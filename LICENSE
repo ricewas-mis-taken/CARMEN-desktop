@@ -1,21 +1,71 @@
-MIT License
+The Prosperity-Attribution Noncommercial License
+(based on PolyForm Noncommercial License 1.0.0, with an added attribution requirement)
 
-Copyright (c) 2026 Lucas Tang
+Copyright (c) [2026] [Lucas Tang]
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+## Acceptance
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+In order to receive this license, you must agree to its rules. Those
+rules are both obligations under that agreement and conditions to
+your license. You must not do anything with this software that
+triggers a rule you cannot or will not follow.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+## Copyright License
+
+The licensor grants you a copyright license for the software to do
+everything you might do with the software that would otherwise
+infringe the licensor's copyright in it, for any noncommercial
+purpose. Noncommercial purposes include personal use, education,
+research, and hobby projects.
+
+## Attribution Requirement
+
+Any use of this software, modified or unmodified, in whole or in
+part, must retain clear and visible attribution to [YOUR NAME] as
+the original author, including a link to the original source
+repository where reasonably possible. This requirement applies even
+if you modify, rebrand, or build upon the software.
+
+## Commercial Use
+
+Commercial use of this software is not permitted under this license.
+If you wish to use this software for a commercial purpose —
+including but not limited to selling it, bundling it into a paid
+product, or using it to provide a paid service — you must contact
+the licensor at [lucastangsd@gmail.com] to negotiate a separate commercial
+license.
+
+## Patent License
+
+The licensor grants you a patent license for the software that
+covers patent claims the licensor can license, or becomes able to
+license, that you would infringe by using the software for the
+permitted noncommercial purposes above.
+
+## Notices
+
+You must ensure that anyone who gets a copy of any part of this
+software from you also gets a copy of these terms, as well as the
+following notice:
+
+  "This software is licensed under the Prosperity-Attribution
+  Noncommercial License. Commercial use requires a separate license.
+  Contact [lucastangsd@gmail.com] for commercial licensing inquiries."
+
+## No Other Rights
+
+These terms do not allow you to sublicense or transfer your rights
+to anyone else, or to use the software for any purpose not
+expressly stated, without separate permission from the licensor.
+
+## Patent Defense
+
+You may not make any legal claim against anyone accusing this
+software, with or without changes, of infringing any patent.
+
+## Disclaimer
+
+AS FAR AS THE LAW ALLOWS, THIS SOFTWARE COMES AS IS, WITHOUT ANY
+WARRANTY OR CONDITION, AND THE LICENSOR WILL NOT BE LIABLE TO YOU
+FOR ANY DAMAGES ARISING OUT OF THESE TERMS OR THE USE OR NATURE OF
+THE SOFTWARE, UNDER ANY KIND OF LEGAL CLAIM.
