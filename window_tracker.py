@@ -92,6 +92,16 @@ def run_polling_loop(stop_event, on_session_end=None):
                         lock_mode = session_manager.get_lock_mode()
                         if lock_mode == "hard":
                             enforcer.hard_lock_redirect(process_name)
+                            # hard_lock_redirect() forces focus back to the
+                            # whitelisted app right here, so the dedupe check
+                            # above must not keep treating this process as
+                            # "already handled" — if the user alt-tabs straight
+                            # back to it before the next tick observes the
+                            # whitelisted app (which is what normally resets
+                            # this via record_acceptable), the reopened app
+                            # would otherwise compare equal and get skipped,
+                            # silently defeating hard lock.
+                            last_flagged_process = None
                         else:
                             enforcer.soft_lock_warning()
             else:

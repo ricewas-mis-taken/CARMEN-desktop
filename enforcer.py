@@ -40,7 +40,17 @@ def hard_lock_redirect(offending_process_name=None):
     except Exception:
         pass
 
-    if hwnd and not session_manager.is_exempt(hwnd_process, hwnd_pid):
+    # Re-check against the whitelist too, not just is_exempt() — the
+    # foreground window can change between the polling tick that detected
+    # this violation and this call actually running (e.g. the user already
+    # switched to an allowed app in that gap). Minimizing whatever happens
+    # to be foreground right now without this check could minimize a
+    # window that's no longer the violation at all.
+    if (
+        hwnd
+        and not session_manager.is_exempt(hwnd_process, hwnd_pid)
+        and not (hwnd_process and session_manager.is_whitelisted(hwnd_process))
+    ):
         try:
             win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
         except Exception:

@@ -5,6 +5,7 @@ own Tk()/thread — Tkinter is not thread-safe, and two Tk() roots alive in
 different threads at once (e.g. one of these dialogs open while an
 enforcement popup fires) crashes the whole process with a fatal Tcl error."""
 import tkinter as tk
+from tkinter import messagebox
 
 import config
 import gui_thread
@@ -21,8 +22,19 @@ def open_timer_dialog():
 
 
 def _build_whitelist_picker(root):
-    cfg = config.load_config()
-    saved = {name.lower() for name in cfg.get("processWhitelist", [])}
+    # Mid-session, this picker isn't the "set the whitelist for the next
+    # session" editor anymore — it's an "add extras to the running session"
+    # tool instead, since overwriting processWhitelist wholesale here would
+    # silently rewrite what's currently being enforced out from under an
+    # active session. Newly checked apps get whitelisted immediately (via
+    # add_process_to_whitelist) but only after a reason is given for each,
+    # collected on the follow-up page built by _build_reason_dialog.
+    session_active = session_manager.is_active()
+
+    if session_active:
+        saved = {name.lower() for name in session_manager.get_status()["processWhitelist"]}
+    else:
+        saved = {name.lower() for name in config.load_config().get("processWhitelist", [])}
     apps = installed_apps.list_installed_apps()
 
     win = tk.Toplevel(root)
@@ -30,9 +42,18 @@ def _build_whitelist_picker(root):
     win.geometry("440x560")
     win.attributes("-topmost", True)
 
+    if session_active:
+        instructions = (
+            "A session is active — checked apps below are already allowed.\n"
+            "Check any more you want to add. You'll be asked to explain each\n"
+            "new one before it's added."
+        )
+    else:
+        instructions = "Check the apps allowed during a focus session.\nPreviously saved picks are pre-checked."
+
     tk.Label(
         win,
-        text="Check the apps allowed during a focus session.\nPreviously saved picks are pre-checked.",
+        text=instructions,
         font=("Segoe UI", 10),
         justify="center",
         pady=10,
@@ -70,12 +91,99 @@ def _build_whitelist_picker(root):
 
     def save():
         selected = [name for name, var in vars_by_process.items() if var.get()]
+
+        if session_active:
+            # Only newly checked apps need a reason — apps already on the
+            # running session's whitelist are already in effect and have
+            # nothing new to log.
+            extras = [name for name in selected if name.lower() not in saved]
+            if not extras:
+                status_label.config(text="No new apps selected — nothing to add.")
+                return
+            win.destroy()
+            # Already running on the shared GUI thread (this is a Tkinter
+            # button callback) — no need to go through run_on_gui_thread's
+            # queue to open the next page.
+            _build_reason_dialog(root, extras)
+            return
+
         current_cfg = config.load_config()
         current_cfg["processWhitelist"] = selected
         config.save_config(current_cfg)
         status_label.config(text=f"Saved {len(selected)} app(s) to the whitelist.")
 
-    tk.Button(win, text="Save Whitelist", command=save).pack(pady=12)
+    button_label = "Add Selected to Session" if session_active else "Save Whitelist"
+    tk.Button(win, text=button_label, command=save).pack(pady=12)
+
+
+def _build_reason_dialog(root, process_names):
+    """Second page shown after saving mid-session extras — one reason field
+    per newly selected app, all required, before add_process_to_whitelist()
+    actually applies any of them. Keeps process_names in the closure rather
+    than re-deriving from checkboxes, so this page is a pure "explain what
+    you just picked" step."""
+    win = tk.Toplevel(root)
+    win.title("Carmen Focus — Explain Additions")
+    win.geometry("440x480")
+    win.attributes("-topmost", True)
+
+    tk.Label(
+        win,
+        text="Why does each of these need to be added to this session?",
+        font=("Segoe UI", 10),
+        justify="center",
+        wraplength=400,
+        pady=10,
+    ).pack()
+
+    list_container = tk.Frame(win)
+    list_container.pack(fill="both", expand=True, padx=10)
+
+    canvas = tk.Canvas(list_container, highlightthickness=0)
+    scrollbar = tk.Scrollbar(list_container, orient="vertical", command=canvas.yview)
+    list_frame = tk.Frame(canvas)
+
+    list_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+    canvas.create_window((0, 0), window=list_frame, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
+
+    reason_vars = {}
+    for process_name in process_names:
+        tk.Label(list_frame, text=process_name, font=("Segoe UI", 9, "bold"), anchor="w").pack(
+            fill="x", anchor="w", pady=(8, 0)
+        )
+        var = tk.StringVar(master=win)
+        tk.Entry(list_frame, textvariable=var, width=48).pack(fill="x", anchor="w")
+        reason_vars[process_name] = var
+
+    status_label = tk.Label(win, text="", font=("Segoe UI", 9), fg="#c62828")
+    status_label.pack(pady=(6, 0))
+
+    def confirm():
+        reasons = {name: var.get().strip() for name, var in reason_vars.items()}
+        missing = [name for name, reason in reasons.items() if not reason]
+        if missing:
+            status_label.config(text=f"Enter a reason for: {', '.join(missing)}")
+            return
+
+        for process_name, reason in reasons.items():
+            session_manager.add_process_to_whitelist(process_name, reason)
+
+        win.destroy()
+        messagebox.showinfo(
+            "Carmen Focus",
+            f"Added {len(reasons)} app(s) to the session whitelist.",
+        )
+
+    def cancel():
+        win.destroy()
+
+    button_frame = tk.Frame(win)
+    button_frame.pack(pady=14)
+    tk.Button(button_frame, text="Confirm", command=confirm).pack(side="left", padx=6)
+    tk.Button(button_frame, text="Cancel", command=cancel).pack(side="left", padx=6)
 
 
 def _build_timer_dialog(root):
