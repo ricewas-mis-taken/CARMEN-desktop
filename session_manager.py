@@ -85,6 +85,31 @@ ALWAYS_ALLOWED_PROCESSES = {
     "git-cmd.exe",
     "git-gui.exe",
     "gitk.exe",
+    # Built-in Windows utility apps and personal tooling — exempted by
+    # explicit request, same as the git-bash entries above. PowerShell is
+    # included here (rather than just "Developer PowerShell for VS" alone)
+    # because that shortcut just launches the regular powershell.exe/pwsh.exe
+    # binary with startup arguments; there's no separate "dev powershell" exe
+    # to match on.
+    "time.exe",  # Clock / Alarms & Clock
+    "calculatorapp.exe",  # Calculator
+    "notepad.exe",  # Notepad (classic and the newer Store version share this name)
+    "snippingtool.exe",  # Snipping Tool
+    "screensketch.exe",  # Snip & Sketch (older name for the same app)
+    "powershell.exe",
+    "pwsh.exe",
+    # Own background app — has no visible window most of the time, so it
+    # never shows up in the installed-apps picker (no Start Menu shortcut,
+    # no MSIX package) for is_exempt() to be checked against in the first
+    # place there; exempting it here is what actually stops it from getting
+    # minimized/redirected by hard-lock enforcement on the rare occasion its
+    # window does come to the foreground.
+    "typesenselogger.exe",
+    # Power Automate Desktop — process name guessed (not verified on this
+    # machine); if it's still getting flagged, check Task Manager for its
+    # actual process name and add it here instead/also.
+    "pad.console.host.exe",
+    "microsoft.flow.rpa.desktop.exe",
 }
 
 
