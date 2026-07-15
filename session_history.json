@@ -1,0 +1,101 @@
+[
+  {
+    "startTime": "2026-07-14T21:27:14.528519",
+    "endTime": "2026-07-14T21:29:14.560482",
+    "lockMode": "hard",
+    "processWhitelist": [],
+    "domainWhitelist": [
+      "github.com"
+    ],
+    "violationCount": 4,
+    "violationLog": [
+      {
+        "kind": "process",
+        "process": "chrome.exe",
+        "timestamp": "2026-07-14T21:27:15.037379",
+        "lockMode": "hard",
+        "resolvedAt": "2026-07-14T21:27:48.156098",
+        "durationSeconds": 33
+      },
+      {
+        "kind": "process",
+        "process": "Discord.exe",
+        "timestamp": "2026-07-14T21:27:48.156098",
+        "lockMode": "hard",
+        "resolvedAt": "2026-07-14T21:28:06.232460",
+        "durationSeconds": 18
+      },
+      {
+        "kind": "process",
+        "process": "Spotify.exe",
+        "timestamp": "2026-07-14T21:28:06.232460",
+        "lockMode": "hard",
+        "resolvedAt": "2026-07-14T21:28:25.828291",
+        "durationSeconds": 19
+      },
+      {
+        "kind": "process",
+        "process": "Discord.exe",
+        "timestamp": "2026-07-14T21:28:25.828291",
+        "lockMode": "hard",
+        "resolvedAt": null,
+        "durationSeconds": null
+      }
+    ]
+  },
+  {
+    "startTime": "2026-07-14T21:31:04.476288",
+    "endTime": "2026-07-14T21:33:05.034683",
+    "lockMode": "soft",
+    "processWhitelist": [],
+    "domainWhitelist": [
+      "github.com"
+    ],
+    "violationCount": 0,
+    "violationLog": []
+  },
+  {
+    "startTime": "2026-07-14T21:35:31.246876",
+    "endTime": "2026-07-14T21:37:31.280043",
+    "lockMode": "soft",
+    "processWhitelist": [],
+    "domainWhitelist": [
+      "github.com"
+    ],
+    "violationCount": 4,
+    "violationLog": [
+      {
+        "kind": "process",
+        "process": "claude.exe",
+        "timestamp": "2026-07-14T21:35:46.004124",
+        "lockMode": "soft",
+        "resolvedAt": "2026-07-14T21:35:49.021018",
+        "durationSeconds": 3
+      },
+      {
+        "kind": "process",
+        "process": "chrome.exe",
+        "timestamp": "2026-07-14T21:35:49.021018",
+        "lockMode": "soft",
+        "resolvedAt": "2026-07-14T21:36:08.637035",
+        "durationSeconds": 19
+      },
+      {
+        "kind": "process",
+        "process": "Discord.exe",
+        "timestamp": "2026-07-14T21:36:08.637035",
+        "lockMode": "soft",
+        "resolvedAt": "2026-07-14T21:36:40.349809",
+        "durationSeconds": 31
+      },
+      {
+        "kind": "process",
+        "process": "chrome.exe",
+        "timestamp": "2026-07-14T21:36:40.349809",
+        "lockMode": "soft",
+        "resolvedAt": null,
+        "durationSeconds": null
+      }
+    ]
+  }
+]

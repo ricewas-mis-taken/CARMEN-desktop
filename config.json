@@ -1,0 +1,11 @@
+{
+  "processWhitelist": [
+    "CalculatorApp.exe",
+    "claude.exe",
+    "chrome.exe",
+    "Spotify.exe"
+  ],
+  "domainWhitelist": [],
+  "last_duration_minutes": 30.0,
+  "last_lock_mode": "soft"
+}
