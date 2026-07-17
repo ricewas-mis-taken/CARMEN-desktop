@@ -4,6 +4,7 @@ import tkinter as tk
 import pystray
 from PIL import Image, ImageDraw
 
+import calendar_gui
 import gui_thread
 import history_gui
 import picker_gui
@@ -121,14 +122,16 @@ def _build_nuclear_reason_dialog(root, icon):
 def build_tray_icon(on_quit):
     icon_image = _generate_icon_image()
 
+    def on_open_window(icon, item):
+        # The tray icon is now a small persistent launcher for the main
+        # sidebar window (Calendar / Focus tabs) rather than a standalone
+        # focus on/off toggle — starting/ending sessions and picking apps
+        # now live inside the Focus tab (calendar_gui.py), reached from
+        # here rather than directly off the tray menu.
+        calendar_gui.open_main_window()
+
     def on_status(icon, item):
         icon.notify(_format_status_text(), title="Carmen Focus Status")
-
-    def on_pick_apps(icon, item):
-        picker_gui.open_whitelist_picker()
-
-    def on_start_session(icon, item):
-        picker_gui.open_timer_dialog()
 
     def on_end_session(icon, item):
         # Nuclear-ending mid-session is a deliberate, disruptive act — ask
@@ -167,9 +170,13 @@ def build_tray_icon(on_quit):
         icon.update_menu()
 
     menu = pystray.Menu(
+        # default=True makes a left-click on the icon itself fire this item
+        # directly (pystray's win32 backend), instead of opening the
+        # right-click context menu — that's the "small persistent tray icon
+        # that opens a main window on click" behavior. It's also included
+        # normally in the right-click menu as "Open Carmen Focus".
+        pystray.MenuItem("Open Carmen Focus", on_open_window, default=True),
         pystray.MenuItem("Status", on_status),
-        pystray.MenuItem("Start Focus Session", on_start_session),
-        pystray.MenuItem("Pick Apps to Whitelist", on_pick_apps),
         pystray.MenuItem("Session History", on_view_history),
         pystray.MenuItem(_pause_resume_text, on_pause_resume, visible=_session_active),
         pystray.MenuItem("End Session (Nuclear)", on_end_session, visible=_session_active),

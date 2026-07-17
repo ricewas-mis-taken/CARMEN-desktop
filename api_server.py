@@ -63,11 +63,23 @@ def session_start():
     lock_mode = body.get("lock_mode")
     process_whitelist = body.get("process_whitelist")
     domain_whitelist = body.get("domain_whitelist")
+    # "manual" (popup/picker_gui, using the saved whitelist) or
+    # "calendar-event" (a temporary per-session override tagged with the
+    # event it came from) — purely descriptive, surfaced back through
+    # GET /status so the extension popup can show why the active whitelist
+    # doesn't match the user's manually saved one.
+    source = body.get("source", "manual")
+    event_id = body.get("event_id")
+    event_title = body.get("event_title")
 
     if not isinstance(duration_minutes, (int, float)) or duration_minutes <= 0:
         return jsonify({"error": "duration_minutes must be a positive number"}), 400
     if lock_mode not in ("soft", "hard"):
         return jsonify({"error": "lock_mode must be 'soft' or 'hard'"}), 400
+    if source not in ("manual", "calendar-event"):
+        return jsonify({"error": "source must be 'manual' or 'calendar-event'"}), 400
+    if source == "calendar-event" and (not isinstance(event_id, str) or not event_id.strip()):
+        return jsonify({"error": "event_id is required when source is 'calendar-event'"}), 400
 
     if process_whitelist is None:
         # Caller didn't send one (e.g. the browser extension, which no
@@ -82,7 +94,13 @@ def session_start():
         return jsonify({"error": "domain_whitelist must be a list of domain/URL substrings"}), 400
 
     result = session_manager.start_session(
-        duration_minutes, lock_mode, process_whitelist, domain_whitelist
+        duration_minutes,
+        lock_mode,
+        process_whitelist,
+        domain_whitelist,
+        source=source,
+        event_id=event_id,
+        event_title=event_title,
     )
     return jsonify(result)
 

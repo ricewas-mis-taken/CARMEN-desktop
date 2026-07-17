@@ -1,6 +1,11 @@
 __pycache__/
 *.pyc
 session_state.json
+calendar.db
+calendar.db-journal
+calendar.db-wal
+calendar.db-shm
+calendar_errors.log
 venv/
 build/
 dist/

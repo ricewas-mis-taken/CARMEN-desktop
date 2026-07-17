@@ -29,6 +29,16 @@ _state = {
     "isPaused": False,
     "pausedAt": None,
     "frozenSecondsRemaining": None,
+    # Where this session's whitelist/lock_mode came from: "manual" (popup or
+    # picker_gui, using config.json's saved whitelist) or "calendar-event"
+    # (a per-session override tagged with the event it came from). Purely
+    # descriptive — enforcement itself doesn't branch on this, it just reads
+    # domainWhitelist/lockMode as usual. Exists so the extension popup can
+    # show *why* the active whitelist doesn't match what's saved locally,
+    # instead of leaving the user thinking their manual whitelist broke.
+    "source": "manual",
+    "eventId": None,
+    "eventTitle": None,
 }
 
 # Index into violationLog of the most recent still-unresolved violation of
@@ -159,9 +169,31 @@ def _load():
 _load()
 
 
-def start_session(duration_minutes, lock_mode, process_whitelist, domain_whitelist):
+def start_session(
+    duration_minutes,
+    lock_mode,
+    process_whitelist,
+    domain_whitelist,
+    source="manual",
+    event_id=None,
+    event_title=None,
+):
     with _lock:
         now = datetime.now()
+        if _state["isActive"]:
+            # A session is already running (e.g. a calendar event fires
+            # mid-way through a manual session, or two events overlap) —
+            # the new session still wins outright rather than trying to
+            # stack/queue lock types or reconcile whitelists, but the one
+            # being replaced must not just vanish. Finalize it to history
+            # first, same as a normal end, so its violation count/log and
+            # whichever whitelist it was actually running under aren't
+            # silently discarded.
+            _finalize_to_history_locked(
+                now,
+                end_type="superseded",
+                reason=f"Overwritten by a new {source} session starting.",
+            )
         end_time = now + timedelta(minutes=duration_minutes)
         _state["isActive"] = True
         _state["startTime"] = now.isoformat()
@@ -177,6 +209,12 @@ def start_session(duration_minutes, lock_mode, process_whitelist, domain_whiteli
         _state["isPaused"] = False
         _state["pausedAt"] = None
         _state["frozenSecondsRemaining"] = None
+        # Defaulted explicitly (rather than left over from whatever the
+        # previous session was) so a plain manual start can never inherit a
+        # stale "calendar-event" tag from before.
+        _state["source"] = source
+        _state["eventId"] = event_id
+        _state["eventTitle"] = event_title
         _open_violation_index["process"] = None
         _open_violation_index["domain"] = None
         _save()
@@ -223,6 +261,9 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
     domain_whitelist_additions = list(_state["domainWhitelistAdditions"])
     process_whitelist_additions = list(_state["processWhitelistAdditions"])
     start_time = _state["startTime"]
+    source = _state["source"]
+    event_id = _state["eventId"]
+    event_title = _state["eventTitle"]
 
     if was_active:
         session_history.append_entry(
@@ -238,6 +279,9 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
                 "violationLog": summary_log,
                 "domainWhitelistAdditions": domain_whitelist_additions,
                 "processWhitelistAdditions": process_whitelist_additions,
+                "source": source,
+                "eventId": event_id,
+                "eventTitle": event_title,
             }
         )
 
@@ -252,6 +296,13 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
     _state["isPaused"] = False
     _state["pausedAt"] = None
     _state["frozenSecondsRemaining"] = None
+    # Reset back to "manual" here (not just at the next start_session()) so a
+    # GET /status polled in the gap between this session ending and the next
+    # one starting never reports a stale calendar-event tag for a session
+    # that's no longer running.
+    _state["source"] = "manual"
+    _state["eventId"] = None
+    _state["eventTitle"] = None
     _open_violation_index["process"] = None
     _open_violation_index["domain"] = None
     _save()
@@ -269,6 +320,9 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
         "violationLog": summary_log,
         "domainWhitelistAdditions": domain_whitelist_additions,
         "processWhitelistAdditions": process_whitelist_additions,
+        "source": source,
+        "eventId": event_id,
+        "eventTitle": event_title,
     }
 
 
@@ -305,6 +359,9 @@ def _get_status_locked():
         "lastAcceptableProcess": _state["lastAcceptableProcess"],
         "domainWhitelistAdditions": list(_state["domainWhitelistAdditions"]),
         "processWhitelistAdditions": list(_state["processWhitelistAdditions"]),
+        "source": _state["source"],
+        "eventId": _state["eventId"],
+        "eventTitle": _state["eventTitle"],
     }
 
 

@@ -4,6 +4,8 @@ main thread (pystray requirement)."""
 import os
 import threading
 
+import calendar_scheduler
+import calendar_toast
 import config
 import gui_thread
 import tray
@@ -15,9 +17,12 @@ stop_event = threading.Event()
 
 def main():
     config.load_config()
+    calendar_toast.set_app_id()
 
     api_thread = threading.Thread(target=run_server, daemon=True)
     api_thread.start()
+
+    calendar_scheduler.start(stop_event)
 
     def on_quit():
         stop_event.set()

@@ -4,3 +4,5 @@ flask
 flask-cors
 pystray
 pillow
+python-dateutil
+winsdk
