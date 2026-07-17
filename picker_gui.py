@@ -159,7 +159,12 @@ def _build_whitelist_picker(root):
     manual_status.pack(anchor="w")
 
     def add_manual_entry(process_name):
-        process_name = process_name.strip()
+        # Reduce to just the basename even for a typed (not browsed) entry —
+        # is_whitelisted() and enforcement everywhere else compare on
+        # process name alone, never a full path, so a typed "C:\...\app.exe"
+        # would otherwise pass validation but silently never match the
+        # actually-running process.
+        process_name = os.path.basename(process_name.strip())
         if not process_name:
             manual_status.config(text="Enter an exe name or browse for a file.")
             return
@@ -270,14 +275,28 @@ def _build_reason_dialog(root, process_names):
             status_label.config(text=f"Enter a reason for: {', '.join(missing)}")
             return
 
+        added = 0
         for process_name, reason in reasons.items():
-            session_manager.add_process_to_whitelist(process_name, reason)
+            _, addition = session_manager.add_process_to_whitelist(process_name, reason)
+            if addition is not None:
+                added += 1
 
         win.destroy()
-        messagebox.showinfo(
-            "Carmen Focus",
-            f"Added {len(reasons)} app(s) to the session whitelist.",
-        )
+        if added < len(reasons):
+            # Session ended mid-form (naturally, nuclear, or via the API)
+            # before every entry could be applied — say so rather than
+            # silently under-reporting or applying the rest to whatever
+            # session starts next (see add_process_to_whitelist's docstring).
+            messagebox.showwarning(
+                "Carmen Focus",
+                f"Session ended before all apps could be added — "
+                f"{added} of {len(reasons)} were whitelisted.",
+            )
+        else:
+            messagebox.showinfo(
+                "Carmen Focus",
+                f"Added {added} app(s) to the session whitelist.",
+            )
 
     def cancel():
         win.destroy()

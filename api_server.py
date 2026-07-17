@@ -184,9 +184,6 @@ def whitelist_apps_add():
     processWhitelistAdditions) — the API-level counterpart to the lock
     overlay's own "Whitelist" button (enforcer.py), for any other caller
     (e.g. Carmen) that wants to drive the same mid-session unblock."""
-    if not session_manager.is_active():
-        return jsonify({"error": "no active session"}), 400
-
     body = request.get_json(force=True, silent=True) or {}
     process_name = body.get("process_name")
     reason = body.get("reason")
@@ -196,9 +193,15 @@ def whitelist_apps_add():
     if not isinstance(reason, str) or not reason.strip():
         return jsonify({"error": "reason must be a non-empty string"}), 400
 
+    # is_active() is checked atomically inside add_process_to_whitelist,
+    # under the same lock as the write itself, rather than as a separate
+    # check-then-act step here — a session can end in the gap between a
+    # pre-check and the write actually happening.
     process_whitelist, addition = session_manager.add_process_to_whitelist(
         process_name.strip(), reason.strip()
     )
+    if addition is None:
+        return jsonify({"error": "no active session"}), 409
     return jsonify({"processWhitelist": process_whitelist, "addition": addition})
 
 
@@ -208,9 +211,6 @@ def whitelist_domains_add():
     required reason logged for the audit trail (session_manager's
     domainWhitelistAdditions) — for unblocking a site mid-session without
     ending it. Only makes sense while a session is actually running."""
-    if not session_manager.is_active():
-        return jsonify({"error": "no active session"}), 400
-
     body = request.get_json(force=True, silent=True) or {}
     domain = body.get("domain")
     reason = body.get("reason")
@@ -220,9 +220,14 @@ def whitelist_domains_add():
     if not isinstance(reason, str) or not reason.strip():
         return jsonify({"error": "reason must be a non-empty string"}), 400
 
+    # See whitelist_apps_add() above for why is_active() is checked
+    # atomically inside add_domain_to_whitelist rather than as a separate
+    # pre-check here.
     domain_whitelist, addition = session_manager.add_domain_to_whitelist(
         domain.strip(), reason.strip()
     )
+    if addition is None:
+        return jsonify({"error": "no active session"}), 409
     return jsonify({"domainWhitelist": domain_whitelist, "addition": addition})
 
 

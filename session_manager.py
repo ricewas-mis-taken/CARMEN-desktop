@@ -421,6 +421,14 @@ def record_acceptable(process_name):
 
 def record_violation(process_name):
     with _lock:
+        if not _state["isActive"]:
+            # The window-polling loop only calls this after seeing
+            # isActive=True on the very same status snapshot, but this is
+            # still reachable with a stale/in-flight call racing a session
+            # end — recording a violation against already-reset state would
+            # inflate violationCount/violationLog for the idle period until
+            # the next session's start_session() call happens to wipe it.
+            return _state["violationCount"]
         now = datetime.now()
         _resolve_open_violation_locked("process", now)
         _state["violationCount"] += 1
@@ -444,6 +452,12 @@ def record_domain_violation(url):
     uses, for a violation reported by the browser extension (an off-whitelist
     domain) instead of this app's own window-polling loop."""
     with _lock:
+        if not _state["isActive"]:
+            # Reachable when the browser extension's POST /violation lands
+            # just after a session ends (network latency racing the end) —
+            # see record_violation()'s matching guard for why this must not
+            # apply against already-reset state.
+            return _state["violationCount"]
         now = datetime.now()
         _resolve_open_violation_locked("domain", now)
         _state["violationCount"] += 1
@@ -482,8 +496,21 @@ def add_domain_to_whitelist(domain, reason):
 
     Skips the append (but still logs the addition) if domain is already on
     the whitelist, case-insensitive — same "don't grow the list with
-    duplicates" behavior as the rest of this module's whitelist handling."""
+    duplicates" behavior as the rest of this module's whitelist handling.
+
+    Returns (None, None) if no session is active. This is checked here,
+    inside the same lock as the actual write, rather than leaving it to
+    callers to check is_active() beforehand — a session can end (naturally,
+    nuclear, or via another request) in the gap between a caller's own
+    is_active() check and this call actually running (e.g. while a user is
+    still typing a reason in a dialog). Without this atomic check, that race
+    would silently apply the addition to already-reset state: since
+    domainWhitelist itself isn't cleared until the next start_session(),
+    the addition (and its audit-log entry) would end up misattributed to
+    whatever session starts next instead of the one the user meant it for."""
     with _lock:
+        if not _state["isActive"]:
+            return None, None
         now = datetime.now()
         existing_lower = {d.lower() for d in _state["domainWhitelist"]}
         if domain.lower() not in existing_lower:
@@ -510,8 +537,14 @@ def add_process_to_whitelist(process_name, reason):
 
     Skips the append (but still logs the addition) if process_name is
     already on the whitelist, case-insensitive — same "don't grow the list
-    with duplicates" behavior as add_domain_to_whitelist()."""
+    with duplicates" behavior as add_domain_to_whitelist().
+
+    Returns (None, None) if no session is active — see add_domain_to_whitelist()
+    for why this is checked atomically inside the lock rather than by callers
+    beforehand."""
     with _lock:
+        if not _state["isActive"]:
+            return None, None
         now = datetime.now()
         existing_lower = {p.lower() for p in _state["processWhitelist"]}
         if process_name.lower() not in existing_lower:

@@ -258,7 +258,15 @@ def _build_whitelist_reason_dialog(root, process_name):
         if not reason:
             status_label.config(text="Enter a reason before whitelisting.")
             return
-        session_manager.add_process_to_whitelist(process_name, reason)
+        _, addition = session_manager.add_process_to_whitelist(process_name, reason)
+        if addition is None:
+            # Session ended (naturally, nuclear, or via the API) in the gap
+            # between this popup opening and the user confirming — nothing
+            # to whitelist anymore, and applying it anyway would silently
+            # bleed into whatever session starts next (see
+            # add_process_to_whitelist's docstring).
+            status_label.config(text="Session already ended — nothing to whitelist.")
+            return
         win.destroy()
 
     def cancel():

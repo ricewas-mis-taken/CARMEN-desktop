@@ -46,7 +46,13 @@ def format_end_summary(summary):
     if end_type == "nuclear" and reason:
         prefix += f" — reason: {reason}"
 
-    log = summary.get("violationLog", [])
+    # violationLog also carries "kind": "pause"/"resume" bookkeeping entries
+    # (see session_manager's pause_session()/resume_session()) alongside
+    # actual process/domain violations — those have neither a "process" nor
+    # a "url" key, so counting them here would both wrongly clear the "no
+    # violations" message for a session that paused but never violated
+    # anything, and show a bogus "? x1" breakdown entry.
+    log = [e for e in summary.get("violationLog", []) if e.get("kind") in ("process", "domain")]
     if not log:
         return f"{prefix}. No violations — nice work."
 
