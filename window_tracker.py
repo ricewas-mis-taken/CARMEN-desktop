@@ -103,7 +103,7 @@ def run_polling_loop(stop_event, on_session_end=None):
                             # silently defeating hard lock.
                             last_flagged_process = None
                         else:
-                            enforcer.soft_lock_warning()
+                            enforcer.soft_lock_warning(process_name)
             else:
                 last_flagged_process = None
         except Exception:

@@ -11,10 +11,14 @@ import gui_thread
 import session_manager
 
 
-def soft_lock_warning():
+def soft_lock_warning(offending_process_name=None):
     status = session_manager.get_status()
     last_ok = status["lastAcceptableProcess"] or "your focus app"
-    _show_lock_overlay(f"You're off track — back to {last_ok}?", duration_ms=5000)
+    _show_lock_overlay(
+        f"You're off track — back to {last_ok}?",
+        duration_ms=5000,
+        offending_process_name=offending_process_name,
+    )
 
 
 def hard_lock_redirect(offending_process_name=None):
@@ -75,6 +79,7 @@ def hard_lock_redirect(offending_process_name=None):
     _show_lock_overlay(
         f"Redirected from {label} — back to {back_to}.",
         duration_ms=3000,
+        offending_process_name=label if label != "that app" else None,
     )
 
 
@@ -100,7 +105,7 @@ def _find_window_by_process_name(process_name):
     return found["hwnd"]
 
 
-def _show_lock_overlay(message, duration_ms):
+def _show_lock_overlay(message, duration_ms, offending_process_name=None):
     """Shows a small always-on-top, borderless popup for duration_ms while a
     green progress bar fills, then closes automatically. It repeatedly lifts
     and refocuses itself so it's hard to ignore, but deliberately does not
@@ -116,12 +121,21 @@ def _show_lock_overlay(message, duration_ms):
 
     Guarded two ways against ever getting stuck open: the normal
     tick-driven close, and a backup `.after()` timer.
+
+    offending_process_name, when known, adds a "Whitelist" button — lets the
+    user let that exe through for the rest of the session without ending
+    hard/soft lock enforcement entirely, same as the "Pick Apps to
+    Whitelist" tray flow, just reachable from the moment of redirect itself.
     """
-    gui_thread.run_on_gui_thread(lambda root: _build_overlay(root, message, duration_ms))
+    gui_thread.run_on_gui_thread(
+        lambda root: _build_overlay(root, message, duration_ms, offending_process_name)
+    )
 
 
-def _build_overlay(root, message, duration_ms):
+def _build_overlay(root, message, duration_ms, offending_process_name=None):
     width, height = 380, 150
+    if offending_process_name:
+        height += 40
     bar_width = width - 40
 
     win = tk.Toplevel(root)
@@ -161,6 +175,20 @@ def _build_overlay(root, message, duration_ms):
         except Exception:
             pass
 
+    if offending_process_name:
+        def on_whitelist_click():
+            # Closing this overlay first, not just hiding it — the reason
+            # dialog below is a plain Toplevel too, and this popup's own
+            # lift()/focus_force() tick would otherwise keep stealing focus
+            # back from it every 50ms.
+            close()
+            _build_whitelist_reason_dialog(root, offending_process_name)
+
+        tk.Button(
+            win, text="Whitelist", command=on_whitelist_click,
+            bg="#3a3a3a", fg="white", relief="flat", padx=10, pady=3,
+        ).pack(pady=(10, 0))
+
     # Hard safety net independent of the tick loop below — guarantees the
     # popup closes even if something in tick() raises.
     win.after(duration_ms + 1000, close)
@@ -195,3 +223,50 @@ def _build_overlay(root, message, duration_ms):
         win.after(50, tick)
 
     tick()
+
+
+def _build_whitelist_reason_dialog(root, process_name):
+    """Lets the whitelist-from-redirect flow still require a reason and still
+    log it — same audit trail as the tray's "Pick Apps to Whitelist" picker
+    (session_manager.add_process_to_whitelist -> processWhitelistAdditions),
+    just reachable straight from the redirect popup instead of digging
+    through the tray menu mid-session."""
+    win = tk.Toplevel(root)
+    win.title("Carmen Focus — Whitelist App")
+    win.geometry("360x180")
+    win.attributes("-topmost", True)
+
+    tk.Label(
+        win,
+        text=f"Whitelist {process_name} for the rest of this session — why?",
+        font=("Segoe UI", 10),
+        justify="center",
+        wraplength=320,
+        pady=10,
+    ).pack()
+
+    reason_var = tk.StringVar(master=win)
+    entry = tk.Entry(win, textvariable=reason_var, width=40)
+    entry.pack(pady=(0, 6))
+    entry.focus_set()
+
+    status_label = tk.Label(win, text="", font=("Segoe UI", 9), fg="#c62828")
+    status_label.pack()
+
+    def confirm():
+        reason = reason_var.get().strip()
+        if not reason:
+            status_label.config(text="Enter a reason before whitelisting.")
+            return
+        session_manager.add_process_to_whitelist(process_name, reason)
+        win.destroy()
+
+    def cancel():
+        win.destroy()
+
+    button_frame = tk.Frame(win)
+    button_frame.pack(pady=14)
+    tk.Button(button_frame, text="Whitelist", command=confirm).pack(side="left", padx=6)
+    tk.Button(button_frame, text="Cancel", command=cancel).pack(side="left", padx=6)
+
+    entry.bind("<Return>", lambda e: confirm())

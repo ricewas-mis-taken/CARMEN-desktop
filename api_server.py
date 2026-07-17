@@ -13,6 +13,7 @@ Endpoints:
     GET  /apps/running
     GET  /apps/installed
     POST /whitelist/apps
+    POST /whitelist/apps/add
     POST /whitelist/domains/add
 
 This is the shared source of truth for focus session state: both this
@@ -174,6 +175,31 @@ def whitelist_apps():
     cfg["processWhitelist"] = list(process_whitelist)
     config.save_config(cfg)
     return jsonify({"processWhitelist": cfg["processWhitelist"]})
+
+
+@app.route("/whitelist/apps/add", methods=["POST"])
+def whitelist_apps_add():
+    """Adds a single process to the active session's processWhitelist, with a
+    required reason logged for the audit trail (session_manager's
+    processWhitelistAdditions) — the API-level counterpart to the lock
+    overlay's own "Whitelist" button (enforcer.py), for any other caller
+    (e.g. Carmen) that wants to drive the same mid-session unblock."""
+    if not session_manager.is_active():
+        return jsonify({"error": "no active session"}), 400
+
+    body = request.get_json(force=True, silent=True) or {}
+    process_name = body.get("process_name")
+    reason = body.get("reason")
+
+    if not isinstance(process_name, str) or not process_name.strip():
+        return jsonify({"error": "process_name must be a non-empty string"}), 400
+    if not isinstance(reason, str) or not reason.strip():
+        return jsonify({"error": "reason must be a non-empty string"}), 400
+
+    process_whitelist, addition = session_manager.add_process_to_whitelist(
+        process_name.strip(), reason.strip()
+    )
+    return jsonify({"processWhitelist": process_whitelist, "addition": addition})
 
 
 @app.route("/whitelist/domains/add", methods=["POST"])

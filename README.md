@@ -308,6 +308,33 @@ curl -X POST http://127.0.0.1:5847/whitelist/apps \
 {"processWhitelist": ["Code.exe", "chrome.exe"]}
 ```
 
+### `POST /whitelist/apps/add`
+
+Adds a single process to the *active* session's `processWhitelist`, with a
+required `reason` logged to `processWhitelistAdditions` for the audit trail —
+the mid-session counterpart to `POST /whitelist/apps` above, which only
+touches the saved default and doesn't require a reason. This is also what the
+lock overlay's own "Whitelist" button calls internally (via
+`session_manager.add_process_to_whitelist`) when you whitelist an app straight
+from a redirect popup. 400s if no session is active.
+
+```
+curl -X POST http://127.0.0.1:5847/whitelist/apps/add \
+  -H "Content-Type: application/json" \
+  -d '{"process_name": "Discord.exe", "reason": "coordinating with team"}'
+```
+
+```json
+{
+  "processWhitelist": ["Code.exe", "Discord.exe"],
+  "addition": {
+    "process": "Discord.exe",
+    "reason": "coordinating with team",
+    "timestamp": "2026-07-16T14:02:11.000"
+  }
+}
+```
+
 ### `GET /history`
 
 Every completed session, oldest first — start/end time, lock mode, the
@@ -416,6 +443,14 @@ render it differently (e.g. Carmen).
 
 Enforcement only triggers on a *change* to a new non-whitelisted foreground app,
 not on every poll tick while you stay on the same one.
+
+Both the soft and hard overlays include a **"Whitelist"** button whenever the
+offending process name is known. Clicking it opens a small dialog that still
+requires a reason (same as `POST /whitelist/apps/add` above) before adding the
+app to `processWhitelist` for the rest of the session — it doesn't touch lock
+mode or violation tracking, it just lets that one app through going forward.
+The addition is logged to `processWhitelistAdditions` and shows up in the
+session history viewer the same way mid-session whitelist picks already do.
 
 ### Always-allowed system processes
 
