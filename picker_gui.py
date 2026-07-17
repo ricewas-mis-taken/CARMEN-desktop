@@ -4,12 +4,14 @@ single shared GUI-thread root (gui_thread.py) instead of spinning up their
 own Tk()/thread — Tkinter is not thread-safe, and two Tk() roots alive in
 different threads at once (e.g. one of these dialogs open while an
 enforcement popup fires) crashes the whole process with a fatal Tcl error."""
+import os
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 
 import config
 import gui_thread
 import installed_apps
+import session_history
 import session_manager
 
 
@@ -39,7 +41,7 @@ def _build_whitelist_picker(root):
 
     win = tk.Toplevel(root)
     win.title("Carmen Focus — Pick Apps to Whitelist")
-    win.geometry("440x560")
+    win.geometry("440x640")
     win.attributes("-topmost", True)
 
     if session_active:
@@ -73,18 +75,95 @@ def _build_whitelist_picker(root):
     scrollbar.pack(side="right", fill="y")
 
     vars_by_process = {}
-    if not apps:
-        tk.Label(list_frame, text="No installed apps found.", fg="#888").pack(anchor="w", pady=8)
-    for app in apps:
-        var = tk.BooleanVar(master=win, value=app["process_name"].lower() in saved)
+
+    def add_checkbox_row(process_name, label_text, checked):
+        # Shared by every source of rows (installed-apps scan, the
+        # last-session quick-pick section, and manually typed/browsed
+        # entries) so nothing ever gets double-listed — first writer for a
+        # given process name (case-insensitive) wins.
+        key = process_name.lower()
+        if key in {p.lower() for p in vars_by_process}:
+            return
+        var = tk.BooleanVar(master=win, value=checked)
         tk.Checkbutton(
             list_frame,
-            text=f"{app['display_name']}   ({app['process_name']})",
+            text=label_text,
             variable=var,
             anchor="w",
             justify="left",
         ).pack(fill="x", anchor="w")
-        vars_by_process[app["process_name"]] = var
+        vars_by_process[process_name] = var
+
+    # Only offered when picking the whitelist for the *next* session (not
+    # mid-session) — a quick way to re-check whatever the previous session
+    # actually ended up whitelisting, without having to find each one again
+    # in the installed-apps scan below (which can miss anything without a
+    # Start Menu shortcut). "Temporary" in the sense that it's just whatever
+    # session_history's last entry happens to hold — it naturally reflects
+    # a different session once another one completes.
+    if not session_active:
+        history = session_history.load_all()
+        prev_apps = history[-1].get("processWhitelist", []) if history else []
+        if prev_apps:
+            tk.Label(
+                list_frame, text="From your last session — quick re-add:",
+                font=("Segoe UI", 9, "bold"), anchor="w", fg="#555",
+            ).pack(fill="x", anchor="w", pady=(4, 0))
+            for process_name in prev_apps:
+                add_checkbox_row(process_name, process_name, checked=False)
+            tk.Frame(list_frame, height=1, bg="#ccc").pack(fill="x", pady=6)
+
+    if not apps:
+        tk.Label(list_frame, text="No installed apps found.", fg="#888").pack(anchor="w", pady=8)
+    for app in apps:
+        add_checkbox_row(
+            app["process_name"],
+            f"{app['display_name']}   ({app['process_name']})",
+            checked=app["process_name"].lower() in saved,
+        )
+
+    manual_frame = tk.Frame(win)
+    manual_frame.pack(fill="x", padx=10, pady=(8, 0))
+    tk.Label(manual_frame, text="Not listed? Add by name or file:", font=("Segoe UI", 9)).pack(anchor="w")
+
+    manual_row = tk.Frame(manual_frame)
+    manual_row.pack(fill="x", pady=(2, 0))
+    manual_var = tk.StringVar(master=win)
+    manual_entry = tk.Entry(manual_row, textvariable=manual_var)
+    manual_entry.pack(side="left", fill="x", expand=True)
+
+    manual_status = tk.Label(manual_frame, text="", font=("Segoe UI", 8), fg="#c62828")
+    manual_status.pack(anchor="w")
+
+    def add_manual_entry(process_name):
+        process_name = process_name.strip()
+        if not process_name:
+            manual_status.config(text="Enter an exe name or browse for a file.")
+            return
+        if not process_name.lower().endswith(".exe"):
+            manual_status.config(text="Process name must end in .exe.")
+            return
+        add_checkbox_row(process_name, process_name, checked=True)
+        manual_status.config(text="", fg="#c62828")
+        manual_var.set("")
+
+    def browse_for_exe():
+        # Only need the filename to match the running process by, same as
+        # everywhere else in this app (is_whitelisted() etc. compare on
+        # process_name alone, not a full path) — so basename is all that's
+        # kept from whatever path the user picks.
+        path = filedialog.askopenfilename(
+            title="Pick an executable",
+            filetypes=[("Executables", "*.exe"), ("All files", "*.*")],
+        )
+        if path:
+            add_manual_entry(os.path.basename(path))
+
+    tk.Button(manual_row, text="Browse...", command=browse_for_exe).pack(side="left", padx=(6, 0))
+    tk.Button(manual_row, text="Add", command=lambda: add_manual_entry(manual_var.get())).pack(
+        side="left", padx=(6, 0)
+    )
+    manual_entry.bind("<Return>", lambda e: add_manual_entry(manual_var.get()))
 
     status_label = tk.Label(win, text="", font=("Segoe UI", 9), fg="#2e7d32")
     status_label.pack(pady=(6, 0))

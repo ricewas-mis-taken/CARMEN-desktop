@@ -375,14 +375,24 @@ does **not** create a phantom entry.
 ## Whitelist picker & start-session dialog (tray GUI)
 
 Picking a whitelist and starting a session both happen through native Tkinter
-windows (`picker_gui.py`), not a web page — no browser round-trip, and no typing
-exact process names by hand:
+windows (`picker_gui.py`), not a web page — no browser round-trip:
 
 - Tray → **"Pick Apps to Whitelist"** opens a scrollable checkbox list built from
   `installed_apps.list_installed_apps()` (same data as `GET /apps/installed`).
   Apps already in the saved `processWhitelist` come back pre-checked, so
   re-opening the picker to tweak your list doesn't lose previous picks. "Save
   Whitelist" writes the checked set straight to `config.json`.
+  - When there's no active session, the top of the list also shows a **"From
+    your last session — quick re-add"** section pulled from `session_history`'s
+    most recent entry — a fast way to re-check whatever the previous session
+    ended up whitelisting (including apps the installed-apps scan can't find,
+    e.g. ones without a Start Menu shortcut) without hunting for each one
+    again. It reflects whichever session most recently completed, so it
+    naturally changes after the next one ends.
+  - A manual "Not listed? Add by name or file" row lets you type an exe name
+    directly (e.g. `xxx.exe`) or click **Browse...** to pick the executable
+    through a file dialog — either way it's added as a new checked row using
+    just the filename, since that's what enforcement matches processes on.
 - Tray → **"Start Focus Session"** opens a small dialog for duration (minutes)
   and lock mode (soft/hard). "Start Session" calls the exact same
   `session_manager.start_session()` that `POST /session/start` calls — it's the
