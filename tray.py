@@ -98,6 +98,7 @@ def _build_nuclear_reason_dialog(root, icon):
             return
         summary = session_manager.end_session(end_type="nuclear", reason=reason)
         icon.notify(format_end_summary(summary), title="Carmen Focus")
+        icon.update_menu()
         win.destroy()
 
     def cancel():
@@ -137,12 +138,35 @@ def build_tray_icon(on_quit):
         on_quit()
         icon.stop()
 
+    def _session_active(item):
+        # Both "End Session (Nuclear)" and "Pause/Resume" only make sense
+        # while a session is actually running — pystray re-evaluates
+        # `visible` callables each time the menu is opened, so these items
+        # just disappear on their own once a session ends instead of sitting
+        # there as a dead no-op.
+        return session_manager.is_active()
+
+    def _pause_resume_text(item):
+        return "Resume Session" if session_manager.get_status()["isPaused"] else "Pause Session"
+
+    def on_pause_resume(icon, item):
+        # pause_session()/resume_session() already log a "pause"/"resume"
+        # entry into violationLog (see session_manager.py), which
+        # history_gui.py renders inline in the session's timeline — nothing
+        # extra needed here to get that into the log.
+        if session_manager.get_status()["isPaused"]:
+            session_manager.resume_session()
+        else:
+            session_manager.pause_session()
+        icon.update_menu()
+
     menu = pystray.Menu(
         pystray.MenuItem("Status", on_status),
         pystray.MenuItem("Start Focus Session", on_start_session),
         pystray.MenuItem("Pick Apps to Whitelist", on_pick_apps),
         pystray.MenuItem("Session History", on_view_history),
-        pystray.MenuItem("End Session (Nuclear)", on_end_session),
+        pystray.MenuItem(_pause_resume_text, on_pause_resume, visible=_session_active),
+        pystray.MenuItem("End Session (Nuclear)", on_end_session, visible=_session_active),
         pystray.MenuItem("Quit", on_quit_clicked),
     )
 

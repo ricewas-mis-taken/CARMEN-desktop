@@ -30,7 +30,11 @@ every 1.5 seconds, and shows a tray icon. No session is enforced until you start
 one — either via the tray's "Start Focus Session" dialog, or `POST /session/start`
 directly (curl, the browser extension, or eventually Carmen's voice interface).
 The tray menu also lets you pick your whitelist, check status, view past sessions,
-end a session immediately, or quit the app.
+pause/resume the countdown, end a session immediately, or quit the app. The
+"Pause Session"/"Resume Session" and "End Session (Nuclear)" items only appear
+in the menu while a session is actually active — pause/resume each log a
+timestamped entry in that session's log, visible in the "Session History"
+viewer alongside violations and whitelist additions.
 
 Every completed session (ended manually or by running out the clock) is appended
 to `session_history.json` — see "Session history" below.
@@ -382,13 +386,16 @@ windows (`picker_gui.py`), not a web page — no browser round-trip:
   Apps already in the saved `processWhitelist` come back pre-checked, so
   re-opening the picker to tweak your list doesn't lose previous picks. "Save
   Whitelist" writes the checked set straight to `config.json`.
-  - When there's no active session, the top of the list also shows a **"From
-    your last session — quick re-add"** section pulled from `session_history`'s
-    most recent entry — a fast way to re-check whatever the previous session
-    ended up whitelisting (including apps the installed-apps scan can't find,
-    e.g. ones without a Start Menu shortcut) without hunting for each one
-    again. It reflects whichever session most recently completed, so it
-    naturally changes after the next one ends.
+  - When there's no active session, the top of the list also shows two
+    quick-pick sections pulled from `session_history`'s most recent entry:
+    **"Added mid-session last time"** — specifically the apps that were let
+    in via the reason-required flow (tray picker or the lock overlay's own
+    "Whitelist" button) last session, each labeled with the reason that was
+    given — and **"From your last session"** — the rest of that session's
+    full `processWhitelist`. Both let you re-check an app without hunting for
+    it in the installed-apps scan below (which can miss anything without a
+    Start Menu shortcut). They reflect whichever session most recently
+    completed, so they naturally change after the next one ends.
   - A manual "Not listed? Add by name or file" row lets you type an exe name
     directly (e.g. `xxx.exe`) or click **Browse...** to pick the executable
     through a file dialog — either way it's added as a new checked row using

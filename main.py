@@ -33,6 +33,7 @@ def main():
     polling_thread = threading.Thread(
         target=window_tracker.run_polling_loop,
         args=(stop_event, on_session_end),
+        kwargs={"tray_icon": icon},
         daemon=True,
     )
     polling_thread.start()

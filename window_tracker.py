@@ -48,7 +48,7 @@ def list_running_apps():
     return list(apps.values())
 
 
-def run_polling_loop(stop_event, on_session_end=None):
+def run_polling_loop(stop_event, on_session_end=None, tray_icon=None):
     """Runs until stop_event is set. Intended to be launched in its own thread.
 
     on_session_end(summary), if given, is called once whenever a session's
@@ -58,12 +58,31 @@ def run_polling_loop(stop_event, on_session_end=None):
     happens here even if nothing else (browser extension, lock overlay) is
     polling /status — otherwise a session could expire with no notification
     ever firing.
+
+    tray_icon, if given, gets update_menu() called whenever isActive/isPaused
+    changes — pystray's win32 backend only rebuilds its popup menu (and so
+    only re-evaluates each MenuItem's `visible` callable) when told to, not
+    automatically on every right-click. Without this, the tray's Pause/Resume
+    and End Session (Nuclear) items — which are only meant to show up while a
+    session is running — would keep showing whatever visibility they had the
+    last time update_menu() happened to run, regardless of session state
+    changes made elsewhere (the API, a session ending naturally, etc).
     """
     last_flagged_process = None
+    last_menu_state = None
 
     while not stop_event.is_set():
         try:
             status = session_manager.get_status()
+
+            if tray_icon is not None:
+                menu_state = (status["isActive"], status["isPaused"])
+                if menu_state != last_menu_state:
+                    last_menu_state = menu_state
+                    try:
+                        tray_icon.update_menu()
+                    except Exception:
+                        pass
 
             pending = session_manager.pop_pending_natural_end()
             if pending is not None and on_session_end is not None:
