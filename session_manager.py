@@ -26,6 +26,9 @@ _state = {
     "lastAcceptableProcess": None,
     "domainWhitelistAdditions": [],
     "processWhitelistAdditions": [],
+    "isPaused": False,
+    "pausedAt": None,
+    "frozenSecondsRemaining": None,
 }
 
 # Index into violationLog of the most recent still-unresolved violation of
@@ -171,6 +174,9 @@ def start_session(duration_minutes, lock_mode, process_whitelist, domain_whiteli
         _state["lastAcceptableProcess"] = None
         _state["domainWhitelistAdditions"] = []
         _state["processWhitelistAdditions"] = []
+        _state["isPaused"] = False
+        _state["pausedAt"] = None
+        _state["frozenSecondsRemaining"] = None
         _open_violation_index["process"] = None
         _open_violation_index["domain"] = None
         _save()
@@ -243,6 +249,9 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
     _state["lastAcceptableProcess"] = None
     _state["domainWhitelistAdditions"] = []
     _state["processWhitelistAdditions"] = []
+    _state["isPaused"] = False
+    _state["pausedAt"] = None
+    _state["frozenSecondsRemaining"] = None
     _open_violation_index["process"] = None
     _open_violation_index["domain"] = None
     _save()
@@ -265,24 +274,85 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
 
 def get_status():
     with _lock:
-        seconds_remaining = 0
-        if _state["isActive"] and _state["endTime"]:
-            end_time = datetime.fromisoformat(_state["endTime"])
-            seconds_remaining = max(0, int((end_time - datetime.now()).total_seconds()))
-            if seconds_remaining == 0:
-                _pending_natural_end["value"] = _finalize_to_history_locked(end_time, end_type="natural")
-        return {
-            "isActive": _state["isActive"],
-            "secondsRemaining": seconds_remaining,
-            "lockMode": _state["lockMode"],
-            "processWhitelist": list(_state["processWhitelist"]),
-            "domainWhitelist": list(_state["domainWhitelist"]),
-            "violationCount": _state["violationCount"],
-            "violationLog": list(_state["violationLog"]),
-            "lastAcceptableProcess": _state["lastAcceptableProcess"],
-            "domainWhitelistAdditions": list(_state["domainWhitelistAdditions"]),
-            "processWhitelistAdditions": list(_state["processWhitelistAdditions"]),
-        }
+        return _get_status_locked()
+
+
+def _get_status_locked():
+    """Body of get_status(), for callers (pause_session()/resume_session())
+    that already hold _lock — _lock isn't reentrant, so get_status() itself
+    can't be called from inside another with _lock: block."""
+    seconds_remaining = 0
+    if _state["isActive"] and _state["isPaused"]:
+        # Timer is frozen — return the exact value it was frozen at instead
+        # of recomputing from endTime, and never self-finalize a "natural
+        # end" while paused (the deadline math below is the only thing that
+        # can fire that, and it's skipped entirely here).
+        seconds_remaining = _state["frozenSecondsRemaining"] or 0
+    elif _state["isActive"] and _state["endTime"]:
+        end_time = datetime.fromisoformat(_state["endTime"])
+        seconds_remaining = max(0, int((end_time - datetime.now()).total_seconds()))
+        if seconds_remaining == 0:
+            _pending_natural_end["value"] = _finalize_to_history_locked(end_time, end_type="natural")
+    return {
+        "isActive": _state["isActive"],
+        "isPaused": _state["isPaused"],
+        "secondsRemaining": seconds_remaining,
+        "lockMode": _state["lockMode"],
+        "processWhitelist": list(_state["processWhitelist"]),
+        "domainWhitelist": list(_state["domainWhitelist"]),
+        "violationCount": _state["violationCount"],
+        "violationLog": list(_state["violationLog"]),
+        "lastAcceptableProcess": _state["lastAcceptableProcess"],
+        "domainWhitelistAdditions": list(_state["domainWhitelistAdditions"]),
+        "processWhitelistAdditions": list(_state["processWhitelistAdditions"]),
+    }
+
+
+def pause_session():
+    """Freezes the countdown only — isActive, lockMode, whitelists, and
+    violation tracking are all untouched, so lock enforcement keeps working
+    exactly as before while paused. Idempotent: no active session, or a
+    session that's already paused, just returns the current status unchanged.
+
+    The frozen secondsRemaining is computed once here and stored, rather than
+    just remembering pausedAt, so get_status() can return the exact same
+    number on every poll without redoing "now vs endTime" math that would
+    have to account for the pause itself."""
+    with _lock:
+        if not _state["isActive"] or _state["isPaused"]:
+            return _get_status_locked()
+
+        now = datetime.now()
+        end_time = datetime.fromisoformat(_state["endTime"])
+        seconds_remaining = max(0, int((end_time - now).total_seconds()))
+
+        _state["isPaused"] = True
+        _state["pausedAt"] = now.isoformat()
+        _state["frozenSecondsRemaining"] = seconds_remaining
+        _state["violationLog"].append({"kind": "pause", "timestamp": now.isoformat()})
+        _save()
+        return _get_status_locked()
+
+
+def resume_session():
+    """Resumes the countdown from exactly the secondsRemaining it was frozen
+    at — shifts endTime forward by however long the pause lasted, rather than
+    recomputing from the original start time, so the pause duration never
+    counts against the timer. Idempotent: no active session, or a session
+    that isn't paused, just returns the current status unchanged."""
+    with _lock:
+        if not _state["isActive"] or not _state["isPaused"]:
+            return _get_status_locked()
+
+        now = datetime.now()
+        frozen_remaining = _state["frozenSecondsRemaining"] or 0
+        _state["endTime"] = (now + timedelta(seconds=frozen_remaining)).isoformat()
+        _state["isPaused"] = False
+        _state["pausedAt"] = None
+        _state["frozenSecondsRemaining"] = None
+        _state["violationLog"].append({"kind": "resume", "timestamp": now.isoformat()})
+        _save()
+        return _get_status_locked()
 
 
 def pop_pending_natural_end():

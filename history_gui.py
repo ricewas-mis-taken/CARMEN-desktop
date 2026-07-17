@@ -78,12 +78,22 @@ def _write_session(text, session):
     text.insert("end", f"Allowed sites: {', '.join(domain_whitelist) or '(none)'}\n")
 
     violation_log = session.get("violationLog") or []
-    violation_count = session.get("violationCount", len(violation_log))
+    violation_count = session.get(
+        "violationCount", sum(1 for e in violation_log if e.get("kind") in ("process", "domain"))
+    )
     text.insert("end", f"Violations: {violation_count}\n", "dim")
 
+    # violationLog also carries pause/resume events (see session_manager's
+    # pause_session()/resume_session()) — rendered inline in the same
+    # chronological list rather than a separate section, since the whole
+    # point is showing when the user was on a break relative to a violation.
     for entry in violation_log:
-        line, tag = _format_violation(entry)
-        text.insert("end", "  " + line + "\n", tag)
+        kind = entry.get("kind", "process")
+        if kind in ("pause", "resume"):
+            text.insert("end", "  " + _format_pause_event(entry) + "\n", "dim")
+        else:
+            line, tag = _format_violation(entry)
+            text.insert("end", "  " + line + "\n", tag)
 
     process_additions = session.get("processWhitelistAdditions") or []
     domain_additions = session.get("domainWhitelistAdditions") or []
@@ -112,6 +122,13 @@ def _format_violation(entry):
         tag = "unresolved"
 
     return f"[{kind}] {name}  —  {time_text}  —  {resolution}", tag
+
+
+def _format_pause_event(entry):
+    label = "Paused" if entry.get("kind") == "pause" else "Resumed"
+    ts = _parse(entry.get("timestamp"))
+    time_text = ts.strftime("%H:%M:%S") if ts else "?"
+    return f"{label} at {time_text}"
 
 
 def _format_addition(kind_label, entry, key):

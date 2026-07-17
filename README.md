@@ -64,6 +64,7 @@ curl http://127.0.0.1:5847/status
 ```json
 {
   "isActive": true,
+  "isPaused": false,
   "secondsRemaining": 1423,
   "lockMode": "soft",
   "processWhitelist": ["Code.exe", "chrome.exe"],
@@ -89,6 +90,11 @@ curl http://127.0.0.1:5847/status
 it's the browser extension's job to fetch it from `GET /status` and match it
 against active tabs.
 
+`isPaused` reflects whether the countdown is currently frozen (see
+`POST /session/pause` below) — the session stays `isActive: true` and lock
+enforcement keeps running exactly as normal while paused; only
+`secondsRemaining` stops moving.
+
 Each `violationLog` entry is `kind: "process"` (this app's own window-polling,
 identified by `"process"`) or `kind: "domain"` (reported by the browser
 extension via `POST /violation`, identified by `"url"`). `resolvedAt`/
@@ -98,6 +104,11 @@ entries that happens automatically the moment the foreground app is back on
 `POST /violation/resolved` (see below) since this app has no way to observe tab
 changes itself. If a violation is still open when the session ends, it stays
 `null` forever — "never corrected before the session ended."
+
+The same log also carries `kind: "pause"` / `kind: "resume"` entries (just
+`{"kind": ..., "timestamp": ...}`, no resolution fields) whenever
+`POST /session/pause` / `POST /session/resume` is called, so session
+history shows breaks inline with violations in chronological order.
 
 ### `POST /session/start`
 
@@ -137,6 +148,43 @@ omitted entirely (the browser extension does this, since it doesn't collect an
 app whitelist) — in that case the session starts with whatever process whitelist
 was last saved via the tray's "Pick Apps to Whitelist" picker
 (`config.json`'s `processWhitelist`), rather than being rejected or reset to empty.
+
+### `POST /session/pause`
+
+Freezes the countdown only — the session stays `isActive: true` and lock mode
+(soft/hard) keeps being enforced exactly as before. Doesn't touch violation
+tracking, whitelists, or lock mode at all. No body. Idempotent: if no session
+is active, or the session is already paused, just returns the current status
+unchanged.
+
+```
+curl -X POST http://127.0.0.1:5847/session/pause
+```
+
+Returns the current `GET /status` shape, with `isPaused: true` and
+`secondsRemaining` frozen at whatever it was the moment pause was called —
+every subsequent `GET /status` poll returns that same frozen number until
+resumed. Appends a `{"kind": "pause", "timestamp": ...}` entry to
+`violationLog`.
+
+### `POST /session/resume`
+
+Resumes the countdown from exactly the `secondsRemaining` it was frozen at —
+the pause duration never counts against the timer. No body. Idempotent: if no
+session is active, or the session isn't paused, just returns the current
+status unchanged.
+
+```
+curl -X POST http://127.0.0.1:5847/session/resume
+```
+
+Returns the current `GET /status` shape, with `isPaused: false` and
+`secondsRemaining` ticking down again. Appends a
+`{"kind": "resume", "timestamp": ...}` entry to `violationLog`.
+
+Both endpoints, and `isPaused`/the frozen `secondsRemaining`, are persisted to
+`session_state.json` on every call, so an app restart while paused doesn't
+silently resume the countdown.
 
 ### `POST /violation`
 

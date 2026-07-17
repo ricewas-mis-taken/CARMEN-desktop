@@ -5,6 +5,8 @@ Endpoints:
     GET  /status
     POST /session/start
     POST /session/end
+    POST /session/pause
+    POST /session/resume
     POST /violation
     POST /violation/resolved
     GET  /history
@@ -88,6 +90,23 @@ def session_start():
 def session_end():
     result = session_manager.end_session()
     return jsonify(result)
+
+
+@app.route("/session/pause", methods=["POST"])
+def session_pause():
+    """Freezes the countdown only — the session stays active and lock
+    enforcement (handled entirely by the extension/window_tracker, not this
+    endpoint) is untouched. Idempotent: no active session, or a session
+    that's already paused, just returns the current status unchanged."""
+    return jsonify(session_manager.pause_session())
+
+
+@app.route("/session/resume", methods=["POST"])
+def session_resume():
+    """Resumes the countdown from exactly where it was frozen. Idempotent:
+    no active session, or a session that isn't paused, just returns the
+    current status unchanged."""
+    return jsonify(session_manager.resume_session())
 
 
 @app.route("/violation", methods=["POST"])
