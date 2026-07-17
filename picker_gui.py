@@ -103,7 +103,30 @@ def _build_whitelist_picker(root):
     # a different session once another one completes.
     if not session_active:
         history = session_history.load_all()
-        prev_apps = history[-1].get("processWhitelist", []) if history else []
+        prev_session = history[-1] if history else None
+        prev_additions = prev_session.get("processWhitelistAdditions", []) if prev_session else []
+        prev_apps = prev_session.get("processWhitelist", []) if prev_session else []
+
+        # Rendered before the plain processWhitelist section below, and with
+        # its reason attached — these are specifically the apps that got let
+        # in mid-session (via the reason-required flow, either the tray
+        # picker or the lock overlay's own "Whitelist" button) rather than
+        # picked at session start, so they're worth calling out on their own
+        # even though processWhitelist already contains them too.
+        if prev_additions:
+            tk.Label(
+                list_frame, text="Added mid-session last time — quick re-add:",
+                font=("Segoe UI", 9, "bold"), anchor="w", fg="#555",
+            ).pack(fill="x", anchor="w", pady=(4, 0))
+            for addition in prev_additions:
+                process_name = addition.get("process")
+                if not process_name:
+                    continue
+                reason = addition.get("reason")
+                label = f"{process_name}   — {reason}" if reason else process_name
+                add_checkbox_row(process_name, label, checked=False)
+            tk.Frame(list_frame, height=1, bg="#ccc").pack(fill="x", pady=6)
+
         if prev_apps:
             tk.Label(
                 list_frame, text="From your last session — quick re-add:",
