@@ -8,24 +8,65 @@ overlays) — never a second Tk(). A module-level singleton reference means a
 repeat tray click lifts the existing window instead of spawning another one.
 """
 import calendar as calendar_module
+import functools
 import os
 import tkinter as tk
+import tkinter.font as tkfont
 from datetime import date, datetime, timedelta
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
 import calendar_recurrence as recurrence
 import calendar_store as store
 import checklist_widget
+import config
 import gui_thread
 import history_gui
 import installed_apps
 import picker_gui
+import rounded_widgets as rw
+import session_history
 import session_manager
 
 COLOR_PALETTE = [
     "#2d8cff", "#e53935", "#43a047", "#fb8c00", "#8e24aa",
     "#00acc1", "#f4511e", "#3949ab", "#6d4c41", "#546e7a",
 ]
+
+# Visual-only constants — a light, airy Google/macOS-Calendar-style theme for
+# the Calendar tab (the Focus tab keeps its current look for now, pending a
+# follow-up pass). Nothing below this point changes data flow or event
+# handling; it's all bg/fg/font/spacing on the same widgets.
+FONT = "Segoe UI"
+THEME = {
+    "bg": "#ffffff",
+    "bg_soft": "#fafbfc",
+    "sidebar_bg": "#262b36",
+    "sidebar_hover": "#333a48",
+    "sidebar_active": "#3a4256",
+    "sidebar_text": "#e8eaed",
+    "sidebar_text_muted": "#9aa0ac",
+    "grid_line": "#eceef1",
+    "border": "#e3e5e9",
+    "text": "#1f2328",
+    "text_muted": "#8a8f98",
+    "text_faint": "#c7cad0",
+    "today_bg": "#eaf2ff",
+    "today_border": "#2d8cff",
+    "selected_bg": "#f1f3f6",
+    "selected_border": "#c9ccd3",
+    "weekend_bg": "#fafbfc",
+    "accent": "#2d8cff",
+    "accent_soft": "#eef4ff",
+    "button_secondary": "#f1f3f6",
+    "button_secondary_hover": "#e6e9ee",
+}
+
+
+def _letter_spaced(text):
+    """Cheap letter-spacing simulation — Tkinter fonts have no tracking
+    property, so day-of-week headers get a hair-space between characters
+    instead, matching the "uppercase, letter-spaced" look without it."""
+    return " ".join(text.upper())
 
 REMINDER_PRESETS = [
     ("At start time", 0),
@@ -62,58 +103,61 @@ def _build_main_window(root):
     _state["win"] = win
     _state["selected_date"] = date.today()
     win.title("Carmen Focus")
-    win.geometry("880x680")
+    win.geometry("900x700")
     win.minsize(680, 520)
+    win.configure(bg=THEME["bg"])
 
-    sidebar = tk.Frame(win, width=140, bg="#20242c")
+    sidebar = tk.Frame(win, width=168, bg=THEME["sidebar_bg"])
     sidebar.pack(side="left", fill="y")
     sidebar.pack_propagate(False)
 
-    content = tk.Frame(win)
+    content = tk.Frame(win, bg=THEME["bg"])
     content.pack(side="left", fill="both", expand=True)
 
-    calendar_frame = tk.Frame(content)
-    focus_frame = tk.Frame(content)
-    for frame in (calendar_frame, focus_frame):
+    calendar_frame = tk.Frame(content, bg=THEME["bg"])
+    focus_frame = tk.Frame(content, bg=THEME["bg"])
+    finished_frame = tk.Frame(content, bg=THEME["bg"])
+    tab_frames = {"calendar": calendar_frame, "focus": focus_frame, "finished": finished_frame}
+    for frame in tab_frames.values():
         frame.place(x=0, y=0, relwidth=1, relheight=1)
 
     tk.Label(
-        sidebar, text="Carmen Focus", bg="#20242c", fg="white",
-        font=("Segoe UI", 12, "bold"), pady=16,
-    ).pack(fill="x")
+        sidebar, text="Carmen Focus", bg=THEME["sidebar_bg"], fg=THEME["sidebar_text"],
+        font=(FONT, 13, "bold"), anchor="w",
+    ).pack(fill="x", padx=18, pady=(22, 20))
 
     tab_buttons = {}
 
     def show_tab(name):
         for n, btn in tab_buttons.items():
-            btn.configure(bg="#2d3340" if n == name else "#20242c")
-        (calendar_frame if name == "calendar" else focus_frame).tkraise()
+            btn.set_active(n == name, active_bg=THEME["sidebar_active"])
+        tab_frames[name].tkraise()
 
-    tab_buttons["calendar"] = tk.Button(
-        sidebar, text="📅 Calendar", anchor="w", bd=0, fg="white", bg="#20242c",
-        activebackground="#2d3340", activeforeground="white", padx=14, pady=10,
-        command=lambda: show_tab("calendar"),
-    )
-    tab_buttons["focus"] = tk.Button(
-        sidebar, text="🎯 Focus", anchor="w", bd=0, fg="white", bg="#20242c",
-        activebackground="#2d3340", activeforeground="white", padx=14, pady=10,
-        command=lambda: show_tab("focus"),
-    )
-    tab_buttons["calendar"].pack(fill="x")
-    tab_buttons["focus"].pack(fill="x")
+    nav_items = [("calendar", "📅  Calendar"), ("focus", "🎯  Focus"), ("finished", "✅  Finished")]
+    for key, label in nav_items:
+        btn = rw.RoundedButton(
+            sidebar, label, command=lambda k=key: show_tab(k),
+            bg=THEME["sidebar_bg"], hover_bg=THEME["sidebar_hover"], fg=THEME["sidebar_text"],
+            font=(FONT, 10), radius=8, width=144, height=38, anchor="w", padx=14,
+            parent_bg=THEME["sidebar_bg"],
+        )
+        btn.pack(padx=12, pady=3)
+        tab_buttons[key] = btn
 
-    tk.Frame(sidebar, bg="#20242c").pack(fill="both", expand=True)  # spacer
+    tk.Frame(sidebar, bg=THEME["sidebar_bg"]).pack(fill="both", expand=True)  # spacer
 
-    tk.Button(
-        sidebar, text="Backup / Restore…", anchor="w", bd=0, fg="#cccccc", bg="#20242c",
-        activebackground="#2d3340", activeforeground="white", padx=14, pady=8,
-        font=("Segoe UI", 8), command=lambda: _open_backup_dialog(win),
-    ).pack(fill="x", side="bottom")
-
-    _build_calendar_tab(calendar_frame, win)
-    _build_focus_tab(focus_frame, win)
+    rw.RoundedButton(
+        sidebar, "Backup / Restore…", command=lambda: _open_backup_dialog(win),
+        bg=THEME["sidebar_bg"], hover_bg=THEME["sidebar_hover"], fg=THEME["sidebar_text_muted"],
+        font=(FONT, 8), radius=8, width=144, height=30, anchor="w", padx=14,
+        parent_bg=THEME["sidebar_bg"],
+    ).pack(padx=12, pady=(0, 16))
 
     _state["refresh_callbacks"] = []
+    _build_calendar_tab(calendar_frame, win)
+    _build_focus_tab(focus_frame, win)
+    _build_finished_tab(finished_frame, win)
+
     show_tab("calendar")
 
     def on_close():
@@ -188,37 +232,47 @@ def _build_focus_tab(parent, win):
 # ---------------------------------------------------------------------------
 
 def _build_calendar_tab(parent, win):
-    header = tk.Frame(parent)
-    header.pack(fill="x", padx=16, pady=(16, 4))
+    header = tk.Frame(parent, bg=THEME["bg"])
+    header.pack(fill="x", padx=24, pady=(22, 6))
 
-    next_up = tk.Frame(parent)
-    next_up.pack(fill="x", padx=16, pady=(0, 6))
+    next_up = tk.Frame(parent, bg=THEME["bg"])
+    next_up.pack(fill="x", padx=24, pady=(0, 8))
     _register_next_up_widget(next_up)
 
     search_var = tk.StringVar(master=win)
 
     month_state = {"cursor": date.today().replace(day=1)}
 
-    nav_frame = tk.Frame(header)
+    nav_frame = tk.Frame(header, bg=THEME["bg"])
     nav_frame.pack(side="left")
-    month_label = tk.Label(nav_frame, font=("Segoe UI", 13, "bold"))
-    month_label.pack(side="left", padx=8)
+    month_label = tk.Label(nav_frame, font=(FONT, 17, "bold"), bg=THEME["bg"], fg=THEME["text"])
+    month_label.pack(side="left", padx=(0, 16))
 
-    search_frame = tk.Frame(header)
+    search_frame = tk.Frame(header, bg=THEME["border"], padx=1, pady=1)
     search_frame.pack(side="right")
-    tk.Label(search_frame, text="Search:").pack(side="left")
-    search_entry = tk.Entry(search_frame, textvariable=search_var, width=20)
-    search_entry.pack(side="left", padx=(4, 0))
+    search_inner = tk.Frame(search_frame, bg=THEME["bg_soft"])
+    search_inner.pack()
+    tk.Label(
+        search_inner, text="🔍", bg=THEME["bg_soft"], fg=THEME["text_muted"], font=(FONT, 9),
+    ).pack(side="left", padx=(10, 4), pady=6)
+    search_entry = tk.Entry(
+        search_inner, textvariable=search_var, width=18, bd=0, bg=THEME["bg_soft"],
+        fg=THEME["text"], font=(FONT, 10), highlightthickness=0, insertbackground=THEME["text"],
+    )
+    search_entry.pack(side="left", padx=(0, 10), pady=7)
 
-    body = tk.PanedWindow(parent, orient="vertical", sashrelief="flat", sashwidth=6)
-    body.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+    body = tk.PanedWindow(
+        parent, orient="vertical", sashrelief="flat", sashwidth=8,
+        bg=THEME["bg"], bd=0,
+    )
+    body.pack(fill="both", expand=True, padx=24, pady=(4, 20))
 
-    month_frame = tk.Frame(body)
-    day_frame = tk.Frame(body)
+    month_frame = tk.Frame(body, bg=THEME["bg"])
+    day_frame = tk.Frame(body, bg=THEME["bg"])
     body.add(month_frame, height=380)
     body.add(day_frame, height=260)
 
-    grid_cells = tk.Frame(month_frame)
+    grid_cells = tk.Frame(month_frame, bg=THEME["grid_line"])
 
     def render_month():
         for child in grid_cells.winfo_children():
@@ -228,9 +282,10 @@ def _build_calendar_tab(parent, win):
 
         weekday_names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
         for i, name in enumerate(weekday_names):
-            tk.Label(grid_cells, text=name, font=("Segoe UI", 9, "bold"), fg="#666").grid(
-                row=0, column=i, sticky="nsew", padx=1, pady=1
-            )
+            tk.Label(
+                grid_cells, text=_letter_spaced(name), font=(FONT, 8, "bold"),
+                fg=THEME["text_muted"], bg=THEME["bg"], pady=8,
+            ).grid(row=0, column=i, sticky="nsew", padx=1, pady=(0, 1))
 
         cal = calendar_module.Calendar(firstweekday=6)  # Sunday-start
         month_days = list(cal.itermonthdates(cursor.year, cursor.month))
@@ -255,23 +310,35 @@ def _build_calendar_tab(parent, win):
         for idx, day in enumerate(month_days):
             row, col = divmod(idx, 7)
             in_month = day.month == cursor.month
+            is_today = day == date.today()
             is_selected = day == _state["selected_date"]
+            is_weekend = col in (0, 6)
+
+            if is_today:
+                cell_bg = THEME["today_bg"]
+            elif is_selected:
+                cell_bg = THEME["selected_bg"]
+            elif in_month:
+                cell_bg = THEME["weekend_bg"] if is_weekend else THEME["bg"]
+            else:
+                cell_bg = THEME["bg_soft"]
+
+            border_color = THEME["today_border"] if is_today else (
+                THEME["selected_border"] if is_selected else THEME["grid_line"]
+            )
             cell = tk.Frame(
-                grid_cells, bg="#e8f0fe" if is_selected else ("white" if in_month else "#f5f5f5"),
-                highlightbackground="#ddd", highlightthickness=1,
+                grid_cells, bg=cell_bg,
+                highlightbackground=border_color, highlightthickness=1,
             )
             cell.grid(row=row + 1, column=col, sticky="nsew", padx=1, pady=1)
 
-            tk.Label(
+            day_number = tk.Label(
                 cell, text=str(day.day), anchor="ne",
-                bg=cell["bg"], fg="black" if in_month else "#aaa",
-                font=("Segoe UI", 9),
-            ).pack(fill="x")
-
-            for event in occurrences_by_day.get(day, [])[:3]:
-                tk.Label(
-                    cell, text="●", fg=event["color"], bg=cell["bg"], font=("Segoe UI", 8),
-                ).pack(anchor="w", padx=2)
+                bg=cell_bg,
+                fg=(THEME["accent"] if is_today else THEME["text"]) if in_month else THEME["text_faint"],
+                font=(FONT, 10, "bold" if is_today else "normal"),
+            )
+            day_number.pack(fill="x", padx=6, pady=(5, 2))
 
             def on_click(d=day):
                 _state["selected_date"] = d
@@ -279,8 +346,57 @@ def _build_calendar_tab(parent, win):
                 render_day()
 
             cell.bind("<Button-1>", lambda e, d=day: on_click(d))
-            for child in cell.winfo_children():
-                child.bind("<Button-1>", lambda e, d=day: on_click(d))
+            day_number.bind("<Button-1>", lambda e, d=day: on_click(d))
+
+            day_events = occurrences_by_day.get(day, [])
+            MAX_STRIPS = 3
+            for event in day_events[:MAX_STRIPS]:
+                # A small rounded pill per event, overlaid on the day cell —
+                # same "block of color" language as the day view's hourly
+                # event blocks, just collapsed to one compact chip per day
+                # instead of being positioned by time.
+                pill_holder = tk.Frame(cell, bg=cell_bg)
+                pill_holder.pack(fill="x", padx=5, pady=1)
+                pill_canvas = tk.Canvas(
+                    # width=1: Canvas defaults to a ~200px requested width
+                    # with none given, which — inside a grid column with no
+                    # other wide content — was forcing that day's column to
+                    # balloon out and push later weekday columns off the
+                    # visible grid. pack(fill="x") still stretches it to the
+                    # cell's actual width once the column size is settled;
+                    # only the initial size *hint* to the grid changes.
+                    pill_holder, height=16, width=1, highlightthickness=0, bg=cell_bg,
+                )
+                pill_canvas.pack(fill="x")
+
+                def draw_pill(canvas=pill_canvas, ev=event):
+                    canvas.delete("all")
+                    canvas.update_idletasks()
+                    w = max(canvas.winfo_width(), 40)
+                    title = ev["title"]
+                    # Rough char budget for an 8pt Segoe UI pill at this
+                    # width — good enough for "truncated, not raw text".
+                    max_chars = max(4, int(w / 6.2))
+                    if len(title) > max_chars:
+                        title = title[: max_chars - 1].rstrip() + "…"
+                    rw.draw_pill(
+                        canvas, 0, 0, w, 16, fill=ev["color"], text=title,
+                        text_fill=_contrasting_text_color(ev["color"]), font=(FONT, 7),
+                    )
+
+                pill_canvas.bind("<Configure>", lambda e, fn=draw_pill: fn())
+                pill_canvas.bind(
+                    "<Button-1>",
+                    lambda e, d=day, ev=event: (_state.update(selected_date=d), render_month(), render_day(), open_event_editor(win, event_id=ev["id"]))[-1],
+                )
+
+            if len(day_events) > MAX_STRIPS:
+                more_label = tk.Label(
+                    cell, text=f"+{len(day_events) - MAX_STRIPS} more", anchor="w",
+                    bg=cell_bg, fg=THEME["text_muted"], font=(FONT, 7),
+                )
+                more_label.pack(fill="x", padx=6, pady=(0, 3))
+                more_label.bind("<Button-1>", lambda e, d=day: on_click(d))
 
     grid_cells.pack(fill="both", expand=True)
 
@@ -295,27 +411,50 @@ def _build_calendar_tab(parent, win):
         month_state["cursor"] = (c + timedelta(days=days_in_month)).replace(day=1)
         render_month()
 
-    tk.Button(nav_frame, text="◀", command=prev_month, width=3).pack(side="left")
-    tk.Button(nav_frame, text="▶", command=next_month, width=3).pack(side="left")
-    tk.Button(nav_frame, text="Today", command=lambda: (_jump_today(month_state, render_month_cb=render_month, render_day_cb=lambda: render_day())),).pack(side="left", padx=(6, 0))
-    tk.Button(nav_frame, text="+ New Event", command=lambda: open_event_editor(win, initial_date=_state["selected_date"])).pack(side="left", padx=(12, 0))
+    rw.RoundedButton(
+        nav_frame, "‹", command=prev_month, bg=THEME["button_secondary"],
+        hover_bg=THEME["button_secondary_hover"], fg=THEME["text"], font=(FONT, 11),
+        width=30, height=30, radius=8, parent_bg=THEME["bg"],
+    ).pack(side="left", padx=(0, 4))
+    rw.RoundedButton(
+        nav_frame, "›", command=next_month, bg=THEME["button_secondary"],
+        hover_bg=THEME["button_secondary_hover"], fg=THEME["text"], font=(FONT, 11),
+        width=30, height=30, radius=8, parent_bg=THEME["bg"],
+    ).pack(side="left")
+    rw.RoundedButton(
+        nav_frame, "Today",
+        command=lambda: _jump_today(month_state, render_month_cb=render_month, render_day_cb=lambda: render_day()),
+        bg=THEME["button_secondary"], hover_bg=THEME["button_secondary_hover"], fg=THEME["text"],
+        font=(FONT, 9), radius=8, parent_bg=THEME["bg"],
+    ).pack(side="left", padx=(10, 0))
+    rw.RoundedButton(
+        nav_frame, "+  New Event",
+        command=lambda: open_event_editor(win, initial_date=_state["selected_date"]),
+        bg=THEME["accent"], hover_bg=rw.shade(THEME["accent"], -10), fg="white",
+        font=(FONT, 9, "bold"), radius=8, parent_bg=THEME["bg"],
+    ).pack(side="left", padx=(14, 0))
 
     # --- day schedule (bottom pane) ---
-    day_header = tk.Frame(day_frame)
-    day_header.pack(fill="x")
-    day_title = tk.Label(day_header, font=("Segoe UI", 11, "bold"))
-    day_title.pack(side="left", pady=4)
+    day_header = tk.Frame(day_frame, bg=THEME["bg"])
+    day_header.pack(fill="x", pady=(4, 8))
+    day_title = tk.Label(day_header, font=(FONT, 13, "bold"), bg=THEME["bg"], fg=THEME["text"])
+    day_title.pack(side="left")
 
-    day_canvas_container = tk.Frame(day_frame)
+    day_canvas_container = tk.Frame(day_frame, bg=THEME["bg"])
     day_canvas_container.pack(fill="both", expand=True)
-    day_canvas = tk.Canvas(day_canvas_container, highlightthickness=0, bg="white")
+    day_canvas = tk.Canvas(day_canvas_container, highlightthickness=0, bg=THEME["bg"])
     day_scrollbar = tk.Scrollbar(day_canvas_container, orient="vertical", command=day_canvas.yview)
     day_canvas.configure(yscrollcommand=day_scrollbar.set)
     day_canvas.pack(side="left", fill="both", expand=True)
     day_scrollbar.pack(side="right", fill="y")
 
-    HOUR_HEIGHT = 48
-    LABEL_WIDTH = 56
+    HOUR_HEIGHT = 52
+    LABEL_WIDTH = 60
+    EVENT_LEFT_MARGIN = 10
+    EVENT_RIGHT_EDGE = 560
+    MIN_BLOCK_HEIGHT = 16
+    MIN_BLOCK_DURATION = timedelta(minutes=(MIN_BLOCK_HEIGHT / HOUR_HEIGHT) * 60)
+    day_view_state = {"last_date": None}
 
     def render_day():
         day_canvas.delete("all")
@@ -328,8 +467,11 @@ def _build_calendar_tab(parent, win):
         for hour in range(24):
             y = hour * HOUR_HEIGHT
             label = datetime(2000, 1, 1, hour).strftime("%I %p").lstrip("0")
-            day_canvas.create_line(0, y, 2000, y, fill="#eee")
-            day_canvas.create_text(4, y + 2, anchor="nw", text=label, font=("Segoe UI", 8), fill="#888")
+            day_canvas.create_line(LABEL_WIDTH - 8, y, 2000, y, fill=THEME["grid_line"])
+            day_canvas.create_text(
+                LABEL_WIDTH - 14, y + 2, anchor="ne", text=label,
+                font=(FONT, 8), fill=THEME["text_muted"],
+            )
 
         range_start = datetime.combine(selected, datetime.min.time())
         range_end = range_start + timedelta(days=1)
@@ -343,27 +485,39 @@ def _build_calendar_tab(parent, win):
             for occ_start, occ_end in recurrence.expand_occurrences(event, range_start, range_end):
                 day_events.append((occ_start, occ_end, event))
 
-        for occ_start, occ_end, event in sorted(day_events, key=lambda t: t[0]):
+        block_x0 = LABEL_WIDTH + EVENT_LEFT_MARGIN
+        for occ_start, occ_end, event, col, cols in _layout_day_blocks(day_events, min_duration=MIN_BLOCK_DURATION):
             start_minutes = max(0, (occ_start - range_start).total_seconds() / 60)
             end_minutes = min(24 * 60, (occ_end - range_start).total_seconds() / 60)
-            y0 = LABEL_WIDTH and (start_minutes / 60) * HOUR_HEIGHT
+            y0 = (start_minutes / 60) * HOUR_HEIGHT
             y1 = (end_minutes / 60) * HOUR_HEIGHT
-            y1 = max(y1, y0 + 16)
-            rect = day_canvas.create_rectangle(
-                LABEL_WIDTH, y0, 560, y1, fill=event["color"], outline=""
+            y1 = max(y1, y0 + MIN_BLOCK_HEIGHT)
+            col_width = (EVENT_RIGHT_EDGE - block_x0) / cols
+            gap = 4 if cols > 1 else 0
+            x0 = block_x0 + col * col_width
+            x1 = x0 + col_width - gap
+            rect = rw.draw_rounded_rect(
+                day_canvas, x0, y0 + 1, x1, y1 - 1, radius=6,
+                fill=event["color"], outline="",
             )
-            label_text = event["title"]
+            full_title = event["title"]
             if event.get("focusProfile") and event["focusProfile"].get("enabled"):
-                label_text = "🎯 " + label_text
+                full_title = "🎯 " + full_title
+            label_font = (FONT, 9)
+            label_text = _fit_block_label(label_font, (x1 - x0) - 16, full_title)
             text = day_canvas.create_text(
-                LABEL_WIDTH + 6, y0 + 2, anchor="nw", text=label_text,
-                fill="white", font=("Segoe UI", 9), width=560 - LABEL_WIDTH - 12,
+                x0 + 8, (y0 + y1) / 2, anchor="w", text=label_text,
+                fill=_contrasting_text_color(event["color"]), font=label_font,
             )
             for item in (rect, text):
                 day_canvas.tag_bind(
                     item, "<Button-1>",
                     lambda e, ev=event: open_event_editor(win, event_id=ev["id"]),
                 )
+
+        if day_view_state["last_date"] != selected:
+            day_view_state["last_date"] = selected
+            _scroll_to_current_hour(day_canvas, HOUR_HEIGHT, total_height)
 
     def _jump_today(month_state, render_month_cb, render_day_cb):
         month_state["cursor"] = date.today().replace(day=1)
@@ -382,8 +536,513 @@ def _build_calendar_tab(parent, win):
     render_day()
 
 
+# ---------------------------------------------------------------------------
+# Finished tab — same month-grid/day-schedule layout as the Calendar tab, but
+# reading from session_history.py (logged, completed focus sessions) instead
+# of calendar_store.py (scheduled events). No create/edit affordances here:
+# entries are appended by session_manager.end_session(), never authored by
+# hand, so this tab is read-only.
+# ---------------------------------------------------------------------------
+
+SESSION_END_COLORS = {
+    "manual": THEME["accent"],
+    "nuclear": "#e53935",
+    "timeout": "#fb8c00",
+}
+
+
+def _session_color(session):
+    return SESSION_END_COLORS.get(session.get("endType", "manual"), THEME["accent"])
+
+
+def _session_title(session):
+    return session.get("eventTitle") or "Focus session"
+
+
+def _parse_session_dt(iso_string):
+    if not iso_string:
+        return None
+    try:
+        return datetime.fromisoformat(iso_string)
+    except ValueError:
+        return None
+
+
+def _build_finished_tab(parent, win):
+    header = tk.Frame(parent, bg=THEME["bg"])
+    header.pack(fill="x", padx=24, pady=(22, 6))
+
+    last_session = tk.Frame(parent, bg=THEME["bg"])
+    last_session.pack(fill="x", padx=24, pady=(0, 8))
+    _register_last_session_widget(last_session)
+
+    search_var = tk.StringVar(master=win)
+
+    month_state = {"cursor": date.today().replace(day=1)}
+
+    nav_frame = tk.Frame(header, bg=THEME["bg"])
+    nav_frame.pack(side="left")
+    month_label = tk.Label(nav_frame, font=(FONT, 17, "bold"), bg=THEME["bg"], fg=THEME["text"])
+    month_label.pack(side="left", padx=(0, 16))
+
+    search_frame = tk.Frame(header, bg=THEME["border"], padx=1, pady=1)
+    search_frame.pack(side="right")
+    search_inner = tk.Frame(search_frame, bg=THEME["bg_soft"])
+    search_inner.pack()
+    tk.Label(
+        search_inner, text="🔍", bg=THEME["bg_soft"], fg=THEME["text_muted"], font=(FONT, 9),
+    ).pack(side="left", padx=(10, 4), pady=6)
+    search_entry = tk.Entry(
+        search_inner, textvariable=search_var, width=18, bd=0, bg=THEME["bg_soft"],
+        fg=THEME["text"], font=(FONT, 10), highlightthickness=0, insertbackground=THEME["text"],
+    )
+    search_entry.pack(side="left", padx=(0, 10), pady=7)
+
+    body = tk.PanedWindow(
+        parent, orient="vertical", sashrelief="flat", sashwidth=8,
+        bg=THEME["bg"], bd=0,
+    )
+    body.pack(fill="both", expand=True, padx=24, pady=(4, 20))
+
+    month_frame = tk.Frame(body, bg=THEME["bg"])
+    day_frame = tk.Frame(body, bg=THEME["bg"])
+    body.add(month_frame, height=380)
+    body.add(day_frame, height=260)
+
+    grid_cells = tk.Frame(month_frame, bg=THEME["grid_line"])
+
+    def matching_sessions():
+        query = search_var.get().strip().lower()
+        sessions = session_history.load_all()
+        if query:
+            sessions = [
+                s for s in sessions
+                if query in (_session_title(s).lower()) or query in (s.get("reason") or "").lower()
+            ]
+        return sessions
+
+    def render_month():
+        for child in grid_cells.winfo_children():
+            child.destroy()
+        cursor = month_state["cursor"]
+        month_label.config(text=cursor.strftime("%B %Y"))
+
+        weekday_names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        for i, name in enumerate(weekday_names):
+            tk.Label(
+                grid_cells, text=_letter_spaced(name), font=(FONT, 8, "bold"),
+                fg=THEME["text_muted"], bg=THEME["bg"], pady=8,
+            ).grid(row=0, column=i, sticky="nsew", padx=1, pady=(0, 1))
+
+        cal = calendar_module.Calendar(firstweekday=6)  # Sunday-start
+        month_days = list(cal.itermonthdates(cursor.year, cursor.month))
+
+        sessions_by_day = {}
+        for session in matching_sessions():
+            start = _parse_session_dt(session.get("startTime"))
+            if start:
+                sessions_by_day.setdefault(start.date(), []).append(session)
+
+        for i in range(6):
+            grid_cells.grid_rowconfigure(i + 1, weight=1)
+        for i in range(7):
+            grid_cells.grid_columnconfigure(i, weight=1)
+
+        for idx, day in enumerate(month_days):
+            row, col = divmod(idx, 7)
+            in_month = day.month == cursor.month
+            is_today = day == date.today()
+            is_selected = day == _state["selected_date"]
+            is_weekend = col in (0, 6)
+
+            if is_today:
+                cell_bg = THEME["today_bg"]
+            elif is_selected:
+                cell_bg = THEME["selected_bg"]
+            elif in_month:
+                cell_bg = THEME["weekend_bg"] if is_weekend else THEME["bg"]
+            else:
+                cell_bg = THEME["bg_soft"]
+
+            border_color = THEME["today_border"] if is_today else (
+                THEME["selected_border"] if is_selected else THEME["grid_line"]
+            )
+            cell = tk.Frame(
+                grid_cells, bg=cell_bg,
+                highlightbackground=border_color, highlightthickness=1,
+            )
+            cell.grid(row=row + 1, column=col, sticky="nsew", padx=1, pady=1)
+
+            day_number = tk.Label(
+                cell, text=str(day.day), anchor="ne",
+                bg=cell_bg,
+                fg=(THEME["accent"] if is_today else THEME["text"]) if in_month else THEME["text_faint"],
+                font=(FONT, 10, "bold" if is_today else "normal"),
+            )
+            day_number.pack(fill="x", padx=6, pady=(5, 2))
+
+            def on_click(d=day):
+                _state["selected_date"] = d
+                render_month()
+                render_day()
+
+            cell.bind("<Button-1>", lambda e, d=day: on_click(d))
+            day_number.bind("<Button-1>", lambda e, d=day: on_click(d))
+
+            day_sessions = sorted(sessions_by_day.get(day, []), key=lambda s: s.get("startTime") or "")
+            MAX_STRIPS = 3
+            for session in day_sessions[:MAX_STRIPS]:
+                pill_holder = tk.Frame(cell, bg=cell_bg)
+                pill_holder.pack(fill="x", padx=5, pady=1)
+                pill_canvas = tk.Canvas(
+                    pill_holder, height=16, width=1, highlightthickness=0, bg=cell_bg,
+                )
+                pill_canvas.pack(fill="x")
+
+                def draw_pill(canvas=pill_canvas, s=session):
+                    canvas.delete("all")
+                    canvas.update_idletasks()
+                    w = max(canvas.winfo_width(), 40)
+                    title = _session_title(s)
+                    max_chars = max(4, int(w / 6.2))
+                    if len(title) > max_chars:
+                        title = title[: max_chars - 1].rstrip() + "…"
+                    color = _session_color(s)
+                    rw.draw_pill(
+                        canvas, 0, 0, w, 16, fill=color, text=title,
+                        text_fill=_contrasting_text_color(color), font=(FONT, 7),
+                    )
+
+                pill_canvas.bind("<Configure>", lambda e, fn=draw_pill: fn())
+                pill_canvas.bind(
+                    "<Button-1>",
+                    lambda e, d=day, s=session: (_state.update(selected_date=d), render_month(), render_day(), _open_session_detail(win, s))[-1],
+                )
+
+            if len(day_sessions) > MAX_STRIPS:
+                more_label = tk.Label(
+                    cell, text=f"+{len(day_sessions) - MAX_STRIPS} more", anchor="w",
+                    bg=cell_bg, fg=THEME["text_muted"], font=(FONT, 7),
+                )
+                more_label.pack(fill="x", padx=6, pady=(0, 3))
+                more_label.bind("<Button-1>", lambda e, d=day: on_click(d))
+
+    grid_cells.pack(fill="both", expand=True)
+
+    def prev_month():
+        c = month_state["cursor"]
+        month_state["cursor"] = (c.replace(day=1) - timedelta(days=1)).replace(day=1)
+        render_month()
+
+    def next_month():
+        c = month_state["cursor"]
+        days_in_month = calendar_module.monthrange(c.year, c.month)[1]
+        month_state["cursor"] = (c + timedelta(days=days_in_month)).replace(day=1)
+        render_month()
+
+    rw.RoundedButton(
+        nav_frame, "‹", command=prev_month, bg=THEME["button_secondary"],
+        hover_bg=THEME["button_secondary_hover"], fg=THEME["text"], font=(FONT, 11),
+        width=30, height=30, radius=8, parent_bg=THEME["bg"],
+    ).pack(side="left", padx=(0, 4))
+    rw.RoundedButton(
+        nav_frame, "›", command=next_month, bg=THEME["button_secondary"],
+        hover_bg=THEME["button_secondary_hover"], fg=THEME["text"], font=(FONT, 11),
+        width=30, height=30, radius=8, parent_bg=THEME["bg"],
+    ).pack(side="left")
+    rw.RoundedButton(
+        nav_frame, "Today",
+        command=lambda: _jump_today(month_state, render_month_cb=render_month, render_day_cb=lambda: render_day()),
+        bg=THEME["button_secondary"], hover_bg=THEME["button_secondary_hover"], fg=THEME["text"],
+        font=(FONT, 9), radius=8, parent_bg=THEME["bg"],
+    ).pack(side="left", padx=(10, 0))
+    rw.RoundedButton(
+        nav_frame, "View Full Log…",
+        command=history_gui.open_history_viewer,
+        bg=THEME["button_secondary"], hover_bg=THEME["button_secondary_hover"], fg=THEME["text"],
+        font=(FONT, 9), radius=8, parent_bg=THEME["bg"],
+    ).pack(side="left", padx=(14, 0))
+
+    # --- day schedule (bottom pane) ---
+    day_header = tk.Frame(day_frame, bg=THEME["bg"])
+    day_header.pack(fill="x", pady=(4, 8))
+    day_title = tk.Label(day_header, font=(FONT, 13, "bold"), bg=THEME["bg"], fg=THEME["text"])
+    day_title.pack(side="left")
+
+    day_canvas_container = tk.Frame(day_frame, bg=THEME["bg"])
+    day_canvas_container.pack(fill="both", expand=True)
+    day_canvas = tk.Canvas(day_canvas_container, highlightthickness=0, bg=THEME["bg"])
+    day_scrollbar = tk.Scrollbar(day_canvas_container, orient="vertical", command=day_canvas.yview)
+    day_canvas.configure(yscrollcommand=day_scrollbar.set)
+    day_canvas.pack(side="left", fill="both", expand=True)
+    day_scrollbar.pack(side="right", fill="y")
+
+    HOUR_HEIGHT = 52
+    LABEL_WIDTH = 60
+    EVENT_LEFT_MARGIN = 10
+    EVENT_RIGHT_EDGE = 560
+    MIN_BLOCK_HEIGHT = 16
+    MIN_BLOCK_DURATION = timedelta(minutes=(MIN_BLOCK_HEIGHT / HOUR_HEIGHT) * 60)
+    day_view_state = {"last_date": None}
+
+    def render_day():
+        day_canvas.delete("all")
+        selected = _state["selected_date"]
+        day_title.config(text=selected.strftime("%A, %B %d, %Y"))
+
+        total_height = HOUR_HEIGHT * 24
+        day_canvas.configure(scrollregion=(0, 0, 600, total_height))
+
+        for hour in range(24):
+            y = hour * HOUR_HEIGHT
+            label = datetime(2000, 1, 1, hour).strftime("%I %p").lstrip("0")
+            day_canvas.create_line(LABEL_WIDTH - 8, y, 2000, y, fill=THEME["grid_line"])
+            day_canvas.create_text(
+                LABEL_WIDTH - 14, y + 2, anchor="ne", text=label,
+                font=(FONT, 8), fill=THEME["text_muted"],
+            )
+
+        range_start = datetime.combine(selected, datetime.min.time())
+
+        day_sessions = []
+        for session in matching_sessions():
+            start = _parse_session_dt(session.get("startTime"))
+            if start and start.date() == selected:
+                end = _parse_session_dt(session.get("endTime")) or start
+                day_sessions.append((start, end, session))
+
+        block_x0 = LABEL_WIDTH + EVENT_LEFT_MARGIN
+        for occ_start, occ_end, session, col, cols in _layout_day_blocks(day_sessions, min_duration=MIN_BLOCK_DURATION):
+            start_minutes = max(0, (occ_start - range_start).total_seconds() / 60)
+            end_minutes = min(24 * 60, (occ_end - range_start).total_seconds() / 60)
+            y0 = (start_minutes / 60) * HOUR_HEIGHT
+            y1 = (end_minutes / 60) * HOUR_HEIGHT
+            y1 = max(y1, y0 + MIN_BLOCK_HEIGHT)
+            col_width = (EVENT_RIGHT_EDGE - block_x0) / cols
+            gap = 4 if cols > 1 else 0
+            x0 = block_x0 + col * col_width
+            x1 = x0 + col_width - gap
+            color = _session_color(session)
+            rect = rw.draw_rounded_rect(
+                day_canvas, x0, y0 + 1, x1, y1 - 1, radius=6,
+                fill=color, outline="",
+            )
+            duration = _format_duration_short(int((occ_end - occ_start).total_seconds()))
+            title = _session_title(session)
+            start_time_only = occ_start.strftime("%I:%M%p").lstrip("0")
+            label_font = (FONT, 9)
+            label_text = _fit_block_label(
+                label_font, (x1 - x0) - 16,
+                f"{title}  ·  {duration}", title, start_time_only,
+            )
+            text = day_canvas.create_text(
+                x0 + 8, (y0 + y1) / 2, anchor="w", text=label_text,
+                fill=_contrasting_text_color(color), font=label_font,
+            )
+            for item in (rect, text):
+                day_canvas.tag_bind(
+                    item, "<Button-1>",
+                    lambda e, s=session: _open_session_detail(win, s),
+                )
+
+        if day_view_state["last_date"] != selected:
+            day_view_state["last_date"] = selected
+            _scroll_to_current_hour(day_canvas, HOUR_HEIGHT, total_height)
+
+    def _jump_today(month_state, render_month_cb, render_day_cb):
+        month_state["cursor"] = date.today().replace(day=1)
+        _state["selected_date"] = date.today()
+        render_month_cb()
+        render_day_cb()
+
+    def refresh_all():
+        render_month()
+        render_day()
+
+    search_var.trace_add("write", lambda *_: refresh_all())
+    _state["refresh_callbacks"].append(refresh_all)
+
+    render_month()
+    render_day()
+
+
+def _format_duration_short(total_seconds):
+    minutes, seconds = divmod(max(0, total_seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
+def _register_last_session_widget(parent):
+    label = tk.Label(
+        parent, font=(FONT, 9), fg=THEME["text_muted"], bg=parent.cget("bg"),
+        justify="left", anchor="w",
+    )
+    label.pack(fill="x")
+
+    def refresh():
+        if not label.winfo_exists():
+            return
+        sessions = session_history.load_all()
+        if not sessions:
+            label.config(text="No finished sessions yet.")
+            return
+        last = sessions[-1]
+        start = _parse_session_dt(last.get("startTime"))
+        end = _parse_session_dt(last.get("endTime"))
+        when = start.strftime("%a %I:%M %p").replace(" 0", " ") if start else "?"
+        duration = _format_duration_short(int((end - start).total_seconds())) if start and end else "?"
+        label.config(text=f"Last session: {_session_title(last)} — {when} ({duration})")
+
+    _state["refresh_callbacks"].append(refresh)
+
+
+def _open_session_detail(win, session):
+    detail = tk.Toplevel(win)
+    detail.title("Focus Session Details")
+    detail.geometry("560x480")
+
+    text_frame = tk.Frame(detail)
+    text_frame.pack(fill="both", expand=True)
+
+    text = tk.Text(text_frame, wrap="word", font=("Consolas", 10), padx=12, pady=10)
+    scrollbar = tk.Scrollbar(text_frame, orient="vertical", command=text.yview)
+    text.configure(yscrollcommand=scrollbar.set)
+    scrollbar.pack(side="right", fill="y")
+    text.pack(side="left", fill="both", expand=True)
+
+    text.tag_configure("header", font=("Consolas", 10, "bold"))
+    text.tag_configure("dim", foreground="#888888")
+    text.tag_configure("resolved", foreground="#2e7d32")
+    text.tag_configure("unresolved", foreground="#c62828")
+
+    # Reuses history_gui's per-session formatting rather than re-implementing
+    # violation/whitelist-addition rendering a second time here.
+    history_gui._write_session(text, session)
+    text.config(state="disabled")
+
+
+def _layout_day_blocks(items, min_duration=timedelta(0)):
+    """Assigns each (start, end, payload) interval a (column, column_count)
+    pair so overlapping blocks in a day-schedule canvas are drawn side by
+    side, narrowed to fit, instead of full-width and stacked directly on
+    top of one another. Returns items in start-sorted order with the two
+    extra fields appended.
+
+    min_duration should match the caller's rendered minimum block height
+    (converted to a time span) — a short event's *drawn* box is clamped to
+    that minimum height, so two short events sitting close together (but not
+    technically overlapping by their raw start/end) can still collide once
+    rendered. Collision detection here uses each interval's end stretched
+    out to at least min_duration so the column split matches what actually
+    gets drawn; the true (start, end) is still what's returned."""
+    items = sorted(items, key=lambda t: t[0])
+    active = []  # (effective_end, column) for intervals still "open" at the current point
+    columns = [0] * len(items)
+    clusters = []
+    cluster_indices = []
+
+    for i, (start, end, _payload) in enumerate(items):
+        effective_end = max(end, start + min_duration)
+        active = [a for a in active if a[0] > start]
+        if not active and cluster_indices:
+            clusters.append(cluster_indices)
+            cluster_indices = []
+        used = {col for _end2, col in active}
+        col = 0
+        while col in used:
+            col += 1
+        columns[i] = col
+        active.append((effective_end, col))
+        cluster_indices.append(i)
+    if cluster_indices:
+        clusters.append(cluster_indices)
+
+    column_counts = [1] * len(items)
+    for cluster in clusters:
+        count = max(columns[i] for i in cluster) + 1
+        for i in cluster:
+            column_counts[i] = count
+
+    return [
+        (items[i][0], items[i][1], items[i][2], columns[i], column_counts[i])
+        for i in range(len(items))
+    ]
+
+
+def _scroll_to_current_hour(canvas, hour_height, total_height):
+    canvas.update_idletasks()
+    target_y = max(0, datetime.now().hour - 1) * hour_height
+    fraction = min(1.0, max(0.0, target_y / total_height)) if total_height else 0
+    canvas.yview_moveto(fraction)
+
+
+@functools.lru_cache(maxsize=None)
+def _get_font(font_spec):
+    return tkfont.Font(font=font_spec)
+
+
+def _truncate_to_width(text, font_obj, max_width):
+    """Longest prefix of text + an ellipsis that still measures within
+    max_width, found by binary search over prefix length (font metrics
+    aren't monospace, so this can't be a cheap char-count estimate)."""
+    ellipsis = "…"
+    if font_obj.measure(ellipsis) > max_width:
+        return ""
+    lo, hi = 0, len(text)
+    best = ellipsis
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = text[:mid].rstrip() + ellipsis
+        if font_obj.measure(candidate) <= max_width:
+            best = candidate
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best
+
+
+def _fit_block_label(font_spec, max_width, *candidates):
+    """Picks the first (most-detailed) candidate string that fits max_width
+    as measured by the actual font, falling back to shorter candidates and
+    finally to a truncated-with-ellipsis version of the last one — so a day-
+    view block's text is always fully contained within its own column,
+    never wrapping into extra lines that could bleed into the block below
+    or beside it."""
+    if max_width <= 4:
+        return ""
+    font_obj = _get_font(font_spec)
+    for text in candidates:
+        if font_obj.measure(text) <= max_width:
+            return text
+    return _truncate_to_width(candidates[-1], font_obj, max_width)
+
+
+def _contrasting_text_color(hex_color):
+    """Plain-white or plain-black label text over an arbitrary event color
+    swatch, picked by relative luminance so the month-grid strips and
+    day-view blocks stay readable regardless of which palette color (or
+    custom colorchooser pick) an event uses."""
+    try:
+        hex_color = hex_color.lstrip("#")
+        r, g, b = (int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
+        luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+        return "black" if luminance > 0.6 else "white"
+    except Exception:
+        return "white"
+
+
 def _register_next_up_widget(parent):
-    label = tk.Label(parent, font=("Segoe UI", 9), fg="#555", justify="left", anchor="w")
+    # bg matches whatever container it's dropped into (Calendar tab passes
+    # THEME["bg"], Focus tab hasn't been restyled yet) so this never shows
+    # up as a mismatched gray box against either.
+    label = tk.Label(
+        parent, font=(FONT, 9), fg=THEME["text_muted"], bg=parent.cget("bg"),
+        justify="left", anchor="w",
+    )
     label.pack(fill="x")
 
     def refresh():
@@ -617,12 +1276,34 @@ def _build_event_editor(root_win, existing, initial_date):
         anchor="w", padx=10, pady=(6, 0)
     )
     apps = installed_apps.list_installed_apps()
-    existing_process_set = {p.lower() for p in (existing_focus or {}).get("processWhitelist", [])}
+    # An event that already has its own focus profile keeps exactly what was
+    # saved for it — but a brand-new "Integrate with Focus Timer" toggle
+    # (no per-event profile saved yet) defaults to the same apps as the
+    # global whitelist (config.json), so the common case of "whitelist my
+    # usual apps" doesn't mean re-checking every app for every event.
+    if existing_focus:
+        default_processes = existing_focus.get("processWhitelist", [])
+    else:
+        default_processes = config.load_config().get("processWhitelist", [])
+    existing_process_set = {p.lower() for p in default_processes}
     process_container, process_vars, process_add_row = checklist_widget.build_checklist(
         focus_subscreen, apps, existing_process_set,
         key_fn=lambda a: a["process_name"], label_fn=lambda a: f"{a['display_name']} ({a['process_name']})",
     )
     process_container.pack(fill="x", padx=10, pady=(2, 0))
+
+    # build_checklist only creates a row per *item* it's handed (the
+    # installed-apps scan) — a previously saved process that the scan never
+    # finds (a manually-typed exe with no Start Menu shortcut, or one that's
+    # since been uninstalled) would otherwise have no checkbox at all, so
+    # get_checked() at Save time would silently drop it even though the
+    # checkbox for it was never unchecked — it just never existed. Add it
+    # back explicitly, pre-checked, so a saved whitelist entry can only ever
+    # be removed by an explicit uncheck/manual action, never lost on reopen.
+    scanned_lower = {a["process_name"].lower() for a in apps}
+    for process_name in default_processes:
+        if process_name.lower() not in scanned_lower:
+            process_add_row(process_name, process_name, checked=True)
 
     process_manual_row = tk.Frame(focus_subscreen)
     process_manual_row.pack(fill="x", padx=10, pady=(2, 6))
@@ -639,9 +1320,26 @@ def _build_event_editor(root_win, existing, initial_date):
 
     tk.Label(focus_subscreen, text="Domain whitelist (for this event, sent to the browser extension)",
              font=("Segoe UI", 8, "bold")).pack(anchor="w", padx=10, pady=(4, 0))
+    # Domains offered here come from config.json's global domainWhitelist —
+    # the same field the browser extension can now read/write directly via
+    # GET/POST /whitelist/domains (api_server.py) — unioned with whatever's
+    # already saved on this event, so a domain the extension knows about
+    # shows up as a pickable option without retyping it, the same way the
+    # process whitelist above defaults from config.json's processWhitelist.
+    global_domains = config.load_config().get("domainWhitelist", [])
     existing_domains = list((existing_focus or {}).get("domainWhitelist", []))
+    existing_domains_lower = {d.lower() for d in existing_domains}
+    domain_items = list(existing_domains)
+    for domain in global_domains:
+        if domain.lower() not in existing_domains_lower:
+            domain_items.append(domain)
+    # New focus profile (no per-event domains saved yet) defaults to
+    # whatever's globally whitelisted, same "reuse my usual picks" default as
+    # the process whitelist; an event with its own saved profile keeps
+    # exactly what was checked for it.
+    domain_checked = existing_domains_lower if existing_focus else {d.lower() for d in global_domains}
     domain_container, domain_vars, domain_add_row = checklist_widget.build_checklist(
-        focus_subscreen, existing_domains, {d.lower() for d in existing_domains},
+        focus_subscreen, domain_items, domain_checked,
     )
     domain_container.pack(fill="x", padx=10, pady=(2, 0))
 
