@@ -120,6 +120,17 @@ class FinishedTab(QWidget):
 
         self._day_view.show_date(date.today())
 
+        # Tracks isActive across ticks so _refresh_status can notice a
+        # session ending (naturally, manually, or via nuclear end -- all
+        # three just flip isActive True->False with no other shared hook)
+        # and refresh the calendar/day view + "Last session" label to pick
+        # up the newly-appended history entry. Without this, those only
+        # ever reflected session_history.json as of __init__, and stayed
+        # stale until the user happened to navigate the month/day view by
+        # hand -- the countdown itself kept ticking fine since that's
+        # computed straight from get_status() on every timer tick.
+        self._was_active = session_manager.get_status()["isActive"]
+
         self._status_timer = QTimer(self)
         self._status_timer.timeout.connect(self._refresh_status)
         self._status_timer.start(STATUS_REFRESH_MS)
@@ -221,6 +232,9 @@ class FinishedTab(QWidget):
     def _refresh_status(self):
         status = session_manager.get_status()
         active = status["isActive"]
+        if self._was_active and not active:
+            self.refresh()
+        self._was_active = active
         self._pause_button.setVisible(active)
         self._nuclear_button.setVisible(active)
         if not active:

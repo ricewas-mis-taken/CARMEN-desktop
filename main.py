@@ -67,7 +67,11 @@ def main():
     icon = tray.build_tray_icon(on_quit)
 
     def on_session_end(summary):
-        icon.notify(tray.format_end_summary(summary), title="Focus session complete")
+        # A real Windows toast (calendar_toast, same mechanism calendar_scheduler
+        # uses for reminders) rather than icon.notify() -- pystray's tray balloon
+        # is easy to miss/suppress and doesn't land in Action Center, which is
+        # why natural session ends were going unnoticed.
+        calendar_toast.show_toast("Focus session complete", tray.format_end_summary(summary))
 
     polling_thread = threading.Thread(
         target=window_tracker.run_polling_loop,
