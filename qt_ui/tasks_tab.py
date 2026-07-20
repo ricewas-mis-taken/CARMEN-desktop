@@ -31,6 +31,7 @@ while some session -- task or otherwise -- is active.
 from datetime import date
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsBlurEffect,
@@ -53,7 +54,8 @@ import tasks_store
 from qt_ui.task_editor import open_task_editor
 
 STATUS_REFRESH_MS = 1000
-CARD_WIDTH = 230
+CARD_WIDTH = 260
+CARD_HEIGHT = 208
 CARDS_PER_ROW = 3
 WHITELIST_PREVIEW_COUNT = 3
 
@@ -64,6 +66,22 @@ def _format_minutes(total_minutes):
     if hours:
         return f"{hours}h {minutes}m"
     return f"{minutes}m"
+
+
+def _pastelize(hex_color, mix=0.62):
+    """Blend a (possibly saturated) task color toward white so it reads as
+    a soft pastel card fill. The un-blended color is still used for the
+    progress bar chunk and the color-picker swatches, where full saturation
+    is what makes it legible/identifiable -- only the large card background
+    needs softening."""
+    hex_color = hex_color.lstrip("#")
+    if len(hex_color) != 6:
+        return "#FFFFFF"
+    r, g, b = (int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
+    r = round(r + (255 - r) * mix)
+    g = round(g + (255 - g) * mix)
+    b = round(b + (255 - b) * mix)
+    return f"#{r:02X}{g:02X}{b:02X}"
 
 
 class TasksTab(QWidget):
@@ -120,7 +138,7 @@ class TasksTab(QWidget):
         tasks = [t for t in tasks_store.load_tasks() if not t.get("archived")]
         if not tasks:
             empty_label = QLabel("No tasks yet -- click “+ Add Task” to create one.")
-            empty_label.setStyleSheet("color: #8A8F98;")
+            empty_label.setStyleSheet("color: #8A8F98; font-size: 14px;")
             self._grid.addWidget(empty_label, 0, 0)
         for index, task in enumerate(tasks):
             row, col = divmod(index, CARDS_PER_ROW)
@@ -147,10 +165,12 @@ class _TaskCard(QFrame):
 
         self.setProperty("class", "TaskCard")
         self.setFixedWidth(CARD_WIDTH)
+        self.setMinimumHeight(CARD_HEIGHT)
         self.setCursor(Qt.PointingHandCursor)
         color = self._task.get("color", "#5B8DEF")
+        pastel = _pastelize(color)
         self.setStyleSheet(
-            f"QFrame.TaskCard {{ background: {color}; border: 1px solid rgba(0,0,0,0.08); "
+            f"QFrame.TaskCard {{ background: {pastel}; border: 1px solid rgba(0,0,0,0.08); "
             f"border-radius: 12px; }}"
         )
 
@@ -188,9 +208,17 @@ class _TaskCard(QFrame):
 
     def _build_header_row(self):
         row = QHBoxLayout()
-        name_label = QLabel(self._task["name"])
-        name_label.setWordWrap(True)
-        name_label.setStyleSheet("font-size: 19px; font-weight: 700;")
+        name_label = QLabel()
+        name_label.setStyleSheet("font-size: 21px; font-weight: 700;")
+        full_name = self._task["name"]
+        metrics = QFontMetrics(name_label.font())
+        # Elided to one line (rather than word-wrapped) so every idle card
+        # has the same header height -- long names no longer stretch a
+        # card's overall size relative to its neighbors in the grid.
+        available_width = CARD_WIDTH - 32 - 26 - 6  # margins + gear button + spacing
+        name_label.setText(metrics.elidedText(full_name, Qt.ElideRight, available_width))
+        if name_label.text() != full_name:
+            name_label.setToolTip(full_name)
         row.addWidget(name_label, 1)
 
         # Hidden until the card is hovered (see enterEvent/leaveEvent below)
@@ -198,6 +226,7 @@ class _TaskCard(QFrame):
         self._gear_button = QPushButton("⚙")
         self._gear_button.setFixedSize(26, 26)
         self._gear_button.setProperty("class", "SecondaryButton")
+        self._gear_button.setStyleSheet("font-size: 14px; padding: 0;")
         self._gear_button.setToolTip("Edit task")
         self._gear_button.clicked.connect(self._open_editor)
         self._gear_button.setVisible(False)
@@ -231,7 +260,7 @@ class _TaskCard(QFrame):
 
         self._description_full = QLabel()
         self._description_full.setWordWrap(True)
-        self._description_full.setStyleSheet("font-size: 11px; color: #4A4F58;")
+        self._description_full.setStyleSheet("font-size: 13px; color: #4A4F58;")
         self._description_full.setVisible(False)
         layout.addWidget(self._description_full)
 
@@ -266,12 +295,12 @@ class _TaskCard(QFrame):
     def _build_progress_section(self):
         col = QVBoxLayout()
         self._progress_label = QLabel()
-        self._progress_label.setStyleSheet("font-size: 11px; color: #8A8F98;")
+        self._progress_label.setStyleSheet("font-size: 13px; color: #5A6070;")
         col.addWidget(self._progress_label)
         self._progress_bar = QProgressBar()
         self._progress_bar.setRange(0, 100)
         self._progress_bar.setTextVisible(False)
-        self._progress_bar.setFixedHeight(10)
+        self._progress_bar.setFixedHeight(12)
         self._progress_bar.setProperty("class", "TaskProgressBar")
         self._progress_bar.setStyleSheet(f"QProgressBar::chunk {{ background: {self._task.get('color', '#5B8DEF')}; }}")
         col.addWidget(self._progress_bar)
@@ -280,10 +309,11 @@ class _TaskCard(QFrame):
     def _build_vacation_section(self):
         row = QHBoxLayout()
         self._vacation_label = QLabel()
-        self._vacation_label.setStyleSheet("font-size: 11px; color: #8A8F98;")
+        self._vacation_label.setStyleSheet("font-size: 13px; color: #5A6070;")
         row.addWidget(self._vacation_label, 1)
         self._cash_in_button = QPushButton("Cash in vacation")
         self._cash_in_button.setProperty("class", "SecondaryButton")
+        self._cash_in_button.setStyleSheet("font-size: 13px;")
         self._cash_in_button.clicked.connect(self._cash_in)
         row.addWidget(self._cash_in_button)
         return row
@@ -297,20 +327,28 @@ class _TaskCard(QFrame):
         duration_row = QHBoxLayout()
         self._duration_edit = QLineEdit()
         self._duration_edit.setPlaceholderText("minutes")
+        self._duration_edit.setStyleSheet(
+            "font-size: 13px; background: #FFFFFF; border: 1px solid rgba(0,0,0,0.15); "
+            "border-radius: 6px; padding: 4px 6px;"
+        )
         duration_row.addWidget(self._duration_edit)
         self._burnout_button = QPushButton("Until I burnout")
         self._burnout_button.setCheckable(True)
         self._burnout_button.setProperty("class", "SecondaryButton")
+        self._burnout_button.setStyleSheet("font-size: 13px;")
         self._burnout_button.toggled.connect(self._toggle_burnout)
         duration_row.addWidget(self._burnout_button)
         layout.addLayout(duration_row)
 
         button_row = QHBoxLayout()
         cancel_button = QPushButton("Cancel")
+        cancel_button.setProperty("class", "SecondaryButton")
+        cancel_button.setStyleSheet("font-size: 13px;")
         cancel_button.clicked.connect(self._disarm)
         button_row.addWidget(cancel_button)
         start_button = QPushButton("Start Task")
         start_button.setProperty("class", "AccentButton")
+        start_button.setStyleSheet("font-size: 13px;")
         start_button.clicked.connect(self._start_task)
         button_row.addWidget(start_button)
         layout.addLayout(button_row)
@@ -324,15 +362,18 @@ class _TaskCard(QFrame):
         layout.setSpacing(6)
 
         self._countdown_label = QLabel()
-        self._countdown_label.setStyleSheet("font-size: 22px; font-weight: 700;")
+        self._countdown_label.setStyleSheet("font-size: 24px; font-weight: 700;")
         layout.addWidget(self._countdown_label)
 
         button_row = QHBoxLayout()
         self._pause_button = QPushButton("Pause")
+        self._pause_button.setProperty("class", "SecondaryButton")
+        self._pause_button.setStyleSheet("font-size: 13px;")
         self._pause_button.clicked.connect(self._pause_resume)
         button_row.addWidget(self._pause_button)
         end_button = QPushButton("End Task")
         end_button.setProperty("class", "SecondaryButton")
+        end_button.setStyleSheet("font-size: 13px;")
         end_button.clicked.connect(self._end_task)
         button_row.addWidget(end_button)
         layout.addLayout(button_row)

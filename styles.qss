@@ -233,7 +233,7 @@ QPushButton.TaskDescriptionButton {
     background: transparent;
     padding: 0;
     color: #5A6070;
-    font-size: 11px;
+    font-size: 13px;
 }
 
 QPushButton.TaskDescriptionButton:hover {
