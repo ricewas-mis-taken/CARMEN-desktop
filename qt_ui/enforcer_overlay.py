@@ -172,6 +172,13 @@ class _LockOverlay(QWidget):
             return True
         self._closed = True
         self._tick_timer.stop()
+        # close() only hides the widget -- it doesn't delete the C++ object,
+        # so `destroyed` (which build_overlay() relies on to prune
+        # _open_windows) never fires. Without this, every closed overlay
+        # stays counted in _position_window()'s cascade index, so the very
+        # next soft-lock warning (and every one after) lands off-center
+        # instead of back at dead-center once nothing is actually open.
+        _open_windows.discard(self)
         return super().close()
 
 
