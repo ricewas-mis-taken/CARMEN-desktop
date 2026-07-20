@@ -8,6 +8,7 @@ import threading
 
 from PySide6.QtWidgets import QApplication
 
+import auto_updater
 import autostart
 import calendar_scheduler
 import calendar_toast
@@ -68,6 +69,12 @@ def main():
     # window_tracker.run_polling_loop's on_session_end).
     icon = tray.build_tray_icon(on_quit)
 
+    # Reuses on_quit's exact shutdown path -- the only difference between a
+    # user-initiated Quit and an auto-update restart is what main() does
+    # after app.exec() returns (os._exit vs. os.execv into the freshly
+    # pulled code; see below).
+    auto_updater.start(stop_event, on_quit)
+
     def on_session_end(summary):
         # A real Windows toast (calendar_toast, same mechanism calendar_scheduler
         # uses for reminders) rather than icon.notify() -- pystray's tray balloon
@@ -93,6 +100,12 @@ def main():
     exit_code = app.exec()  # main thread blocks here instead of icon.run()
 
     stop_event.set()
+    if auto_updater.restart_was_requested():
+        # Re-exec in place (same PID, fresh interpreter) rather than
+        # spawning a new process and exiting this one -- avoids a race
+        # where the child tries to rebind api_server's port before this
+        # process has actually released it.
+        os.execv(sys.executable, [sys.executable] + sys.argv)
     os._exit(exit_code)
 
 
