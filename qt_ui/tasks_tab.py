@@ -31,7 +31,7 @@ while some session -- task or otherwise -- is active.
 from datetime import date
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFontMetrics
+from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsBlurEffect,
@@ -54,10 +54,14 @@ import tasks_store
 from qt_ui.task_editor import open_task_editor
 
 STATUS_REFRESH_MS = 1000
-CARD_WIDTH = 260
-CARD_HEIGHT = 208
+CARD_WIDTH = 300
+CARD_HEIGHT = 240
+CARD_MARGIN = 18
 CARDS_PER_ROW = 3
-WHITELIST_PREVIEW_COUNT = 3
+# Content width available to a full-width row inside the card, after the
+# left/right card margins -- used to elide text to the pixel budget instead
+# of letting Qt clip it mid-word or overflow past the card edge.
+CARD_CONTENT_WIDTH = CARD_WIDTH - 2 * CARD_MARGIN
 
 
 def _format_minutes(total_minutes):
@@ -175,8 +179,8 @@ class _TaskCard(QFrame):
         )
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 14, 16, 14)
-        outer.setSpacing(10)
+        outer.setContentsMargins(CARD_MARGIN, 16, CARD_MARGIN, 16)
+        outer.setSpacing(12)
 
         outer.addLayout(self._build_header_row())
 
@@ -186,7 +190,7 @@ class _TaskCard(QFrame):
         self._content = QWidget()
         content_layout = QVBoxLayout(self._content)
         content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(8)
+        content_layout.setSpacing(10)
         content_layout.addWidget(self._build_description_section())
         content_layout.addLayout(self._build_progress_section())
         content_layout.addLayout(self._build_vacation_section())
@@ -215,7 +219,7 @@ class _TaskCard(QFrame):
         # Elided to one line (rather than word-wrapped) so every idle card
         # has the same header height -- long names no longer stretch a
         # card's overall size relative to its neighbors in the grid.
-        available_width = CARD_WIDTH - 32 - 26 - 6  # margins + gear button + spacing
+        available_width = CARD_CONTENT_WIDTH - 26 - 6  # gear button + spacing
         name_label.setText(metrics.elidedText(full_name, Qt.ElideRight, available_width))
         if name_label.text() != full_name:
             name_label.setToolTip(full_name)
@@ -227,6 +231,13 @@ class _TaskCard(QFrame):
         self._gear_button.setFixedSize(26, 26)
         self._gear_button.setProperty("class", "SecondaryButton")
         self._gear_button.setStyleSheet("font-size: 14px; padding: 0;")
+        # "Segoe UI" (this app's base font, see styles.qss) has no glyph for
+        # U+2699 GEAR -- it rendered as an empty tofu box. Segoe UI Symbol
+        # covers the Miscellaneous Symbols block and is present on every
+        # Windows version this app targets.
+        gear_font = QFont(self._gear_button.font())
+        gear_font.setFamilies(["Segoe UI Symbol", "Segoe UI Emoji", gear_font.family()])
+        self._gear_button.setFont(gear_font)
         self._gear_button.setToolTip("Edit task")
         self._gear_button.clicked.connect(self._open_editor)
         self._gear_button.setVisible(False)
@@ -242,11 +253,14 @@ class _TaskCard(QFrame):
         super().leaveEvent(event)
 
     def _build_description_section(self):
-        """Lock mode + a short preview of the whitelist, truncated with
-        "…etc" past WHITELIST_PREVIEW_COUNT entries. It's a QPushButton
-        (not a QLabel) specifically so a click on it is consumed here and
-        never bubbles up to the card's own mousePressEvent (arm/start) --
-        same trick the Start/Cancel/gear buttons already rely on."""
+        """Lock mode + a preview of the whitelist, pixel-elided (not just
+        clipped -- QPushButton doesn't wrap or elide its own label, so past
+        the button's width text used to just get cut off mid-word with no
+        "…") to fit the card. Full whitelist is always available on hover
+        via the tooltip, and by clicking to expand. It's a QPushButton (not
+        a QLabel) specifically so a click on it is consumed here and never
+        bubbles up to the card's own mousePressEvent (arm/start) -- same
+        trick the Start/Cancel/gear buttons already rely on."""
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -273,14 +287,14 @@ class _TaskCard(QFrame):
     def _refresh_description(self):
         lock_label = "Hard lock" if self._task.get("lockMode") == "hard" else "Soft lock"
         items = self._whitelist_items()
-        if not items:
-            preview = "no whitelist set"
-        else:
-            preview = ", ".join(items[:WHITELIST_PREVIEW_COUNT])
-            if len(items) > WHITELIST_PREVIEW_COUNT:
-                preview += " …etc"
+        preview = ", ".join(items) if items else "no whitelist set"
         arrow = "▾" if self._expanded else "▸"
-        self._description_button.setText(f"{arrow} {lock_label} · {preview}")
+        full_text = f"{arrow} {lock_label} · {preview}"
+
+        metrics = QFontMetrics(self._description_button.font())
+        elided = metrics.elidedText(full_text, Qt.ElideRight, CARD_CONTENT_WIDTH)
+        self._description_button.setText(elided)
+        self._description_button.setToolTip(full_text if elided != full_text else "")
 
         if items:
             self._description_full.setText("Whitelisted: " + ", ".join(items))
@@ -308,6 +322,7 @@ class _TaskCard(QFrame):
 
     def _build_vacation_section(self):
         row = QHBoxLayout()
+        row.setSpacing(8)
         self._vacation_label = QLabel()
         self._vacation_label.setStyleSheet("font-size: 13px; color: #5A6070;")
         row.addWidget(self._vacation_label, 1)
@@ -316,6 +331,12 @@ class _TaskCard(QFrame):
         self._cash_in_button.setStyleSheet("font-size: 13px;")
         self._cash_in_button.clicked.connect(self._cash_in)
         row.addWidget(self._cash_in_button)
+        # Reserve the button's own width up front so the label's elide
+        # budget (applied in update_dynamic, once the balance text is
+        # known) never has to contest space with it -- at the old, narrower
+        # CARD_WIDTH the label had no width cap at all and its text simply
+        # overflowed underneath the button instead of stopping short of it.
+        self._vacation_label_budget = CARD_CONTENT_WIDTH - self._cash_in_button.sizeHint().width() - row.spacing()
         return row
 
     def _build_armed_overlay(self):
@@ -490,7 +511,11 @@ class _TaskCard(QFrame):
             self._progress_label.setText(f"{_format_minutes(logged_minutes)} of {_format_minutes(required)} today")
 
         balance = tasks_store.vacation_balance_minutes(self._task, sessions)
-        self._vacation_label.setText(f"\U0001F3D6 {_format_minutes(balance)} vacation banked")
+        vacation_text = f"\U0001F3D6 {_format_minutes(balance)} vacation banked"
+        metrics = QFontMetrics(self._vacation_label.font())
+        elided = metrics.elidedText(vacation_text, Qt.ElideRight, max(self._vacation_label_budget, 0))
+        self._vacation_label.setText(elided)
+        self._vacation_label.setToolTip(vacation_text if elided != vacation_text else "")
         self._cash_in_button.setEnabled(balance > 0 and not self._is_running())
 
         is_running = status.get("isActive") and status.get("source") == "task" and status.get("eventId") == self._task["id"]
