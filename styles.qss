@@ -112,6 +112,18 @@ QPushButton.SecondaryButton:hover {
     background: #E6E9EE;
 }
 
+/* "Until I burnout" toggle on a task's Start overlay -- fully filled (not
+   just outlined) so the armed/checked state reads unmistakably, since it
+   commits the session to BURNOUT_MINUTES instead of a typed duration. */
+QPushButton#burnoutButton:checked {
+    background: #E74C3C;
+    color: #FFFFFF;
+}
+
+QPushButton#burnoutButton:checked:hover {
+    background: #D64031;
+}
+
 QPushButton.AccentButton {
     background: #5B8DEF;
     color: white;

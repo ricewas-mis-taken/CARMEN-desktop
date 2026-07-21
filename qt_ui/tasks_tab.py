@@ -37,7 +37,6 @@ from PySide6.QtWidgets import (
     QGraphicsBlurEffect,
     QGridLayout,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -54,8 +53,8 @@ import tasks_store
 from qt_ui.task_editor import open_task_editor
 
 STATUS_REFRESH_MS = 1000
-CARD_WIDTH = 300
-CARD_HEIGHT = 240
+CARD_WIDTH = 450
+CARD_HEIGHT = 360
 CARD_MARGIN = 18
 CARDS_PER_ROW = 3
 # Content width available to a full-width row inside the card, after the
@@ -72,7 +71,7 @@ def _format_minutes(total_minutes):
     return f"{minutes}m"
 
 
-def _pastelize(hex_color, mix=0.62):
+def _pastelize(hex_color, mix=0.32):
     """Blend a (possibly saturated) task color toward white so it reads as
     a soft pastel card fill. The un-blended color is still used for the
     progress bar chunk and the color-picker swatches, where full saturation
@@ -166,21 +165,24 @@ class _TaskCard(QFrame):
         self._armed = False
         self._until_burnout = False
         self._expanded = False
+        self._hovering = False
+        self._cash_in_balance_int = 0
 
         self.setProperty("class", "TaskCard")
         self.setFixedWidth(CARD_WIDTH)
         self.setMinimumHeight(CARD_HEIGHT)
         self.setCursor(Qt.PointingHandCursor)
+        self.setAttribute(Qt.WA_StyledBackground, True)
         color = self._task.get("color", "#5B8DEF")
         pastel = _pastelize(color)
         self.setStyleSheet(
-            f"QFrame.TaskCard {{ background: {pastel}; border: 1px solid rgba(0,0,0,0.08); "
+            f"QFrame.TaskCard {{ background: {pastel}; border: 1px solid rgba(0,0,0,0.15); "
             f"border-radius: 12px; }}"
         )
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(CARD_MARGIN, 16, CARD_MARGIN, 16)
-        outer.setSpacing(12)
+        outer.setSpacing(6)
 
         outer.addLayout(self._build_header_row())
 
@@ -213,7 +215,7 @@ class _TaskCard(QFrame):
     def _build_header_row(self):
         row = QHBoxLayout()
         name_label = QLabel()
-        name_label.setStyleSheet("font-size: 21px; font-weight: 700;")
+        name_label.setStyleSheet("font-size: 21px; font-weight: 700; color: #1F2328;")
         full_name = self._task["name"]
         metrics = QFontMetrics(name_label.font())
         # Elided to one line (rather than word-wrapped) so every idle card
@@ -246,10 +248,14 @@ class _TaskCard(QFrame):
 
     def enterEvent(self, event):
         self._gear_button.setVisible(True)
+        self._hovering = True
+        self._refresh_cash_in_visibility()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
         self._gear_button.setVisible(False)
+        self._hovering = False
+        self._refresh_cash_in_visibility()
         super().leaveEvent(event)
 
     def _build_description_section(self):
@@ -308,36 +314,91 @@ class _TaskCard(QFrame):
 
     def _build_progress_section(self):
         col = QVBoxLayout()
+        col.setSpacing(4)
         self._progress_label = QLabel()
         self._progress_label.setStyleSheet("font-size: 13px; color: #5A6070;")
         col.addWidget(self._progress_label)
         self._progress_bar = QProgressBar()
         self._progress_bar.setRange(0, 100)
         self._progress_bar.setTextVisible(False)
-        self._progress_bar.setFixedHeight(12)
+        self._progress_bar.setFixedHeight(14)
         self._progress_bar.setProperty("class", "TaskProgressBar")
-        self._progress_bar.setStyleSheet(f"QProgressBar::chunk {{ background: {self._task.get('color', '#5B8DEF')}; }}")
+        # Black outline (per-instance, so it always wins over the shared
+        # QSS) plus a fill color pulled from the task's own un-pastelized
+        # color -- the card background is the softened/blended version, so
+        # the chunk always reads as distinct from it.
+        self._progress_bar.setStyleSheet(
+            "QProgressBar.TaskProgressBar { background: #F1F3F6; "
+            "border: 1px solid #000000; border-radius: 6px; } "
+            f"QProgressBar.TaskProgressBar::chunk {{ background: {self._task.get('color', '#5B8DEF')}; "
+            "border-radius: 5px; }}"
+        )
         col.addWidget(self._progress_bar)
+        self._remaining_label = QLabel()
+        self._remaining_label.setStyleSheet("font-size: 11px; color: #5A6070;")
+        col.addWidget(self._remaining_label)
         return col
 
     def _build_vacation_section(self):
-        row = QHBoxLayout()
-        row.setSpacing(8)
+        col = QVBoxLayout()
+        col.setSpacing(4)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(8)
         self._vacation_label = QLabel()
         self._vacation_label.setStyleSheet("font-size: 13px; color: #5A6070;")
-        row.addWidget(self._vacation_label, 1)
-        self._cash_in_button = QPushButton("Cash in vacation")
+        top_row.addWidget(self._vacation_label, 1)
+        # Hidden until hover (like the gear button) -- the idle card only
+        # shows the banked balance; "Cash" (the cash-in trigger) only shows
+        # up when there's something to cash in and the mouse is over the
+        # card, keeping the idle card decluttered.
+        self._cash_in_button = QPushButton("Cash")
         self._cash_in_button.setProperty("class", "SecondaryButton")
         self._cash_in_button.setStyleSheet("font-size: 13px;")
-        self._cash_in_button.clicked.connect(self._cash_in)
-        row.addWidget(self._cash_in_button)
+        self._cash_in_button.setVisible(False)
+        self._cash_in_button.clicked.connect(self._open_cash_in_editor)
+        top_row.addWidget(self._cash_in_button)
         # Reserve the button's own width up front so the label's elide
         # budget (applied in update_dynamic, once the balance text is
         # known) never has to contest space with it -- at the old, narrower
         # CARD_WIDTH the label had no width cap at all and its text simply
         # overflowed underneath the button instead of stopping short of it.
-        self._vacation_label_budget = CARD_CONTENT_WIDTH - self._cash_in_button.sizeHint().width() - row.spacing()
-        return row
+        self._vacation_label_budget = CARD_CONTENT_WIDTH - self._cash_in_button.sizeHint().width() - top_row.spacing()
+        col.addLayout(top_row)
+
+        self._cash_in_row = QWidget()
+        cash_layout = QHBoxLayout(self._cash_in_row)
+        cash_layout.setContentsMargins(0, 0, 0, 0)
+        cash_layout.setSpacing(6)
+        self._cash_in_edit = QLineEdit()
+        self._cash_in_edit.setFixedWidth(56)
+        self._cash_in_edit.setPlaceholderText("0")
+        self._cash_in_edit.setStyleSheet(
+            "font-size: 13px; color: #1F2328; background: #FFFFFF; "
+            "border: 1px solid rgba(0,0,0,0.2); border-radius: 6px; padding: 3px 6px;"
+        )
+        self._cash_in_edit.returnPressed.connect(self._confirm_cash_in)
+        cash_layout.addWidget(self._cash_in_edit)
+        self._cash_in_max_label = QLabel("/ 0")
+        self._cash_in_max_label.setStyleSheet("font-size: 13px; color: #1F2328;")
+        cash_layout.addWidget(self._cash_in_max_label)
+        confirm_button = QPushButton("✓")
+        confirm_button.setFixedSize(26, 26)
+        confirm_button.setProperty("class", "SecondaryButton")
+        confirm_button.setStyleSheet("font-size: 13px; padding: 0;")
+        confirm_button.clicked.connect(self._confirm_cash_in)
+        cash_layout.addWidget(confirm_button)
+        cancel_button = QPushButton("✕")
+        cancel_button.setFixedSize(26, 26)
+        cancel_button.setProperty("class", "SecondaryButton")
+        cancel_button.setStyleSheet("font-size: 13px; padding: 0;")
+        cancel_button.clicked.connect(self._close_cash_in_editor)
+        cash_layout.addWidget(cancel_button)
+        cash_layout.addStretch(1)
+        self._cash_in_row.setVisible(False)
+        col.addWidget(self._cash_in_row)
+
+        return col
 
     def _build_armed_overlay(self):
         overlay = QWidget()
@@ -349,11 +410,12 @@ class _TaskCard(QFrame):
         self._duration_edit = QLineEdit()
         self._duration_edit.setPlaceholderText("minutes")
         self._duration_edit.setStyleSheet(
-            "font-size: 13px; background: #FFFFFF; border: 1px solid rgba(0,0,0,0.15); "
-            "border-radius: 6px; padding: 4px 6px;"
+            "font-size: 13px; color: #1F2328; background: #FFFFFF; "
+            "border: 1px solid rgba(0,0,0,0.15); border-radius: 6px; padding: 4px 6px;"
         )
         duration_row.addWidget(self._duration_edit)
         self._burnout_button = QPushButton("Until I burnout")
+        self._burnout_button.setObjectName("burnoutButton")
         self._burnout_button.setCheckable(True)
         self._burnout_button.setProperty("class", "SecondaryButton")
         self._burnout_button.setStyleSheet("font-size: 13px;")
@@ -383,7 +445,7 @@ class _TaskCard(QFrame):
         layout.setSpacing(6)
 
         self._countdown_label = QLabel()
-        self._countdown_label.setStyleSheet("font-size: 24px; font-weight: 700;")
+        self._countdown_label.setStyleSheet("font-size: 24px; font-weight: 700; color: #1F2328;")
         layout.addWidget(self._countdown_label)
 
         button_row = QHBoxLayout()
@@ -466,25 +528,42 @@ class _TaskCard(QFrame):
     def _end_task(self):
         session_manager.end_session(end_type="manual")
 
-    def _cash_in(self):
+    def _open_cash_in_editor(self):
+        if self._cash_in_balance_int <= 0:
+            return
+        self._cash_in_edit.setText("")
+        self._cash_in_max_label.setText(f"/ {self._cash_in_balance_int}")
+        self._cash_in_row.setVisible(True)
+        self._cash_in_edit.setFocus()
+
+    def _close_cash_in_editor(self):
+        self._cash_in_row.setVisible(False)
+
+    def _confirm_cash_in(self):
+        try:
+            minutes = int(self._cash_in_edit.text())
+        except ValueError:
+            return
+        if minutes <= 0 or minutes > self._cash_in_balance_int:
+            QMessageBox.warning(
+                self, "Carmen Focus",
+                f"Enter a whole number of minutes between 1 and {self._cash_in_balance_int}.",
+            )
+            return
         sessions = session_history.load_all()
-        balance = tasks_store.vacation_balance_minutes(self._task, sessions)
-        if balance <= 0:
-            QMessageBox.information(self, "Carmen Focus", "No vacation time banked yet for this task.")
-            return
-        minutes, ok = QInputDialog.getInt(
-            self, "Cash in vacation",
-            f"Minutes to cash in against today (up to {int(balance)}):",
-            min(int(balance), self._task.get("targetMinutes", 0) or int(balance)), 1, int(balance),
-        )
-        if not ok:
-            return
         try:
             self._task = tasks_store.cash_in(self._task["id"], date.today(), minutes, sessions)
         except ValueError as exc:
             QMessageBox.warning(self, "Carmen Focus", str(exc))
             return
+        self._close_cash_in_editor()
         self._on_changed()
+
+    def _refresh_cash_in_visibility(self):
+        can_cash_in = self._cash_in_balance_int > 0 and not self._is_running()
+        self._cash_in_button.setVisible(self._hovering and can_cash_in)
+        if not self._hovering:
+            self._close_cash_in_editor()
 
     # --- dynamic refresh (called every tick by TasksTab) ---
 
@@ -507,23 +586,32 @@ class _TaskCard(QFrame):
         self._progress_bar.setValue(pct if (required > 0 or logged_minutes > 0) else 0)
         if required <= 0:
             self._progress_label.setText(f"{_format_minutes(logged_minutes)} logged · not scheduled today")
+            self._remaining_label.setText("Not scheduled today")
         else:
             self._progress_label.setText(f"{_format_minutes(logged_minutes)} of {_format_minutes(required)} today")
+            remaining_minutes = max(0, int(round(required - logged_minutes)))
+            self._remaining_label.setText(f"{remaining_minutes} minutes remaining today")
 
         balance = tasks_store.vacation_balance_minutes(self._task, sessions)
+        # Floor, not just `balance > 0` -- cashing in requires a whole
+        # number of minutes, so a sub-1-minute balance (e.g. 0.4m banked)
+        # must not be treated as usable, or the editor's own "1..max" range
+        # becomes invalid (min=1 > max=0) and cashing in silently breaks.
+        self._cash_in_balance_int = int(balance)
         vacation_text = f"\U0001F3D6 {_format_minutes(balance)} vacation banked"
         metrics = QFontMetrics(self._vacation_label.font())
         elided = metrics.elidedText(vacation_text, Qt.ElideRight, max(self._vacation_label_budget, 0))
         self._vacation_label.setText(elided)
         self._vacation_label.setToolTip(vacation_text if elided != vacation_text else "")
-        self._cash_in_button.setEnabled(balance > 0 and not self._is_running())
 
         is_running = status.get("isActive") and status.get("source") == "task" and status.get("eventId") == self._task["id"]
         locked_by_other = self._is_locked_by_other_session()
+        self._refresh_cash_in_visibility()
 
         if is_running:
             if self._armed:
                 self._disarm()
+            self._close_cash_in_editor()
             self._content.setVisible(False)
             self._armed_overlay.setVisible(False)
             self._running_panel.setVisible(True)
