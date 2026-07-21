@@ -28,6 +28,9 @@ def restart_was_requested():
     return _restart_requested.is_set()
 
 
+_CREATE_NO_WINDOW = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+
+
 def _run_git(*args):
     return subprocess.run(
         ["git", *args],
@@ -35,6 +38,7 @@ def _run_git(*args):
         capture_output=True,
         text=True,
         timeout=30,
+        creationflags=_CREATE_NO_WINDOW,
     )
 
 
