@@ -55,7 +55,7 @@ from qt_ui.task_editor import open_task_editor
 STATUS_REFRESH_MS = 1000
 CARD_WIDTH = 450
 CARD_HEIGHT = 360
-CARD_MARGIN = 18
+CARD_MARGIN = 22
 CARDS_PER_ROW = 3
 # Content width available to a full-width row inside the card, after the
 # left/right card margins -- used to elide text to the pixel budget instead
@@ -71,7 +71,7 @@ def _format_minutes(total_minutes):
     return f"{minutes}m"
 
 
-def _pastelize(hex_color, mix=0.32):
+def _pastelize(hex_color, mix=0.22):
     """Blend a (possibly saturated) task color toward white so it reads as
     a soft pastel card fill. The un-blended color is still used for the
     progress bar chunk and the color-picker swatches, where full saturation
@@ -175,13 +175,16 @@ class _TaskCard(QFrame):
         self.setAttribute(Qt.WA_StyledBackground, True)
         color = self._task.get("color", "#5B8DEF")
         pastel = _pastelize(color)
+        # Border is deliberately faint -- the task's color now carries the
+        # card's whole identity via the fill itself, not a colored frame
+        # around a white box.
         self.setStyleSheet(
-            f"QFrame.TaskCard {{ background: {pastel}; border: 1px solid rgba(0,0,0,0.15); "
+            f"QFrame.TaskCard {{ background: {pastel}; border: 1px solid rgba(0,0,0,0.08); "
             f"border-radius: 12px; }}"
         )
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(CARD_MARGIN, 16, CARD_MARGIN, 16)
+        outer.setContentsMargins(CARD_MARGIN, 20, CARD_MARGIN, 20)
         outer.setSpacing(6)
 
         outer.addLayout(self._build_header_row())
@@ -192,7 +195,7 @@ class _TaskCard(QFrame):
         self._content = QWidget()
         content_layout = QVBoxLayout(self._content)
         content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(10)
+        content_layout.setSpacing(14)
         content_layout.addWidget(self._build_description_section())
         content_layout.addLayout(self._build_progress_section())
         content_layout.addLayout(self._build_vacation_section())
@@ -215,7 +218,7 @@ class _TaskCard(QFrame):
     def _build_header_row(self):
         row = QHBoxLayout()
         name_label = QLabel()
-        name_label.setStyleSheet("font-size: 21px; font-weight: 700; color: #1F2328;")
+        name_label.setStyleSheet("font-size: 26px; font-weight: 700; color: #1F2328;")
         full_name = self._task["name"]
         metrics = QFontMetrics(name_label.font())
         # Elided to one line (rather than word-wrapped) so every idle card
@@ -259,18 +262,26 @@ class _TaskCard(QFrame):
         super().leaveEvent(event)
 
     def _build_description_section(self):
-        """Lock mode + a preview of the whitelist, pixel-elided (not just
-        clipped -- QPushButton doesn't wrap or elide its own label, so past
-        the button's width text used to just get cut off mid-word with no
-        "…") to fit the card. Full whitelist is always available on hover
-        via the tooltip, and by clicking to expand. It's a QPushButton (not
-        a QLabel) specifically so a click on it is consumed here and never
-        bubbles up to the card's own mousePressEvent (arm/start) -- same
-        trick the Start/Cancel/gear buttons already rely on."""
+        """Lock mode as its own bold sub-heading, then a preview of the
+        whitelist underneath it (smaller, regular weight -- one tier down
+        in the card's type hierarchy), pixel-elided with a trailing
+        "More"/"Less" toggle -- not just clipped, and not just a tooltip,
+        since QPushButton doesn't wrap or elide its own label and past its
+        width text used to get cut off mid-word with no indication there
+        was more to see. Full whitelist is always available on hover via
+        the tooltip, and by clicking "More" to expand it below. The preview
+        is a QPushButton (not a QLabel) specifically so a click on it is
+        consumed here and never bubbles up to the card's own
+        mousePressEvent (arm/start) -- same trick the Start/Cancel/gear
+        buttons already rely on."""
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(2)
+        layout.setSpacing(4)
+
+        self._lock_label = QLabel()
+        self._lock_label.setStyleSheet("font-size: 16px; font-weight: 600; color: #262A32;")
+        layout.addWidget(self._lock_label)
 
         self._description_button = QPushButton()
         self._description_button.setProperty("class", "TaskDescriptionButton")
@@ -280,7 +291,7 @@ class _TaskCard(QFrame):
 
         self._description_full = QLabel()
         self._description_full.setWordWrap(True)
-        self._description_full.setStyleSheet("font-size: 13px; color: #4A4F58;")
+        self._description_full.setStyleSheet("font-size: 13px; color: #3A3F48;")
         self._description_full.setVisible(False)
         layout.addWidget(self._description_full)
 
@@ -291,16 +302,27 @@ class _TaskCard(QFrame):
         return list(self._task.get("processWhitelist", [])) + list(self._task.get("domainWhitelist", []))
 
     def _refresh_description(self):
-        lock_label = "Hard lock" if self._task.get("lockMode") == "hard" else "Soft lock"
+        self._lock_label.setText("Hard Lock" if self._task.get("lockMode") == "hard" else "Soft Lock")
+
         items = self._whitelist_items()
-        preview = ", ".join(items) if items else "no whitelist set"
-        arrow = "▾" if self._expanded else "▸"
-        full_text = f"{arrow} {lock_label} · {preview}"
+        preview = ", ".join(items) if items else "No whitelist set"
+        toggle_word = "Less" if self._expanded else "More"
+        suffix = f"   {toggle_word}"
 
         metrics = QFontMetrics(self._description_button.font())
-        elided = metrics.elidedText(full_text, Qt.ElideRight, CARD_CONTENT_WIDTH)
-        self._description_button.setText(elided)
-        self._description_button.setToolTip(full_text if elided != full_text else "")
+        available = max(CARD_CONTENT_WIDTH - metrics.horizontalAdvance(suffix), 0)
+        elided_preview = metrics.elidedText(preview, Qt.ElideRight, available)
+        truncated = elided_preview != preview
+
+        # Only show the More/Less toggle when there's actually something to
+        # expand -- either the preview is cut off, or it's already expanded
+        # (so there's a way to collapse it back).
+        if items and (truncated or self._expanded):
+            self._description_button.setText(f"{elided_preview}{suffix}")
+            self._description_button.setToolTip(preview if truncated and not self._expanded else "")
+        else:
+            self._description_button.setText(preview)
+            self._description_button.setToolTip("")
 
         if items:
             self._description_full.setText("Whitelisted: " + ", ".join(items))
@@ -314,9 +336,9 @@ class _TaskCard(QFrame):
 
     def _build_progress_section(self):
         col = QVBoxLayout()
-        col.setSpacing(4)
+        col.setSpacing(8)
         self._progress_label = QLabel()
-        self._progress_label.setStyleSheet("font-size: 13px; color: #5A6070;")
+        self._progress_label.setStyleSheet("font-size: 14px; font-weight: 500; color: #2B2F38;")
         col.addWidget(self._progress_label)
         self._progress_bar = QProgressBar()
         self._progress_bar.setRange(0, 100)
@@ -335,7 +357,7 @@ class _TaskCard(QFrame):
         )
         col.addWidget(self._progress_bar)
         self._remaining_label = QLabel()
-        self._remaining_label.setStyleSheet("font-size: 11px; color: #5A6070;")
+        self._remaining_label.setStyleSheet("font-size: 12px; font-weight: 400; color: #5A6070;")
         col.addWidget(self._remaining_label)
         return col
 
@@ -346,7 +368,7 @@ class _TaskCard(QFrame):
         top_row = QHBoxLayout()
         top_row.setSpacing(8)
         self._vacation_label = QLabel()
-        self._vacation_label.setStyleSheet("font-size: 13px; color: #5A6070;")
+        self._vacation_label.setStyleSheet("font-size: 12px; font-weight: 400; color: #5A6070;")
         top_row.addWidget(self._vacation_label, 1)
         # Hidden until hover (like the gear button) -- the idle card only
         # shows the banked balance; "Cash" (the cash-in trigger) only shows

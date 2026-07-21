@@ -244,12 +244,12 @@ QPushButton.TaskDescriptionButton {
     border: none;
     background: transparent;
     padding: 0;
-    color: #5A6070;
+    color: #3A3F48;
     font-size: 13px;
 }
 
 QPushButton.TaskDescriptionButton:hover {
-    color: #2B2F38;
+    color: #1F2328;
     text-decoration: underline;
 }
 
