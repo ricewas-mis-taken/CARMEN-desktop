@@ -1,0 +1,170 @@
+"""Widget-level tests for the Review tab (qt_ui/review_tab.py) -- topic tab
+strip, due/all filtering, the problems table, and the Add Problem flow.
+Uses isolate_review_db (tests/conftest.py) so nothing touches the real
+calendar.db or review_photos folder."""
+from datetime import date
+
+import review_store
+import qt_ui.review_tab as review_tab
+
+
+def _make_topic_and_subject(name="Math", subject_name="Quadratics", color="#4A90D9"):
+    topic = review_store.create_topic(name)
+    subject = review_store.create_subject(topic["id"], subject_name, color)
+    return topic, subject
+
+
+def test_empty_state_shows_only_plus_tab(qtbot, isolate_review_db):
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    assert tab._tabs.count() == 1
+    assert tab._tabs.tabText(0) == "+"
+
+
+def test_topics_render_as_tabs_with_trailing_plus(qtbot, isolate_review_db):
+    review_store.create_topic("Math")
+    review_store.create_topic("Physics")
+
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+
+    assert tab._tabs.count() == 3
+    assert [tab._tabs.tabText(i) for i in range(3)] == ["Math", "Physics", "+"]
+
+
+def test_topic_view_lists_due_problems_by_default(qtbot, isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=5,
+        description_type="text", description_text="factor",
+    )
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+
+    view = tab._topic_views[topic["id"]]
+    # 5-star problems land 1 day out (see review_scheduler), so nothing is
+    # due yet under the default "Due" filter.
+    assert view._table.rowCount() == 0
+
+    view._set_due_only(False)
+    assert view._table.rowCount() == 1
+    assert view._table.item(0, review_tab.COLUMN_NAME).text() == "Solve it"
+
+
+def test_topic_view_shows_due_problem_when_next_review_is_today(qtbot, isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Due today", stars=3,
+        description_type="text", description_text="x",
+    )
+    conn = review_store._get_conn()
+    conn.execute(
+        "UPDATE review_problems SET next_review_date = ? WHERE id = ?",
+        (date.today().isoformat(), problem["id"]),
+    )
+    conn.commit()
+
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    view = tab._topic_views[topic["id"]]
+    assert view._table.rowCount() == 1
+
+
+def test_start_and_finish_review_updates_table(qtbot, isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Due today", stars=3,
+        description_type="text", description_text="x",
+    )
+    conn = review_store._get_conn()
+    conn.execute(
+        "UPDATE review_problems SET next_review_date = ? WHERE id = ?",
+        (date.today().isoformat(), problem["id"]),
+    )
+    conn.commit()
+
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    view = tab._topic_views[topic["id"]]
+    assert view._table.rowCount() == 1
+
+    token = review_store.start_review(problem["id"])
+    review_store.finish_review(token)
+    view.refresh()
+
+    # Rescheduled at least a day out, so it drops off the "Due" view.
+    assert view._table.rowCount() == 0
+
+
+def test_add_problem_dialog_creates_problem_with_text_description(qtbot, isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    view = tab._topic_views[topic["id"]]
+
+    dialog = review_tab._AddProblemDialog(topic["id"], on_added=lambda _p: view.refresh())
+    qtbot.addWidget(dialog)
+    dialog._name_edit.setText("New Problem")
+    dialog._star_picker._set_value(4)
+    dialog._text_edit.setPlainText("do the thing")
+    dialog._submit()
+
+    problems = review_store.list_problems(topic["id"], due_only=False)
+    assert len(problems) == 1
+    assert problems[0]["name"] == "New Problem"
+    assert problems[0]["stars"] == 4
+    assert problems[0]["descriptionText"] == "do the thing"
+
+
+def test_add_problem_dialog_rejects_missing_name(qtbot, isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    dialog = review_tab._AddProblemDialog(topic["id"], on_added=lambda _p: None)
+    qtbot.addWidget(dialog)
+    dialog._text_edit.setPlainText("desc")
+    dialog._submit()
+    assert "name is required" in dialog._status_label.text().lower()
+    assert review_store.list_problems(topic["id"], due_only=False) == []
+
+
+def test_add_problem_dialog_inline_add_subject_selects_new_subject(qtbot, isolate_review_db):
+    topic, _subject = _make_topic_and_subject()
+    dialog = review_tab._AddProblemDialog(topic["id"], on_added=lambda _p: None)
+    qtbot.addWidget(dialog)
+
+    dialog._new_subject_name.setText("Trig")
+    dialog._pick_subject_color("#e53935")
+    dialog._save_new_subject()
+
+    assert dialog._subject_combo.currentText() == "Trig"
+    assert dialog._subject_combo.currentData() is not None
+    assert not dialog._add_subject_form.isVisible()
+
+
+def test_add_problem_dialog_link_validation(qtbot, isolate_review_db):
+    topic, _subject = _make_topic_and_subject()
+    dialog = review_tab._AddProblemDialog(topic["id"], on_added=lambda _p: None)
+    qtbot.addWidget(dialog)
+    dialog._name_edit.setText("Link Problem")
+    dialog._link_button.setChecked(True)
+    dialog._link_edit.setText("not a url")
+    dialog._submit()
+    assert "valid url" in dialog._status_label.text().lower()
+
+    dialog._link_edit.setText("https://example.com/problem")
+    dialog._submit()
+    problems = review_store.list_problems(topic["id"], due_only=False)
+    assert len(problems) == 1
+    assert problems[0]["descriptionLink"] == "https://example.com/problem"
+
+
+def test_star_text_and_time_formatting_helpers():
+    assert review_tab._star_text(3) == "★★★☆☆"
+    assert review_tab._format_mmss(None) == "--:--"
+    assert review_tab._format_mmss(65) == "01:05"
+    assert review_tab._relative_time(None) == "Never"
+
+
+def test_lighten_produces_valid_hex():
+    result = review_tab._lighten("#5B8DEF")
+    assert result.startswith("#")
+    assert len(result) == 7

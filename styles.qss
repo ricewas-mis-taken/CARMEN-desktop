@@ -112,9 +112,33 @@ QPushButton.SecondaryButton:hover {
     background: #E6E9EE;
 }
 
-/* "Until I burnout" toggle on a task's Start overlay -- fully filled (not
-   just outlined) so the armed/checked state reads unmistakably, since it
-   commits the session to BURNOUT_MINUTES instead of a typed duration. */
+/* Checkable SecondaryButtons used as toggle pairs (Review tab's Due/All
+   filter) -- without this, a checked and unchecked toggle button look
+   identical since SecondaryButton itself has no :checked rule. */
+QPushButton.SecondaryButton:checked {
+    background: #5B8DEF;
+    color: #FFFFFF;
+    font-weight: 600;
+}
+
+/* "Until I burnout" toggle on a task's Start overlay -- dark red by default
+   so the option pops out as a distinct, deliberate choice (not just another
+   gray SecondaryButton) even before it's clicked; checked state brightens
+   further so the armed/committed state still reads unmistakably. A task's
+   own card can itself be a red pastel fill (task color picked as red), which
+   made a borderless red button blend straight into the card background --
+   the white border guarantees an edge against any card color, not just the
+   ones that happen to contrast with red. */
+QPushButton#burnoutButton {
+    background: #A93226;
+    color: #FFFFFF;
+    border: 2px solid #FFFFFF;
+}
+
+QPushButton#burnoutButton:hover {
+    background: #922B1F;
+}
+
 QPushButton#burnoutButton:checked {
     background: #E74C3C;
     color: #FFFFFF;
@@ -122,6 +146,22 @@ QPushButton#burnoutButton:checked {
 
 QPushButton#burnoutButton:checked:hover {
     background: #D64031;
+}
+
+/* Start Task button on a task's Start overlay -- black text on a green
+   outline (not filled), since the shared .AccentButton fill made the white
+   text unreadable against this card's own background. */
+QPushButton#startTaskButton {
+    background: #FFFFFF;
+    color: #1F2328;
+    border: 2px solid #2E8B57;
+    border-radius: 8px;
+    padding: 6px 13px;
+    font-weight: 600;
+}
+
+QPushButton#startTaskButton:hover {
+    background: #EAF6EF;
 }
 
 QPushButton.AccentButton {
@@ -217,6 +257,18 @@ QLabel.OverflowLabel {
     padding: 0px 6px;
 }
 
+QSplitter::handle {
+    background: #E3E5E9;
+}
+
+QSplitter::handle:hover {
+    background: #5B8DEF;
+}
+
+QSplitter::handle:vertical {
+    height: 6px;
+}
+
 QFrame.TaskCard {
     /* Background is set per-card in tasks_tab.py (tinted with the task's
        own color) via an instance stylesheet, which takes precedence over
@@ -261,4 +313,60 @@ QProgressBar.TaskProgressBar {
 
 QProgressBar.TaskProgressBar::chunk {
     border-radius: 5px;
+}
+
+/* Review tab's topic tabs (qt_ui/review_tab.py) -- browser/chrome-style tab
+   strip, including the trailing "+" tab (styled the same as any other tab;
+   review_tab.py intercepts clicks on it rather than actually showing it as
+   a page). */
+QTabWidget::pane {
+    border: none;
+    background: #FFFFFF;
+}
+
+QTabBar::tab {
+    background: #F1F3F6;
+    color: #5A6070;
+    border: none;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    padding: 8px 18px;
+    margin-right: 4px;
+    font-size: 13px;
+}
+
+QTabBar::tab:selected {
+    background: #FFFFFF;
+    color: #1F2328;
+    font-weight: 600;
+}
+
+QTabBar::tab:hover {
+    background: #E6E9EE;
+}
+
+QTableWidget {
+    background: #FFFFFF;
+    border: 1px solid #ECEEF1;
+    border-radius: 8px;
+    gridline-color: #ECEEF1;
+}
+
+QHeaderView::section {
+    background: #F7F7F8;
+    color: #5A6070;
+    border: none;
+    border-bottom: 1px solid #ECEEF1;
+    padding: 6px 8px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+/* Inline "+ Add Subject" mini-form inside the Add Problem dialog
+   (qt_ui/review_tab.py's _AddProblemDialog). */
+QFrame.InlineForm {
+    background: #FAFBFC;
+    border: 1px solid #E3E5E9;
+    border-radius: 8px;
+    padding: 8px;
 }

@@ -1,10 +1,6 @@
-"""The real Qt main window: sidebar nav (Calendar / Finished) +
-QStackedWidget content, replacing calendar_gui.py's Tk `.tkraise()` frame
-switching and Stage 1's placeholder stand-in. Two tabs are populated:
-Calendar (qt_ui/calendar_page.py) and Finished (qt_ui/finished_tab.py) --
-the former Focus tab's controls (session start/status, pause/resume,
-nuclear end) now live at the top of Finished, since starting a session and
-reviewing finished ones are both part of the same day-to-day loop.
+"""The real Qt main window: sidebar nav (Calendar / Focus / Tasks /
+Finished) + QStackedWidget content, replacing calendar_gui.py's Tk
+`.tkraise()` frame switching and Stage 1's placeholder stand-in.
 """
 import ctypes
 import ctypes.wintypes
@@ -25,6 +21,8 @@ from PySide6.QtWidgets import (
 
 from qt_ui.calendar_page import CalendarPage
 from qt_ui.finished_tab import FinishedTab
+from qt_ui.focus_tab import FocusTab
+from qt_ui.review_tab import ReviewTab
 from qt_ui.tasks_tab import TasksTab
 
 # Dragging the title bar could snap the window into a taller rectangle.
@@ -126,9 +124,10 @@ class _PagesStack(QStackedWidget):
 class _RootLayout(QHBoxLayout):
     """The top-level layout hasHeightForWidth() as soon as anything in the
     tree does -- here, NextUpLabel (qt_ui/next_up_widget.py), a word-wrapped
-    QLabel that sits at the top of both Calendar and Finished (never Tasks,
-    which is exactly the split earlier testing found: only those two tabs
-    ever reproduced the drag-stretch). A hasHeightForWidth top-level widget
+    QLabel that sits at the top of both Calendar and Focus (never Tasks or
+    Finished, which is exactly the split earlier testing found: only
+    NextUpLabel's tabs ever reproduced the drag-stretch). A hasHeightForWidth
+    top-level widget
     gets special-cased by Qt's Windows platform code, which reasserts a
     heightForWidth-derived height right as an interactive move/resize
     finishes -- observed directly: WM_MOVING held the frame steady for the
@@ -172,7 +171,9 @@ class _MainWindow(QWidget):
 
         self._pages = {}
         self._add_page("calendar", CalendarPage())
+        self._add_page("focus", FocusTab())
         self._add_page("tasks", TasksTab())
+        self._add_page("review", ReviewTab())
         self._add_page("finished", FinishedTab())
 
         self._show_tab("calendar")
@@ -195,7 +196,13 @@ class _MainWindow(QWidget):
 
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
-        nav_items = [("calendar", "📅  Calendar"), ("tasks", "🎯  Tasks"), ("finished", "✅  Finished")]
+        nav_items = [
+            ("calendar", "📅  Calendar"),
+            ("focus", "🔥  Focus"),
+            ("tasks", "🎯  Tasks"),
+            ("review", "🔁  Review"),
+            ("finished", "✅  Finished"),
+        ]
         for key, label in nav_items:
             button = QPushButton(label)
             button.setProperty("class", "NavButton")
