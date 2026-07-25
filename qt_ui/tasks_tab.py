@@ -289,17 +289,17 @@ class _TaskCard(QFrame):
         layout.setSpacing(3)
 
         self._lock_label = QLabel()
-        self._lock_label.setStyleSheet("font-size: 18px; font-weight: 600; color: #262A32;")
+        self._lock_label.setStyleSheet("font-size: 36px; font-weight: 600; color: #262A32;")
         layout.addWidget(self._lock_label)
 
-        self._whitelist_button = QPushButton("(edit whitelist)")
+        self._whitelist_button = QPushButton("(see whitelist)")
         self._whitelist_button.setFlat(True)
         self._whitelist_button.setCursor(Qt.PointingHandCursor)
         self._whitelist_button.setStyleSheet(
-            "color: #3A3F48; font-size: 18px; text-align: left; border: none; "
+            "color: #3A3F48; font-size: 36px; text-align: left; border: none; "
             "background: transparent; padding: 0;"
         )
-        self._whitelist_button.clicked.connect(self._open_whitelist_editor)
+        self._whitelist_button.clicked.connect(self._open_whitelist_viewer)
         layout.addWidget(self._whitelist_button)
 
         self._refresh_description()
@@ -311,57 +311,39 @@ class _TaskCard(QFrame):
     def _refresh_description(self):
         self._lock_label.setText("Hard Lock" if self._task.get("lockMode") == "hard" else "Soft Lock")
 
-    def _open_whitelist_editor(self):
-        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QPlainTextEdit
+    def _open_whitelist_viewer(self):
+        from PySide6.QtWidgets import QDialog, QPlainTextEdit
         dlg = QDialog(self.window())
-        dlg.setWindowTitle(f"{self._task['name']} — Edit Whitelist")
+        dlg.setWindowTitle(f"{self._task['name']} — Whitelist")
         dlg.setObjectName("PopupBg")
         dlg.setMinimumWidth(340)
         lay = QVBoxLayout(dlg)
         lay.setContentsMargins(20, 16, 20, 16)
         lay.setSpacing(8)
 
-        proc_lbl = QLabel("Allowed apps (one .exe per line):")
+        proc_lbl = QLabel("Allowed apps:")
         proc_lbl.setStyleSheet("font-weight: 600; font-size: 13px; color: #1F2328;")
         lay.addWidget(proc_lbl)
-        proc_edit = QPlainTextEdit()
-        proc_edit.setPlainText("\n".join(self._task.get("processWhitelist", [])))
-        proc_edit.setFixedHeight(100)
-        lay.addWidget(proc_edit)
+        proc_view = QPlainTextEdit()
+        proc_view.setPlainText("\n".join(self._task.get("processWhitelist", [])) or "(none)")
+        proc_view.setFixedHeight(100)
+        proc_view.setReadOnly(True)
+        lay.addWidget(proc_view)
 
-        dom_lbl = QLabel("Allowed domains (one per line):")
+        dom_lbl = QLabel("Allowed domains:")
         dom_lbl.setStyleSheet("font-weight: 600; font-size: 13px; color: #1F2328;")
         lay.addWidget(dom_lbl)
-        dom_edit = QPlainTextEdit()
-        dom_edit.setPlainText("\n".join(self._task.get("domainWhitelist", [])))
-        dom_edit.setFixedHeight(80)
-        lay.addWidget(dom_edit)
+        dom_view = QPlainTextEdit()
+        dom_view.setPlainText("\n".join(self._task.get("domainWhitelist", [])) or "(none)")
+        dom_view.setFixedHeight(80)
+        dom_view.setReadOnly(True)
+        lay.addWidget(dom_view)
 
-        btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        btns.accepted.connect(dlg.accept)
-        btns.rejected.connect(dlg.reject)
-        lay.addWidget(btns)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dlg.accept)
+        lay.addWidget(close_btn)
 
-        if dlg.exec() != QDialog.Accepted:
-            return
-
-        proc_list = [s.strip() for s in proc_edit.toPlainText().splitlines() if s.strip()]
-        dom_list = [s.strip() for s in dom_edit.toPlainText().splitlines() if s.strip()]
-
-        updated = tasks_store.update_task(self._task["id"], {
-            **self._task,
-            "processWhitelist": proc_list,
-            "domainWhitelist": dom_list,
-        })
-        if updated:
-            self._task = updated
-
-        status = session_manager.get_status()
-        if (status.get("isActive") and status.get("source") == "task"
-                and status.get("eventId") == self._task["id"]):
-            session_manager.update_whitelist(proc_list, dom_list)
-
-        self._on_changed()
+        dlg.exec()
 
     def _build_progress_section(self):
         col = QVBoxLayout()
@@ -664,7 +646,9 @@ class _TaskCard(QFrame):
             self._running_panel.setVisible(True)
             minutes, seconds = divmod(status.get("secondsRemaining", 0), 60)
             paused = " (paused)" if status.get("isPaused") else ""
-            self._countdown_label.setText(f"{minutes}m {seconds}s remaining{paused}")
+            violations = status.get("violationCount", 0)
+            violation_text = f"  •  {violations} violation{'s' if violations != 1 else ''}" if violations else ""
+            self._countdown_label.setText(f"{minutes}m {seconds}s remaining{paused}{violation_text}")
             self._pause_button.setText("Resume" if status.get("isPaused") else "Pause")
         else:
             self._running_panel.setVisible(False)
