@@ -17,7 +17,7 @@ import re
 from datetime import date, datetime
 
 from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QPixmap
+from PySide6.QtGui import QColor, QDesktopServices, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -133,6 +133,9 @@ def _build_description_content(layout, problem):
         link_label.setOpenExternalLinks(False)
         link_label.linkActivated.connect(lambda url: QDesktopServices.openUrl(QUrl(url)))
         link_label.setWordWrap(True)
+        palette = link_label.palette()
+        palette.setColor(QPalette.Link, QColor("#1F2328"))
+        link_label.setPalette(palette)
         layout.addWidget(link_label, 1)
 
 
@@ -616,24 +619,38 @@ class _ReviewStartDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle(problem["name"])
-        self.resize(480, 440)
+        self.resize(380, 300)
         self._problem = problem
         self._on_start = on_start
 
         layout = QVBoxLayout(self)
 
+        header_row = QHBoxLayout()
         name_label = QLabel(problem["name"])
-        name_label.setStyleSheet("font-size: 16px; font-weight: 700;")
-        layout.addWidget(name_label)
-
+        name_label.setStyleSheet("font-size: 22px; font-weight: 700;")
+        header_row.addWidget(name_label, 1)
         stars_label = QLabel(_star_text(problem["stars"]))
-        stars_label.setStyleSheet("color: #F5A623; font-size: 14px;")
-        layout.addWidget(stars_label)
+        stars_label.setStyleSheet("color: #F5A623; font-size: 22px;")
+        header_row.addWidget(stars_label)
+        layout.addLayout(header_row)
+
+        stats_row = QHBoxLayout()
+        fastest_label = QLabel(f"Fastest: {_format_mmss(problem['fastestTimeSeconds'])}")
+        fastest_label.setStyleSheet("font-size: 12px; color: #5A6070;")
+        stats_row.addWidget(fastest_label)
+        stats_row.addStretch(1)
+        attempts_label = QLabel(f"Attempts: {problem['reviewCount']}")
+        attempts_label.setStyleSheet("font-size: 12px; color: #5A6070;")
+        stats_row.addWidget(attempts_label)
+        layout.addLayout(stats_row)
 
         _build_description_content(layout, problem)
 
         start_button = QPushButton("Start")
-        start_button.setProperty("class", "AccentButton")
+        start_button.setStyleSheet(
+            "background: #28a745; color: white; font-weight: 600; "
+            "border-radius: 8px; padding: 8px 20px; font-size: 13px;"
+        )
         start_button.clicked.connect(self._do_start)
         layout.addWidget(start_button)
 
