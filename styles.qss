@@ -112,9 +112,33 @@ QPushButton.SecondaryButton:hover {
     background: #E6E9EE;
 }
 
-/* "Until I burnout" toggle on a task's Start overlay -- fully filled (not
-   just outlined) so the armed/checked state reads unmistakably, since it
-   commits the session to BURNOUT_MINUTES instead of a typed duration. */
+/* Checkable SecondaryButtons used as toggle pairs (Review tab's Due/All
+   filter) -- without this, a checked and unchecked toggle button look
+   identical since SecondaryButton itself has no :checked rule. */
+QPushButton.SecondaryButton:checked {
+    background: #5B8DEF;
+    color: #FFFFFF;
+    font-weight: 600;
+}
+
+/* "Until I burnout" toggle on a task's Start overlay -- dark red by default
+   so the option pops out as a distinct, deliberate choice (not just another
+   gray SecondaryButton) even before it's clicked; checked state brightens
+   further so the armed/committed state still reads unmistakably. A task's
+   own card can itself be a red pastel fill (task color picked as red), which
+   made a borderless red button blend straight into the card background --
+   the white border guarantees an edge against any card color, not just the
+   ones that happen to contrast with red. */
+QPushButton#burnoutButton {
+    background: #A93226;
+    color: #FFFFFF;
+    border: 2px solid #FFFFFF;
+}
+
+QPushButton#burnoutButton:hover {
+    background: #922B1F;
+}
+
 QPushButton#burnoutButton:checked {
     background: #E74C3C;
     color: #FFFFFF;
@@ -122,6 +146,22 @@ QPushButton#burnoutButton:checked {
 
 QPushButton#burnoutButton:checked:hover {
     background: #D64031;
+}
+
+/* Start Task button on a task's Start overlay -- black text on a green
+   outline (not filled), since the shared .AccentButton fill made the white
+   text unreadable against this card's own background. */
+QPushButton#startTaskButton {
+    background: #FFFFFF;
+    color: #1F2328;
+    border: 2px solid #2E8B57;
+    border-radius: 8px;
+    padding: 6px 13px;
+    font-weight: 600;
+}
+
+QPushButton#startTaskButton:hover {
+    background: #EAF6EF;
 }
 
 QPushButton.AccentButton {
@@ -217,6 +257,18 @@ QLabel.OverflowLabel {
     padding: 0px 6px;
 }
 
+QSplitter::handle {
+    background: #E3E5E9;
+}
+
+QSplitter::handle:hover {
+    background: #5B8DEF;
+}
+
+QSplitter::handle:vertical {
+    height: 6px;
+}
+
 QFrame.TaskCard {
     /* Background is set per-card in tasks_tab.py (tinted with the task's
        own color) via an instance stylesheet, which takes precedence over
@@ -263,23 +315,21 @@ QProgressBar.TaskProgressBar::chunk {
     border-radius: 5px;
 }
 
-/* Start button in the Review tab's problem table -- black text on a subtle
-   border instead of AccentButton blue+white, since the pastel tint the cell
-   container already applies provides subject identity and white text over it
-   reads as "inactive". Follows the same pattern as #startTaskButton. */
+/* Start button in the Review tab's problem table -- flat blue text, no
+   border/box. The row's pastel tint already identifies the subject, so a
+   border-style button adds visual noise. */
 QPushButton#reviewStartButton {
-    background: #FFFFFF;
-    color: #1F2328;
-    border: 1.5px solid #C7CAD3;
-    border-radius: 8px;
-    padding: 5px 14px;
+    background: transparent;
+    color: #5B8DEF;
+    border: none;
+    border-radius: 6px;
+    padding: 4px 10px;
     font-size: 12px;
     font-weight: 600;
 }
 
 QPushButton#reviewStartButton:hover {
-    background: #F1F3F6;
-    border-color: #5B8DEF;
+    background: rgba(91, 141, 239, 0.12);
 }
 
 /* Review tab's topic tabs (qt_ui/review_tab.py) -- browser/chrome-style tab

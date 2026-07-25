@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QStackedWidget,
@@ -40,7 +41,6 @@ from PySide6.QtWidgets import (
 import review_store
 import session_manager
 import tasks_store
-from qt_ui.day_layout import contrasting_text_color
 
 COLOR_PALETTE = [
     "#5B8DEF", "#e53935", "#43a047", "#fb8c00", "#8e24aa",
@@ -158,6 +158,8 @@ class ReviewTab(QWidget):
         # never fire. tabBarClicked fires on every click regardless of
         # whether the index actually changed.
         self._tabs.tabBarClicked.connect(self._on_tab_bar_clicked)
+        self._tabs.tabBar().setContextMenuPolicy(Qt.CustomContextMenu)
+        self._tabs.tabBar().customContextMenuRequested.connect(self._on_tab_context_menu)
         layout.addWidget(self._tabs, 1)
 
         self._topic_views = {}
@@ -179,9 +181,7 @@ class ReviewTab(QWidget):
             view = _TopicView(topic["id"], review_tab=self)
             self._topic_views[topic["id"]] = view
             self._topic_names[topic["id"]] = topic["name"]
-            subjects = review_store.list_subjects(topic["id"])
-            has_link = any(s.get("linkedTaskId") for s in subjects)
-            label = topic["name"] + (" 🔗" if has_link else "")
+            label = topic["name"] + (" 🔗" if topic.get("linkedTaskId") else "")
             self._tabs.addTab(view, label)
 
         self._plus_index = self._tabs.addTab(QWidget(), "+")
@@ -230,16 +230,76 @@ class ReviewTab(QWidget):
         self._select_topic(topic["id"])
 
     def _refresh_tab_labels(self):
-        """Update tab text 🔗 indicators without a full rebuild -- called after
-        a subject's linked task is changed."""
+        """Update tab text 🔗 indicators without a full rebuild."""
         for topic_id, view in self._topic_views.items():
             idx = self._tabs.indexOf(view)
             if idx < 0:
                 continue
-            subjects = review_store.list_subjects(topic_id)
-            has_link = any(s.get("linkedTaskId") for s in subjects)
+            topic = review_store.get_topic(topic_id)
             name = self._topic_names.get(topic_id, "")
+            has_link = topic and topic.get("linkedTaskId")
             self._tabs.setTabText(idx, name + (" 🔗" if has_link else ""))
+
+    def _topic_id_at_tab(self, index):
+        widget = self._tabs.widget(index)
+        for topic_id, view in self._topic_views.items():
+            if view is widget:
+                return topic_id
+        return None
+
+    def _on_tab_context_menu(self, pos):
+        idx = self._tabs.tabBar().tabAt(pos)
+        if idx < 0 or idx == self._plus_index:
+            return
+        topic_id = self._topic_id_at_tab(idx)
+        if topic_id is None:
+            return
+
+        menu = QMenu(self)
+        rename_action = menu.addAction("Rename tab")
+        link_action = menu.addAction("Link to task")
+        menu.addSeparator()
+        delete_action = menu.addAction("Delete tab")
+
+        # Block destructive/disruptive actions during an active review
+        if self._is_reviewing:
+            rename_action.setEnabled(False)
+            delete_action.setEnabled(False)
+
+        action = menu.exec(self._tabs.tabBar().mapToGlobal(pos))
+        if action == rename_action:
+            self._rename_topic(topic_id)
+        elif action == link_action:
+            self._link_topic_to_task(topic_id)
+        elif action == delete_action:
+            self._delete_topic(topic_id)
+
+    def _rename_topic(self, topic_id):
+        current_name = self._topic_names.get(topic_id, "")
+        _register_popup(_RenameTopicDialog(topic_id, current_name, on_renamed=self._on_topic_renamed))
+
+    def _on_topic_renamed(self, topic_id, new_name):
+        self._topic_names[topic_id] = new_name
+        self._refresh_tab_labels()
+
+    def _link_topic_to_task(self, topic_id):
+        topic = review_store.get_topic(topic_id)
+        if topic:
+            _register_popup(_TopicTaskLinkDialog(topic, on_saved=self._refresh_tab_labels))
+
+    def _delete_topic(self, topic_id):
+        name = self._topic_names.get(topic_id, "this topic")
+        confirm = QMessageBox.question(
+            self,
+            "Delete topic",
+            f'Delete "{name}" and all its subjects and problems? This cannot be undone.',
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        review_store.delete_topic(topic_id)
+        self.refresh()
 
     def can_start_review(self):
         return not self._is_reviewing
@@ -399,34 +459,19 @@ class _TopicView(QWidget):
             stars_item.setForeground(QColor("#F5A623"))
             self._table.setItem(row, COLUMN_STARS, stars_item)
 
+            subject_item = QTableWidgetItem(problem["subjectName"])
+            subject_item.setForeground(QColor("#1F2328"))
+            subject_item.setBackground(QColor(tint))
+            self._table.setItem(row, COLUMN_SUBJECT, subject_item)
+
             for col in (COLUMN_NAME, COLUMN_REVIEWS, COLUMN_LAST_REVIEWED, COLUMN_FIRST_SOLVED, COLUMN_FASTEST):
                 self._table.item(row, col).setForeground(QColor("#1F2328"))
             for col in (COLUMN_NAME, COLUMN_REVIEWS, COLUMN_LAST_REVIEWED, COLUMN_FIRST_SOLVED, COLUMN_FASTEST, COLUMN_STARS):
                 self._table.item(row, col).setBackground(QColor(tint))
 
-            self._table.setCellWidget(row, COLUMN_SUBJECT, self._build_subject_pill(problem, tint))
             self._table.setCellWidget(row, COLUMN_START, self._build_start_cell(problem, tint))
 
         self._table.resizeRowsToContents()
-
-    def _build_subject_pill(self, problem, tint):
-        container = QWidget()
-        container.setStyleSheet(f"background: {tint};")
-        container.setToolTip("Click to link this subject to a task")
-        layout = QHBoxLayout(container)
-        layout.setContentsMargins(6, 4, 6, 4)
-        pill_text = problem["subjectName"]
-        if problem.get("subjectLinkedTaskId"):
-            pill_text += " 🔗"
-        pill = QLabel(pill_text)
-        text_color = contrasting_text_color(problem["subjectColor"])
-        pill.setStyleSheet(
-            f"background: {problem['subjectColor']}; color: {text_color}; "
-            "border-radius: 8px; padding: 2px 8px; font-size: 11px;"
-        )
-        layout.addWidget(pill)
-        layout.addStretch(1)
-        return container
 
     def _build_start_cell(self, problem, tint):
         container = QWidget()
@@ -442,20 +487,7 @@ class _TopicView(QWidget):
     def _on_cell_clicked(self, row, column):
         if column == COLUMN_START:
             return
-        problem = self._problems[row]
-        if column == COLUMN_SUBJECT:
-            # Subject pill click: open the task-link chooser for this subject
-            subjects = review_store.list_subjects(self._topic_id)
-            subject = next((s for s in subjects if s["id"] == problem["subjectId"]), None)
-            if subject:
-                _SubjectTaskLinkDialog(subject, on_saved=self._on_link_saved)
-            return
-        _DescriptionPopup(problem)
-
-    def _on_link_saved(self):
-        self.refresh()
-        if self._review_tab:
-            self._review_tab._refresh_tab_labels()
+        _DescriptionPopup(self._problems[row])
 
     def _start_problem(self, problem):
         if self._review_tab and not self._review_tab.can_start_review():
@@ -470,8 +502,9 @@ class _TopicView(QWidget):
             return
 
         end_session_on_finish = False
-        if problem.get("subjectLinkedTaskId") and not session_manager.is_active():
-            task = tasks_store.get_task(problem["subjectLinkedTaskId"])
+        topic = review_store.get_topic(self._topic_id)
+        if topic and topic.get("linkedTaskId") and not session_manager.is_active():
+            task = tasks_store.get_task(topic["linkedTaskId"])
             if task:
                 session_manager.start_session(
                     duration_minutes=tasks_store.BURNOUT_MINUTES,
@@ -480,7 +513,7 @@ class _TopicView(QWidget):
                     domain_whitelist=task.get("domainWhitelist", []),
                     source="task",
                     event_id=task["id"],
-                    event_title=task["name"],
+                    event_title=f"{task['name']} - {problem['subjectName']} review",
                 )
                 end_session_on_finish = True
 
@@ -612,26 +645,26 @@ class _ReviewStartDialog(QWidget):
         self._on_start(self._problem)
 
 
-class _SubjectTaskLinkDialog(QWidget):
-    """Opens when the user clicks a subject pill -- lets them link/unlink that
-    subject to a task so review time counts toward the task's enforcer session."""
-    def __init__(self, subject, on_saved):
+class _TopicTaskLinkDialog(QWidget):
+    """Right-click context menu → Link to task: links/unlinks the whole topic
+    tab to a task so every review under it counts toward that task's session."""
+    def __init__(self, topic, on_saved):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
-        self.setWindowTitle(f"Link subject — {subject['name']}")
+        self.setWindowTitle(f"Link tab — {topic['name']}")
         self.resize(320, 180)
-        self._subject = subject
+        self._topic = topic
         self._on_saved = on_saved
 
         layout = QVBoxLayout(self)
-        layout.addWidget(_bold_label(f"Link \"{subject['name']}\" to a task"))
+        layout.addWidget(_bold_label(f"Link \"{topic['name']}\" to a task"))
 
         self._task_combo = QComboBox()
         self._task_combo.addItem("No link", None)
         for task in tasks_store.load_tasks():
             if not task.get("archived"):
                 self._task_combo.addItem(task["name"], task["id"])
-        current_id = subject.get("linkedTaskId")
+        current_id = topic.get("linkedTaskId")
         if current_id:
             idx = self._task_combo.findData(current_id)
             if idx >= 0:
@@ -659,9 +692,47 @@ class _SubjectTaskLinkDialog(QWidget):
 
     def _save(self):
         task_id = self._task_combo.currentData()
-        review_store.update_subject_link(self._subject["id"], task_id)
+        review_store.update_topic_link(self._topic["id"], task_id)
         self.close()
         self._on_saved()
+
+
+class _RenameTopicDialog(QWidget):
+    def __init__(self, topic_id, current_name, on_renamed):
+        super().__init__(None, Qt.WindowStaysOnTopHint)
+        self.setObjectName("PopupBg")
+        self.setWindowTitle("Rename tab")
+        self.resize(300, 120)
+        self._topic_id = topic_id
+        self._on_renamed = on_renamed
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("New name"))
+        self._name_edit = QLineEdit(current_name)
+        self._name_edit.selectAll()
+        self._name_edit.returnPressed.connect(self._save)
+        layout.addWidget(self._name_edit)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.close)
+        btn_row.addWidget(cancel)
+        save = QPushButton("Rename")
+        save.setProperty("class", "AccentButton")
+        save.clicked.connect(self._save)
+        btn_row.addWidget(save)
+        layout.addLayout(btn_row)
+
+        self.show()
+
+    def _save(self):
+        name = self._name_edit.text().strip()
+        if not name:
+            return
+        review_store.rename_topic(self._topic_id, name)
+        self.close()
+        self._on_renamed(self._topic_id, name)
 
 
 class _DescriptionPopup(QWidget):
@@ -860,14 +931,6 @@ class _AddProblemDialog(QWidget):
         layout.addLayout(swatch_row)
         self._pick_subject_color(self._new_subject_color)
 
-        layout.addWidget(QLabel("Link to task (optional)"))
-        self._new_subject_task_combo = QComboBox()
-        self._new_subject_task_combo.addItem("No link", None)
-        for task in tasks_store.load_tasks():
-            if not task.get("archived"):
-                self._new_subject_task_combo.addItem(task["name"], task["id"])
-        layout.addWidget(self._new_subject_task_combo)
-
         save_row = QHBoxLayout()
         save_row.addStretch(1)
         save_button = QPushButton("Save Subject")
@@ -891,9 +954,8 @@ class _AddProblemDialog(QWidget):
         name = self._new_subject_name.text().strip()
         if not name:
             return
-        task_id = self._new_subject_task_combo.currentData()
         subject = review_store.create_subject(
-            self._topic_id, name, self._new_subject_color, linked_task_id=task_id
+            self._topic_id, name, self._new_subject_color
         )
         if subject is None:
             return

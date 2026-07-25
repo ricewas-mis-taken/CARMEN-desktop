@@ -1,11 +1,11 @@
-"""Qt port of calendar_gui.py's Finished tab (_build_finished_tab), now also
-absorbing the former Focus tab (qt_ui/focus_tab.py, deleted): session
-status/controls live at the top, with the same month-grid/day-schedule
-layout language as the Calendar page below, sourced from session_history.py
-(logged, completed focus sessions) instead of calendar_store.py. The
-session list itself stays read-only -- entries are appended by
-session_manager.end_session(), never authored by hand here, so unlike the
-Calendar page there's no "+ New Event" affordance and clicking a
+"""Qt port of calendar_gui.py's Finished tab (_build_finished_tab): a
+read-only log of completed focus sessions, with the same month-grid/
+day-schedule layout language as the Calendar page, sourced from
+session_history.py (logged, completed focus sessions) instead of
+calendar_store.py. Session start/status/pause controls live in their own
+Focus tab (qt_ui/focus_tab.py) rather than here -- entries in this tab are
+appended by session_manager.end_session(), never authored by hand, so
+unlike the Calendar page there's no "+ New Event" affordance and clicking a
 session opens a read-only detail popup instead of an editor.
 """
 import calendar as calendar_module
@@ -31,15 +31,10 @@ from PySide6.QtWidgets import (
 )
 
 import history_gui
-import picker_gui
 import session_history
-import session_manager
-import qt_ui.nuclear_dialog as nuclear_dialog
+import tasks_store
 from qt_ui.day_layout import contrasting_text_color, layout_day_blocks
 from qt_ui.history_viewer import format_session_html
-from qt_ui.next_up_widget import NextUpLabel
-
-STATUS_REFRESH_MS = 1000
 
 WEEKDAY_NAMES = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
 MAX_PILLS_PER_CELL = 3
@@ -80,8 +75,27 @@ SESSION_END_COLORS = {
 }
 
 
-def _session_color(session):
+def _session_color(session, task_colors=None):
+    """Sessions started from a task (source == "task") are colored to match
+    that task's own color, same as its card in the Tasks tab, so a
+    session's origin is visible at a glance in the Finished log. Anything
+    else (manual/calendar-event sessions) keeps the old end-type coloring.
+    `task_colors` is an optional {task_id: color} map so callers rendering
+    many sessions at once (month grid, day view) can look tasks up once
+    instead of hitting tasks_store per session."""
+    if session.get("source") == "task" and session.get("eventId"):
+        if task_colors is not None:
+            color = task_colors.get(session["eventId"])
+        else:
+            task = tasks_store.get_task(session["eventId"])
+            color = task.get("color") if task else None
+        if color:
+            return color
     return SESSION_END_COLORS.get(session.get("endType", "manual"), "#5B8DEF")
+
+
+def _load_task_colors():
+    return {task["id"]: task.get("color", "#5B8DEF") for task in tasks_store.load_tasks()}
 
 
 def _session_title(session):
@@ -114,7 +128,10 @@ class FinishedTab(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        layout.addWidget(self._build_focus_panel())
+        title = QLabel("Finished")
+        title.setStyleSheet("font-size: 20px; font-weight: 700;")
+        title.setContentsMargins(24, 22, 24, 8)
+        layout.addWidget(title)
 
         self._last_session_label = QLabel()
         self._last_session_label.setStyleSheet("color: #8A8F98; font-size: 12px;")
@@ -124,6 +141,7 @@ class FinishedTab(QWidget):
 
         splitter = QSplitter(Qt.Vertical)
         splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(6)
 
         self._day_view = _FinishedDayView(on_session_clicked=self._open_detail)
         self._month_view = _FinishedMonthView(on_date_selected=self._day_view.show_date)
@@ -135,77 +153,6 @@ class FinishedTab(QWidget):
         layout.addWidget(splitter)
 
         self._day_view.show_date(date.today())
-
-        # Tracks isActive across ticks so _refresh_status can notice a
-        # session ending (naturally, manually, or via nuclear end -- all
-        # three just flip isActive True->False with no other shared hook)
-        # and refresh the calendar/day view + "Last session" label to pick
-        # up the newly-appended history entry. Without this, those only
-        # ever reflected session_history.json as of __init__, and stayed
-        # stale until the user happened to navigate the month/day view by
-        # hand -- the countdown itself kept ticking fine since that's
-        # computed straight from get_status() on every timer tick.
-        self._was_active = session_manager.get_status()["isActive"]
-
-        self._status_timer = QTimer(self)
-        self._status_timer.timeout.connect(self._refresh_status)
-        self._status_timer.start(STATUS_REFRESH_MS)
-        self._refresh_status()
-
-    def _build_focus_panel(self):
-        panel = QWidget()
-        panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(24, 22, 24, 8)
-        panel_layout.setSpacing(8)
-
-        title = QLabel("Focus")
-        title.setStyleSheet("font-size: 20px; font-weight: 700;")
-        panel_layout.addWidget(title)
-
-        panel_layout.addWidget(NextUpLabel())
-
-        self._status_label = QLabel()
-        self._status_label.setWordWrap(True)
-        panel_layout.addWidget(self._status_label)
-
-        panel_layout.addSpacing(6)
-
-        button_row = QHBoxLayout()
-        button_row.setSpacing(8)
-
-        start_button = QPushButton("Start Focus Session")
-        start_button.setProperty("class", "AccentButton")
-        start_button.clicked.connect(picker_gui.open_timer_dialog)
-        button_row.addWidget(start_button)
-
-        whitelist_button = QPushButton("Pick Apps to Whitelist")
-        whitelist_button.setProperty("class", "SecondaryButton")
-        whitelist_button.clicked.connect(picker_gui.open_whitelist_picker)
-        button_row.addWidget(whitelist_button)
-
-        # Pause/Resume and Nuclear End only make sense while a session is
-        # actually running -- same reasoning as tray.py's pystray menu items
-        # (visible=_session_active there); _refresh_status re-evaluates this
-        # every tick so these disappear on their own once a session ends.
-        self._pause_button = QPushButton("Pause / Resume Session")
-        self._pause_button.setProperty("class", "SecondaryButton")
-        self._pause_button.clicked.connect(self._pause_resume)
-        button_row.addWidget(self._pause_button)
-
-        self._nuclear_button = QPushButton("End Session (Nuclear)")
-        self._nuclear_button.setProperty("class", "SecondaryButton")
-        self._nuclear_button.clicked.connect(self._open_nuclear_dialog)
-        button_row.addWidget(self._nuclear_button)
-
-        history_button = QPushButton("Session History")
-        history_button.setProperty("class", "SecondaryButton")
-        history_button.clicked.connect(history_gui.open_history_viewer)
-        button_row.addWidget(history_button)
-
-        button_row.addStretch(1)
-        panel_layout.addLayout(button_row)
-
-        return panel
 
     def refresh(self):
         self._refresh_last_session()
@@ -226,61 +173,6 @@ class FinishedTab(QWidget):
 
     def _open_detail(self, session):
         _SessionDetailPopup(session).show()
-
-    def _pause_resume(self):
-        if session_manager.get_status()["isPaused"]:
-            session_manager.resume_session()
-        else:
-            session_manager.pause_session()
-
-    def _open_nuclear_dialog(self):
-        # qt_ui/nuclear_dialog.py was written for tray.py's pystray menu
-        # item, so it expects an "icon" it can call .notify()/.update_menu()
-        # on -- neither is meaningful from an in-window button, so this
-        # passes a no-op stand-in rather than reworking the dialog's public
-        # signature just for this second caller. Imported lazily: tray.py
-        # imports calendar_gui -> qt_ui.main_window -> this module, so a
-        # top-level "import tray" here would be circular.
-        import tray
-
-        nuclear_dialog.open_nuclear_reason_dialog(_NullIcon(), tray.format_end_summary)
-
-    def _refresh_status(self):
-        status = session_manager.get_status()
-        active = status["isActive"]
-        if self._was_active and not active:
-            self.refresh()
-        self._was_active = active
-        self._pause_button.setVisible(active)
-        self._nuclear_button.setVisible(active)
-        if not active:
-            self._status_label.setText("No active focus session.")
-            return
-        minutes, seconds = divmod(status["secondsRemaining"], 60)
-        paused = " (paused)" if status["isPaused"] else ""
-        source_note = ""
-        if status.get("source") == "calendar-event" and status.get("eventTitle"):
-            source_note = f"\nFrom calendar event: {status['eventTitle']}"
-        elif status.get("source") == "task" and status.get("eventTitle"):
-            source_note = f"\nTask: {status['eventTitle']}"
-        self._status_label.setText(
-            f"Active session{paused} — {minutes}m {seconds}s remaining\n"
-            f"Lock mode: {status['lockMode']}   Violations: {status['violationCount']}"
-            f"{source_note}"
-        )
-
-
-class _NullIcon:
-    """Stand-in for the pystray Icon that qt_ui/nuclear_dialog.py expects,
-    used when opening it from the in-window Nuclear End button rather than
-    the tray menu -- there's no tray notification/menu-refresh to perform
-    from here, so both calls are no-ops."""
-
-    def notify(self, *args, **kwargs):
-        pass
-
-    def update_menu(self):
-        pass
 
 
 class _FinishedMonthView(QWidget):
@@ -398,6 +290,8 @@ class _FinishedMonthView(QWidget):
             if start:
                 sessions_by_day.setdefault(start.date(), []).append(session)
 
+        task_colors = _load_task_colors()
+
         for row in range(6):
             self._grid_layout.setRowStretch(row + 1, 1)
         for col in range(7):
@@ -407,7 +301,7 @@ class _FinishedMonthView(QWidget):
             row, col = divmod(idx, 7)
             day_sessions = sorted(sessions_by_day.get(day, []), key=lambda s: s.get("startTime") or "")
             cell = _SessionDayCell(
-                day, self._cursor, self._selected_date, day_sessions, on_click=self._on_day_clicked,
+                day, self._cursor, self._selected_date, day_sessions, task_colors, on_click=self._on_day_clicked,
             )
             self._grid_layout.addWidget(cell, row + 1, col)
 
@@ -419,7 +313,7 @@ class _FinishedMonthView(QWidget):
 
 
 class _SessionDayCell(QFrame):
-    def __init__(self, day, cursor_month, selected_date, day_sessions, on_click):
+    def __init__(self, day, cursor_month, selected_date, day_sessions, task_colors, on_click):
         super().__init__()
         self.setProperty("class", "DayCell")
         self.setCursor(Qt.PointingHandCursor)
@@ -445,7 +339,7 @@ class _SessionDayCell(QFrame):
         for session in day_sessions[:MAX_PILLS_PER_CELL]:
             pill = QLabel()
             pill.setProperty("class", "EventPill")
-            pill.setStyleSheet(f"background: {_session_color(session)};")
+            pill.setStyleSheet(f"background: {_session_color(session, task_colors)};")
             metrics = QFontMetrics(pill.font())
             pill.setText(metrics.elidedText(_session_title(session), Qt.ElideRight, 110))
             layout.addWidget(pill)
@@ -533,6 +427,7 @@ class _FinishedDayView(QWidget):
             text_item.setPos(LABEL_WIDTH - 14 - metrics.horizontalAdvance(label_text), y - 8)
 
         range_start = datetime.combine(selected, datetime.min.time())
+        task_colors = _load_task_colors()
 
         day_sessions = []
         for session in self._matching_sessions():
@@ -568,7 +463,7 @@ class _FinishedDayView(QWidget):
                 start_time_only = occ_start.strftime("%I:%M%p").lstrip("0")
                 label_text = _fit_session_label(f"{title}  ·  {duration}", title, start_time_only, x1 - x0 - 16)
 
-            item = _SessionBlockItem(x0, y0, x1 - x0, y1 - y0, _session_color(session), label_text, session)
+            item = _SessionBlockItem(x0, y0, x1 - x0, y1 - y0, _session_color(session, task_colors), label_text, session)
             if self._on_session_clicked is not None:
                 item.clicked.connect(self._on_session_clicked)
             self._scene.addItem(item)

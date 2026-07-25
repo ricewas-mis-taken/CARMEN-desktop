@@ -452,7 +452,7 @@ class _TaskCard(QFrame):
         cancel_button.clicked.connect(self._disarm)
         button_row.addWidget(cancel_button)
         start_button = QPushButton("Start Task")
-        start_button.setProperty("class", "AccentButton")
+        start_button.setObjectName("startTaskButton")
         start_button.setStyleSheet("font-size: 13px;")
         start_button.clicked.connect(self._start_task)
         button_row.addWidget(start_button)

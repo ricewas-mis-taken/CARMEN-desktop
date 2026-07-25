@@ -60,6 +60,7 @@ def _init_schema(conn):
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             order_index INTEGER NOT NULL,
+            linked_task_id TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -112,9 +113,20 @@ def _init_schema(conn):
         conn.execute("ALTER TABLE review_subjects ADD COLUMN linked_task_id TEXT")
         conn.commit()
 
+    # Add linked_task_id to review_topics for DBs that predate this column.
+    topic_cols = {row[1] for row in conn.execute("PRAGMA table_info(review_topics)").fetchall()}
+    if "linked_task_id" not in topic_cols:
+        conn.execute("ALTER TABLE review_topics ADD COLUMN linked_task_id TEXT")
+        conn.commit()
+
 
 def _row_to_topic(row):
-    return {"id": row["id"], "name": row["name"], "orderIndex": row["order_index"]}
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "orderIndex": row["order_index"],
+        "linkedTaskId": row["linked_task_id"],
+    }
 
 
 def _row_to_subject(row):
@@ -146,13 +158,11 @@ def _row_to_problem(row):
         "fastestTimeSeconds": row["fastest_time_seconds"],
         "scheduleStage": row["schedule_stage"],
         "nextReviewDate": row["next_review_date"],
-        "subjectLinkedTaskId": row["subject_linked_task_id"],
     }
 
 
 _PROBLEM_SELECT = """
-    SELECT p.*, s.name AS subject_name, s.color AS subject_color,
-           s.linked_task_id AS subject_linked_task_id
+    SELECT p.*, s.name AS subject_name, s.color AS subject_color
     FROM review_problems p
     JOIN review_subjects s ON s.id = p.subject_id
 """
@@ -188,6 +198,59 @@ def create_topic(name):
         except Exception:
             logger.exception("review_store.create_topic failed for %s", name)
             return None
+
+
+def get_topic(topic_id):
+    with _lock:
+        try:
+            conn = _get_conn()
+            row = conn.execute("SELECT * FROM review_topics WHERE id = ?", (topic_id,)).fetchone()
+            return _row_to_topic(row) if row else None
+        except Exception:
+            logger.exception("review_store.get_topic failed for %s", topic_id)
+            return None
+
+
+def update_topic_link(topic_id, task_id):
+    """Links or unlinks a topic tab to a task (task_id=None removes the link)."""
+    with _lock:
+        try:
+            conn = _get_conn()
+            conn.execute(
+                "UPDATE review_topics SET linked_task_id = ? WHERE id = ?",
+                (task_id, topic_id),
+            )
+            conn.commit()
+        except Exception:
+            logger.exception("review_store.update_topic_link failed for topic %s", topic_id)
+
+
+def rename_topic(topic_id, name):
+    with _lock:
+        try:
+            conn = _get_conn()
+            conn.execute("UPDATE review_topics SET name = ? WHERE id = ?", (name, topic_id))
+            conn.commit()
+        except Exception:
+            logger.exception("review_store.rename_topic failed for %s", topic_id)
+
+
+def delete_topic(topic_id):
+    """Deletes a topic and all its subjects and problems."""
+    with _lock:
+        try:
+            conn = _get_conn()
+            conn.execute(
+                "DELETE FROM review_sessions WHERE problem_id IN "
+                "(SELECT id FROM review_problems WHERE topic_id = ?)",
+                (topic_id,),
+            )
+            conn.execute("DELETE FROM review_problems WHERE topic_id = ?", (topic_id,))
+            conn.execute("DELETE FROM review_subjects WHERE topic_id = ?", (topic_id,))
+            conn.execute("DELETE FROM review_topics WHERE id = ?", (topic_id,))
+            conn.commit()
+        except Exception:
+            logger.exception("review_store.delete_topic failed for %s", topic_id)
 
 
 def list_subjects(topic_id):

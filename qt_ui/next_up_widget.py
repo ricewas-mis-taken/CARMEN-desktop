@@ -1,5 +1,6 @@
 """Small self-refreshing "next up" label, shown above both the Calendar
-page and the Focus tab -- ported from calendar_gui.py's
+page (qt_ui/calendar_page.py) and the Focus tab (qt_ui/focus_tab.py) --
+ported from calendar_gui.py's
 _register_next_up_widget, which both of the Tk tabs shared for the same
 reason. A QTimer replaces the original's refresh_callbacks-list pattern
 (each Tk widget registered its own refresh function into

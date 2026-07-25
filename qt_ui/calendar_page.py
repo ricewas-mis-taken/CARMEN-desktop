@@ -28,6 +28,7 @@ class CalendarPage(QWidget):
 
         splitter = QSplitter(Qt.Vertical)
         splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(6)
 
         self._day_view = DayView(on_event_clicked=self._on_event_clicked)
         self._month_view = MonthView(on_date_selected=self._day_view.show_date)

@@ -179,7 +179,8 @@ def test_begin_review_starts_and_ends_linked_task_session(
     task = tasks_store.create_task({"name": "Math Session", "lockMode": "soft"})
 
     topic = review_store.create_topic("Math")
-    subject = review_store.create_subject(topic["id"], "Quadratics", "#5B8DEF", linked_task_id=task["id"])
+    review_store.update_topic_link(topic["id"], task["id"])
+    subject = review_store.create_subject(topic["id"], "Quadratics", "#5B8DEF")
     problem = review_store.create_problem(
         topic["id"], subject["id"], "Solve for x", stars=3,
         description_type="text", description_text="factor",
