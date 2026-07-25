@@ -174,12 +174,8 @@ class _TaskCard(QFrame):
         self.setCursor(Qt.PointingHandCursor)
         self.setAttribute(Qt.WA_StyledBackground, True)
         color = self._task.get("color", "#5B8DEF")
-        pastel = _pastelize(color)
-        # Border is deliberately faint -- the task's color now carries the
-        # card's whole identity via the fill itself, not a colored frame
-        # around a white box.
         self.setStyleSheet(
-            f"QFrame.TaskCard {{ background: {pastel}; border: 1px solid rgba(0,0,0,0.08); "
+            f"QFrame.TaskCard {{ background: {color}; border: 1px solid rgba(0,0,0,0.12); "
             f"border-radius: 12px; }}"
         )
 
