@@ -5,6 +5,8 @@ calendar.db or review_photos folder."""
 from datetime import date
 
 import review_store
+import session_manager
+import tasks_store
 import qt_ui.review_tab as review_tab
 
 
@@ -168,3 +170,33 @@ def test_lighten_produces_valid_hex():
     result = review_tab._lighten("#5B8DEF")
     assert result.startswith("#")
     assert len(result) == 7
+
+
+def test_begin_review_starts_and_ends_linked_task_session(
+    qtbot, isolate_review_db, isolate_state, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
+    task = tasks_store.create_task({"name": "Math Session", "lockMode": "soft"})
+
+    topic = review_store.create_topic("Math")
+    subject = review_store.create_subject(topic["id"], "Quadratics", "#5B8DEF", linked_task_id=task["id"])
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve for x", stars=3,
+        description_type="text", description_text="factor",
+    )
+
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    view = tab._topic_views[topic["id"]]
+    view._set_due_only(False)
+
+    assert not session_manager.is_active()
+    assert view._problems, "problem should appear in All view"
+
+    view._begin_review(view._problems[0])
+
+    assert session_manager.is_active(), "linked task session should be active during review"
+
+    view._review_banner._finish()
+
+    assert not session_manager.is_active(), "session should end when review finishes"
