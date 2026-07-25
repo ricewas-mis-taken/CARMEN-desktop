@@ -129,13 +129,10 @@ def _build_description_content(layout, problem):
         layout.addWidget(image_label, 1)
     else:  # link
         link = problem.get("descriptionLink") or ""
-        link_label = QLabel(f'<a href="{link}">{link}</a>')
+        link_label = QLabel(f'<a style="color: #1F2328;" href="{link}">{link}</a>')
         link_label.setOpenExternalLinks(False)
         link_label.linkActivated.connect(lambda url: QDesktopServices.openUrl(QUrl(url)))
         link_label.setWordWrap(True)
-        palette = link_label.palette()
-        palette.setColor(QPalette.Link, QColor("#1F2328"))
-        link_label.setPalette(palette)
         layout.addWidget(link_label, 1)
 
 
