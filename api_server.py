@@ -37,6 +37,7 @@ from flask_cors import CORS
 
 import config
 import installed_apps
+import review_store
 import session_history
 import session_manager
 import window_tracker
@@ -309,6 +310,132 @@ def whitelist_domains_add():
     if addition is None:
         return jsonify({"error": "no active session"}), 409
     return jsonify({"domainWhitelist": domain_whitelist, "addition": addition})
+
+
+@app.route("/review/topics", methods=["GET"])
+def review_topics_list():
+    return jsonify(review_store.list_topics())
+
+
+@app.route("/review/topics", methods=["POST"])
+def review_topics_create():
+    body = request.get_json(force=True, silent=True) or {}
+    name = body.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return jsonify({"error": "name must be a non-empty string"}), 400
+    topic = review_store.create_topic(name.strip())
+    if topic is None:
+        return jsonify({"error": "failed to create topic"}), 500
+    return jsonify(topic), 201
+
+
+@app.route("/review/topics/<int:topic_id>/subjects", methods=["GET"])
+def review_subjects_list(topic_id):
+    return jsonify(review_store.list_subjects(topic_id))
+
+
+@app.route("/review/topics/<int:topic_id>/subjects", methods=["POST"])
+def review_subjects_create(topic_id):
+    body = request.get_json(force=True, silent=True) or {}
+    name = body.get("name")
+    color = body.get("color")
+    if not isinstance(name, str) or not name.strip():
+        return jsonify({"error": "name must be a non-empty string"}), 400
+    if not isinstance(color, str) or not color.strip():
+        return jsonify({"error": "color must be a non-empty hex string"}), 400
+    subject = review_store.create_subject(topic_id, name.strip(), color.strip())
+    if subject is None:
+        return jsonify({"error": "failed to create subject"}), 500
+    return jsonify(subject), 201
+
+
+@app.route("/review/topics/<int:topic_id>/problems", methods=["GET"])
+def review_problems_list(topic_id):
+    due_only = request.args.get("due_only", "true").lower() != "false"
+    return jsonify(review_store.list_problems(topic_id, due_only=due_only))
+
+
+@app.route("/review/topics/<int:topic_id>/problems", methods=["POST"])
+def review_problems_create(topic_id):
+    name = (request.form.get("name") or "").strip()
+    subject_id = request.form.get("subject_id")
+    stars = request.form.get("stars")
+    description_type = request.form.get("description_type")
+
+    if not name:
+        return jsonify({"error": "name must be a non-empty string"}), 400
+    try:
+        subject_id = int(subject_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "subject_id must be an integer"}), 400
+    try:
+        stars = int(stars)
+        if not (1 <= stars <= 5):
+            raise ValueError
+    except (TypeError, ValueError):
+        return jsonify({"error": "stars must be an integer between 1 and 5"}), 400
+    if description_type not in ("text", "photo", "link"):
+        return jsonify({"error": "description_type must be 'text', 'photo', or 'link'"}), 400
+
+    description_text = None
+    description_link = None
+    photo_bytes = None
+    photo_filename = None
+
+    if description_type == "text":
+        description_text = (request.form.get("description_text") or "").strip()
+        if not description_text:
+            return jsonify({"error": "description_text is required when description_type is 'text'"}), 400
+    elif description_type == "link":
+        description_link = (request.form.get("description_link") or "").strip()
+        if not description_link:
+            return jsonify({"error": "description_link is required when description_type is 'link'"}), 400
+    else:  # photo
+        photo_file = request.files.get("description_photo")
+        if photo_file is None or not photo_file.filename:
+            return jsonify({"error": "description_photo file is required when description_type is 'photo'"}), 400
+        photo_bytes = photo_file.read()
+        photo_filename = photo_file.filename
+
+    problem = review_store.create_problem(
+        topic_id, subject_id, name, stars, description_type,
+        description_text=description_text, description_link=description_link,
+        photo_bytes=photo_bytes, photo_filename=photo_filename,
+    )
+    if problem is None:
+        return jsonify({"error": "failed to create problem"}), 500
+    return jsonify(problem), 201
+
+
+@app.route("/review/problems/<int:problem_id>", methods=["GET"])
+def review_problem_detail(problem_id):
+    problem = review_store.get_problem(problem_id)
+    if problem is None:
+        return jsonify({"error": "problem not found"}), 404
+    return jsonify(problem)
+
+
+@app.route("/review/problems/<int:problem_id>/start", methods=["POST"])
+def review_problem_start(problem_id):
+    token = review_store.start_review(problem_id)
+    if token is None:
+        return jsonify({"error": "problem not found"}), 404
+    return jsonify({"sessionToken": token})
+
+
+@app.route("/review/problems/<int:problem_id>/finish", methods=["POST"])
+def review_problem_finish(problem_id):
+    body = request.get_json(force=True, silent=True) or {}
+    session_token = body.get("session_token")
+    if not isinstance(session_token, str) or not session_token:
+        return jsonify({"error": "session_token must be a non-empty string"}), 400
+
+    problem = review_store.finish_review(session_token)
+    if problem is None:
+        return jsonify({"error": "invalid or already-used session_token"}), 409
+    if problem["id"] != problem_id:
+        return jsonify({"error": "session_token does not belong to this problem"}), 409
+    return jsonify(problem)
 
 
 def run_server():

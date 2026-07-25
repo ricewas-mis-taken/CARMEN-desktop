@@ -10,6 +10,7 @@ import pytest
 
 import calendar_store
 import config
+import review_store
 import session_history
 import session_manager
 
@@ -58,4 +59,18 @@ def isolate_calendar_db(tmp_path, monkeypatch):
     so every test gets a fresh, isolated on-disk database."""
     monkeypatch.setattr(calendar_store, "DB_PATH", str(tmp_path / "calendar.db"))
     monkeypatch.setattr(calendar_store, "_conn", None)
+    yield
+
+
+@pytest.fixture
+def isolate_review_db(isolate_calendar_db, tmp_path, monkeypatch):
+    """review_store.py shares calendar_store's connection (see its module
+    docstring) rather than opening one of its own, so isolating it also
+    means resetting review_store's own module-level state: _schema_ready
+    (or the fresh calendar.db from isolate_calendar_db would never get its
+    review_* tables created) and _active_sessions (in-memory start/finish
+    tracking, which must not leak between tests)."""
+    monkeypatch.setattr(review_store, "_schema_ready", False)
+    monkeypatch.setattr(review_store, "_active_sessions", {})
+    monkeypatch.setattr(review_store, "PHOTOS_DIR", str(tmp_path / "review_photos"))
     yield
