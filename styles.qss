@@ -315,6 +315,23 @@ QProgressBar.TaskProgressBar::chunk {
     border-radius: 5px;
 }
 
+/* Start button in the Review tab's problem table -- flat blue text, no
+   border/box. The row's pastel tint already identifies the subject, so a
+   border-style button adds visual noise. */
+QPushButton#reviewStartButton {
+    background: transparent;
+    color: #5B8DEF;
+    border: none;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QPushButton#reviewStartButton:hover {
+    background: rgba(91, 141, 239, 0.12);
+}
+
 /* Review tab's topic tabs (qt_ui/review_tab.py) -- browser/chrome-style tab
    strip, including the trailing "+" tab (styled the same as any other tab;
    review_tab.py intercepts clicks on it rather than actually showing it as

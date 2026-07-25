@@ -60,6 +60,7 @@ def _init_schema(conn):
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             order_index INTEGER NOT NULL,
+            linked_task_id TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -68,6 +69,7 @@ def _init_schema(conn):
             topic_id INTEGER NOT NULL REFERENCES review_topics(id),
             name TEXT NOT NULL,
             color TEXT NOT NULL,
+            linked_task_id TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -105,13 +107,36 @@ def _init_schema(conn):
     )
     conn.commit()
 
+    # Add linked_task_id to review_subjects for DBs that predate this column.
+    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(review_subjects)").fetchall()}
+    if "linked_task_id" not in existing_cols:
+        conn.execute("ALTER TABLE review_subjects ADD COLUMN linked_task_id TEXT")
+        conn.commit()
+
+    # Add linked_task_id to review_topics for DBs that predate this column.
+    topic_cols = {row[1] for row in conn.execute("PRAGMA table_info(review_topics)").fetchall()}
+    if "linked_task_id" not in topic_cols:
+        conn.execute("ALTER TABLE review_topics ADD COLUMN linked_task_id TEXT")
+        conn.commit()
+
 
 def _row_to_topic(row):
-    return {"id": row["id"], "name": row["name"], "orderIndex": row["order_index"]}
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "orderIndex": row["order_index"],
+        "linkedTaskId": row["linked_task_id"],
+    }
 
 
 def _row_to_subject(row):
-    return {"id": row["id"], "topicId": row["topic_id"], "name": row["name"], "color": row["color"]}
+    return {
+        "id": row["id"],
+        "topicId": row["topic_id"],
+        "name": row["name"],
+        "color": row["color"],
+        "linkedTaskId": row["linked_task_id"],
+    }
 
 
 def _row_to_problem(row):
@@ -175,6 +200,59 @@ def create_topic(name):
             return None
 
 
+def get_topic(topic_id):
+    with _lock:
+        try:
+            conn = _get_conn()
+            row = conn.execute("SELECT * FROM review_topics WHERE id = ?", (topic_id,)).fetchone()
+            return _row_to_topic(row) if row else None
+        except Exception:
+            logger.exception("review_store.get_topic failed for %s", topic_id)
+            return None
+
+
+def update_topic_link(topic_id, task_id):
+    """Links or unlinks a topic tab to a task (task_id=None removes the link)."""
+    with _lock:
+        try:
+            conn = _get_conn()
+            conn.execute(
+                "UPDATE review_topics SET linked_task_id = ? WHERE id = ?",
+                (task_id, topic_id),
+            )
+            conn.commit()
+        except Exception:
+            logger.exception("review_store.update_topic_link failed for topic %s", topic_id)
+
+
+def rename_topic(topic_id, name):
+    with _lock:
+        try:
+            conn = _get_conn()
+            conn.execute("UPDATE review_topics SET name = ? WHERE id = ?", (name, topic_id))
+            conn.commit()
+        except Exception:
+            logger.exception("review_store.rename_topic failed for %s", topic_id)
+
+
+def delete_topic(topic_id):
+    """Deletes a topic and all its subjects and problems."""
+    with _lock:
+        try:
+            conn = _get_conn()
+            conn.execute(
+                "DELETE FROM review_sessions WHERE problem_id IN "
+                "(SELECT id FROM review_problems WHERE topic_id = ?)",
+                (topic_id,),
+            )
+            conn.execute("DELETE FROM review_problems WHERE topic_id = ?", (topic_id,))
+            conn.execute("DELETE FROM review_subjects WHERE topic_id = ?", (topic_id,))
+            conn.execute("DELETE FROM review_topics WHERE id = ?", (topic_id,))
+            conn.commit()
+        except Exception:
+            logger.exception("review_store.delete_topic failed for %s", topic_id)
+
+
 def list_subjects(topic_id):
     with _lock:
         try:
@@ -188,13 +266,13 @@ def list_subjects(topic_id):
             return []
 
 
-def create_subject(topic_id, name, color):
+def create_subject(topic_id, name, color, linked_task_id=None):
     with _lock:
         try:
             conn = _get_conn()
             cur = conn.execute(
-                "INSERT INTO review_subjects (topic_id, name, color) VALUES (?, ?, ?)",
-                (topic_id, name, color),
+                "INSERT INTO review_subjects (topic_id, name, color, linked_task_id) VALUES (?, ?, ?, ?)",
+                (topic_id, name, color, linked_task_id),
             )
             conn.commit()
             row = conn.execute("SELECT * FROM review_subjects WHERE id = ?", (cur.lastrowid,)).fetchone()
@@ -202,6 +280,20 @@ def create_subject(topic_id, name, color):
         except Exception:
             logger.exception("review_store.create_subject failed for topic %s", topic_id)
             return None
+
+
+def update_subject_link(subject_id, task_id):
+    """Links or unlinks a subject to a task (task_id=None removes the link)."""
+    with _lock:
+        try:
+            conn = _get_conn()
+            conn.execute(
+                "UPDATE review_subjects SET linked_task_id = ? WHERE id = ?",
+                (task_id, subject_id),
+            )
+            conn.commit()
+        except Exception:
+            logger.exception("review_store.update_subject_link failed for subject %s", subject_id)
 
 
 def list_problems(topic_id, due_only=True):

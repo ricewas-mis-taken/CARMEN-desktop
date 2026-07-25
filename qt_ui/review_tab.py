@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QStackedWidget,
@@ -38,7 +39,8 @@ from PySide6.QtWidgets import (
 )
 
 import review_store
-from qt_ui.day_layout import contrasting_text_color
+import session_manager
+import tasks_store
 
 COLOR_PALETTE = [
     "#5B8DEF", "#e53935", "#43a047", "#fb8c00", "#8e24aa",
@@ -105,9 +107,40 @@ def _relative_time(iso_datetime_string):
     return f"{days} day{'s' if days != 1 else ''} ago"
 
 
+def _build_description_content(layout, problem):
+    """Adds the problem's description widget(s) to layout -- shared between
+    _DescriptionPopup (read-only view) and _ReviewStartDialog (pre-start
+    preview)."""
+    description_type = problem["descriptionType"]
+    if description_type == "text":
+        text_view = QTextEdit()
+        text_view.setReadOnly(True)
+        text_view.setPlainText(problem.get("descriptionText") or "")
+        layout.addWidget(text_view, 1)
+    elif description_type == "photo":
+        image_label = QLabel()
+        image_label.setAlignment(Qt.AlignCenter)
+        path = problem.get("descriptionPhotoPath")
+        pixmap = QPixmap(path) if path and os.path.exists(path) else None
+        if pixmap and not pixmap.isNull():
+            image_label.setPixmap(pixmap.scaled(440, 320, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        else:
+            image_label.setText("Image not found.")
+        layout.addWidget(image_label, 1)
+    else:  # link
+        link = problem.get("descriptionLink") or ""
+        link_label = QLabel(f'<a href="{link}">{link}</a>')
+        link_label.setOpenExternalLinks(False)
+        link_label.linkActivated.connect(lambda url: QDesktopServices.openUrl(QUrl(url)))
+        link_label.setWordWrap(True)
+        layout.addWidget(link_label, 1)
+
+
 class ReviewTab(QWidget):
     def __init__(self):
         super().__init__()
+        self._is_reviewing = False
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -125,9 +158,12 @@ class ReviewTab(QWidget):
         # never fire. tabBarClicked fires on every click regardless of
         # whether the index actually changed.
         self._tabs.tabBarClicked.connect(self._on_tab_bar_clicked)
+        self._tabs.tabBar().setContextMenuPolicy(Qt.CustomContextMenu)
+        self._tabs.tabBar().customContextMenuRequested.connect(self._on_tab_context_menu)
         layout.addWidget(self._tabs, 1)
 
         self._topic_views = {}
+        self._topic_names = {}
         self._plus_index = None
         self.refresh()
 
@@ -138,12 +174,15 @@ class ReviewTab(QWidget):
         while self._tabs.count():
             self._tabs.removeTab(0)
         self._topic_views = {}
+        self._topic_names = {}
 
         topics = review_store.list_topics()
         for topic in topics:
-            view = _TopicView(topic["id"])
+            view = _TopicView(topic["id"], review_tab=self)
             self._topic_views[topic["id"]] = view
-            self._tabs.addTab(view, topic["name"])
+            self._topic_names[topic["id"]] = topic["name"]
+            label = topic["name"] + (" 🔗" if topic.get("linkedTaskId") else "")
+            self._tabs.addTab(view, label)
 
         self._plus_index = self._tabs.addTab(QWidget(), "+")
         self._tabs.blockSignals(False)
@@ -170,17 +209,106 @@ class ReviewTab(QWidget):
             return
         # The "+" tab is a trigger, not a real destination -- switch back to
         # a real tab (if any) right away rather than actually landing on it,
-        # then open the dialog non-modally. _on_topic_added (via refresh())
-        # selects the newly created topic once it exists; if the user
-        # cancels, whatever real tab was showing just stays showing.
+        # then open the dialog non-modally. _on_topic_added selects the newly
+        # created topic once it exists; if the user cancels, whatever real tab
+        # was showing just stays showing.
         if self._topic_views:
             self._tabs.setCurrentIndex(0)
         _register_popup(_AddTopicDialog(on_added=self._on_topic_added))
 
     def _on_topic_added(self, topic):
+        if topic is None:
+            return
+        # Incremental add: insert a new tab before "+" instead of rebuilding
+        # everything, so an in-progress review banner isn't orphaned when the
+        # user creates a topic mid-session.
+        view = _TopicView(topic["id"], review_tab=self)
+        self._topic_views[topic["id"]] = view
+        self._topic_names[topic["id"]] = topic["name"]
+        self._tabs.insertTab(self._plus_index, view, topic["name"])
+        self._plus_index = self._tabs.count() - 1
+        self._select_topic(topic["id"])
+
+    def _refresh_tab_labels(self):
+        """Update tab text 🔗 indicators without a full rebuild."""
+        for topic_id, view in self._topic_views.items():
+            idx = self._tabs.indexOf(view)
+            if idx < 0:
+                continue
+            topic = review_store.get_topic(topic_id)
+            name = self._topic_names.get(topic_id, "")
+            has_link = topic and topic.get("linkedTaskId")
+            self._tabs.setTabText(idx, name + (" 🔗" if has_link else ""))
+
+    def _topic_id_at_tab(self, index):
+        widget = self._tabs.widget(index)
+        for topic_id, view in self._topic_views.items():
+            if view is widget:
+                return topic_id
+        return None
+
+    def _on_tab_context_menu(self, pos):
+        idx = self._tabs.tabBar().tabAt(pos)
+        if idx < 0 or idx == self._plus_index:
+            return
+        topic_id = self._topic_id_at_tab(idx)
+        if topic_id is None:
+            return
+
+        menu = QMenu(self)
+        rename_action = menu.addAction("Rename tab")
+        link_action = menu.addAction("Link to task")
+        menu.addSeparator()
+        delete_action = menu.addAction("Delete tab")
+
+        # Block destructive/disruptive actions during an active review
+        if self._is_reviewing:
+            rename_action.setEnabled(False)
+            delete_action.setEnabled(False)
+
+        action = menu.exec(self._tabs.tabBar().mapToGlobal(pos))
+        if action == rename_action:
+            self._rename_topic(topic_id)
+        elif action == link_action:
+            self._link_topic_to_task(topic_id)
+        elif action == delete_action:
+            self._delete_topic(topic_id)
+
+    def _rename_topic(self, topic_id):
+        current_name = self._topic_names.get(topic_id, "")
+        _register_popup(_RenameTopicDialog(topic_id, current_name, on_renamed=self._on_topic_renamed))
+
+    def _on_topic_renamed(self, topic_id, new_name):
+        self._topic_names[topic_id] = new_name
+        self._refresh_tab_labels()
+
+    def _link_topic_to_task(self, topic_id):
+        topic = review_store.get_topic(topic_id)
+        if topic:
+            _register_popup(_TopicTaskLinkDialog(topic, on_saved=self._refresh_tab_labels))
+
+    def _delete_topic(self, topic_id):
+        name = self._topic_names.get(topic_id, "this topic")
+        confirm = QMessageBox.question(
+            self,
+            "Delete topic",
+            f'Delete "{name}" and all its subjects and problems? This cannot be undone.',
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        review_store.delete_topic(topic_id)
         self.refresh()
-        if topic is not None:
-            self._select_topic(topic["id"])
+
+    def can_start_review(self):
+        return not self._is_reviewing
+
+    def on_review_started(self):
+        self._is_reviewing = True
+
+    def on_review_finished(self):
+        self._is_reviewing = False
 
 
 class _AddTopicDialog(QWidget):
@@ -229,17 +357,21 @@ class _AddTopicDialog(QWidget):
 
 
 class _TopicView(QWidget):
-    def __init__(self, topic_id):
+    def __init__(self, topic_id, review_tab=None):
         super().__init__()
         self._topic_id = topic_id
         self._due_only = True
         self._problems = []
+        self._review_tab = review_tab
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 16, 24, 20)
         layout.setSpacing(10)
 
         layout.addLayout(self._build_header())
+
+        self._review_banner = _ReviewBanner(on_finished=self._banner_finished)
+        layout.addWidget(self._review_banner)
 
         self._table = QTableWidget(0, len(COLUMN_HEADERS))
         self._table.setHorizontalHeaderLabels(COLUMN_HEADERS)
@@ -327,30 +459,19 @@ class _TopicView(QWidget):
             stars_item.setForeground(QColor("#F5A623"))
             self._table.setItem(row, COLUMN_STARS, stars_item)
 
+            subject_item = QTableWidgetItem(problem["subjectName"])
+            subject_item.setForeground(QColor("#1F2328"))
+            subject_item.setBackground(QColor(tint))
+            self._table.setItem(row, COLUMN_SUBJECT, subject_item)
+
             for col in (COLUMN_NAME, COLUMN_REVIEWS, COLUMN_LAST_REVIEWED, COLUMN_FIRST_SOLVED, COLUMN_FASTEST):
                 self._table.item(row, col).setForeground(QColor("#1F2328"))
             for col in (COLUMN_NAME, COLUMN_REVIEWS, COLUMN_LAST_REVIEWED, COLUMN_FIRST_SOLVED, COLUMN_FASTEST, COLUMN_STARS):
                 self._table.item(row, col).setBackground(QColor(tint))
 
-            self._table.setCellWidget(row, COLUMN_SUBJECT, self._build_subject_pill(problem, tint))
             self._table.setCellWidget(row, COLUMN_START, self._build_start_cell(problem, tint))
 
         self._table.resizeRowsToContents()
-
-    def _build_subject_pill(self, problem, tint):
-        container = QWidget()
-        container.setStyleSheet(f"background: {tint};")
-        layout = QHBoxLayout(container)
-        layout.setContentsMargins(6, 4, 6, 4)
-        pill = QLabel(problem["subjectName"])
-        text_color = contrasting_text_color(problem["subjectColor"])
-        pill.setStyleSheet(
-            f"background: {problem['subjectColor']}; color: {text_color}; "
-            "border-radius: 8px; padding: 2px 8px; font-size: 11px;"
-        )
-        layout.addWidget(pill)
-        layout.addStretch(1)
-        return container
 
     def _build_start_cell(self, problem, tint):
         container = QWidget()
@@ -358,32 +479,260 @@ class _TopicView(QWidget):
         layout = QHBoxLayout(container)
         layout.setContentsMargins(6, 4, 6, 4)
         start_button = QPushButton("Start")
-        start_button.setProperty("class", "AccentButton")
-        start_button.clicked.connect(lambda: self._confirm_start(problem))
+        start_button.setObjectName("reviewStartButton")
+        start_button.clicked.connect(lambda: self._start_problem(problem))
         layout.addWidget(start_button)
         return container
 
     def _on_cell_clicked(self, row, column):
         if column == COLUMN_START:
             return
-        problem = self._problems[row]
-        _DescriptionPopup(problem).show()
+        _DescriptionPopup(self._problems[row])
 
-    def _confirm_start(self, problem):
-        answer = QMessageBox.question(
-            self, "Carmen Focus", f"Start working on \"{problem['name']}\"?",
-        )
-        if answer != QMessageBox.Yes:
+    def _start_problem(self, problem):
+        if self._review_tab and not self._review_tab.can_start_review():
             return
+        _ReviewStartDialog(problem, on_start=self._begin_review)
+
+    def _begin_review(self, problem):
         token = review_store.start_review(problem["id"])
         if token is None:
             QMessageBox.warning(self, "Carmen Focus", "That problem no longer exists.")
             self.refresh()
             return
-        _register_popup(_TimerPopup(problem, token, on_finished=self.refresh))
+
+        end_session_on_finish = False
+        topic = review_store.get_topic(self._topic_id)
+        if topic and topic.get("linkedTaskId") and not session_manager.is_active():
+            task = tasks_store.get_task(topic["linkedTaskId"])
+            if task:
+                session_manager.start_session(
+                    duration_minutes=tasks_store.BURNOUT_MINUTES,
+                    lock_mode=task["lockMode"],
+                    process_whitelist=task.get("processWhitelist", []),
+                    domain_whitelist=task.get("domainWhitelist", []),
+                    source="task",
+                    event_id=task["id"],
+                    event_title=f"{task['name']} - {problem['subjectName']} review",
+                )
+                end_session_on_finish = True
+
+        if self._review_tab:
+            self._review_tab.on_review_started()
+        self._review_banner.start(problem, token, end_session_on_finish=end_session_on_finish)
+
+    def _banner_finished(self):
+        if self._review_tab:
+            self._review_tab.on_review_finished()
+        self.refresh()
 
     def _open_add_problem(self):
         _register_popup(_AddProblemDialog(self._topic_id, on_added=lambda _p: self.refresh()))
+
+
+class _ReviewBanner(QWidget):
+    """Inline timer shown at the top of _TopicView while a review is active.
+    Hidden by default; call start() to activate."""
+    def __init__(self, on_finished):
+        super().__init__()
+        self._on_finished = on_finished
+        self._session_token = None
+        self._end_session_on_finish = False
+        self._elapsed_seconds = 0
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background: #EAF2FF; border: 1px solid #BDD4F7; border-radius: 10px; }"
+        )
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(12, 10, 12, 10)
+        card_layout.setSpacing(4)
+
+        self._problem_label = QLabel()
+        self._problem_label.setAlignment(Qt.AlignCenter)
+        self._problem_label.setStyleSheet(
+            "font-size: 13px; font-weight: 600; color: #1F2328; background: transparent; border: none;"
+        )
+        card_layout.addWidget(self._problem_label)
+
+        self._timer_label = QLabel("00:00")
+        self._timer_label.setAlignment(Qt.AlignCenter)
+        self._timer_label.setStyleSheet(
+            "font-size: 48px; font-weight: 700; color: #1F2328; "
+            "letter-spacing: 4px; background: transparent; border: none;"
+        )
+        card_layout.addWidget(self._timer_label)
+
+        finish_btn = QPushButton("Finish")
+        finish_btn.setProperty("class", "AccentButton")
+        finish_btn.setFixedWidth(120)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        btn_row.addWidget(finish_btn)
+        btn_row.addStretch(1)
+        card_layout.addLayout(btn_row)
+        finish_btn.clicked.connect(self._finish)
+
+        outer.addWidget(card)
+
+        self._tick_timer = QTimer(self)
+        self._tick_timer.timeout.connect(self._tick)
+
+        self.hide()
+
+    def start(self, problem, token, end_session_on_finish=False):
+        self._session_token = token
+        self._end_session_on_finish = end_session_on_finish
+        self._elapsed_seconds = 0
+        self._problem_label.setText(f"Reviewing: {problem['name']}")
+        self._timer_label.setText("00:00")
+        self._tick_timer.start(1000)
+        self.show()
+
+    def _tick(self):
+        self._elapsed_seconds += 1
+        self._timer_label.setText(_format_mmss(self._elapsed_seconds))
+
+    def _finish(self):
+        self._tick_timer.stop()
+        review_store.finish_review(self._session_token)
+        if self._end_session_on_finish:
+            session_manager.end_session()
+        self._session_token = None
+        self._end_session_on_finish = False
+        self.hide()
+        self._on_finished()
+
+
+class _ReviewStartDialog(QWidget):
+    """Shows a problem's description with a Start button -- replaces the old
+    QMessageBox.question so the user sees what they're about to review before
+    the inline timer starts."""
+    def __init__(self, problem, on_start):
+        super().__init__(None, Qt.WindowStaysOnTopHint)
+        self.setObjectName("PopupBg")
+        self.setWindowTitle(problem["name"])
+        self.resize(480, 440)
+        self._problem = problem
+        self._on_start = on_start
+
+        layout = QVBoxLayout(self)
+
+        name_label = QLabel(problem["name"])
+        name_label.setStyleSheet("font-size: 16px; font-weight: 700;")
+        layout.addWidget(name_label)
+
+        stars_label = QLabel(_star_text(problem["stars"]))
+        stars_label.setStyleSheet("color: #F5A623; font-size: 14px;")
+        layout.addWidget(stars_label)
+
+        _build_description_content(layout, problem)
+
+        start_button = QPushButton("Start")
+        start_button.setProperty("class", "AccentButton")
+        start_button.clicked.connect(self._do_start)
+        layout.addWidget(start_button)
+
+        self.show()
+        _register_popup(self)
+
+    def _do_start(self):
+        self.close()
+        self._on_start(self._problem)
+
+
+class _TopicTaskLinkDialog(QWidget):
+    """Right-click context menu → Link to task: links/unlinks the whole topic
+    tab to a task so every review under it counts toward that task's session."""
+    def __init__(self, topic, on_saved):
+        super().__init__(None, Qt.WindowStaysOnTopHint)
+        self.setObjectName("PopupBg")
+        self.setWindowTitle(f"Link tab — {topic['name']}")
+        self.resize(320, 180)
+        self._topic = topic
+        self._on_saved = on_saved
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(_bold_label(f"Link \"{topic['name']}\" to a task"))
+
+        self._task_combo = QComboBox()
+        self._task_combo.addItem("No link", None)
+        for task in tasks_store.load_tasks():
+            if not task.get("archived"):
+                self._task_combo.addItem(task["name"], task["id"])
+        current_id = topic.get("linkedTaskId")
+        if current_id:
+            idx = self._task_combo.findData(current_id)
+            if idx >= 0:
+                self._task_combo.setCurrentIndex(idx)
+        layout.addWidget(self._task_combo)
+
+        hint = QLabel("Review time will count toward the linked task's session.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #5A6070; font-size: 12px;")
+        layout.addWidget(hint)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.close)
+        btn_row.addWidget(cancel)
+        save = QPushButton("Save")
+        save.setProperty("class", "AccentButton")
+        save.clicked.connect(self._save)
+        btn_row.addWidget(save)
+        layout.addLayout(btn_row)
+
+        self.show()
+        _register_popup(self)
+
+    def _save(self):
+        task_id = self._task_combo.currentData()
+        review_store.update_topic_link(self._topic["id"], task_id)
+        self.close()
+        self._on_saved()
+
+
+class _RenameTopicDialog(QWidget):
+    def __init__(self, topic_id, current_name, on_renamed):
+        super().__init__(None, Qt.WindowStaysOnTopHint)
+        self.setObjectName("PopupBg")
+        self.setWindowTitle("Rename tab")
+        self.resize(300, 120)
+        self._topic_id = topic_id
+        self._on_renamed = on_renamed
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("New name"))
+        self._name_edit = QLineEdit(current_name)
+        self._name_edit.selectAll()
+        self._name_edit.returnPressed.connect(self._save)
+        layout.addWidget(self._name_edit)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.close)
+        btn_row.addWidget(cancel)
+        save = QPushButton("Rename")
+        save.setProperty("class", "AccentButton")
+        save.clicked.connect(self._save)
+        btn_row.addWidget(save)
+        layout.addLayout(btn_row)
+
+        self.show()
+
+    def _save(self):
+        name = self._name_edit.text().strip()
+        if not name:
+            return
+        review_store.rename_topic(self._topic_id, name)
+        self.close()
+        self._on_renamed(self._topic_id, name)
 
 
 class _DescriptionPopup(QWidget):
@@ -403,75 +752,10 @@ class _DescriptionPopup(QWidget):
         stars_label.setStyleSheet("color: #F5A623; font-size: 14px;")
         layout.addWidget(stars_label)
 
-        description_type = problem["descriptionType"]
-        if description_type == "text":
-            text_view = QTextEdit()
-            text_view.setReadOnly(True)
-            text_view.setPlainText(problem.get("descriptionText") or "")
-            layout.addWidget(text_view, 1)
-        elif description_type == "photo":
-            image_label = QLabel()
-            image_label.setAlignment(Qt.AlignCenter)
-            path = problem.get("descriptionPhotoPath")
-            pixmap = QPixmap(path) if path and os.path.exists(path) else None
-            if pixmap and not pixmap.isNull():
-                image_label.setPixmap(pixmap.scaled(440, 320, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            else:
-                image_label.setText("Image not found.")
-            layout.addWidget(image_label, 1)
-        else:  # link
-            link = problem.get("descriptionLink") or ""
-            link_label = QLabel(f'<a href="{link}">{link}</a>')
-            link_label.setOpenExternalLinks(False)
-            link_label.linkActivated.connect(lambda url: QDesktopServices.openUrl(QUrl(url)))
-            link_label.setWordWrap(True)
-            layout.addWidget(link_label, 1)
-
-        _register_popup(self)
-
-
-class _TimerPopup(QWidget):
-    def __init__(self, problem, session_token, on_finished):
-        super().__init__(None, Qt.WindowStaysOnTopHint)
-        self.setObjectName("PopupBg")
-        self.setWindowTitle(f"Reviewing — {problem['name']}")
-        self.resize(300, 160)
-        self._problem = problem
-        self._session_token = session_token
-        self._on_finished = on_finished
-        self._elapsed_seconds = 0
-
-        layout = QVBoxLayout(self)
-        name_label = QLabel(problem["name"])
-        name_label.setStyleSheet("font-size: 15px; font-weight: 700;")
-        name_label.setWordWrap(True)
-        layout.addWidget(name_label)
-
-        self._timer_label = QLabel("00:00")
-        self._timer_label.setAlignment(Qt.AlignCenter)
-        self._timer_label.setStyleSheet("font-size: 32px; font-weight: 700;")
-        layout.addWidget(self._timer_label)
-
-        finish_button = QPushButton("Finish")
-        finish_button.setProperty("class", "AccentButton")
-        finish_button.clicked.connect(self._finish)
-        layout.addWidget(finish_button)
-
-        self._tick_timer = QTimer(self)
-        self._tick_timer.timeout.connect(self._tick)
-        self._tick_timer.start(1000)
+        _build_description_content(layout, problem)
 
         self.show()
-
-    def _tick(self):
-        self._elapsed_seconds += 1
-        self._timer_label.setText(_format_mmss(self._elapsed_seconds))
-
-    def _finish(self):
-        self._tick_timer.stop()
-        review_store.finish_review(self._session_token)
-        self.close()
-        self._on_finished()
+        _register_popup(self)
 
 
 _popup_refs = set()
@@ -526,7 +810,7 @@ class _AddProblemDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle("Carmen Focus — Add Problem")
-        self.resize(420, 560)
+        self.resize(420, 580)
         self._topic_id = topic_id
         self._on_added = on_added
         self._photo_path = None
@@ -670,7 +954,9 @@ class _AddProblemDialog(QWidget):
         name = self._new_subject_name.text().strip()
         if not name:
             return
-        subject = review_store.create_subject(self._topic_id, name, self._new_subject_color)
+        subject = review_store.create_subject(
+            self._topic_id, name, self._new_subject_color
+        )
         if subject is None:
             return
         self._reload_subjects(select_id=subject["id"])
