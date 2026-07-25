@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import review_store
 import session_history
 import session_manager
 import tasks_store
@@ -85,6 +86,18 @@ def _pastelize(hex_color, mix=0.22):
     g = round(g + (255 - g) * mix)
     b = round(b + (255 - b) * mix)
     return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def _subjects_for_task(task_id):
+    try:
+        subjects = []
+        for topic in review_store.list_topics():
+            for s in review_store.list_subjects(topic["id"]):
+                if s.get("linkedTaskId") == task_id:
+                    subjects.append(s)
+        return subjects
+    except Exception:
+        return []
 
 
 class TasksTab(QWidget):
@@ -164,7 +177,6 @@ class _TaskCard(QFrame):
         self._on_changed = on_changed
         self._armed = False
         self._until_burnout = False
-        self._expanded = False
         self._hovering = False
         self._cash_in_balance_int = 0
 
@@ -176,7 +188,8 @@ class _TaskCard(QFrame):
         color = self._task.get("color", "#5B8DEF")
         self.setStyleSheet(
             f"QFrame.TaskCard {{ background: {color}; border: 1px solid rgba(0,0,0,0.12); "
-            f"border-radius: 12px; }}"
+            f"border-radius: 12px; }} "
+            f"QFrame.TaskCard QWidget {{ background: transparent; }}"
         )
 
         outer = QVBoxLayout(self)
@@ -191,7 +204,8 @@ class _TaskCard(QFrame):
         self._content = QWidget()
         content_layout = QVBoxLayout(self._content)
         content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(14)
+        content_layout.setSpacing(10)
+        content_layout.addLayout(self._build_subjects_row())
         content_layout.addWidget(self._build_description_section())
         content_layout.addLayout(self._build_progress_section())
         content_layout.addLayout(self._build_vacation_section())
@@ -214,7 +228,7 @@ class _TaskCard(QFrame):
     def _build_header_row(self):
         row = QHBoxLayout()
         name_label = QLabel()
-        name_label.setStyleSheet("font-size: 26px; font-weight: 700; color: #1F2328;")
+        name_label.setStyleSheet("font-size: 30px; font-weight: 700; color: #1F2328;")
         full_name = self._task["name"]
         metrics = QFontMetrics(name_label.font())
         # Elided to one line (rather than word-wrapped) so every idle card
@@ -257,39 +271,39 @@ class _TaskCard(QFrame):
         self._refresh_cash_in_visibility()
         super().leaveEvent(event)
 
+    def _build_subjects_row(self):
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        subjects = _subjects_for_task(self._task["id"])
+        for subject in subjects:
+            pill = QLabel(subject["name"])
+            pill.setStyleSheet(
+                f"background: {subject['color']}; color: white; "
+                f"border-radius: 10px; padding: 3px 10px; font-size: 11px; font-weight: 600;"
+            )
+            row.addWidget(pill)
+        row.addStretch(1)
+        return row
+
     def _build_description_section(self):
-        """Lock mode as its own bold sub-heading, then a preview of the
-        whitelist underneath it (smaller, regular weight -- one tier down
-        in the card's type hierarchy), pixel-elided with a trailing
-        "More"/"Less" toggle -- not just clipped, and not just a tooltip,
-        since QPushButton doesn't wrap or elide its own label and past its
-        width text used to get cut off mid-word with no indication there
-        was more to see. Full whitelist is always available on hover via
-        the tooltip, and by clicking "More" to expand it below. The preview
-        is a QPushButton (not a QLabel) specifically so a click on it is
-        consumed here and never bubbles up to the card's own
-        mousePressEvent (arm/start) -- same trick the Start/Cancel/gear
-        buttons already rely on."""
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        layout.setSpacing(3)
 
         self._lock_label = QLabel()
-        self._lock_label.setStyleSheet("font-size: 16px; font-weight: 600; color: #262A32;")
+        self._lock_label.setStyleSheet("font-size: 12px; font-weight: 600; color: #262A32;")
         layout.addWidget(self._lock_label)
 
-        self._description_button = QPushButton()
-        self._description_button.setProperty("class", "TaskDescriptionButton")
-        self._description_button.setCursor(Qt.PointingHandCursor)
-        self._description_button.clicked.connect(self._toggle_expanded)
-        layout.addWidget(self._description_button)
-
-        self._description_full = QLabel()
-        self._description_full.setWordWrap(True)
-        self._description_full.setStyleSheet("font-size: 13px; color: #3A3F48;")
-        self._description_full.setVisible(False)
-        layout.addWidget(self._description_full)
+        self._whitelist_button = QPushButton("(view whitelist)")
+        self._whitelist_button.setFlat(True)
+        self._whitelist_button.setCursor(Qt.PointingHandCursor)
+        self._whitelist_button.setStyleSheet(
+            "color: #3A3F48; font-size: 12px; text-align: left; border: none; "
+            "background: transparent; padding: 0;"
+        )
+        self._whitelist_button.clicked.connect(self._open_whitelist_viewer)
+        layout.addWidget(self._whitelist_button)
 
         self._refresh_description()
         return container
@@ -300,61 +314,50 @@ class _TaskCard(QFrame):
     def _refresh_description(self):
         self._lock_label.setText("Hard Lock" if self._task.get("lockMode") == "hard" else "Soft Lock")
 
+    def _open_whitelist_viewer(self):
+        from PySide6.QtWidgets import QDialog
         items = self._whitelist_items()
-        preview = ", ".join(items) if items else "No whitelist set"
-        toggle_word = "Less" if self._expanded else "More"
-        suffix = f"   {toggle_word}"
-
-        metrics = QFontMetrics(self._description_button.font())
-        available = max(CARD_CONTENT_WIDTH - metrics.horizontalAdvance(suffix), 0)
-        elided_preview = metrics.elidedText(preview, Qt.ElideRight, available)
-        truncated = elided_preview != preview
-
-        # Only show the More/Less toggle when there's actually something to
-        # expand -- either the preview is cut off, or it's already expanded
-        # (so there's a way to collapse it back).
-        if items and (truncated or self._expanded):
-            self._description_button.setText(f"{elided_preview}{suffix}")
-            self._description_button.setToolTip(preview if truncated and not self._expanded else "")
-        else:
-            self._description_button.setText(preview)
-            self._description_button.setToolTip("")
-
+        dlg = QDialog(self.window())
+        dlg.setWindowTitle(f"{self._task['name']} — Whitelist")
+        dlg.setObjectName("PopupBg")
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(20, 16, 20, 16)
+        lay.setSpacing(6)
+        title_lbl = QLabel("Allowed apps & sites")
+        title_lbl.setStyleSheet("font-weight: 700; font-size: 15px; color: #1F2328;")
+        lay.addWidget(title_lbl)
         if items:
-            self._description_full.setText("Whitelisted: " + ", ".join(items))
+            for it in items:
+                lbl = QLabel(it)
+                lbl.setStyleSheet("font-size: 13px; color: #1F2328;")
+                lay.addWidget(lbl)
         else:
-            self._description_full.setText("Nothing whitelisted for this task yet.")
-        self._description_full.setVisible(self._expanded)
-
-    def _toggle_expanded(self):
-        self._expanded = not self._expanded
-        self._refresh_description()
+            lbl = QLabel("Nothing whitelisted for this task.")
+            lbl.setStyleSheet("font-size: 13px; color: #8A8F98;")
+            lay.addWidget(lbl)
+        dlg.exec()
 
     def _build_progress_section(self):
         col = QVBoxLayout()
-        col.setSpacing(8)
-        self._progress_label = QLabel()
-        self._progress_label.setStyleSheet("font-size: 14px; font-weight: 500; color: #2B2F38;")
-        col.addWidget(self._progress_label)
+        col.setSpacing(3)
         self._progress_bar = QProgressBar()
         self._progress_bar.setRange(0, 100)
         self._progress_bar.setTextVisible(False)
         self._progress_bar.setFixedHeight(14)
         self._progress_bar.setProperty("class", "TaskProgressBar")
-        # Black outline (per-instance, so it always wins over the shared
-        # QSS) plus a fill color pulled from the task's own un-pastelized
-        # color -- the card background is the softened/blended version, so
-        # the chunk always reads as distinct from it.
         self._progress_bar.setStyleSheet(
-            "QProgressBar.TaskProgressBar { background: #F1F3F6; "
-            "border: 1px solid #000000; border-radius: 6px; } "
-            f"QProgressBar.TaskProgressBar::chunk {{ background: {self._task.get('color', '#5B8DEF')}; "
-            "border-radius: 5px; }}"
+            "QProgressBar.TaskProgressBar { background: rgba(0,0,0,0.18); "
+            "border: 1px solid rgba(0,0,0,0.25); border-radius: 6px; } "
+            "QProgressBar.TaskProgressBar::chunk { background: rgba(255,255,255,0.85); "
+            "border-radius: 5px; }"
         )
         col.addWidget(self._progress_bar)
-        self._remaining_label = QLabel()
-        self._remaining_label.setStyleSheet("font-size: 12px; font-weight: 400; color: #5A6070;")
-        col.addWidget(self._remaining_label)
+        below_row = QHBoxLayout()
+        below_row.addStretch(1)
+        self._progress_label = QLabel()
+        self._progress_label.setStyleSheet("font-size: 11px; color: rgba(0,0,0,0.55);")
+        below_row.addWidget(self._progress_label)
+        col.addLayout(below_row)
         return col
 
     def _build_vacation_section(self):
@@ -603,12 +606,9 @@ class _TaskCard(QFrame):
         pct = 100 if required <= 0 else min(100, int(logged_minutes / required * 100))
         self._progress_bar.setValue(pct if (required > 0 or logged_minutes > 0) else 0)
         if required <= 0:
-            self._progress_label.setText(f"{_format_minutes(logged_minutes)} logged · not scheduled today")
-            self._remaining_label.setText("Not scheduled today")
+            self._progress_label.setText(f"{_format_minutes(logged_minutes)} logged")
         else:
-            self._progress_label.setText(f"{_format_minutes(logged_minutes)} of {_format_minutes(required)} today")
-            remaining_minutes = max(0, int(round(required - logged_minutes)))
-            self._remaining_label.setText(f"{remaining_minutes} minutes remaining today")
+            self._progress_label.setText(f"{_format_minutes(logged_minutes)} of {_format_minutes(required)}")
 
         balance = tasks_store.vacation_balance_minutes(self._task, sessions)
         # Floor, not just `balance > 0` -- cashing in requires a whole
@@ -616,7 +616,7 @@ class _TaskCard(QFrame):
         # must not be treated as usable, or the editor's own "1..max" range
         # becomes invalid (min=1 > max=0) and cashing in silently breaks.
         self._cash_in_balance_int = int(balance)
-        vacation_text = f"\U0001F3D6 {_format_minutes(balance)} vacation banked"
+        vacation_text = f"{_format_minutes(balance)} vacation banked"
         metrics = QFontMetrics(self._vacation_label.font())
         elided = metrics.elidedText(vacation_text, Qt.ElideRight, max(self._vacation_label_budget, 0))
         self._vacation_label.setText(elided)
