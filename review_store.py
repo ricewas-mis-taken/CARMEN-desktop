@@ -68,6 +68,7 @@ def _init_schema(conn):
             topic_id INTEGER NOT NULL REFERENCES review_topics(id),
             name TEXT NOT NULL,
             color TEXT NOT NULL,
+            linked_task_id TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -105,13 +106,25 @@ def _init_schema(conn):
     )
     conn.commit()
 
+    # Add linked_task_id to review_subjects for DBs that predate this column.
+    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(review_subjects)").fetchall()}
+    if "linked_task_id" not in existing_cols:
+        conn.execute("ALTER TABLE review_subjects ADD COLUMN linked_task_id TEXT")
+        conn.commit()
+
 
 def _row_to_topic(row):
     return {"id": row["id"], "name": row["name"], "orderIndex": row["order_index"]}
 
 
 def _row_to_subject(row):
-    return {"id": row["id"], "topicId": row["topic_id"], "name": row["name"], "color": row["color"]}
+    return {
+        "id": row["id"],
+        "topicId": row["topic_id"],
+        "name": row["name"],
+        "color": row["color"],
+        "linkedTaskId": row["linked_task_id"],
+    }
 
 
 def _row_to_problem(row):
@@ -133,11 +146,13 @@ def _row_to_problem(row):
         "fastestTimeSeconds": row["fastest_time_seconds"],
         "scheduleStage": row["schedule_stage"],
         "nextReviewDate": row["next_review_date"],
+        "subjectLinkedTaskId": row["subject_linked_task_id"],
     }
 
 
 _PROBLEM_SELECT = """
-    SELECT p.*, s.name AS subject_name, s.color AS subject_color
+    SELECT p.*, s.name AS subject_name, s.color AS subject_color,
+           s.linked_task_id AS subject_linked_task_id
     FROM review_problems p
     JOIN review_subjects s ON s.id = p.subject_id
 """
@@ -188,13 +203,13 @@ def list_subjects(topic_id):
             return []
 
 
-def create_subject(topic_id, name, color):
+def create_subject(topic_id, name, color, linked_task_id=None):
     with _lock:
         try:
             conn = _get_conn()
             cur = conn.execute(
-                "INSERT INTO review_subjects (topic_id, name, color) VALUES (?, ?, ?)",
-                (topic_id, name, color),
+                "INSERT INTO review_subjects (topic_id, name, color, linked_task_id) VALUES (?, ?, ?, ?)",
+                (topic_id, name, color, linked_task_id),
             )
             conn.commit()
             row = conn.execute("SELECT * FROM review_subjects WHERE id = ?", (cur.lastrowid,)).fetchone()
@@ -202,6 +217,20 @@ def create_subject(topic_id, name, color):
         except Exception:
             logger.exception("review_store.create_subject failed for topic %s", topic_id)
             return None
+
+
+def update_subject_link(subject_id, task_id):
+    """Links or unlinks a subject to a task (task_id=None removes the link)."""
+    with _lock:
+        try:
+            conn = _get_conn()
+            conn.execute(
+                "UPDATE review_subjects SET linked_task_id = ? WHERE id = ?",
+                (task_id, subject_id),
+            )
+            conn.commit()
+        except Exception:
+            logger.exception("review_store.update_subject_link failed for subject %s", subject_id)
 
 
 def list_problems(topic_id, due_only=True):
