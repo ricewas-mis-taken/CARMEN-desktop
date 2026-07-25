@@ -255,18 +255,15 @@ class _TaskCard(QFrame):
         self._gear_button.setFont(gear_font)
         self._gear_button.setToolTip("Edit task")
         self._gear_button.clicked.connect(self._open_editor)
-        self._gear_button.setVisible(False)
         row.addWidget(self._gear_button)
         return row
 
     def enterEvent(self, event):
-        self._gear_button.setVisible(True)
         self._hovering = True
         self._refresh_cash_in_visibility()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        self._gear_button.setVisible(False)
         self._hovering = False
         self._refresh_cash_in_visibility()
         super().leaveEvent(event)
@@ -292,14 +289,14 @@ class _TaskCard(QFrame):
         layout.setSpacing(3)
 
         self._lock_label = QLabel()
-        self._lock_label.setStyleSheet("font-size: 12px; font-weight: 600; color: #262A32;")
+        self._lock_label.setStyleSheet("font-size: 18px; font-weight: 600; color: #262A32;")
         layout.addWidget(self._lock_label)
 
         self._whitelist_button = QPushButton("(view whitelist)")
         self._whitelist_button.setFlat(True)
         self._whitelist_button.setCursor(Qt.PointingHandCursor)
         self._whitelist_button.setStyleSheet(
-            "color: #3A3F48; font-size: 12px; text-align: left; border: none; "
+            "color: #3A3F48; font-size: 18px; text-align: left; border: none; "
             "background: transparent; padding: 0;"
         )
         self._whitelist_button.clicked.connect(self._open_whitelist_viewer)
@@ -355,7 +352,7 @@ class _TaskCard(QFrame):
         below_row = QHBoxLayout()
         below_row.addStretch(1)
         self._progress_label = QLabel()
-        self._progress_label.setStyleSheet("font-size: 11px; color: rgba(0,0,0,0.55);")
+        self._progress_label.setStyleSheet("font-size: 17px; color: rgba(0,0,0,0.55);")
         below_row.addWidget(self._progress_label)
         col.addLayout(below_row)
         return col
@@ -367,7 +364,7 @@ class _TaskCard(QFrame):
         top_row = QHBoxLayout()
         top_row.setSpacing(8)
         self._vacation_label = QLabel()
-        self._vacation_label.setStyleSheet("font-size: 12px; font-weight: 400; color: #5A6070;")
+        self._vacation_label.setStyleSheet("font-size: 18px; font-weight: 400; color: #5A6070;")
         top_row.addWidget(self._vacation_label, 1)
         # Hidden until hover (like the gear button) -- the idle card only
         # shows the banked balance; "Cash" (the cash-in trigger) only shows
