@@ -259,8 +259,14 @@ class _MainWindow(QWidget):
             msg = ctypes.wintypes.MSG.from_address(int(message))
             if msg.message == WM_ENTERSIZEMOVE:
                 try:
-                    left, top, right, bottom = win32gui.GetWindowRect(int(self.winId()))
-                    self._drag_frame_size = (right - left, bottom - top)
+                    # Don't freeze the frame during a maximized-window drag --
+                    # that's a "drag to restore" gesture and we want Windows'
+                    # natural un-maximize behaviour to proceed unimpeded.
+                    if self.isMaximized():
+                        self._drag_frame_size = None
+                    else:
+                        left, top, right, bottom = win32gui.GetWindowRect(int(self.winId()))
+                        self._drag_frame_size = (right - left, bottom - top)
                 except Exception:
                     self._drag_frame_size = None
             elif msg.message == WM_EXITSIZEMOVE:
