@@ -197,6 +197,7 @@ class _TaskCard(QFrame):
         outer.setSpacing(6)
 
         outer.addLayout(self._build_header_row())
+        outer.addWidget(self._build_description_section())
 
         # Everything that gets blurred while armed lives in this one
         # sub-widget -- see module docstring for why the trigger controls
@@ -206,7 +207,6 @@ class _TaskCard(QFrame):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(10)
         content_layout.addLayout(self._build_subjects_row())
-        content_layout.addWidget(self._build_description_section())
         content_layout.addLayout(self._build_progress_section())
         content_layout.addLayout(self._build_vacation_section())
         outer.addWidget(self._content)
@@ -292,14 +292,14 @@ class _TaskCard(QFrame):
         self._lock_label.setStyleSheet("font-size: 18px; font-weight: 600; color: #262A32;")
         layout.addWidget(self._lock_label)
 
-        self._whitelist_button = QPushButton("(view whitelist)")
+        self._whitelist_button = QPushButton("(edit whitelist)")
         self._whitelist_button.setFlat(True)
         self._whitelist_button.setCursor(Qt.PointingHandCursor)
         self._whitelist_button.setStyleSheet(
             "color: #3A3F48; font-size: 18px; text-align: left; border: none; "
             "background: transparent; padding: 0;"
         )
-        self._whitelist_button.clicked.connect(self._open_whitelist_viewer)
+        self._whitelist_button.clicked.connect(self._open_whitelist_editor)
         layout.addWidget(self._whitelist_button)
 
         self._refresh_description()
@@ -311,28 +311,57 @@ class _TaskCard(QFrame):
     def _refresh_description(self):
         self._lock_label.setText("Hard Lock" if self._task.get("lockMode") == "hard" else "Soft Lock")
 
-    def _open_whitelist_viewer(self):
-        from PySide6.QtWidgets import QDialog
-        items = self._whitelist_items()
+    def _open_whitelist_editor(self):
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QPlainTextEdit
         dlg = QDialog(self.window())
-        dlg.setWindowTitle(f"{self._task['name']} — Whitelist")
+        dlg.setWindowTitle(f"{self._task['name']} — Edit Whitelist")
         dlg.setObjectName("PopupBg")
+        dlg.setMinimumWidth(340)
         lay = QVBoxLayout(dlg)
         lay.setContentsMargins(20, 16, 20, 16)
-        lay.setSpacing(6)
-        title_lbl = QLabel("Allowed apps & sites")
-        title_lbl.setStyleSheet("font-weight: 700; font-size: 15px; color: #1F2328;")
-        lay.addWidget(title_lbl)
-        if items:
-            for it in items:
-                lbl = QLabel(it)
-                lbl.setStyleSheet("font-size: 13px; color: #1F2328;")
-                lay.addWidget(lbl)
-        else:
-            lbl = QLabel("Nothing whitelisted for this task.")
-            lbl.setStyleSheet("font-size: 13px; color: #8A8F98;")
-            lay.addWidget(lbl)
-        dlg.exec()
+        lay.setSpacing(8)
+
+        proc_lbl = QLabel("Allowed apps (one .exe per line):")
+        proc_lbl.setStyleSheet("font-weight: 600; font-size: 13px; color: #1F2328;")
+        lay.addWidget(proc_lbl)
+        proc_edit = QPlainTextEdit()
+        proc_edit.setPlainText("\n".join(self._task.get("processWhitelist", [])))
+        proc_edit.setFixedHeight(100)
+        lay.addWidget(proc_edit)
+
+        dom_lbl = QLabel("Allowed domains (one per line):")
+        dom_lbl.setStyleSheet("font-weight: 600; font-size: 13px; color: #1F2328;")
+        lay.addWidget(dom_lbl)
+        dom_edit = QPlainTextEdit()
+        dom_edit.setPlainText("\n".join(self._task.get("domainWhitelist", [])))
+        dom_edit.setFixedHeight(80)
+        lay.addWidget(dom_edit)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        lay.addWidget(btns)
+
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        proc_list = [s.strip() for s in proc_edit.toPlainText().splitlines() if s.strip()]
+        dom_list = [s.strip() for s in dom_edit.toPlainText().splitlines() if s.strip()]
+
+        updated = tasks_store.update_task(self._task["id"], {
+            **self._task,
+            "processWhitelist": proc_list,
+            "domainWhitelist": dom_list,
+        })
+        if updated:
+            self._task = updated
+
+        status = session_manager.get_status()
+        if (status.get("isActive") and status.get("source") == "task"
+                and status.get("eventId") == self._task["id"]):
+            session_manager.update_whitelist(proc_list, dom_list)
+
+        self._on_changed()
 
     def _build_progress_section(self):
         col = QVBoxLayout()
@@ -466,15 +495,18 @@ class _TaskCard(QFrame):
         self._countdown_label.setStyleSheet("font-size: 24px; font-weight: 700; color: #1F2328;")
         layout.addWidget(self._countdown_label)
 
+        _running_btn_style = (
+            "background: white; color: #1F2328; "
+            "border: 2px solid black; border-radius: 6px; "
+            "font-size: 26px; padding: 4px 14px;"
+        )
         button_row = QHBoxLayout()
         self._pause_button = QPushButton("Pause")
-        self._pause_button.setProperty("class", "SecondaryButton")
-        self._pause_button.setStyleSheet("font-size: 13px;")
+        self._pause_button.setStyleSheet(_running_btn_style)
         self._pause_button.clicked.connect(self._pause_resume)
         button_row.addWidget(self._pause_button)
         end_button = QPushButton("End Task")
-        end_button.setProperty("class", "SecondaryButton")
-        end_button.setStyleSheet("font-size: 13px;")
+        end_button.setStyleSheet(_running_btn_style)
         end_button.clicked.connect(self._end_task)
         button_row.addWidget(end_button)
         layout.addLayout(button_row)

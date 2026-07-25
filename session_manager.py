@@ -221,6 +221,16 @@ def start_session(
     return get_status()
 
 
+def update_whitelist(process_whitelist, domain_whitelist):
+    """Replace the active session's whitelist in-place, effective immediately."""
+    with _lock:
+        if not _state["isActive"]:
+            return
+        _state["processWhitelist"] = list(process_whitelist)
+        _state["domainWhitelist"] = list(domain_whitelist)
+        _save()
+
+
 def end_session(end_type="manual", reason=None):
     """Ends the session and returns its final status, including the full
     violationLog accumulated during the session — this is the one place a
