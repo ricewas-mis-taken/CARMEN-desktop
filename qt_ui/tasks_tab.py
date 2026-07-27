@@ -177,6 +177,7 @@ class _TaskCard(QFrame):
         self._on_changed = on_changed
         self._armed = False
         self._until_burnout = False
+        self._duration_minutes_text = ""
         self._hovering = False
         self._cash_in_balance_int = 0
 
@@ -508,7 +509,8 @@ class _TaskCard(QFrame):
         self._armed = True
         self._blur.setBlurRadius(6)
         self._armed_overlay.setVisible(True)
-        self._duration_edit.setText(str(self._today_required_minutes()))
+        self._duration_minutes_text = str(self._today_required_minutes())
+        self._duration_edit.setText(self._duration_minutes_text)
 
     def _disarm(self):
         self._armed = False
@@ -519,6 +521,13 @@ class _TaskCard(QFrame):
     def _toggle_burnout(self, checked):
         self._until_burnout = checked
         self._duration_edit.setDisabled(checked)
+        if checked:
+            self._duration_minutes_text = self._duration_edit.text()
+            self._duration_edit.setText("")
+            self._duration_edit.setPlaceholderText("Until burnout")
+        else:
+            self._duration_edit.setPlaceholderText("minutes")
+            self._duration_edit.setText(self._duration_minutes_text)
 
     def _open_editor(self):
         open_task_editor(self._task, on_saved=lambda _t: self._on_changed())

@@ -130,22 +130,27 @@ QPushButton.SecondaryButton:checked {
    the white border guarantees an edge against any card color, not just the
    ones that happen to contrast with red. */
 QPushButton#burnoutButton {
-    background: #A93226;
-    color: #FFFFFF;
-    border: 2px solid #FFFFFF;
+    background: #FFFFFF;
+    color: #A93226;
+    border: 2px solid #A93226;
+    font-weight: 600;
 }
 
 QPushButton#burnoutButton:hover {
-    background: #922B1F;
+    background: #FCEBEA;
 }
 
+/* Checked state fully inverts fill/text instead of just shifting shade --
+   two similar reds (dark vs. bright) read as "no change happened" at a
+   glance, which is exactly the "the button doesn't work" bug this fixes. */
 QPushButton#burnoutButton:checked {
-    background: #E74C3C;
+    background: #A93226;
     color: #FFFFFF;
+    border: 2px solid #A93226;
 }
 
 QPushButton#burnoutButton:checked:hover {
-    background: #D64031;
+    background: #922B1F;
 }
 
 /* Start Task button on a task's Start overlay -- black text on a green
