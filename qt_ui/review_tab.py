@@ -1,17 +1,3 @@
-"""Review tab: a spaced-repetition tracker for missed homework/practice
-problems. Topics (review_store's review_topics) are chrome-style tabs across
-the top -- built with a real QTabWidget rather than qt_ui's own hand-rolled
-sidebar nav, since "browser-style tabs with a trailing + tab" is exactly what
-QTabWidget already models. Inside each topic, problems are grouped by
-Subject (a finer, color-coded tag) and shown in a table sourced from
-review_store.list_problems(), the same "presentation here, persistence/
-scheduling in a plain store module" split qt_ui/tasks_tab.py uses for
-tasks_store.py.
-
-Talks directly to review_store.py (no HTTP) -- same convention every other
-tab in this app follows; api_server.py's /review/* routes exist for the
-browser extension or other external callers, not for this UI.
-"""
 import os
 import re
 from datetime import date, datetime
@@ -58,11 +44,6 @@ _URL_RE = re.compile(r"^https?://[^\s]+\.[^\s]+$", re.IGNORECASE)
 
 
 def _lighten(hex_color, mix=0.78):
-    """Blends a subject's saturated color most of the way to white, so a
-    row's background reads as a soft tint (subject identity at a glance)
-    without fighting the row's own text -- much heavier mix than
-    tasks_tab.py's card pastelization since a full table row of solid color
-    would be far louder than one big card."""
     hex_color = (hex_color or "#5B8DEF").lstrip("#")
     if len(hex_color) != 6:
         return "#FFFFFF"
@@ -108,9 +89,6 @@ def _relative_time(iso_datetime_string):
 
 
 def _build_description_content(layout, problem):
-    """Adds the problem's description widget(s) to layout -- shared between
-    _DescriptionPopup (read-only view) and _ReviewStartDialog (pre-start
-    preview)."""
     description_type = problem["descriptionType"]
     if description_type == "text":
         text_view = QTextEdit()
@@ -152,15 +130,11 @@ class ReviewTab(QWidget):
 
         self._tabs = QTabWidget()
         self._tabs.setDocumentMode(True)
-        # tabBarClicked (not currentChanged) -- with zero topics the "+" tab
-        # is index 0 and already current the moment it's added, so a click
-        # on it wouldn't change the current index and currentChanged would
-        # never fire. tabBarClicked fires on every click regardless of
-        # whether the index actually changed.
         self._tabs.tabBarClicked.connect(self._on_tab_bar_clicked)
         self._tabs.tabBar().setContextMenuPolicy(Qt.CustomContextMenu)
         self._tabs.tabBar().customContextMenuRequested.connect(self._on_tab_context_menu)
         layout.addWidget(self._tabs, 1)
+
 
         self._topic_views = {}
         self._topic_names = {}
@@ -207,11 +181,6 @@ class ReviewTab(QWidget):
     def _on_tab_bar_clicked(self, index):
         if index != self._plus_index:
             return
-        # The "+" tab is a trigger, not a real destination -- switch back to
-        # a real tab (if any) right away rather than actually landing on it,
-        # then open the dialog non-modally. _on_topic_added selects the newly
-        # created topic once it exists; if the user cancels, whatever real tab
-        # was showing just stays showing.
         if self._topic_views:
             self._tabs.setCurrentIndex(0)
         _register_popup(_AddTopicDialog(on_added=self._on_topic_added))
@@ -219,9 +188,6 @@ class ReviewTab(QWidget):
     def _on_topic_added(self, topic):
         if topic is None:
             return
-        # Incremental add: insert a new tab before "+" instead of rebuilding
-        # everything, so an in-progress review banner isn't orphaned when the
-        # user creates a topic mid-session.
         view = _TopicView(topic["id"], review_tab=self)
         self._topic_views[topic["id"]] = view
         self._topic_names[topic["id"]] = topic["name"]
@@ -261,7 +227,6 @@ class ReviewTab(QWidget):
         menu.addSeparator()
         delete_action = menu.addAction("Delete tab")
 
-        # Block destructive/disruptive actions during an active review
         if self._is_reviewing:
             rename_action.setEnabled(False)
             delete_action.setEnabled(False)
@@ -435,10 +400,6 @@ class _TopicView(QWidget):
 
             name_item = QTableWidgetItem(problem["name"])
             self._table.setItem(row, COLUMN_NAME, name_item)
-            # QTableWidgetItem text color comes from the app/OS palette, not
-            # the #ContentArea QLabel QSS rule (that only targets QLabel) --
-            # against a light pastel row tint a light default palette color
-            # is unreadable, so every text item gets an explicit dark color.
 
             reviews_item = QTableWidgetItem(str(problem["reviewCount"]))
             reviews_item.setTextAlignment(Qt.AlignCenter)
@@ -531,16 +492,14 @@ class _TopicView(QWidget):
 
 
 class _ReviewBanner(QWidget):
-    """Inline timer shown at the top of _TopicView while a review is active.
-    Hidden by default; call start() to activate."""
     def __init__(self, on_finished):
         super().__init__()
         self._on_finished = on_finished
         self._session_token = None
         self._end_session_on_finish = False
         self._problem = None
-        self._start_time = None         # wall-clock start of current running segment
-        self._accumulated_seconds = 0   # total seconds before the current segment
+        self._start_time = None
+        self._accumulated_seconds = 0
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -670,7 +629,6 @@ class _ReviewBanner(QWidget):
 
 
 class _ShakinessPicker(QWidget):
-    """1–5 numbered buttons: 1 = solid/confident, 5 = very shaky."""
     def __init__(self, initial=3, on_changed=None):
         super().__init__()
         self._value = initial
@@ -714,9 +672,6 @@ _METHOD_BTN_STYLE = (
 
 
 class _PostReviewDialog(QWidget):
-    """Post-review grading: did you solve it yourself, and how shaky were you?
-    Closing the window without submitting is treated the same as Submit so no
-    finish_review() call is ever silently dropped."""
     def __init__(self, problem_name, on_submit):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
@@ -801,9 +756,6 @@ class _PostReviewDialog(QWidget):
 
 
 class _ReviewStartDialog(QWidget):
-    """Shows a problem's description with a Start button -- replaces the old
-    QMessageBox.question so the user sees what they're about to review before
-    the inline timer starts."""
     def __init__(self, problem, on_start):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
@@ -852,8 +804,6 @@ class _ReviewStartDialog(QWidget):
 
 
 class _TopicTaskLinkDialog(QWidget):
-    """Right-click context menu → Link to task: links/unlinks the whole topic
-    tab to a task so every review under it counts toward that task's session."""
     def __init__(self, topic, on_saved):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
@@ -985,10 +935,6 @@ class _StarPicker(QWidget):
             button = QPushButton()
             button.setFixedSize(28, 28)
             button.setFlat(True)
-            # padding: 0 is load-bearing -- the #PopupBg QPushButton global
-            # rule (styles.qss) sets 6px/14px padding by default, which on a
-            # button this small (28x28) squeezes the star glyph out of the
-            # visible area entirely.
             button.setStyleSheet("font-size: 18px; border: none; background: transparent; padding: 0;")
             button.clicked.connect(lambda checked=False, n=n: self._set_value(n))
             layout.addWidget(button)
