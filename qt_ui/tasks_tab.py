@@ -115,9 +115,6 @@ class TasksTab(QWidget):
         scroll.setStyleSheet("background: #FFFFFF; border: none;")
         self._grid_container = QWidget()
         self._grid_container.setObjectName("TasksGridBg")
-        self._grid_container.setMinimumWidth(
-            CARDS_PER_ROW * CARD_WIDTH + (CARDS_PER_ROW - 1) * 16
-        )
         self._grid = QGridLayout(self._grid_container)
         self._grid.setSpacing(16)
         self._grid.setAlignment(Qt.AlignLeft | Qt.AlignTop)

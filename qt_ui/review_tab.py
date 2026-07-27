@@ -344,6 +344,7 @@ class _TopicView(QWidget):
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._table.setSelectionMode(QTableWidget.NoSelection)
         self._table.horizontalHeader().setStretchLastSection(False)
+        self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self._table.setColumnWidth(COLUMN_NAME, 220)
         self._table.setColumnWidth(COLUMN_SUBJECT, 120)
         self._table.setColumnWidth(COLUMN_STARS, 90)

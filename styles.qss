@@ -379,6 +379,40 @@ QHeaderView::section {
     font-weight: 700;
 }
 
+/* Review tab's problem table (qt_ui/review_tab.py) needs a clearly visible
+   horizontal scrollbar when the window is too narrow to show every column --
+   the default QSS-rendered scrollbar (once any global QSS rule applies,
+   Qt stops using the native Windows scrollbar and falls back to an
+   unstyled, barely-visible flat line unless explicitly styled here). */
+QTableWidget QScrollBar:horizontal {
+    height: 14px;
+    background: #F1F3F6;
+    border-radius: 7px;
+    margin: 2px 2px 0px 2px;
+}
+
+QTableWidget QScrollBar::handle:horizontal {
+    background: #C7CAD3;
+    min-width: 30px;
+    border-radius: 6px;
+}
+
+QTableWidget QScrollBar::handle:horizontal:hover {
+    background: #5B8DEF;
+}
+
+QTableWidget QScrollBar::add-line:horizontal,
+QTableWidget QScrollBar::sub-line:horizontal {
+    width: 0px;
+    border: none;
+    background: none;
+}
+
+QTableWidget QScrollBar::add-page:horizontal,
+QTableWidget QScrollBar::sub-page:horizontal {
+    background: none;
+}
+
 /* Inline "+ Add Subject" mini-form inside the Add Problem dialog
    (qt_ui/review_tab.py's _AddProblemDialog). */
 QFrame.InlineForm {
