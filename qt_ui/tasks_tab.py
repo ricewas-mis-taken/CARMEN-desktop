@@ -197,8 +197,7 @@ class _TaskCard(QFrame):
         outer.setSpacing(6)
 
         outer.addLayout(self._build_header_row())
-        self._description_widget = self._build_description_section()
-        outer.addWidget(self._description_widget)
+        outer.addWidget(self._build_description_section())
 
         # Everything that gets blurred while armed lives in this one
         # sub-widget -- see module docstring for why the trigger controls
@@ -646,7 +645,6 @@ class _TaskCard(QFrame):
             if self._armed:
                 self._disarm()
             self._close_cash_in_editor()
-            self._description_widget.setVisible(False)
             self._content.setVisible(False)
             self._armed_overlay.setVisible(False)
             self._running_panel.setVisible(True)
@@ -658,7 +656,6 @@ class _TaskCard(QFrame):
             self._pause_button.setText("Resume" if status.get("isPaused") else "Pause")
         else:
             self._running_panel.setVisible(False)
-            self._description_widget.setVisible(True)
             self._content.setVisible(True)
             if self._armed and locked_by_other:
                 self._disarm()
