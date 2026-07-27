@@ -171,7 +171,7 @@ def worked_seconds(start_iso, end_iso, violation_log):
 def _task_history_entries(task_id, sessions):
     return [
         s for s in sessions
-        if s.get("source") == "task" and s.get("eventId") == task_id and s.get("startTime")
+        if s.get("source") in ("task", "review") and s.get("eventId") == task_id and s.get("startTime")
     ]
 
 
@@ -189,7 +189,7 @@ def logged_seconds_for_date(task, day, sessions, live_status=None):
     if (
         live_status
         and live_status.get("isActive")
-        and live_status.get("source") == "task"
+        and live_status.get("source") in ("task", "review")
         and live_status.get("eventId") == task["id"]
         and live_status.get("startTime")
     ):

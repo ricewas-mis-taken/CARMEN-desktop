@@ -389,11 +389,23 @@ def start_review(problem_id):
     return token
 
 
-def finish_review(session_token):
+def abandon_review(session_token):
+    """Discards a started review without logging anything: no review_sessions
+    row, no stat updates. The elapsed task session time still counts because
+    session_manager tracks it independently."""
+    _active_sessions.pop(session_token, None)
+
+
+def finish_review(session_token, self_solved=True, shakiness=3):
     """Ends a review started via start_review(): logs the session, bumps
-    review_count/last_reviewed_at/fastest_time_seconds, and reschedules the
-    problem via review_scheduler.schedule_after_review(). Returns the
-    updated problem dict, or None if the token is unknown/already used."""
+    review_count/last_reviewed_at, and reschedules the problem.
+
+    self_solved=True  → advance schedule stage; update fastest_time if new best.
+    self_solved=False → keep stage; schedule tomorrow; fastest_time unchanged.
+    shakiness (1–5)   → 1 solid, 5 very shaky; higher shakiness shortens the
+                        next interval (only applies when self_solved=True).
+
+    Returns the updated problem dict, or None if the token is unknown/already used."""
     entry = _active_sessions.pop(session_token, None)
     if entry is None:
         return None
@@ -419,10 +431,17 @@ def finish_review(session_token):
             )
 
             fastest = row["fastest_time_seconds"]
-            if fastest is None or duration_seconds < fastest:
+            if self_solved and (fastest is None or duration_seconds < fastest):
                 fastest = duration_seconds
 
-            schedule = review_scheduler.schedule_after_review(row["schedule_stage"], row["stars"])
+            if self_solved:
+                schedule = review_scheduler.schedule_after_review(
+                    row["schedule_stage"], row["stars"], shakiness=shakiness
+                )
+            else:
+                schedule = review_scheduler.schedule_checked_answer(
+                    row["schedule_stage"], row["stars"]
+                )
 
             conn.execute(
                 """

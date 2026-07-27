@@ -246,6 +246,8 @@ def end_session(end_type="manual", reason=None):
     dialog — None for every other end_type."""
     with _lock:
         result = _finalize_to_history_locked(datetime.now(), end_type=end_type, reason=reason)
+    import daily_summary_store
+    daily_summary_store.flush_through_yesterday()
     return result
 
 
@@ -430,7 +432,10 @@ def pop_pending_natural_end():
     with _lock:
         summary = _pending_natural_end["value"]
         _pending_natural_end["value"] = None
-        return summary
+    if summary is not None:
+        import daily_summary_store
+        daily_summary_store.flush_through_yesterday()
+    return summary
 
 
 def is_whitelisted(process_name):

@@ -66,7 +66,8 @@ _win = None
 
 def open_main_window():
     global _win
-    if _win is not None and _win.isVisible():
+    if _win is not None:
+        _win.show()
         _win.raise_()
         _win.activateWindow()
         return

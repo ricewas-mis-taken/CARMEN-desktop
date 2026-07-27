@@ -511,7 +511,7 @@ class _TopicView(QWidget):
                     lock_mode=task["lockMode"],
                     process_whitelist=task.get("processWhitelist", []),
                     domain_whitelist=task.get("domainWhitelist", []),
-                    source="task",
+                    source="review",
                     event_id=task["id"],
                     event_title=f"{task['name']} - {problem['subjectName']} review",
                 )
@@ -538,7 +538,9 @@ class _ReviewBanner(QWidget):
         self._on_finished = on_finished
         self._session_token = None
         self._end_session_on_finish = False
-        self._elapsed_seconds = 0
+        self._problem = None
+        self._start_time = None         # wall-clock start of current running segment
+        self._accumulated_seconds = 0   # total seconds before the current segment
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -567,15 +569,28 @@ class _ReviewBanner(QWidget):
         )
         card_layout.addWidget(self._timer_label)
 
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+
+        self._pause_btn = QPushButton("Pause")
+        self._pause_btn.setFixedWidth(80)
+        self._pause_btn.clicked.connect(self._pause_resume)
+        btn_row.addWidget(self._pause_btn)
+
+        end_btn = QPushButton("End")
+        end_btn.setProperty("class", "SecondaryButton")
+        end_btn.setFixedWidth(80)
+        end_btn.clicked.connect(self._end_early)
+        btn_row.addWidget(end_btn)
+
         finish_btn = QPushButton("Finish")
         finish_btn.setProperty("class", "AccentButton")
         finish_btn.setFixedWidth(120)
-        btn_row = QHBoxLayout()
-        btn_row.addStretch(1)
+        finish_btn.clicked.connect(self._finish)
         btn_row.addWidget(finish_btn)
+
         btn_row.addStretch(1)
         card_layout.addLayout(btn_row)
-        finish_btn.clicked.connect(self._finish)
 
         outer.addWidget(card)
 
@@ -584,28 +599,205 @@ class _ReviewBanner(QWidget):
 
         self.hide()
 
+    def _elapsed_seconds_now(self):
+        if self._start_time is None:
+            return self._accumulated_seconds
+        return self._accumulated_seconds + int((datetime.now() - self._start_time).total_seconds())
+
     def start(self, problem, token, end_session_on_finish=False):
+        self._problem = problem
         self._session_token = token
         self._end_session_on_finish = end_session_on_finish
-        self._elapsed_seconds = 0
+        self._start_time = datetime.now()
+        self._accumulated_seconds = 0
         self._problem_label.setText(f"Reviewing: {problem['name']}")
         self._timer_label.setText("00:00")
+        self._pause_btn.setText("Pause")
+        self._pause_btn.setVisible(end_session_on_finish)
         self._tick_timer.start(1000)
         self.show()
 
     def _tick(self):
-        self._elapsed_seconds += 1
-        self._timer_label.setText(_format_mmss(self._elapsed_seconds))
+        self._timer_label.setText(_format_mmss(self._elapsed_seconds_now()))
+        if self._pause_btn.isVisible():
+            status = session_manager.get_status()
+            self._pause_btn.setText("Resume" if status.get("isPaused") else "Pause")
+
+    def _pause_resume(self):
+        status = session_manager.get_status()
+        if status.get("isPaused"):
+            session_manager.resume_session()
+            self._start_time = datetime.now()
+        else:
+            self._accumulated_seconds = self._elapsed_seconds_now()
+            self._start_time = None
+            session_manager.pause_session()
+
+    def _end_early(self):
+        self._tick_timer.stop()
+        token = self._session_token
+        end_session = self._end_session_on_finish
+        self._session_token = None
+        self._end_session_on_finish = False
+        self._start_time = None
+        self.hide()
+        review_store.abandon_review(token)
+        if end_session:
+            session_manager.end_session()
+        self._on_finished()
 
     def _finish(self):
         self._tick_timer.stop()
-        review_store.finish_review(self._session_token)
-        if self._end_session_on_finish:
-            session_manager.end_session()
+        token = self._session_token
+        end_session = self._end_session_on_finish
+        problem = self._problem
         self._session_token = None
         self._end_session_on_finish = False
+        self._start_time = None
         self.hide()
+        _PostReviewDialog(
+            problem_name=problem["name"],
+            on_submit=lambda self_solved, shakiness: self._complete_finish(
+                token, end_session, self_solved, shakiness
+            ),
+        )
+
+    def _complete_finish(self, token, end_session, self_solved, shakiness):
+        review_store.finish_review(token, self_solved=self_solved, shakiness=shakiness)
+        if end_session:
+            session_manager.end_session()
         self._on_finished()
+
+
+class _ShakinessPicker(QWidget):
+    """1–5 numbered buttons: 1 = solid/confident, 5 = very shaky."""
+    def __init__(self, initial=3, on_changed=None):
+        super().__init__()
+        self._value = initial
+        self._on_changed = on_changed
+        self._buttons = []
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addStretch(1)
+        for n in range(1, 6):
+            btn = QPushButton(str(n))
+            btn.setFixedSize(36, 36)
+            btn.setCheckable(True)
+            btn.setStyleSheet(
+                "QPushButton { border-radius: 18px; font-size: 14px; font-weight: 600; "
+                "background: #E5E8EF; color: #1F2328; border: none; padding: 0; }"
+                "QPushButton:checked { background: #4A90E2; color: white; }"
+            )
+            btn.clicked.connect(lambda checked=False, n=n: self._set_value(n))
+            layout.addWidget(btn)
+            self._buttons.append(btn)
+        layout.addStretch(1)
+        self._refresh()
+
+    def _set_value(self, n):
+        self._value = n
+        self._refresh()
+        if self._on_changed:
+            self._on_changed(n)
+
+    def _refresh(self):
+        for i, btn in enumerate(self._buttons, start=1):
+            btn.setChecked(i == self._value)
+
+
+_METHOD_BTN_STYLE = (
+    "QPushButton { padding: 8px 12px; border-radius: 6px; font-size: 13px; "
+    "background: #E5E8EF; color: #5A6070; border: none; }"
+    "QPushButton:checked { background: #4A90E2; color: white; font-weight: 600; }"
+)
+
+
+class _PostReviewDialog(QWidget):
+    """Post-review grading: did you solve it yourself, and how shaky were you?
+    Closing the window without submitting is treated the same as Submit so no
+    finish_review() call is ever silently dropped."""
+    def __init__(self, problem_name, on_submit):
+        super().__init__(None, Qt.WindowStaysOnTopHint)
+        self.setObjectName("PopupBg")
+        self.setWindowTitle("Carmen Focus — Review complete")
+        self.resize(360, 250)
+        self._on_submit = on_submit
+        self._self_solved = True
+        self._shakiness = 3
+        self._submitted = False
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        header = QLabel("How did it go?")
+        header.setStyleSheet("font-size: 14px; font-weight: 700;")
+        header.setAlignment(Qt.AlignCenter)
+        layout.addWidget(header)
+
+        name_lbl = QLabel(problem_name)
+        name_lbl.setStyleSheet("font-size: 12px; color: #5A6070;")
+        name_lbl.setAlignment(Qt.AlignCenter)
+        name_lbl.setWordWrap(True)
+        layout.addWidget(name_lbl)
+
+        method_row = QHBoxLayout()
+        self._solved_btn = QPushButton("Solved it!")
+        self._solved_btn.setCheckable(True)
+        self._solved_btn.setChecked(True)
+        self._solved_btn.setStyleSheet(_METHOD_BTN_STYLE)
+        self._checked_btn = QPushButton("Checked the answer")
+        self._checked_btn.setCheckable(True)
+        self._checked_btn.setStyleSheet(_METHOD_BTN_STYLE)
+        method_grp = QButtonGroup(self)
+        method_grp.setExclusive(True)
+        method_grp.addButton(self._solved_btn)
+        method_grp.addButton(self._checked_btn)
+        self._solved_btn.toggled.connect(lambda chk: self._set_method(True) if chk else None)
+        self._checked_btn.toggled.connect(lambda chk: self._set_method(False) if chk else None)
+        method_row.addWidget(self._solved_btn)
+        method_row.addWidget(self._checked_btn)
+        layout.addLayout(method_row)
+
+        self._shak_section = QWidget()
+        shak_layout = QVBoxLayout(self._shak_section)
+        shak_layout.setContentsMargins(0, 0, 0, 0)
+        shak_layout.setSpacing(4)
+        shak_label = QLabel("Shakiness (1 solid → 5 very shaky):")
+        shak_label.setStyleSheet("font-size: 12px;")
+        shak_label.setAlignment(Qt.AlignCenter)
+        shak_layout.addWidget(shak_label)
+        self._shak_picker = _ShakinessPicker(initial=3, on_changed=self._set_shakiness)
+        shak_layout.addWidget(self._shak_picker)
+        layout.addWidget(self._shak_section)
+
+        submit_btn = QPushButton("Submit")
+        submit_btn.setProperty("class", "AccentButton")
+        submit_btn.clicked.connect(self._submit)
+        layout.addWidget(submit_btn)
+
+        _register_popup(self)
+        self.show()
+
+    def _set_method(self, self_solved):
+        self._self_solved = self_solved
+        self._shak_section.setVisible(self_solved)
+
+    def _set_shakiness(self, val):
+        self._shakiness = val
+
+    def _submit(self):
+        if self._submitted:
+            return
+        self._submitted = True
+        self.close()
+        self._on_submit(self._self_solved, self._shakiness)
+
+    def closeEvent(self, event):
+        if not self._submitted:
+            self._submitted = True
+            self._on_submit(self._self_solved, self._shakiness)
+        super().closeEvent(event)
 
 
 class _ReviewStartDialog(QWidget):
