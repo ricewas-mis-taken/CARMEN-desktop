@@ -372,28 +372,22 @@ class _TaskCard(QFrame):
         col = QVBoxLayout()
         col.setSpacing(4)
 
-        top_row = QHBoxLayout()
-        top_row.setSpacing(8)
-        self._vacation_label = QLabel()
-        self._vacation_label.setStyleSheet("font-size: 18px; font-weight: 400; color: #5A6070;")
-        top_row.addWidget(self._vacation_label, 1)
-        # Hidden until hover (like the gear button) -- the idle card only
-        # shows the banked balance; "Cash" (the cash-in trigger) only shows
-        # up when there's something to cash in and the mouse is over the
-        # card, keeping the idle card decluttered.
-        self._cash_in_button = QPushButton("Cash")
-        self._cash_in_button.setProperty("class", "SecondaryButton")
-        self._cash_in_button.setStyleSheet("font-size: 13px;")
-        self._cash_in_button.setVisible(False)
-        self._cash_in_button.clicked.connect(self._open_cash_in_editor)
-        top_row.addWidget(self._cash_in_button)
-        # Reserve the button's own width up front so the label's elide
-        # budget (applied in update_dynamic, once the balance text is
-        # known) never has to contest space with it -- at the old, narrower
-        # CARD_WIDTH the label had no width cap at all and its text simply
-        # overflowed underneath the button instead of stopping short of it.
-        self._vacation_label_budget = CARD_CONTENT_WIDTH - self._cash_in_button.sizeHint().width() - top_row.spacing()
-        col.addLayout(top_row)
+        # The balance text itself is the cash-in trigger (clickable, like
+        # _whitelist_button's "(see whitelist)") rather than a separate
+        # hover-only button -- always visible so there's no discoverability
+        # gap, and disabled (no pointer cursor, no click) when there's
+        # nothing banked to cash in.
+        self._vacation_label = QPushButton()
+        self._vacation_label.setFlat(True)
+        self._vacation_label.setCursor(Qt.PointingHandCursor)
+        self._vacation_label.setStyleSheet(
+            "QPushButton { font-size: 18px; font-weight: 400; color: #5A6070; "
+            "text-align: left; border: none; background: transparent; padding: 0; }"
+            "QPushButton:hover:enabled { color: #1F2328; text-decoration: underline; }"
+        )
+        self._vacation_label.clicked.connect(self._open_cash_in_editor)
+        col.addWidget(self._vacation_label)
+        self._vacation_label_budget = CARD_CONTENT_WIDTH
 
         self._cash_in_row = QWidget()
         cash_layout = QHBoxLayout(self._cash_in_row)
@@ -593,9 +587,8 @@ class _TaskCard(QFrame):
 
     def _refresh_cash_in_visibility(self):
         can_cash_in = self._cash_in_balance_int > 0 and not self._is_running()
-        self._cash_in_button.setVisible(self._hovering and can_cash_in)
-        if not self._hovering:
-            self._close_cash_in_editor()
+        self._vacation_label.setEnabled(can_cash_in)
+        self._vacation_label.setCursor(Qt.PointingHandCursor if can_cash_in else Qt.ArrowCursor)
 
     # --- dynamic refresh (called every tick by TasksTab) ---
 
