@@ -197,7 +197,8 @@ class _TaskCard(QFrame):
         outer.setSpacing(6)
 
         outer.addLayout(self._build_header_row())
-        outer.addWidget(self._build_description_section())
+        self._description_widget = self._build_description_section()
+        outer.addWidget(self._description_widget)
 
         # Everything that gets blurred while armed lives in this one
         # sub-widget -- see module docstring for why the trigger controls
@@ -627,7 +628,11 @@ class _TaskCard(QFrame):
         # must not be treated as usable, or the editor's own "1..max" range
         # becomes invalid (min=1 > max=0) and cashing in silently breaks.
         self._cash_in_balance_int = int(balance)
-        vacation_text = f"{_format_minutes(balance)} vacation banked"
+        # Today's surplus (logged beyond today's required) isn't cashable yet
+        # (the day isn't over), but show it so the user can see they're earning.
+        today_surplus = max(0.0, logged_minutes - required) if required > 0 else 0.0
+        display_balance = balance + today_surplus
+        vacation_text = f"{_format_minutes(display_balance)} vacation banked"
         metrics = QFontMetrics(self._vacation_label.font())
         elided = metrics.elidedText(vacation_text, Qt.ElideRight, max(self._vacation_label_budget, 0))
         self._vacation_label.setText(elided)
@@ -641,6 +646,7 @@ class _TaskCard(QFrame):
             if self._armed:
                 self._disarm()
             self._close_cash_in_editor()
+            self._description_widget.setVisible(False)
             self._content.setVisible(False)
             self._armed_overlay.setVisible(False)
             self._running_panel.setVisible(True)
@@ -652,6 +658,7 @@ class _TaskCard(QFrame):
             self._pause_button.setText("Resume" if status.get("isPaused") else "Pause")
         else:
             self._running_panel.setVisible(False)
+            self._description_widget.setVisible(True)
             self._content.setVisible(True)
             if self._armed and locked_by_other:
                 self._disarm()

@@ -744,7 +744,6 @@ class _PostReviewDialog(QWidget):
         method_row = QHBoxLayout()
         self._solved_btn = QPushButton("Solved it!")
         self._solved_btn.setCheckable(True)
-        self._solved_btn.setChecked(True)
         self._solved_btn.setStyleSheet(_METHOD_BTN_STYLE)
         self._checked_btn = QPushButton("Checked the answer")
         self._checked_btn.setCheckable(True)
@@ -769,6 +768,7 @@ class _PostReviewDialog(QWidget):
         shak_layout.addWidget(shak_label)
         self._shak_picker = _ShakinessPicker(initial=3, on_changed=self._set_shakiness)
         shak_layout.addWidget(self._shak_picker)
+        self._shak_section.setVisible(False)
         layout.addWidget(self._shak_section)
 
         submit_btn = QPushButton("Submit")
