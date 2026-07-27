@@ -109,7 +109,7 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None):
                 except Exception:
                     pass
 
-            if status["isActive"]:
+            if status["isActive"] and not status["isPaused"]:
                 window = get_active_window()
                 process_name = window["process_name"]
                 pid = window["pid"]
@@ -152,6 +152,8 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None):
                         else:
                             enforcer.soft_lock_warning(process_name)
             else:
+                # Reset dedupe state when paused or idle so the first process
+                # seen after resuming is always evaluated fresh.
                 last_flagged_process = None
         except Exception:
             pass
