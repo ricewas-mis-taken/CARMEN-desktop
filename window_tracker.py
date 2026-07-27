@@ -26,7 +26,7 @@ POLL_INTERVAL_SECONDS = 1.5
 HARD_REDIRECT_COOLDOWN_SECONDS = POLL_INTERVAL_SECONDS * 3
 # Minimum gap between logging two violations for the same process -- prevents
 # rapid-fire entries when a background app briefly steals focus repeatedly.
-VIOLATION_COOLDOWN_SECONDS = 15
+VIOLATION_COOLDOWN_SECONDS = 5
 
 
 def get_active_window():
