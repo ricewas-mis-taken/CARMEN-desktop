@@ -24,6 +24,9 @@ POLL_INTERVAL_SECONDS = 1.5
 # offending process can be redirected, without touching how often violations
 # are recorded.
 HARD_REDIRECT_COOLDOWN_SECONDS = POLL_INTERVAL_SECONDS * 3
+# Minimum gap between logging two violations for the same process -- prevents
+# rapid-fire entries when a background app briefly steals focus repeatedly.
+VIOLATION_COOLDOWN_SECONDS = 5
 
 
 def get_active_window():
@@ -85,9 +88,8 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None):
     """
     last_flagged_process = None
     last_menu_state = None
-    # {"process": <name>, "time": <time.time() of last redirect>} -- see
-    # HARD_REDIRECT_COOLDOWN_SECONDS above.
     last_hard_redirect = {"process": None, "time": 0.0}
+    last_violation_time = {}  # process_name -> time.time() of last logged violation
 
     while not stop_event.is_set():
         try:
@@ -125,7 +127,10 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None):
                 elif process_name:
                     if process_name != last_flagged_process:
                         last_flagged_process = process_name
-                        session_manager.record_violation(process_name)
+                        now = time.time()
+                        if now - last_violation_time.get(process_name, 0) >= VIOLATION_COOLDOWN_SECONDS:
+                            last_violation_time[process_name] = now
+                            session_manager.record_violation(process_name)
                         lock_mode = session_manager.get_lock_mode()
                         if lock_mode == "hard":
                             now = time.time()
