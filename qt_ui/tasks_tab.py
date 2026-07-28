@@ -566,11 +566,19 @@ class _TaskCard(QFrame):
     def _end_task(self):
         session_manager.end_session(end_type="manual")
 
+    def _cash_in_max(self):
+        # Capped at today's still-required minutes, not the whole banked
+        # balance -- cashing in more than what's left to fill the bar would
+        # just burn vacation minutes for no visible effect (required_minutes
+        # already floors at 0), so the input shouldn't offer more than what
+        # actually finishes the day.
+        return min(self._cash_in_balance_int, int(self._today_required_minutes()))
+
     def _open_cash_in_editor(self):
-        if self._cash_in_balance_int <= 0:
+        if self._cash_in_max() <= 0:
             return
         self._cash_in_edit.setText("")
-        self._cash_in_max_label.setText(f"/ {self._cash_in_balance_int}")
+        self._cash_in_max_label.setText(f"/ {self._cash_in_max()}")
         self._cash_in_row.setVisible(True)
         self._cash_in_edit.setFocus()
 
@@ -582,10 +590,11 @@ class _TaskCard(QFrame):
             minutes = int(self._cash_in_edit.text())
         except ValueError:
             return
-        if minutes <= 0 or minutes > self._cash_in_balance_int:
+        cap = self._cash_in_max()
+        if minutes <= 0 or minutes > cap:
             QMessageBox.warning(
                 self, "Carmen Focus",
-                f"Enter a whole number of minutes between 1 and {self._cash_in_balance_int}.",
+                f"Enter a whole number of minutes between 1 and {cap} (today's remaining time).",
             )
             return
         sessions = session_history.load_all()
@@ -598,7 +607,7 @@ class _TaskCard(QFrame):
         self._on_changed()
 
     def _refresh_cash_in_visibility(self):
-        can_cash_in = self._cash_in_balance_int > 0 and not self._is_running()
+        can_cash_in = self._cash_in_max() > 0 and not self._is_running()
         self._vacation_label.setEnabled(can_cash_in)
         self._vacation_label.setCursor(Qt.PointingHandCursor if can_cash_in else Qt.ArrowCursor)
 

@@ -354,6 +354,8 @@ class _TopicView(QWidget):
         self._table.setColumnWidth(COLUMN_FASTEST, 100)
         self._table.setColumnWidth(COLUMN_START, 90)
         self._table.cellClicked.connect(self._on_cell_clicked)
+        self._table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._on_table_context_menu)
         layout.addWidget(self._table, 1)
 
         self.refresh()
@@ -450,6 +452,21 @@ class _TopicView(QWidget):
         if column == COLUMN_START:
             return
         _DescriptionPopup(self._problems[row])
+
+    def _on_table_context_menu(self, pos):
+        row = self._table.rowAt(pos.y())
+        if row < 0 or row >= len(self._problems):
+            return
+        problem = self._problems[row]
+
+        menu = QMenu(self)
+        edit_action = menu.addAction("Edit Problem")
+        action = menu.exec(self._table.viewport().mapToGlobal(pos))
+        if action == edit_action:
+            self._open_edit_problem(problem)
+
+    def _open_edit_problem(self, problem):
+        _register_popup(_AddProblemDialog(self._topic_id, on_added=lambda _p: self.refresh(), problem=problem))
 
     def _start_problem(self, problem):
         if self._review_tab and not self._review_tab.can_start_review():
@@ -959,19 +976,27 @@ class _StarPicker(QWidget):
 
 
 class _AddProblemDialog(QWidget):
-    def __init__(self, topic_id, on_added):
+    """Also used for editing (right-click a row > Edit Problem in the Review
+    tab) -- pass an existing `problem` dict to pre-fill every field, switch
+    the submit button to "Save", and call review_store.update_problem
+    instead of create_problem. Review history/schedule fields aren't shown
+    here at all, so editing can't touch them."""
+
+    def __init__(self, topic_id, on_added, problem=None):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
-        self.setWindowTitle("Carmen Focus — Add Problem")
+        self._editing = problem is not None
+        self.setWindowTitle(f"Carmen Focus — {'Edit' if self._editing else 'Add'} Problem")
         self.resize(420, 580)
         self._topic_id = topic_id
         self._on_added = on_added
+        self._problem = problem
         self._photo_path = None
 
         layout = QVBoxLayout(self)
 
         layout.addWidget(_bold_label("Name"))
-        self._name_edit = QLineEdit()
+        self._name_edit = QLineEdit(problem["name"] if problem else "")
         layout.addWidget(self._name_edit)
 
         layout.addWidget(_bold_label("Subject"))
@@ -983,14 +1008,14 @@ class _AddProblemDialog(QWidget):
         add_subject_button.clicked.connect(self._toggle_add_subject)
         subject_row.addWidget(add_subject_button)
         layout.addLayout(subject_row)
-        self._reload_subjects()
+        self._reload_subjects(select_id=problem["subjectId"] if problem else None)
 
         self._add_subject_form = self._build_add_subject_form()
         self._add_subject_form.setVisible(False)
         layout.addWidget(self._add_subject_form)
 
         layout.addWidget(_bold_label("Stars"))
-        self._star_picker = _StarPicker(initial=3)
+        self._star_picker = _StarPicker(initial=problem["stars"] if problem else 3)
         layout.addWidget(self._star_picker)
 
         layout.addWidget(_bold_label("Description"))
@@ -1006,11 +1031,12 @@ class _AddProblemDialog(QWidget):
         self._type_group.setExclusive(True)
         for button in (self._text_button, self._photo_button, self._link_button):
             self._type_group.addButton(button)
-        self._text_button.setChecked(True)
         layout.addLayout(type_row)
 
         self._description_stack = QStackedWidget()
         self._text_edit = QTextEdit()
+        if problem:
+            self._text_edit.setPlainText(problem.get("descriptionText") or "")
         self._description_stack.addWidget(self._text_edit)
 
         photo_page = QWidget()
@@ -1022,10 +1048,15 @@ class _AddProblemDialog(QWidget):
         self._photo_preview = QLabel("No image selected.")
         self._photo_preview.setAlignment(Qt.AlignCenter)
         self._photo_preview.setFixedHeight(180)
+        existing_photo_path = problem.get("descriptionPhotoPath") if problem else None
+        if existing_photo_path and os.path.exists(existing_photo_path):
+            pixmap = QPixmap(existing_photo_path)
+            if not pixmap.isNull():
+                self._photo_preview.setPixmap(pixmap.scaled(300, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         photo_layout.addWidget(self._photo_preview)
         self._description_stack.addWidget(photo_page)
 
-        self._link_edit = QLineEdit()
+        self._link_edit = QLineEdit(problem.get("descriptionLink") or "" if problem else "")
         self._link_edit.setPlaceholderText("https://example.com/problem")
         self._description_stack.addWidget(self._link_edit)
 
@@ -1034,6 +1065,9 @@ class _AddProblemDialog(QWidget):
         self._text_button.toggled.connect(lambda c: c and self._description_stack.setCurrentIndex(0))
         self._photo_button.toggled.connect(lambda c: c and self._description_stack.setCurrentIndex(1))
         self._link_button.toggled.connect(lambda c: c and self._description_stack.setCurrentIndex(2))
+
+        initial_type = problem["descriptionType"] if problem else "text"
+        {"text": self._text_button, "photo": self._photo_button, "link": self._link_button}[initial_type].setChecked(True)
 
         self._status_label = QLabel()
         self._status_label.setStyleSheet("color: #c62828;")
@@ -1044,10 +1078,10 @@ class _AddProblemDialog(QWidget):
         cancel_button = QPushButton("Cancel")
         cancel_button.clicked.connect(self.close)
         button_row.addWidget(cancel_button)
-        add_button = QPushButton("Add")
-        add_button.setProperty("class", "AccentButton")
-        add_button.clicked.connect(self._submit)
-        button_row.addWidget(add_button)
+        submit_button = QPushButton("Save" if self._editing else "Add")
+        submit_button.setProperty("class", "AccentButton")
+        submit_button.clicked.connect(self._submit)
+        button_row.addWidget(submit_button)
         layout.addLayout(button_row)
 
         self.show()
@@ -1152,12 +1186,16 @@ class _AddProblemDialog(QWidget):
                 return
         elif self._photo_button.isChecked():
             description_type = "photo"
-            if not self._photo_path:
+            has_existing_photo = self._editing and self._problem.get("descriptionPhotoPath")
+            if self._photo_path:
+                with open(self._photo_path, "rb") as f:
+                    photo_bytes = f.read()
+                photo_filename = os.path.basename(self._photo_path)
+            elif not has_existing_photo:
                 self._status_label.setText("Choose an image.")
                 return
-            with open(self._photo_path, "rb") as f:
-                photo_bytes = f.read()
-            photo_filename = os.path.basename(self._photo_path)
+            # else: editing and keeping the existing photo -- photo_bytes
+            # stays None, which tells update_problem to leave it alone.
         else:
             description_type = "link"
             description_link = self._link_edit.text().strip()
@@ -1165,11 +1203,18 @@ class _AddProblemDialog(QWidget):
                 self._status_label.setText("Enter a valid URL (e.g. https://example.com).")
                 return
 
-        problem = review_store.create_problem(
-            self._topic_id, subject_id, name, stars, description_type,
-            description_text=description_text, description_link=description_link,
-            photo_bytes=photo_bytes, photo_filename=photo_filename,
-        )
+        if self._editing:
+            problem = review_store.update_problem(
+                self._problem["id"], subject_id, name, stars, description_type,
+                description_text=description_text, description_link=description_link,
+                photo_bytes=photo_bytes, photo_filename=photo_filename,
+            )
+        else:
+            problem = review_store.create_problem(
+                self._topic_id, subject_id, name, stars, description_type,
+                description_text=description_text, description_link=description_link,
+                photo_bytes=photo_bytes, photo_filename=photo_filename,
+            )
         if problem is None:
             self._status_label.setText("Could not save this problem.")
             return
