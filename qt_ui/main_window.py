@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from qt_ui.board_tab import BoardTab
 from qt_ui.calendar_page import CalendarPage
 from qt_ui.finished_tab import FinishedTab
 from qt_ui.focus_tab import FocusTab
@@ -174,6 +175,7 @@ class _MainWindow(QWidget):
         self._add_page("calendar", CalendarPage())
         self._add_page("focus", FocusTab())
         self._add_page("tasks", TasksTab())
+        self._add_page("board", BoardTab())
         self._add_page("review", ReviewTab())
         self._add_page("finished", FinishedTab())
 
@@ -201,6 +203,7 @@ class _MainWindow(QWidget):
             ("calendar", "📅  Calendar"),
             ("focus", "🔥  Focus"),
             ("tasks", "🎯  Tasks"),
+            ("board", "🗂  The Board"),
             ("review", "🔁  Review"),
             ("finished", "✅  Finished"),
         ]

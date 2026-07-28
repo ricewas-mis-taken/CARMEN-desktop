@@ -121,36 +121,22 @@ QPushButton.SecondaryButton:checked {
     font-weight: 600;
 }
 
-/* "Until I burnout" toggle on a task's Start overlay -- dark red by default
-   so the option pops out as a distinct, deliberate choice (not just another
-   gray SecondaryButton) even before it's clicked; checked state brightens
-   further so the armed/committed state still reads unmistakably. A task's
+/* "Until I burnout" button on a task's Start overlay -- immediately starts a
+   burnout-duration session on click (not a toggle), styled with a black
+   label and a red box so it reads as a distinct, deliberate action. A task's
    own card can itself be a red pastel fill (task color picked as red), which
    made a borderless red button blend straight into the card background --
-   the white border guarantees an edge against any card color, not just the
-   ones that happen to contrast with red. */
+   the border guarantees an edge against any card color, not just the ones
+   that happen to contrast with red. */
 QPushButton#burnoutButton {
     background: #FFFFFF;
-    color: #A93226;
+    color: #1F2328;
     border: 2px solid #A93226;
     font-weight: 600;
 }
 
 QPushButton#burnoutButton:hover {
     background: #FCEBEA;
-}
-
-/* Checked state fully inverts fill/text instead of just shifting shade --
-   two similar reds (dark vs. bright) read as "no change happened" at a
-   glance, which is exactly the "the button doesn't work" bug this fixes. */
-QPushButton#burnoutButton:checked {
-    background: #A93226;
-    color: #FFFFFF;
-    border: 2px solid #A93226;
-}
-
-QPushButton#burnoutButton:checked:hover {
-    background: #922B1F;
 }
 
 /* Start Task button on a task's Start overlay -- black text on a green
@@ -425,4 +411,14 @@ QFrame.InlineForm {
     border: 1px solid #E3E5E9;
     border-radius: 8px;
     padding: 8px;
+}
+
+QFrame.BoardCard {
+    background: #FFFFFF;
+    border: 1px solid #ECEEF1;
+    border-radius: 12px;
+}
+
+QFrame.BoardCard:hover {
+    border: 1px solid #5B8DEF;
 }
