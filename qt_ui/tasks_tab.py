@@ -134,7 +134,7 @@ class TasksTab(QWidget):
         title.setStyleSheet("font-size: 20px; font-weight: 700;")
         header.addWidget(title)
         header.addStretch(1)
-        add_button = QPushButton("+ Add Task")
+        add_button = QPushButton("+ Add Recurring Task")
         add_button.setProperty("class", "AccentButton")
         add_button.clicked.connect(lambda: open_task_editor(on_saved=lambda _t: self.refresh()))
         header.addWidget(add_button)
@@ -153,7 +153,7 @@ class TasksTab(QWidget):
 
         tasks = [t for t in tasks_store.load_tasks() if not t.get("archived")]
         if not tasks:
-            empty_label = QLabel("No tasks yet -- click “+ Add Task” to create one.")
+            empty_label = QLabel("No tasks yet -- click “+ Add Recurring Task” to create one.")
             empty_label.setStyleSheet("color: #8A8F98; font-size: 14px;")
             self._grid.addWidget(empty_label, 0, 0)
         for index, task in enumerate(tasks):
@@ -161,6 +161,19 @@ class TasksTab(QWidget):
             card = _TaskCard(task, on_changed=self.refresh)
             self._grid.addWidget(card, row, col, Qt.AlignLeft | Qt.AlignTop)
             self._cards[task["id"]] = card
+
+        # A divider that always sits directly under the last row of cards --
+        # placed one grid row past whatever row the last card landed in, so
+        # it shifts down on its own as more cards are added instead of
+        # needing to be repositioned by hand.
+        if tasks:
+            last_row = -(-len(tasks) // CARDS_PER_ROW)  # ceil division
+            divider = QFrame()
+            divider.setFrameShape(QFrame.HLine)
+            divider.setFixedHeight(1)
+            divider.setStyleSheet("background: rgba(0,0,0,0.12); border: none;")
+            self._grid.addWidget(divider, last_row, 0, 1, CARDS_PER_ROW)
+
         self._tick()
 
     def _tick(self):
@@ -176,7 +189,7 @@ class _TaskCard(QFrame):
         self._task = task
         self._on_changed = on_changed
         self._armed = False
-        self._until_burnout = False
+        self._active_is_burnout = False
         self._duration_minutes_text = ""
         self._hovering = False
         self._cash_in_balance_int = 0
@@ -440,10 +453,8 @@ class _TaskCard(QFrame):
         duration_row.addWidget(self._duration_edit)
         self._burnout_button = QPushButton("Until I burnout")
         self._burnout_button.setObjectName("burnoutButton")
-        self._burnout_button.setCheckable(True)
-        self._burnout_button.setProperty("class", "SecondaryButton")
         self._burnout_button.setStyleSheet("font-size: 13px;")
-        self._burnout_button.toggled.connect(self._toggle_burnout)
+        self._burnout_button.clicked.connect(self._start_burnout)
         duration_row.addWidget(self._burnout_button)
         layout.addLayout(duration_row)
 
@@ -516,33 +527,25 @@ class _TaskCard(QFrame):
         self._armed = False
         self._blur.setBlurRadius(0)
         self._armed_overlay.setVisible(False)
-        self._burnout_button.setChecked(False)
-
-    def _toggle_burnout(self, checked):
-        self._until_burnout = checked
-        self._duration_edit.setDisabled(checked)
-        if checked:
-            self._duration_minutes_text = self._duration_edit.text()
-            self._duration_edit.setText("")
-            self._duration_edit.setPlaceholderText("Until burnout")
-        else:
-            self._duration_edit.setPlaceholderText("minutes")
-            self._duration_edit.setText(self._duration_minutes_text)
 
     def _open_editor(self):
         open_task_editor(self._task, on_saved=lambda _t: self._on_changed())
 
     def _start_task(self):
-        if self._until_burnout:
-            duration_minutes = tasks_store.BURNOUT_MINUTES
-        else:
-            try:
-                duration_minutes = float(self._duration_edit.text())
-                if duration_minutes <= 0:
-                    raise ValueError
-            except ValueError:
-                return
+        try:
+            duration_minutes = float(self._duration_edit.text())
+            if duration_minutes <= 0:
+                raise ValueError
+        except ValueError:
+            return
+        self._active_is_burnout = False
+        self._begin_session(duration_minutes)
 
+    def _start_burnout(self):
+        self._active_is_burnout = True
+        self._begin_session(tasks_store.BURNOUT_MINUTES)
+
+    def _begin_session(self, duration_minutes):
         session_manager.start_session(
             duration_minutes,
             self._task.get("lockMode", "soft"),
@@ -624,11 +627,12 @@ class _TaskCard(QFrame):
             self._progress_label.setText(f"{_format_minutes(logged_minutes)} of {_format_minutes(required)}")
 
         balance = tasks_store.vacation_balance_minutes(self._task, sessions)
-        # Floor, not just `balance > 0` -- cashing in requires a whole
-        # number of minutes, so a sub-1-minute balance (e.g. 0.4m banked)
-        # must not be treated as usable, or the editor's own "1..max" range
-        # becomes invalid (min=1 > max=0) and cashing in silently breaks.
-        self._cash_in_balance_int = int(balance)
+        # Round rather than truncate -- a 0.97m balance reads as "1m banked"
+        # to the user (that's what _format_minutes below shows them), so the
+        # cashable amount must round the same way or the displayed number
+        # and the actually-clickable amount disagree (looked like the button
+        # "didn't work" when it truncated to 0 while showing "1m").
+        self._cash_in_balance_int = int(round(balance))
         # Today's surplus (logged beyond today's required) isn't cashable yet
         # (the day isn't over), but show it so the user can see they're earning.
         today_surplus = max(0.0, logged_minutes - required) if required > 0 else 0.0
@@ -650,11 +654,18 @@ class _TaskCard(QFrame):
             self._content.setVisible(False)
             self._armed_overlay.setVisible(False)
             self._running_panel.setVisible(True)
-            minutes, seconds = divmod(status.get("secondsRemaining", 0), 60)
             paused = " (paused)" if status.get("isPaused") else ""
             violations = status.get("violationCount", 0)
             violation_text = f"  •  {violations} violation{'s' if violations != 1 else ''}" if violations else ""
-            self._countdown_label.setText(f"{minutes}m {seconds}s remaining{paused}{violation_text}")
+            if self._active_is_burnout:
+                elapsed_seconds = max(0, tasks_store.BURNOUT_MINUTES * 60 - status.get("secondsRemaining", 0))
+                el_minutes, el_seconds = divmod(int(elapsed_seconds), 60)
+                self._countdown_label.setText(
+                    f"UNTIL BURNOUT - elapsed {el_minutes}m {el_seconds}s{paused}{violation_text}"
+                )
+            else:
+                minutes, seconds = divmod(status.get("secondsRemaining", 0), 60)
+                self._countdown_label.setText(f"{minutes}m {seconds}s remaining{paused}{violation_text}")
             self._pause_button.setText("Resume" if status.get("isPaused") else "Pause")
         else:
             self._running_panel.setVisible(False)
@@ -662,7 +673,6 @@ class _TaskCard(QFrame):
             if self._armed and locked_by_other:
                 self._disarm()
 
-        self.setEnabled(not locked_by_other)
         self.setProperty("locked", locked_by_other)
         self.style().unpolish(self)
         self.style().polish(self)
