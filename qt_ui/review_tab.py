@@ -554,19 +554,29 @@ class _ReviewBanner(QWidget):
         self._pause_btn.clicked.connect(self._pause_resume)
         btn_row.addWidget(self._pause_btn)
 
-        end_btn = QPushButton("End")
-        end_btn.setProperty("class", "SecondaryButton")
-        end_btn.setFixedWidth(80)
-        end_btn.clicked.connect(self._end_early)
-        btn_row.addWidget(end_btn)
-
         finish_btn = QPushButton("Finish")
         finish_btn.setProperty("class", "AccentButton")
         finish_btn.setFixedWidth(120)
         finish_btn.clicked.connect(self._finish)
         btn_row.addWidget(finish_btn)
 
+        # Sandwiched between two stretches, Pause/Finish read as a centered
+        # pair -- End sits outside that on its own, pinned to the row's
+        # right edge (bottom-right of the timer card) rather than grouped
+        # in with them, so it doesn't get mistaken for "end this review the
+        # normal way" the way it did sitting between Pause and Finish.
         btn_row.addStretch(1)
+
+        end_btn = QPushButton("End")
+        end_btn.setFixedWidth(80)
+        end_btn.setStyleSheet(
+            "QPushButton { background: #e53935; color: white; border: none; "
+            "border-radius: 6px; font-weight: 600; padding: 6px 0; }"
+            "QPushButton:hover { background: #c62828; }"
+        )
+        end_btn.clicked.connect(self._end_early)
+        btn_row.addWidget(end_btn)
+
         card_layout.addLayout(btn_row)
 
         outer.addWidget(card)
