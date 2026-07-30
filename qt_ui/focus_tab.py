@@ -123,6 +123,18 @@ class FocusTab(QWidget):
         ) if status.get("startTime") else 0
         minutes, seconds = divmod(elapsed_seconds, 60)
         paused = " (paused)" if status["isPaused"] else ""
+        review_problem = status.get("source") == "review" and status.get("reviewProblemName")
+        if review_problem:
+            # A review timer running underneath a linked task's session --
+            # name the actual problem/subject being reviewed, same as the
+            # Tasks tab's running card, instead of the generic elapsed text.
+            subject = status.get("reviewSubjectName") or "—"
+            self._status_label.setText(
+                f"{review_problem} in session, subject {subject}, "
+                f"time elapsed {minutes}m {seconds}s{paused}\n"
+                f"Lock mode: {status['lockMode']}   Violations: {status['violationCount']}"
+            )
+            return
         source_note = ""
         if status.get("source") == "calendar-event" and status.get("eventTitle"):
             source_note = f"\nFrom calendar event: {status['eventTitle']}"

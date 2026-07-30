@@ -39,6 +39,12 @@ _state = {
     "source": "manual",
     "eventId": None,
     "eventTitle": None,
+    # Only populated for source="review" (a review timer started against a
+    # task-linked topic, see qt_ui/review_tab.py's _begin_review) -- lets the
+    # Tasks/Focus tabs show which problem/subject is actually being
+    # reviewed right now instead of just the generic eventTitle string.
+    "reviewProblemName": None,
+    "reviewSubjectName": None,
 }
 
 # Index into violationLog of the most recent still-unresolved violation of
@@ -178,6 +184,8 @@ def start_session(
     source="manual",
     event_id=None,
     event_title=None,
+    review_problem_name=None,
+    review_subject_name=None,
 ):
     with _lock:
         now = datetime.now()
@@ -216,6 +224,8 @@ def start_session(
         _state["source"] = source
         _state["eventId"] = event_id
         _state["eventTitle"] = event_title
+        _state["reviewProblemName"] = review_problem_name
+        _state["reviewSubjectName"] = review_subject_name
         _open_violation_index["process"] = None
         _open_violation_index["domain"] = None
         _save()
@@ -376,6 +386,8 @@ def _get_status_locked():
         "source": _state["source"],
         "eventId": _state["eventId"],
         "eventTitle": _state["eventTitle"],
+        "reviewProblemName": _state["reviewProblemName"],
+        "reviewSubjectName": _state["reviewSubjectName"],
     }
 
 

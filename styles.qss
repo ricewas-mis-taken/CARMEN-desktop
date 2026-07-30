@@ -45,6 +45,20 @@ QWidget#PopupBg QListWidget {
     color: #1F2328;
 }
 
+/* The dropdown list a QComboBox pops open is a separate top-level widget,
+   not a descendant of #PopupBg -- the "#PopupBg QComboBox" rule above only
+   styles the closed box itself, so without this the popup list falls back
+   to the OS theme and can render white-on-white (invisible) text on a
+   dark-mode Windows install. Applies globally since every combo box in the
+   app (subject picker, task-link picker, etc.) needs the same fix. */
+QComboBox QAbstractItemView {
+    background: #FFFFFF;
+    color: #1F2328;
+    selection-background-color: #5B8DEF;
+    selection-color: #FFFFFF;
+    outline: none;
+}
+
 QWidget#PopupBg QPushButton {
     background: #F1F3F6;
     color: #1F2328;
