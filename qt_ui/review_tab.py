@@ -67,7 +67,10 @@ def _format_mmss(total_seconds):
 
 def _format_dmy(iso_date_string):
     d = date.fromisoformat(iso_date_string)
-    return f"{d.day}/{d.month}/{d.year}"
+    # %-d (no leading zero) is Linux/macOS-only and raises ValueError on
+    # Windows (this app's target platform) -- day is formatted by hand
+    # instead, same workaround as qt_ui/board_tab.py's _format_date.
+    return f"{d.strftime('%b')} {d.day}, {d.year}"
 
 
 def _relative_time(iso_datetime_string):
@@ -88,16 +91,34 @@ def _relative_time(iso_datetime_string):
     return f"{days} day{'s' if days != 1 else ''} ago"
 
 
+def _fastest_display(problem):
+    """The Fastest Time column's text. A real solved time always wins. With
+    no solve recorded yet, but a single unsolved first attempt on record,
+    show that time anyway with an "(A)" (attempt) marker so it's not just a
+    blank dash -- the moment a real solve happens, fastestTimeSeconds gets
+    set and this falls through to the plain mm:ss branch above it."""
+    fastest = problem.get("fastestTimeSeconds")
+    if fastest is not None:
+        return _format_mmss(fastest)
+    if (
+        problem.get("reviewCount") == 1
+        and problem.get("firstAttemptSelfSolved") is False
+        and problem.get("firstAttemptSeconds") is not None
+    ):
+        return f"{_format_mmss(problem['firstAttemptSeconds'])} (A)"
+    return "--:--"
+
+
 def _first_attempt_text(problem):
     """None if this problem was never started via "Add & Start First
     Attempt" -- older/regular problems just don't have this stat."""
     seconds = problem.get("firstAttemptSeconds")
     if seconds is None:
         return None
-    shakiness = problem.get("firstAttemptShakiness")
-    solved = problem.get("firstAttemptSelfSolved")
-    outcome = "solved it" if solved else "checked the answer"
-    return f"First attempt: {_format_mmss(seconds)}, shakiness {shakiness}/5 ({outcome})"
+    if problem.get("firstAttemptSelfSolved"):
+        shakiness = problem.get("firstAttemptShakiness")
+        return f"First attempt: {_format_mmss(seconds)}, shakiness {shakiness}/5 (solved it)"
+    return f"First attempt: {_format_mmss(seconds)} (checked the answer)"
 
 
 def _build_description_content(layout, problem):
@@ -325,7 +346,11 @@ class _AddTopicDialog(QWidget):
         if not name:
             self._status_label.setText("Name is required.")
             return
-        topic = review_store.create_topic(name)
+        try:
+            topic = review_store.create_topic(name)
+        except review_store.DuplicateNameError as e:
+            self._status_label.setText(str(e))
+            return
         if topic is None:
             self._status_label.setText("Could not create topic.")
             return
@@ -426,7 +451,7 @@ class _TopicView(QWidget):
             first_item = QTableWidgetItem(_format_dmy(problem["dateAdded"]))
             self._table.setItem(row, COLUMN_FIRST_SOLVED, first_item)
 
-            fastest_item = QTableWidgetItem(_format_mmss(problem["fastestTimeSeconds"]))
+            fastest_item = QTableWidgetItem(_fastest_display(problem))
             fastest_item.setTextAlignment(Qt.AlignCenter)
             self._table.setItem(row, COLUMN_FASTEST, fastest_item)
 
@@ -525,16 +550,47 @@ class _TopicView(QWidget):
             on_start_first_attempt=self._start_first_attempt,
         ))
 
-    def _start_first_attempt(self, problem):
-        # The problem was just created (from the Add Problem dialog's "Add &
-        # Start First Attempt" button), so intent to review it right now is
-        # already explicit -- skip _ReviewStartDialog's confirmation step
-        # and go straight into _begin_review, same as clicking "Start" would
-        # once that dialog's own Start button is clicked.
-        self.refresh()
+    def _start_first_attempt(self, add_problem_dialog):
+        """The Add Problem dialog's top "Start First Attempt" button --
+        times the very first attempt on the same embedded review banner
+        every other review uses (not a separate popup window), before the
+        problem even has a name/subject/description yet. The dialog hides
+        while the banner runs and reopens once you finish, pre-filled with
+        the recorded time/outcome, to actually save the problem."""
         if self._review_tab and not self._review_tab.can_start_review():
             return
-        self._begin_review(problem)
+        add_problem_dialog.hide()
+
+        end_session_on_finish = False
+        topic = review_store.get_topic(self._topic_id)
+        if topic and topic.get("linkedTaskId") and not session_manager.is_active():
+            task = tasks_store.get_task(topic["linkedTaskId"])
+            if task:
+                session_manager.start_session(
+                    duration_minutes=tasks_store.BURNOUT_MINUTES,
+                    lock_mode=task["lockMode"],
+                    process_whitelist=task.get("processWhitelist", []),
+                    domain_whitelist=task.get("domainWhitelist", []),
+                    source="review",
+                    event_id=task["id"],
+                    event_title=f"{task['name']} - first attempt",
+                    review_problem_name="First attempt",
+                    review_subject_name=None,
+                )
+                end_session_on_finish = True
+
+        if self._review_tab:
+            self._review_tab.on_review_started()
+
+        def _on_first_attempt_done(elapsed_seconds, self_solved, shakiness):
+            add_problem_dialog.apply_first_attempt(elapsed_seconds, self_solved, shakiness)
+            add_problem_dialog.show()
+
+        self._review_banner.start(
+            {"name": "your new problem"}, token=None,
+            end_session_on_finish=end_session_on_finish,
+            first_attempt_callback=_on_first_attempt_done,
+        )
 
 
 class _ReviewBanner(QWidget):
@@ -547,6 +603,7 @@ class _ReviewBanner(QWidget):
         self._start_time = None
         self._accumulated_seconds = 0
         self._is_paused = False
+        self._first_attempt_callback = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -639,14 +696,16 @@ class _ReviewBanner(QWidget):
             return self._accumulated_seconds
         return self._accumulated_seconds + int((datetime.now() - self._start_time).total_seconds())
 
-    def start(self, problem, token, end_session_on_finish=False):
+    def start(self, problem, token, end_session_on_finish=False, first_attempt_callback=None):
         self._problem = problem
         self._session_token = token
         self._end_session_on_finish = end_session_on_finish
+        self._first_attempt_callback = first_attempt_callback
         self._start_time = datetime.now()
         self._accumulated_seconds = 0
         self._is_paused = False
-        self._problem_label.setText(f"Reviewing: {problem['name']}")
+        label = "Timing first attempt" if first_attempt_callback is not None else f"Reviewing: {problem['name']}"
+        self._problem_label.setText(label)
         self._timer_label.setText("00:00")
         self._pause_btn.setText("Pause")
         # Always available -- pausing here freezes the review's own elapsed
@@ -700,7 +759,10 @@ class _ReviewBanner(QWidget):
         self._session_token = None
         self._end_session_on_finish = False
         self._start_time = None
+        self._first_attempt_callback = None
         self.hide()
+        # No-op when token is None (first-attempt mode -- there was never a
+        # start_review() session to abandon).
         review_store.abandon_review(token)
         if end_session:
             session_manager.end_session()
@@ -711,19 +773,28 @@ class _ReviewBanner(QWidget):
         token = self._session_token
         end_session = self._end_session_on_finish
         problem = self._problem
+        elapsed = self._elapsed_seconds_now()
+        first_attempt_callback = self._first_attempt_callback
         self._session_token = None
         self._end_session_on_finish = False
         self._start_time = None
+        self._first_attempt_callback = None
         self.hide()
         _PostReviewDialog(
             problem_name=problem["name"],
             on_submit=lambda self_solved, shakiness: self._complete_finish(
-                token, end_session, self_solved, shakiness
+                token, end_session, self_solved, shakiness, elapsed, first_attempt_callback
             ),
         )
 
-    def _complete_finish(self, token, end_session, self_solved, shakiness):
-        review_store.finish_review(token, self_solved=self_solved, shakiness=shakiness)
+    def _complete_finish(self, token, end_session, self_solved, shakiness, elapsed, first_attempt_callback):
+        if first_attempt_callback is not None:
+            # No problem exists yet -- hand the timing/outcome back to the
+            # Add Problem dialog instead of writing to review_store, which
+            # needs a real problem_id to attach a session to.
+            first_attempt_callback(elapsed, self_solved, shakiness)
+        else:
+            review_store.finish_review(token, self_solved=self_solved, shakiness=shakiness)
         if end_session:
             session_manager.end_session()
         self._on_finished()
@@ -847,12 +918,15 @@ class _PostReviewDialog(QWidget):
             return
         self._submitted = True
         self.close()
-        self._on_submit(self._self_solved, self._shakiness)
+        # Shakiness only means anything for a solved attempt -- "checked the
+        # answer" never showed the picker, so its stale default must not be
+        # sent along as if the user had actually rated it.
+        self._on_submit(self._self_solved, self._shakiness if self._self_solved else None)
 
     def closeEvent(self, event):
         if not self._submitted:
             self._submitted = True
-            self._on_submit(self._self_solved, self._shakiness)
+            self._on_submit(self._self_solved, self._shakiness if self._self_solved else None)
         super().closeEvent(event)
 
 
@@ -877,7 +951,7 @@ class _ReviewStartDialog(QWidget):
         layout.addLayout(header_row)
 
         stats_row = QHBoxLayout()
-        fastest_label = QLabel(f"Fastest: {_format_mmss(problem['fastestTimeSeconds'])}")
+        fastest_label = QLabel(f"Fastest: {_fastest_display(problem)}")
         fastest_label.setStyleSheet("font-size: 12px; color: #5A6070;")
         stats_row.addWidget(fastest_label)
         stats_row.addStretch(1)
@@ -976,6 +1050,11 @@ class _RenameTopicDialog(QWidget):
         self._name_edit.returnPressed.connect(self._save)
         layout.addWidget(self._name_edit)
 
+        self._status_label = QLabel()
+        self._status_label.setStyleSheet("color: #c62828;")
+        self._status_label.setWordWrap(True)
+        layout.addWidget(self._status_label)
+
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
         cancel = QPushButton("Cancel")
@@ -993,9 +1072,22 @@ class _RenameTopicDialog(QWidget):
         name = self._name_edit.text().strip()
         if not name:
             return
-        review_store.rename_topic(self._topic_id, name)
+        try:
+            review_store.rename_topic(self._topic_id, name)
+        except review_store.DuplicateNameError as e:
+            self._status_label.setText(str(e))
+            return
         self.close()
         self._on_renamed(self._topic_id, name)
+
+
+_HISTORY_DATE, _HISTORY_DURATION, _HISTORY_OUTCOME, _HISTORY_SHAKINESS = range(4)
+_HISTORY_HEADERS = ["Date", "Duration", "Outcome", "Shakiness"]
+
+
+def _format_session_datetime(iso_datetime_string):
+    d = datetime.fromisoformat(iso_datetime_string)
+    return f"{d.strftime('%b')} {d.day}, {d.year} {d.strftime('%H:%M')}"
 
 
 class _DescriptionPopup(QWidget):
@@ -1003,7 +1095,7 @@ class _DescriptionPopup(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle(problem["name"])
-        self.resize(480, 400)
+        self.resize(520, 560)
 
         layout = QVBoxLayout(self)
 
@@ -1023,8 +1115,57 @@ class _DescriptionPopup(QWidget):
 
         _build_description_content(layout, problem)
 
+        layout.addWidget(_bold_label("Review History"))
+        self._history_table = _build_history_table(problem["id"])
+        layout.addWidget(self._history_table)
+
         self.show()
         _register_popup(self)
+
+
+def _build_history_table(problem_id):
+    """Every logged review for a problem -- date, how long it took, and how
+    it went -- not just the aggregate stats (fastest time, review count)
+    shown elsewhere. Backed by review_store.list_sessions(), which is the
+    permanent per-session log every finish_review()/record_first_attempt()
+    call writes to."""
+    sessions = review_store.list_sessions(problem_id)
+    table = QTableWidget(len(sessions), len(_HISTORY_HEADERS))
+    table.setHorizontalHeaderLabels(_HISTORY_HEADERS)
+    table.verticalHeader().setVisible(False)
+    table.setEditTriggers(QTableWidget.NoEditTriggers)
+    table.setSelectionMode(QTableWidget.NoSelection)
+    table.setFixedHeight(160)
+    table.setColumnWidth(_HISTORY_DATE, 170)
+    table.setColumnWidth(_HISTORY_DURATION, 90)
+    table.setColumnWidth(_HISTORY_OUTCOME, 140)
+    table.setColumnWidth(_HISTORY_SHAKINESS, 80)
+
+    if not sessions:
+        table.setRowCount(1)
+        empty_item = QTableWidgetItem("No reviews logged yet.")
+        empty_item.setForeground(QColor("#5A6070"))
+        table.setItem(0, 0, empty_item)
+        table.setSpan(0, 0, 1, len(_HISTORY_HEADERS))
+        return table
+
+    for row, session in enumerate(sessions):
+        date_item = QTableWidgetItem(_format_session_datetime(session["finishedAt"]))
+        table.setItem(row, _HISTORY_DATE, date_item)
+
+        duration_item = QTableWidgetItem(_format_mmss(session["durationSeconds"]))
+        duration_item.setTextAlignment(Qt.AlignCenter)
+        table.setItem(row, _HISTORY_DURATION, duration_item)
+
+        outcome_item = QTableWidgetItem("Solved it" if session["selfSolved"] else "Checked the answer")
+        table.setItem(row, _HISTORY_OUTCOME, outcome_item)
+
+        shakiness = session["shakiness"]
+        shakiness_item = QTableWidgetItem(f"{shakiness}/5" if shakiness is not None else "—")
+        shakiness_item.setTextAlignment(Qt.AlignCenter)
+        table.setItem(row, _HISTORY_SHAKINESS, shakiness_item)
+
+    return table
 
 
 _popup_refs = set()
@@ -1082,14 +1223,37 @@ class _AddProblemDialog(QWidget):
         self.setObjectName("PopupBg")
         self._editing = problem is not None
         self.setWindowTitle(f"Carmen Focus — {'Edit' if self._editing else 'Add'} Problem")
-        self.resize(420, 580)
+        self.resize(420, 620)
         self._topic_id = topic_id
         self._on_added = on_added
         self._on_start_first_attempt = on_start_first_attempt
         self._problem = problem
         self._photo_path = None
+        self._pending_first_attempt = None
 
         layout = QVBoxLayout(self)
+
+        # Only offered when adding (not editing) and the caller wired up a
+        # handler -- editing an existing problem has nothing to "attempt"
+        # here, and _TopicView is the only caller that passes the handler.
+        if not self._editing and self._on_start_first_attempt is not None:
+            # No name/subject/description required to click this -- timing
+            # starts immediately, on the same embedded review banner every
+            # other review uses, and the form gets filled in afterward, once
+            # there's actually something to fill in about.
+            first_attempt_button = QPushButton("Start First Attempt")
+            first_attempt_button.setStyleSheet(
+                "background: #28a745; color: white; font-weight: 600; "
+                "border-radius: 8px; padding: 8px 12px; font-size: 13px;"
+            )
+            first_attempt_button.clicked.connect(self._start_first_attempt)
+            layout.addWidget(first_attempt_button)
+
+            self._first_attempt_status = QLabel()
+            self._first_attempt_status.setStyleSheet("color: #2e7d32; font-size: 12px;")
+            self._first_attempt_status.setWordWrap(True)
+            self._first_attempt_status.setVisible(False)
+            layout.addWidget(self._first_attempt_status)
 
         layout.addWidget(_bold_label("Name"))
         self._name_edit = QLineEdit(problem["name"] if problem else "")
@@ -1174,13 +1338,6 @@ class _AddProblemDialog(QWidget):
         cancel_button = QPushButton("Cancel")
         cancel_button.clicked.connect(self.close)
         button_row.addWidget(cancel_button)
-        # Only offered when adding (not editing) and the caller wired up a
-        # handler -- editing an existing problem has nothing to "attempt"
-        # here, and _TopicView is the only caller that passes the handler.
-        if not self._editing and self._on_start_first_attempt is not None:
-            first_attempt_button = QPushButton("Add & Start First Attempt")
-            first_attempt_button.clicked.connect(self._submit_and_start_first_attempt)
-            button_row.addWidget(first_attempt_button)
         submit_button = QPushButton("Save" if self._editing else "Add")
         submit_button.setProperty("class", "AccentButton")
         submit_button.clicked.connect(self._submit)
@@ -1244,10 +1401,15 @@ class _AddProblemDialog(QWidget):
         name = self._new_subject_name.text().strip()
         if not name:
             return
-        subject = review_store.create_subject(
-            self._topic_id, name, self._new_subject_color
-        )
+        try:
+            subject = review_store.create_subject(
+                self._topic_id, name, self._new_subject_color
+            )
+        except review_store.DuplicateNameError as e:
+            self._status_label.setText(str(e))
+            return
         if subject is None:
+            self._status_label.setText("Could not create subject.")
             return
         self._reload_subjects(select_id=subject["id"])
         self._new_subject_name.setText("")
@@ -1267,9 +1429,7 @@ class _AddProblemDialog(QWidget):
     def _gather_and_save(self):
         """Validates the form and creates/updates the problem. Returns the
         saved problem dict, or None (with an explanatory _status_label
-        already set) if validation or the save itself failed -- shared by
-        both submit paths (_submit and _submit_and_start_first_attempt) so
-        they can't drift out of sync on what counts as a valid problem."""
+        already set) if validation or the save itself failed."""
         name = self._name_edit.text().strip()
         if not name:
             self._status_label.setText("Name is required.")
@@ -1311,18 +1471,22 @@ class _AddProblemDialog(QWidget):
                 self._status_label.setText("Enter a valid URL (e.g. https://example.com).")
                 return None
 
-        if self._editing:
-            problem = review_store.update_problem(
-                self._problem["id"], subject_id, name, stars, description_type,
-                description_text=description_text, description_link=description_link,
-                photo_bytes=photo_bytes, photo_filename=photo_filename,
-            )
-        else:
-            problem = review_store.create_problem(
-                self._topic_id, subject_id, name, stars, description_type,
-                description_text=description_text, description_link=description_link,
-                photo_bytes=photo_bytes, photo_filename=photo_filename,
-            )
+        try:
+            if self._editing:
+                problem = review_store.update_problem(
+                    self._problem["id"], subject_id, name, stars, description_type,
+                    description_text=description_text, description_link=description_link,
+                    photo_bytes=photo_bytes, photo_filename=photo_filename,
+                )
+            else:
+                problem = review_store.create_problem(
+                    self._topic_id, subject_id, name, stars, description_type,
+                    description_text=description_text, description_link=description_link,
+                    photo_bytes=photo_bytes, photo_filename=photo_filename,
+                )
+        except review_store.DuplicateNameError as e:
+            self._status_label.setText(str(e))
+            return None
         if problem is None:
             self._status_label.setText("Could not save this problem.")
             return None
@@ -1332,15 +1496,35 @@ class _AddProblemDialog(QWidget):
         problem = self._gather_and_save()
         if problem is None:
             return
+        if not self._editing and self._pending_first_attempt is not None:
+            problem = review_store.record_first_attempt(
+                problem["id"],
+                self._pending_first_attempt["seconds"],
+                self_solved=self._pending_first_attempt["selfSolved"],
+                shakiness=self._pending_first_attempt["shakiness"],
+            ) or problem
         self.close()
         self._on_added(problem)
 
-    def _submit_and_start_first_attempt(self):
-        problem = self._gather_and_save()
-        if problem is None:
-            return
-        self.close()
-        self._on_start_first_attempt(problem)
+    def _start_first_attempt(self):
+        self._on_start_first_attempt(self)
+
+    def apply_first_attempt(self, elapsed_seconds, self_solved, shakiness):
+        """Called by _TopicView once the embedded review banner's first-
+        attempt timer finishes -- stashes the recorded time/outcome so
+        _submit() can pass it to review_store.record_first_attempt() once
+        the problem itself is actually saved, and shows a confirmation so
+        it's clear the time wasn't lost."""
+        self._pending_first_attempt = {
+            "seconds": elapsed_seconds, "selfSolved": self_solved, "shakiness": shakiness,
+        }
+        detail = f"shakiness {shakiness}/5 (solved it)" if self_solved else "checked the answer"
+        self._first_attempt_status.setText(
+            f"First attempt recorded: {_format_mmss(elapsed_seconds)}, {detail}. "
+            "Fill in the details below and Add to save it."
+        )
+        self._first_attempt_status.setVisible(True)
+        self.show()
 
 
 def _bold_label(text):

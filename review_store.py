@@ -16,7 +16,7 @@ import os
 import sqlite3
 import threading
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import calendar_store
 import review_scheduler
@@ -42,6 +42,15 @@ _schema_ready = False
 # the process, with nothing to reconcile later. review_sessions (the sqlite
 # table) only ever gets a row once a session actually completes.
 _active_sessions = {}
+
+
+class DuplicateNameError(Exception):
+    """Raised (not swallowed by the usual try/except-Exception-and-return-None
+    pattern below) when a topic/subject/problem name collides, case-
+    insensitively, with an existing one in the same scope: topics globally,
+    subjects within a topic, problems within a subject. Callers -- the Qt
+    dialogs -- catch this specifically to show a real message instead of the
+    generic "could not save" one."""
 
 
 def _get_conn():
@@ -100,7 +109,9 @@ def _init_schema(conn):
             problem_id INTEGER NOT NULL REFERENCES review_problems(id),
             started_at TIMESTAMP NOT NULL,
             finished_at TIMESTAMP NOT NULL,
-            duration_seconds INTEGER NOT NULL
+            duration_seconds INTEGER NOT NULL,
+            self_solved INTEGER,
+            shakiness INTEGER
         );
 
         CREATE INDEX IF NOT EXISTS idx_review_subjects_topic ON review_subjects(topic_id);
@@ -128,6 +139,14 @@ def _init_schema(conn):
     for col in ("first_attempt_seconds", "first_attempt_shakiness", "first_attempt_self_solved"):
         if col not in problem_cols:
             conn.execute(f"ALTER TABLE review_problems ADD COLUMN {col} INTEGER")
+            conn.commit()
+
+    # Add self_solved/shakiness to review_sessions for DBs that predate them
+    # -- every logged review's full outcome, not just its duration.
+    session_cols = {row[1] for row in conn.execute("PRAGMA table_info(review_sessions)").fetchall()}
+    for col in ("self_solved", "shakiness"):
+        if col not in session_cols:
+            conn.execute(f"ALTER TABLE review_sessions ADD COLUMN {col} INTEGER")
             conn.commit()
 
 
@@ -199,6 +218,10 @@ def create_topic(name):
     with _lock:
         try:
             conn = _get_conn()
+            if conn.execute(
+                "SELECT id FROM review_topics WHERE LOWER(name) = LOWER(?)", (name,)
+            ).fetchone():
+                raise DuplicateNameError(f'A topic named "{name}" already exists.')
             max_order = conn.execute(
                 "SELECT COALESCE(MAX(order_index), -1) AS m FROM review_topics"
             ).fetchone()["m"]
@@ -209,6 +232,8 @@ def create_topic(name):
             conn.commit()
             row = conn.execute("SELECT * FROM review_topics WHERE id = ?", (cur.lastrowid,)).fetchone()
             return _row_to_topic(row)
+        except DuplicateNameError:
+            raise
         except Exception:
             logger.exception("review_store.create_topic failed for %s", name)
             return None
@@ -243,8 +268,15 @@ def rename_topic(topic_id, name):
     with _lock:
         try:
             conn = _get_conn()
+            if conn.execute(
+                "SELECT id FROM review_topics WHERE LOWER(name) = LOWER(?) AND id != ?",
+                (name, topic_id),
+            ).fetchone():
+                raise DuplicateNameError(f'A topic named "{name}" already exists.')
             conn.execute("UPDATE review_topics SET name = ? WHERE id = ?", (name, topic_id))
             conn.commit()
+        except DuplicateNameError:
+            raise
         except Exception:
             logger.exception("review_store.rename_topic failed for %s", topic_id)
 
@@ -284,6 +316,11 @@ def create_subject(topic_id, name, color, linked_task_id=None):
     with _lock:
         try:
             conn = _get_conn()
+            if conn.execute(
+                "SELECT id FROM review_subjects WHERE topic_id = ? AND LOWER(name) = LOWER(?)",
+                (topic_id, name),
+            ).fetchone():
+                raise DuplicateNameError(f'A subject named "{name}" already exists in this topic.')
             cur = conn.execute(
                 "INSERT INTO review_subjects (topic_id, name, color, linked_task_id) VALUES (?, ?, ?, ?)",
                 (topic_id, name, color, linked_task_id),
@@ -291,6 +328,8 @@ def create_subject(topic_id, name, color, linked_task_id=None):
             conn.commit()
             row = conn.execute("SELECT * FROM review_subjects WHERE id = ?", (cur.lastrowid,)).fetchone()
             return _row_to_subject(row)
+        except DuplicateNameError:
+            raise
         except Exception:
             logger.exception("review_store.create_subject failed for topic %s", topic_id)
             return None
@@ -369,6 +408,11 @@ def create_problem(
     with _lock:
         try:
             conn = _get_conn()
+            if conn.execute(
+                "SELECT id FROM review_problems WHERE subject_id = ? AND LOWER(name) = LOWER(?)",
+                (subject_id, name),
+            ).fetchone():
+                raise DuplicateNameError(f'A problem named "{name}" already exists in this subject.')
             cur = conn.execute(
                 """
                 INSERT INTO review_problems (
@@ -385,6 +429,8 @@ def create_problem(
             )
             conn.commit()
             problem_id = cur.lastrowid
+        except DuplicateNameError:
+            raise
         except Exception:
             logger.exception("review_store.create_problem failed for %s", name)
             return None
@@ -427,6 +473,11 @@ def update_problem(
     with _lock:
         try:
             conn = _get_conn()
+            if conn.execute(
+                "SELECT id FROM review_problems WHERE subject_id = ? AND LOWER(name) = LOWER(?) AND id != ?",
+                (subject_id, name, problem_id),
+            ).fetchone():
+                raise DuplicateNameError(f'A problem named "{name}" already exists in this subject.')
             conn.execute(
                 """
                 UPDATE review_problems SET
@@ -441,6 +492,8 @@ def update_problem(
                 ),
             )
             conn.commit()
+        except DuplicateNameError:
+            raise
         except Exception:
             logger.exception("review_store.update_problem failed for %s", problem_id)
             return None
@@ -467,24 +520,16 @@ def abandon_review(session_token):
     _active_sessions.pop(session_token, None)
 
 
-def finish_review(session_token, self_solved=True, shakiness=3):
-    """Ends a review started via start_review(): logs the session, bumps
-    review_count/last_reviewed_at, and reschedules the problem.
-
-    self_solved=True  → advance schedule stage; update fastest_time if new best.
-    self_solved=False → keep stage; schedule tomorrow; fastest_time unchanged.
-    shakiness (1–5)   → 1 solid, 5 very shaky; higher shakiness shortens the
-                        next interval (only applies when self_solved=True).
-
-    Returns the updated problem dict, or None if the token is unknown/already used."""
-    entry = _active_sessions.pop(session_token, None)
-    if entry is None:
-        return None
-
-    started_at = entry["started_at"]
+def _apply_review_outcome(problem_id, duration_seconds, self_solved, shakiness, started_at=None):
+    """Shared by finish_review() and record_first_attempt(): logs the
+    session, bumps review_count/last_reviewed_at, updates fastest_time,
+    reschedules, and (once, from review_count == 0) records first_attempt_*
+    stats. `started_at` defaults to finished_at - duration_seconds when the
+    caller (record_first_attempt) never had a start_review() token to carry
+    a real one."""
     finished_at = datetime.now()
-    duration_seconds = max(0, int((finished_at - started_at).total_seconds()))
-    problem_id = entry["problem_id"]
+    if started_at is None:
+        started_at = finished_at - timedelta(seconds=duration_seconds)
 
     with _lock:
         try:
@@ -497,8 +542,15 @@ def finish_review(session_token, self_solved=True, shakiness=3):
                 return None
 
             conn.execute(
-                "INSERT INTO review_sessions (problem_id, started_at, finished_at, duration_seconds) VALUES (?, ?, ?, ?)",
-                (problem_id, started_at.isoformat(), finished_at.isoformat(), duration_seconds),
+                """
+                INSERT INTO review_sessions
+                    (problem_id, started_at, finished_at, duration_seconds, self_solved, shakiness)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    problem_id, started_at.isoformat(), finished_at.isoformat(), duration_seconds,
+                    int(self_solved), shakiness if self_solved else None,
+                ),
             )
 
             fastest = row["fastest_time_seconds"]
@@ -518,9 +570,12 @@ def finish_review(session_token, self_solved=True, shakiness=3):
             # subsequent UPDATEs never touch these columns again, so they
             # stay a permanent record of how the very first attempt went
             # even after later attempts change fastest_time_seconds/stage.
+            # Shakiness only means anything for a solved attempt -- "checked
+            # the answer" never collects it, so it must never be persisted
+            # (or later displayed) as if it had been.
             is_first_attempt = row["review_count"] == 0
             first_attempt_seconds = duration_seconds if is_first_attempt else None
-            first_attempt_shakiness = shakiness if is_first_attempt else None
+            first_attempt_shakiness = shakiness if (is_first_attempt and self_solved) else None
             first_attempt_self_solved = int(self_solved) if is_first_attempt else None
 
             conn.execute(
@@ -545,7 +600,7 @@ def finish_review(session_token, self_solved=True, shakiness=3):
             )
             conn.commit()
         except Exception:
-            logger.exception("review_store.finish_review failed for problem %s", problem_id)
+            logger.exception("review_store._apply_review_outcome failed for problem %s", problem_id)
             try:
                 conn.rollback()
             except Exception:
@@ -553,3 +608,61 @@ def finish_review(session_token, self_solved=True, shakiness=3):
             return None
 
     return get_problem(problem_id)
+
+
+def finish_review(session_token, self_solved=True, shakiness=3):
+    """Ends a review started via start_review(): logs the session, bumps
+    review_count/last_reviewed_at, and reschedules the problem.
+
+    self_solved=True  → advance schedule stage; update fastest_time if new best.
+    self_solved=False → keep stage; schedule tomorrow; fastest_time unchanged.
+    shakiness (1–5)   → 1 solid, 5 very shaky; higher shakiness shortens the
+                        next interval (only applies when self_solved=True).
+
+    Returns the updated problem dict, or None if the token is unknown/already used."""
+    entry = _active_sessions.pop(session_token, None)
+    if entry is None:
+        return None
+
+    started_at = entry["started_at"]
+    duration_seconds = max(0, int((datetime.now() - started_at).total_seconds()))
+    return _apply_review_outcome(
+        entry["problem_id"], duration_seconds, self_solved, shakiness, started_at=started_at
+    )
+
+
+def list_sessions(problem_id):
+    """Full log of every review ever finished for a problem -- start/finish
+    time, duration, and outcome (self_solved/shakiness), newest first. This
+    is the raw history behind the aggregate stats (fastest time, review
+    count, first-attempt snapshot) shown elsewhere."""
+    with _lock:
+        try:
+            conn = _get_conn()
+            rows = conn.execute(
+                "SELECT * FROM review_sessions WHERE problem_id = ? ORDER BY finished_at DESC",
+                (problem_id,),
+            ).fetchall()
+            return [
+                {
+                    "id": row["id"],
+                    "startedAt": row["started_at"],
+                    "finishedAt": row["finished_at"],
+                    "durationSeconds": row["duration_seconds"],
+                    "selfSolved": bool(row["self_solved"]) if row["self_solved"] is not None else None,
+                    "shakiness": row["shakiness"],
+                }
+                for row in rows
+            ]
+        except Exception:
+            logger.exception("review_store.list_sessions failed for problem %s", problem_id)
+            return []
+
+
+def record_first_attempt(problem_id, duration_seconds, self_solved=True, shakiness=3):
+    """Records a review that was timed *before* the problem's form was ever
+    filled in -- the Add Problem dialog's "Start First Attempt" button opens
+    a bare timer with no problem_id to attach a start_review() token to, so
+    this takes the elapsed seconds directly once the problem has actually
+    been saved. Same scoring/scheduling as finish_review()."""
+    return _apply_review_outcome(problem_id, max(0, int(duration_seconds)), self_solved, shakiness)
