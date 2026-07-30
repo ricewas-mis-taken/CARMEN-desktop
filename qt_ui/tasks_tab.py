@@ -193,6 +193,7 @@ class _TaskCard(QFrame):
         self._duration_minutes_text = ""
         self._hovering = False
         self._cash_in_balance_int = 0
+        self._logged_minutes_today = 0
 
         self.setProperty("class", "TaskCard")
         self.setFixedWidth(CARD_WIDTH)
@@ -566,11 +567,20 @@ class _TaskCard(QFrame):
     def _end_task(self):
         session_manager.end_session(end_type="manual")
 
+    def _cash_in_max(self):
+        # Capped at how much is actually left to fill the bar today --
+        # today's required minutes (already reduced by whatever's been
+        # cashed in so far) minus whatever's genuinely been worked, not the
+        # whole banked balance. Cashing in more than that would just burn
+        # vacation minutes for no visible effect.
+        remaining = max(0, int(self._today_required_minutes()) - int(self._logged_minutes_today))
+        return min(self._cash_in_balance_int, remaining)
+
     def _open_cash_in_editor(self):
-        if self._cash_in_balance_int <= 0:
+        if self._cash_in_max() <= 0:
             return
         self._cash_in_edit.setText("")
-        self._cash_in_max_label.setText(f"/ {self._cash_in_balance_int}")
+        self._cash_in_max_label.setText(f"/ {self._cash_in_max()}")
         self._cash_in_row.setVisible(True)
         self._cash_in_edit.setFocus()
 
@@ -582,10 +592,11 @@ class _TaskCard(QFrame):
             minutes = int(self._cash_in_edit.text())
         except ValueError:
             return
-        if minutes <= 0 or minutes > self._cash_in_balance_int:
+        cap = self._cash_in_max()
+        if minutes <= 0 or minutes > cap:
             QMessageBox.warning(
                 self, "Carmen Focus",
-                f"Enter a whole number of minutes between 1 and {self._cash_in_balance_int}.",
+                f"Enter a whole number of minutes between 1 and {cap} (today's remaining time).",
             )
             return
         sessions = session_history.load_all()
@@ -598,7 +609,7 @@ class _TaskCard(QFrame):
         self._on_changed()
 
     def _refresh_cash_in_visibility(self):
-        can_cash_in = self._cash_in_balance_int > 0 and not self._is_running()
+        can_cash_in = self._cash_in_max() > 0 and not self._is_running()
         self._vacation_label.setEnabled(can_cash_in)
         self._vacation_label.setCursor(Qt.PointingHandCursor if can_cash_in else Qt.ArrowCursor)
 
@@ -618,13 +629,24 @@ class _TaskCard(QFrame):
         required = self._today_required_minutes()
         logged_seconds = tasks_store.logged_seconds_for_date(self._task, today, sessions, live_status=status)
         logged_minutes = logged_seconds / 60
+        self._logged_minutes_today = logged_minutes
 
-        pct = 100 if required <= 0 else min(100, int(logged_minutes / required * 100))
-        self._progress_bar.setValue(pct if (required > 0 or logged_minutes > 0) else 0)
-        if required <= 0:
-            self._progress_label.setText(f"{_format_minutes(logged_minutes)} logged")
+        # The bar/label count today's cashed-in vacation minutes as if they
+        # were worked, against the *original* (un-reduced) target -- so
+        # cashing in visibly fills the bar instead of just shrinking the
+        # goal underneath an unchanged 0/X display. required_minutes_for_date
+        # already subtracts today's cash-ins from the target, so adding them
+        # back on both sides recovers the original target as the denominator.
+        today_cashed = (self._task.get("cashedInDates") or {}).get(today.isoformat(), 0)
+        display_required = required + today_cashed
+        display_logged = logged_minutes + today_cashed
+
+        pct = 100 if display_required <= 0 else min(100, int(display_logged / display_required * 100))
+        self._progress_bar.setValue(pct if (display_required > 0 or display_logged > 0) else 0)
+        if display_required <= 0:
+            self._progress_label.setText(f"{_format_minutes(display_logged)} logged")
         else:
-            self._progress_label.setText(f"{_format_minutes(logged_minutes)} of {_format_minutes(required)}")
+            self._progress_label.setText(f"{_format_minutes(display_logged)} of {_format_minutes(display_required)}")
 
         balance = tasks_store.vacation_balance_minutes(self._task, sessions)
         # Round rather than truncate -- a 0.97m balance reads as "1m banked"
@@ -657,15 +679,22 @@ class _TaskCard(QFrame):
             paused = " (paused)" if status.get("isPaused") else ""
             violations = status.get("violationCount", 0)
             violation_text = f"  •  {violations} violation{'s' if violations != 1 else ''}" if violations else ""
+            # Elapsed, not remaining, for both burnout and fixed-duration
+            # sessions -- computed pause-aware from startTime/violationLog
+            # (same math as the day's logged-minutes tally) rather than from
+            # secondsRemaining against a duration this card would otherwise
+            # have to remember, which also makes it correct even for a card
+            # that's rebuilt mid-session (e.g. after the app restarts).
+            elapsed_seconds = tasks_store.worked_seconds(
+                status.get("startTime"), None, status.get("violationLog")
+            ) if status.get("startTime") else 0
+            el_minutes, el_seconds = divmod(elapsed_seconds, 60)
             if self._active_is_burnout:
-                elapsed_seconds = max(0, tasks_store.BURNOUT_MINUTES * 60 - status.get("secondsRemaining", 0))
-                el_minutes, el_seconds = divmod(int(elapsed_seconds), 60)
                 self._countdown_label.setText(
                     f"UNTIL BURNOUT - elapsed {el_minutes}m {el_seconds}s{paused}{violation_text}"
                 )
             else:
-                minutes, seconds = divmod(status.get("secondsRemaining", 0), 60)
-                self._countdown_label.setText(f"{minutes}m {seconds}s remaining{paused}{violation_text}")
+                self._countdown_label.setText(f"{el_minutes}m {el_seconds}s elapsed{paused}{violation_text}")
             self._pause_button.setText("Resume" if status.get("isPaused") else "Pause")
         else:
             self._running_panel.setVisible(False)

@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWi
 import history_gui
 import picker_gui
 import session_manager
+import tasks_store
 import qt_ui.nuclear_dialog as nuclear_dialog
 from qt_ui.next_up_widget import NextUpLabel
 
@@ -114,7 +115,13 @@ class FocusTab(QWidget):
         if not active:
             self._status_label.setText("No active focus session.")
             return
-        minutes, seconds = divmod(status["secondsRemaining"], 60)
+        # Elapsed, not remaining -- pause-aware, computed from startTime/
+        # violationLog rather than secondsRemaining against the session's
+        # duration.
+        elapsed_seconds = tasks_store.worked_seconds(
+            status.get("startTime"), None, status.get("violationLog")
+        ) if status.get("startTime") else 0
+        minutes, seconds = divmod(elapsed_seconds, 60)
         paused = " (paused)" if status["isPaused"] else ""
         source_note = ""
         if status.get("source") == "calendar-event" and status.get("eventTitle"):
@@ -122,7 +129,7 @@ class FocusTab(QWidget):
         elif status.get("source") == "task" and status.get("eventTitle"):
             source_note = f"\nTask: {status['eventTitle']}"
         self._status_label.setText(
-            f"Active session{paused} — {minutes}m {seconds}s remaining\n"
+            f"Active session{paused} — {minutes}m {seconds}s elapsed\n"
             f"Lock mode: {status['lockMode']}   Violations: {status['violationCount']}"
             f"{source_note}"
         )

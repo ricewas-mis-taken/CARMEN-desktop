@@ -11,9 +11,13 @@ import session_manager
 
 def soft_lock_warning(offending_process_name=None):
     status = session_manager.get_status()
-    last_ok = status["lastAcceptableProcess"] or "your focus app"
+    if status.get("source") == "review":
+        message = f"Finish {status.get('eventTitle') or 'this review'} first"
+    else:
+        last_ok = status["lastAcceptableProcess"] or "your focus app"
+        message = f"You're off track — back to {last_ok}?"
     _show_lock_overlay(
-        f"You're off track — back to {last_ok}?",
+        message,
         duration_ms=5000,
         offending_process_name=offending_process_name,
     )
@@ -73,9 +77,14 @@ def hard_lock_redirect(offending_process_name=None):
             pass
 
     label = offending_process_name or hwnd_process or "that app"
-    back_to = last_acceptable or "your focus app"
+    status = session_manager.get_status()
+    if status.get("source") == "review":
+        message = f"Finish {status.get('eventTitle') or 'this review'} first"
+    else:
+        back_to = last_acceptable or "your focus app"
+        message = f"Redirected from {label} — back to {back_to}."
     _show_lock_overlay(
-        f"Redirected from {label} — back to {back_to}.",
+        message,
         duration_ms=3000,
         offending_process_name=label if label != "that app" else None,
     )

@@ -377,6 +377,63 @@ def create_problem(
     return get_problem(problem_id)
 
 
+def update_problem(
+    problem_id, subject_id, name, stars, description_type,
+    description_text=None, description_link=None,
+    photo_bytes=None, photo_filename=None,
+):
+    """Edits a problem's editable fields (right-click > Edit Problem in the
+    Review tab). Review history/schedule (review_count, last_reviewed_at,
+    fastest_time_seconds, schedule_stage, next_review_date) is untouched --
+    editing details isn't a review attempt. A new photo is only saved (and
+    the old file left behind, matching create_problem/save_photo_bytes'
+    never-delete-old-files behavior) when photo_bytes is given; otherwise
+    the existing description_photo_path is kept as-is."""
+    if description_type not in ("text", "photo", "link"):
+        return None
+
+    with _lock:
+        try:
+            conn = _get_conn()
+            row = conn.execute(
+                "SELECT description_photo_path FROM review_problems WHERE id = ?", (problem_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            photo_path = row["description_photo_path"]
+        except Exception:
+            logger.exception("review_store.update_problem failed to load %s", problem_id)
+            return None
+
+    if description_type == "photo" and photo_bytes is not None:
+        photo_path = save_photo_bytes(photo_bytes, photo_filename)
+    elif description_type != "photo":
+        photo_path = None
+
+    with _lock:
+        try:
+            conn = _get_conn()
+            conn.execute(
+                """
+                UPDATE review_problems SET
+                    subject_id = ?, name = ?, stars = ?, description_type = ?,
+                    description_text = ?, description_photo_path = ?, description_link = ?
+                WHERE id = ?
+                """,
+                (
+                    subject_id, name, stars, description_type,
+                    description_text, photo_path, description_link,
+                    problem_id,
+                ),
+            )
+            conn.commit()
+        except Exception:
+            logger.exception("review_store.update_problem failed for %s", problem_id)
+            return None
+
+    return get_problem(problem_id)
+
+
 def start_review(problem_id):
     """Logs a start timestamp for a review attempt in memory (not sqlite --
     see _active_sessions above) and hands back an opaque token the caller
