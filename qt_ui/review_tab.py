@@ -88,6 +88,18 @@ def _relative_time(iso_datetime_string):
     return f"{days} day{'s' if days != 1 else ''} ago"
 
 
+def _first_attempt_text(problem):
+    """None if this problem was never started via "Add & Start First
+    Attempt" -- older/regular problems just don't have this stat."""
+    seconds = problem.get("firstAttemptSeconds")
+    if seconds is None:
+        return None
+    shakiness = problem.get("firstAttemptShakiness")
+    solved = problem.get("firstAttemptSelfSolved")
+    outcome = "solved it" if solved else "checked the answer"
+    return f"First attempt: {_format_mmss(seconds)}, shakiness {shakiness}/5 ({outcome})"
+
+
 def _build_description_content(layout, problem):
     description_type = problem["descriptionType"]
     if description_type == "text":
@@ -506,7 +518,21 @@ class _TopicView(QWidget):
         self.refresh()
 
     def _open_add_problem(self):
-        _register_popup(_AddProblemDialog(self._topic_id, on_added=lambda _p: self.refresh()))
+        _register_popup(_AddProblemDialog(
+            self._topic_id, on_added=lambda _p: self.refresh(),
+            on_start_first_attempt=self._start_first_attempt,
+        ))
+
+    def _start_first_attempt(self, problem):
+        # The problem was just created (from the Add Problem dialog's "Add &
+        # Start First Attempt" button), so intent to review it right now is
+        # already explicit -- skip _ReviewStartDialog's confirmation step
+        # and go straight into _begin_review, same as clicking "Start" would
+        # once that dialog's own Start button is clicked.
+        self.refresh()
+        if self._review_tab and not self._review_tab.can_start_review():
+            return
+        self._begin_review(problem)
 
 
 class _ReviewBanner(QWidget):
@@ -813,6 +839,12 @@ class _ReviewStartDialog(QWidget):
         stats_row.addWidget(attempts_label)
         layout.addLayout(stats_row)
 
+        first_attempt_text = _first_attempt_text(problem)
+        if first_attempt_text:
+            first_attempt_label = QLabel(first_attempt_text)
+            first_attempt_label.setStyleSheet("font-size: 12px; color: #5A6070;")
+            layout.addWidget(first_attempt_label)
+
         _build_description_content(layout, problem)
 
         start_button = QPushButton("Start")
@@ -936,6 +968,12 @@ class _DescriptionPopup(QWidget):
         stars_label.setStyleSheet("color: #F5A623; font-size: 14px;")
         layout.addWidget(stars_label)
 
+        first_attempt_text = _first_attempt_text(problem)
+        if first_attempt_text:
+            first_attempt_label = QLabel(first_attempt_text)
+            first_attempt_label.setStyleSheet("font-size: 12px; color: #5A6070;")
+            layout.addWidget(first_attempt_label)
+
         _build_description_content(layout, problem)
 
         self.show()
@@ -992,7 +1030,7 @@ class _AddProblemDialog(QWidget):
     instead of create_problem. Review history/schedule fields aren't shown
     here at all, so editing can't touch them."""
 
-    def __init__(self, topic_id, on_added, problem=None):
+    def __init__(self, topic_id, on_added, problem=None, on_start_first_attempt=None):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self._editing = problem is not None
@@ -1000,6 +1038,7 @@ class _AddProblemDialog(QWidget):
         self.resize(420, 580)
         self._topic_id = topic_id
         self._on_added = on_added
+        self._on_start_first_attempt = on_start_first_attempt
         self._problem = problem
         self._photo_path = None
 
@@ -1088,6 +1127,13 @@ class _AddProblemDialog(QWidget):
         cancel_button = QPushButton("Cancel")
         cancel_button.clicked.connect(self.close)
         button_row.addWidget(cancel_button)
+        # Only offered when adding (not editing) and the caller wired up a
+        # handler -- editing an existing problem has nothing to "attempt"
+        # here, and _TopicView is the only caller that passes the handler.
+        if not self._editing and self._on_start_first_attempt is not None:
+            first_attempt_button = QPushButton("Add & Start First Attempt")
+            first_attempt_button.clicked.connect(self._submit_and_start_first_attempt)
+            button_row.addWidget(first_attempt_button)
         submit_button = QPushButton("Save" if self._editing else "Add")
         submit_button.setProperty("class", "AccentButton")
         submit_button.clicked.connect(self._submit)
@@ -1171,15 +1217,20 @@ class _AddProblemDialog(QWidget):
         else:
             self._photo_preview.setText("Could not preview this image.")
 
-    def _submit(self):
+    def _gather_and_save(self):
+        """Validates the form and creates/updates the problem. Returns the
+        saved problem dict, or None (with an explanatory _status_label
+        already set) if validation or the save itself failed -- shared by
+        both submit paths (_submit and _submit_and_start_first_attempt) so
+        they can't drift out of sync on what counts as a valid problem."""
         name = self._name_edit.text().strip()
         if not name:
             self._status_label.setText("Name is required.")
-            return
+            return None
         subject_id = self._subject_combo.currentData()
         if subject_id is None:
             self._status_label.setText("Add a subject first.")
-            return
+            return None
         stars = self._star_picker.value()
 
         description_type = None
@@ -1193,7 +1244,7 @@ class _AddProblemDialog(QWidget):
             description_text = self._text_edit.toPlainText().strip()
             if not description_text:
                 self._status_label.setText("Description text is required.")
-                return
+                return None
         elif self._photo_button.isChecked():
             description_type = "photo"
             has_existing_photo = self._editing and self._problem.get("descriptionPhotoPath")
@@ -1203,7 +1254,7 @@ class _AddProblemDialog(QWidget):
                 photo_filename = os.path.basename(self._photo_path)
             elif not has_existing_photo:
                 self._status_label.setText("Choose an image.")
-                return
+                return None
             # else: editing and keeping the existing photo -- photo_bytes
             # stays None, which tells update_problem to leave it alone.
         else:
@@ -1211,7 +1262,7 @@ class _AddProblemDialog(QWidget):
             description_link = self._link_edit.text().strip()
             if not _URL_RE.match(description_link):
                 self._status_label.setText("Enter a valid URL (e.g. https://example.com).")
-                return
+                return None
 
         if self._editing:
             problem = review_store.update_problem(
@@ -1227,10 +1278,22 @@ class _AddProblemDialog(QWidget):
             )
         if problem is None:
             self._status_label.setText("Could not save this problem.")
-            return
+            return None
+        return problem
 
+    def _submit(self):
+        problem = self._gather_and_save()
+        if problem is None:
+            return
         self.close()
         self._on_added(problem)
+
+    def _submit_and_start_first_attempt(self):
+        problem = self._gather_and_save()
+        if problem is None:
+            return
+        self.close()
+        self._on_start_first_attempt(problem)
 
 
 def _bold_label(text):

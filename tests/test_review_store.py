@@ -106,6 +106,25 @@ def test_finish_review_updates_counters_and_reschedules(isolate_review_db):
     assert review_store.finish_review(token) is None
 
 
+def test_finish_review_records_first_attempt_once(isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    assert problem["firstAttemptSeconds"] is None
+
+    token = review_store.start_review(problem["id"])
+    first = review_store.finish_review(token, self_solved=True, shakiness=4)
+    assert first["firstAttemptSeconds"] is not None
+    assert first["firstAttemptShakiness"] == 4
+    assert first["firstAttemptSelfSolved"] is True
+
+    # A second attempt must not overwrite the first attempt's stats.
+    token2 = review_store.start_review(problem["id"])
+    second = review_store.finish_review(token2, self_solved=True, shakiness=1)
+    assert second["firstAttemptShakiness"] == 4
+
+
 def test_fastest_time_only_updates_when_faster(isolate_review_db, monkeypatch):
     topic, subject = _make_topic_and_subject()
     problem = review_store.create_problem(
