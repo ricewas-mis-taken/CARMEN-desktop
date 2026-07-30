@@ -42,6 +42,8 @@ def isolate_state(tmp_path, monkeypatch):
         "source": "manual",
         "eventId": None,
         "eventTitle": None,
+        "reviewProblemName": None,
+        "reviewSubjectName": None,
     }
     monkeypatch.setattr(session_manager, "_state", copy.deepcopy(fresh_state))
     monkeypatch.setattr(session_manager, "_open_violation_index", {"process": None, "domain": None})

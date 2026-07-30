@@ -204,3 +204,33 @@ def test_begin_review_starts_and_ends_linked_task_session(
     dlg._submit()
 
     assert not session_manager.is_active(), "session should end when review finishes"
+
+
+def test_pause_button_visible_for_standalone_review(qtbot, isolate_review_db, isolate_state):
+    """A review not linked to any task session (no underlying session_manager
+    session to pause) must still show a working Pause button on its own
+    timer -- previously it was hidden whenever end_session_on_finish was
+    False, which is every review except ones tied to a linked task."""
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve for x", stars=3,
+        description_type="text", description_text="factor",
+    )
+
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    tab.show()
+    view = tab._topic_views[topic["id"]]
+
+    assert not session_manager.is_active()
+    view._begin_review(problem)
+    assert not session_manager.is_active(), "standalone review must not start a task session"
+
+    banner = view._review_banner
+    assert banner._pause_btn.isVisible()
+    assert banner._pause_btn.text() == "Pause"
+
+    banner._pause_resume()
+    assert banner._pause_btn.text() == "Resume"
+    banner._pause_resume()
+    assert banner._pause_btn.text() == "Pause"

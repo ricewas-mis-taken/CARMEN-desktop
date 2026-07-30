@@ -481,7 +481,12 @@ class _TaskCard(QFrame):
         layout.setSpacing(6)
 
         self._countdown_label = QLabel()
-        self._countdown_label.setStyleSheet("font-size: 24px; font-weight: 700; color: #1F2328;")
+        # Word-wrapped and sized down from the original 24px -- the
+        # review-linked text ("<problem> in session, subject <subject>, time
+        # elapsed Xm Ys") runs well past the card's width as one line at
+        # 24px, and got clipped instead of wrapping to a second row.
+        self._countdown_label.setWordWrap(True)
+        self._countdown_label.setStyleSheet("font-size: 18px; font-weight: 700; color: #1F2328;")
         layout.addWidget(self._countdown_label)
 
         _running_btn_style = (
@@ -618,11 +623,20 @@ class _TaskCard(QFrame):
     def _today_required_minutes(self):
         return tasks_store.required_minutes_for_date(self._task, date.today())
 
+    def _belongs_to_this_task(self, status):
+        # "review" sessions (a review timer started against this task's
+        # linked topic, see qt_ui/review_tab.py's _begin_review) run under
+        # this task's eventId too -- without treating them as "this task's
+        # session" the same as source="task", the card would read as locked
+        # by some other session for the whole review instead of showing its
+        # own running panel.
+        return status.get("source") in ("task", "review") and status.get("eventId") == self._task["id"]
+
     def _is_locked_by_other_session(self):
         status = session_manager.get_status()
         if not status["isActive"]:
             return False
-        return not (status.get("source") == "task" and status.get("eventId") == self._task["id"])
+        return not self._belongs_to_this_task(status)
 
     def update_dynamic(self, status, sessions):
         today = date.today()
@@ -665,7 +679,7 @@ class _TaskCard(QFrame):
         self._vacation_label.setText(elided)
         self._vacation_label.setToolTip(vacation_text if elided != vacation_text else "")
 
-        is_running = status.get("isActive") and status.get("source") == "task" and status.get("eventId") == self._task["id"]
+        is_running = status.get("isActive") and self._belongs_to_this_task(status)
         locked_by_other = self._is_locked_by_other_session()
         self._refresh_cash_in_visibility()
 
@@ -689,7 +703,18 @@ class _TaskCard(QFrame):
                 status.get("startTime"), None, status.get("violationLog")
             ) if status.get("startTime") else 0
             el_minutes, el_seconds = divmod(elapsed_seconds, 60)
-            if self._active_is_burnout:
+            review_problem = status.get("source") == "review" and status.get("reviewProblemName")
+            if review_problem:
+                # A review timer (started against this task's linked topic)
+                # is running underneath the task session -- name the actual
+                # problem/subject being reviewed instead of the generic
+                # elapsed-time text, same as the Focus tab.
+                subject = status.get("reviewSubjectName") or "—"
+                self._countdown_label.setText(
+                    f"{review_problem} in session, subject {subject}, "
+                    f"time elapsed {el_minutes}m {el_seconds}s{paused}{violation_text}"
+                )
+            elif self._active_is_burnout:
                 self._countdown_label.setText(
                     f"UNTIL BURNOUT - elapsed {el_minutes}m {el_seconds}s{paused}{violation_text}"
                 )
@@ -708,4 +733,4 @@ class _TaskCard(QFrame):
 
     def _is_running(self):
         status = session_manager.get_status()
-        return status.get("isActive") and status.get("source") == "task" and status.get("eventId") == self._task["id"]
+        return status.get("isActive") and self._belongs_to_this_task(status)

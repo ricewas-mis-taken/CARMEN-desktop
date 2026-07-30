@@ -505,6 +505,8 @@ class _TopicView(QWidget):
                     source="review",
                     event_id=task["id"],
                     event_title=f"{task['name']} - {problem['subjectName']} review",
+                    review_problem_name=problem["name"],
+                    review_subject_name=problem["subjectName"],
                 )
                 end_session_on_finish = True
 
@@ -544,6 +546,7 @@ class _ReviewBanner(QWidget):
         self._problem = None
         self._start_time = None
         self._accumulated_seconds = 0
+        self._is_paused = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -577,6 +580,15 @@ class _ReviewBanner(QWidget):
 
         self._pause_btn = QPushButton("Pause")
         self._pause_btn.setFixedWidth(80)
+        # Explicit styling rather than relying on bare OS-default QPushButton
+        # look (there's no unclassed QPushButton rule in styles.qss outside
+        # #PopupBg) -- unstyled, it was easy to miss against this card's
+        # light #EAF2FF background.
+        self._pause_btn.setStyleSheet(
+            "QPushButton { background: #FFFFFF; color: #1F2328; "
+            "border: 1px solid #BDD4F7; border-radius: 6px; font-weight: 600; padding: 6px 0; }"
+            "QPushButton:hover { background: #DCE9FF; }"
+        )
         self._pause_btn.clicked.connect(self._pause_resume)
         btn_row.addWidget(self._pause_btn)
 
@@ -613,6 +625,16 @@ class _ReviewBanner(QWidget):
         self.hide()
 
     def _elapsed_seconds_now(self):
+        if self._end_session_on_finish:
+            # Pause-aware off the linked task session's own startTime/
+            # violationLog (same math as the Tasks tab's running card) --
+            # this session can be paused/resumed from either tab, so its own
+            # local start_time/accumulated_seconds bookkeeping (below)
+            # can't be trusted to reflect a pause that happened elsewhere.
+            status = session_manager.get_status()
+            if not status.get("startTime"):
+                return 0
+            return tasks_store.worked_seconds(status["startTime"], None, status.get("violationLog"))
         if self._start_time is None:
             return self._accumulated_seconds
         return self._accumulated_seconds + int((datetime.now() - self._start_time).total_seconds())
@@ -623,28 +645,53 @@ class _ReviewBanner(QWidget):
         self._end_session_on_finish = end_session_on_finish
         self._start_time = datetime.now()
         self._accumulated_seconds = 0
+        self._is_paused = False
         self._problem_label.setText(f"Reviewing: {problem['name']}")
         self._timer_label.setText("00:00")
         self._pause_btn.setText("Pause")
-        self._pause_btn.setVisible(end_session_on_finish)
+        # Always available -- pausing here freezes the review's own elapsed
+        # timer (and _start_first_attempt.../ordinary reviews that aren't
+        # tied to a linked task session still get to pause) rather than only
+        # showing up when there happens to be an underlying session to pause.
+        self._pause_btn.setVisible(True)
         self._tick_timer.start(1000)
         self.show()
 
+    def _currently_paused(self):
+        # When a linked task session is driving this review, session_manager
+        # is the source of truth for pause state -- it can also be
+        # paused/resumed from the Tasks tab's own Pause button on the same
+        # underlying session, and this banner needs to reflect that instead
+        # of drifting out of sync with its own separate _is_paused flag.
+        # Otherwise (a standalone review with no linked session) there's
+        # nothing external to defer to, so _is_paused is authoritative.
+        if self._end_session_on_finish:
+            return session_manager.get_status().get("isPaused", False)
+        return self._is_paused
+
     def _tick(self):
-        self._timer_label.setText(_format_mmss(self._elapsed_seconds_now()))
-        if self._pause_btn.isVisible():
-            status = session_manager.get_status()
-            self._pause_btn.setText("Resume" if status.get("isPaused") else "Pause")
+        is_paused = self._currently_paused()
+        self._pause_btn.setText("Resume" if is_paused else "Pause")
+        if not is_paused:
+            self._timer_label.setText(_format_mmss(self._elapsed_seconds_now()))
 
     def _pause_resume(self):
-        status = session_manager.get_status()
-        if status.get("isPaused"):
-            session_manager.resume_session()
+        if self._currently_paused():
+            self._is_paused = False
             self._start_time = datetime.now()
+            self._pause_btn.setText("Pause")
+            # A linked task session is paused/resumed alongside the review
+            # timer -- otherwise pausing the review would leave the task
+            # session's own clock (and enforcement) running underneath it.
+            if self._end_session_on_finish:
+                session_manager.resume_session()
         else:
+            self._is_paused = True
             self._accumulated_seconds = self._elapsed_seconds_now()
             self._start_time = None
-            session_manager.pause_session()
+            self._pause_btn.setText("Resume")
+            if self._end_session_on_finish:
+                session_manager.pause_session()
 
     def _end_early(self):
         self._tick_timer.stop()
