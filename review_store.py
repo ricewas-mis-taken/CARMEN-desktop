@@ -89,6 +89,9 @@ def _init_schema(conn):
             fastest_time_seconds INTEGER,
             schedule_stage INTEGER NOT NULL DEFAULT 0,
             next_review_date DATE NOT NULL,
+            first_attempt_seconds INTEGER,
+            first_attempt_shakiness INTEGER,
+            first_attempt_self_solved INTEGER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -118,6 +121,14 @@ def _init_schema(conn):
     if "linked_task_id" not in topic_cols:
         conn.execute("ALTER TABLE review_topics ADD COLUMN linked_task_id TEXT")
         conn.commit()
+
+    # Add first_attempt_* columns to review_problems for DBs that predate them
+    # ("Start First Attempt" from the Add Problem dialog).
+    problem_cols = {row[1] for row in conn.execute("PRAGMA table_info(review_problems)").fetchall()}
+    for col in ("first_attempt_seconds", "first_attempt_shakiness", "first_attempt_self_solved"):
+        if col not in problem_cols:
+            conn.execute(f"ALTER TABLE review_problems ADD COLUMN {col} INTEGER")
+            conn.commit()
 
 
 def _row_to_topic(row):
@@ -158,6 +169,9 @@ def _row_to_problem(row):
         "fastestTimeSeconds": row["fastest_time_seconds"],
         "scheduleStage": row["schedule_stage"],
         "nextReviewDate": row["next_review_date"],
+        "firstAttemptSeconds": row["first_attempt_seconds"],
+        "firstAttemptShakiness": row["first_attempt_shakiness"],
+        "firstAttemptSelfSolved": bool(row["first_attempt_self_solved"]) if row["first_attempt_self_solved"] is not None else None,
     }
 
 
@@ -476,7 +490,7 @@ def finish_review(session_token, self_solved=True, shakiness=3):
         try:
             conn = _get_conn()
             row = conn.execute(
-                "SELECT stars, schedule_stage, fastest_time_seconds FROM review_problems WHERE id = ?",
+                "SELECT stars, schedule_stage, fastest_time_seconds, review_count FROM review_problems WHERE id = ?",
                 (problem_id,),
             ).fetchone()
             if row is None:
@@ -500,6 +514,15 @@ def finish_review(session_token, self_solved=True, shakiness=3):
                     row["schedule_stage"], row["stars"]
                 )
 
+            # is_first_attempt is captured once, from review_count == 0 --
+            # subsequent UPDATEs never touch these columns again, so they
+            # stay a permanent record of how the very first attempt went
+            # even after later attempts change fastest_time_seconds/stage.
+            is_first_attempt = row["review_count"] == 0
+            first_attempt_seconds = duration_seconds if is_first_attempt else None
+            first_attempt_shakiness = shakiness if is_first_attempt else None
+            first_attempt_self_solved = int(self_solved) if is_first_attempt else None
+
             conn.execute(
                 """
                 UPDATE review_problems SET
@@ -507,12 +530,16 @@ def finish_review(session_token, self_solved=True, shakiness=3):
                     last_reviewed_at = ?,
                     fastest_time_seconds = ?,
                     schedule_stage = ?,
-                    next_review_date = ?
+                    next_review_date = ?,
+                    first_attempt_seconds = COALESCE(first_attempt_seconds, ?),
+                    first_attempt_shakiness = COALESCE(first_attempt_shakiness, ?),
+                    first_attempt_self_solved = COALESCE(first_attempt_self_solved, ?)
                 WHERE id = ?
                 """,
                 (
                     finished_at.isoformat(), fastest,
                     schedule["schedule_stage"], schedule["next_review_date"].isoformat(),
+                    first_attempt_seconds, first_attempt_shakiness, first_attempt_self_solved,
                     problem_id,
                 ),
             )

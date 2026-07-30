@@ -80,6 +80,7 @@ ALWAYS_ALLOWED_PROCESSES = {
     "control.exe",
     "peopleexperiencehost.exe",
     "shellhost.exe",
+    "openwith.exe",  # "How do you want to open this file?" system dialog
     "taskmgr.exe",
     "windowsterminal.exe",
     "wt.exe",
