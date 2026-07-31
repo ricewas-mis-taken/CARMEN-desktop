@@ -10,15 +10,17 @@ Non-modal (.show(), not .exec()), same as every other dialog in this app.
 import os
 from datetime import date, datetime, timedelta
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QDate, QTimer, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QDateEdit,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QApplication,
@@ -27,6 +29,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QSlider,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -51,11 +54,95 @@ REMINDER_PRESETS = [
     ("1 day before", 1440),
 ]
 
+_CUSTOM_REMINDER_LABEL = "Custom minutes before…"
+
 RECUR_LABELS = {
     "none": "Does not repeat", "daily": "Daily", "weekly": "Weekly",
     "weekly_days": "Weekly on selected days", "monthly": "Monthly",
     "yearly": "Yearly", "custom": "Custom (every N days/weeks)",
 }
+
+# This popup is a bare top-level QWidget (not part of the main window's
+# #ContentArea), so it renders with the OS's native dark window background
+# instead of the app's light theme -- the shared styles.qss rules only set
+# *text* color (#1F2328, near-black) for #PopupBg descendants, which is
+# invisible against that native dark background. Rather than fight the
+# native theming, this instance stylesheet commits the dialog to a dark
+# look on purpose: white text throughout, with the combo-box dropdowns kept
+# an explicit light "white dropdown" so they still read as a distinct
+# control against the dark surroundings.
+_DIALOG_QSS = """
+QWidget#PopupBg {
+    background: #1e1e1e;
+}
+QWidget#PopupBg QLabel,
+QWidget#PopupBg QCheckBox,
+QWidget#PopupBg QRadioButton {
+    color: #ffffff;
+    font-size: 13px;
+}
+QWidget#PopupBg QLineEdit,
+QWidget#PopupBg QTextEdit,
+QWidget#PopupBg QDateEdit {
+    background: #2a2a2a;
+    color: #ffffff;
+    border: 1px solid #444;
+    border-radius: 8px;
+    padding: 4px 6px;
+}
+QWidget#PopupBg QComboBox {
+    background: #ffffff;
+    color: #1F2328;
+    border: 1px solid #999;
+    border-radius: 8px;
+    padding: 4px 8px;
+}
+QComboBox QAbstractItemView {
+    background: #ffffff;
+    color: #1F2328;
+    selection-background-color: #5B8DEF;
+    selection-color: #ffffff;
+    outline: none;
+}
+QCalendarWidget {
+    background: #ffffff;
+    color: #1F2328;
+}
+QWidget#PopupBg QPushButton {
+    background: #3a3a3a;
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    padding: 6px 14px;
+}
+QWidget#PopupBg QPushButton:hover {
+    background: #4a4a4a;
+}
+QWidget#PopupBg QPushButton.AccentButton {
+    background: #5B8DEF;
+    color: white;
+    font-weight: 600;
+}
+QWidget#PopupBg QPushButton.AccentButton:hover {
+    background: #4A7CDE;
+}
+QWidget#PopupBg QPushButton.AddButton {
+    background: #2e7d32;
+    color: white;
+    font-weight: 600;
+}
+QWidget#PopupBg QPushButton.AddButton:hover {
+    background: #256428;
+}
+QWidget#PopupBg QPushButton.RemoveButton {
+    background: #c62828;
+    color: white;
+    font-weight: 600;
+}
+QWidget#PopupBg QPushButton.RemoveButton:hover {
+    background: #a82121;
+}
+"""
 
 _open_windows = set()
 
@@ -72,6 +159,7 @@ class _EventEditor(QWidget):
     def __init__(self, existing, initial_date):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
+        self.setStyleSheet(_DIALOG_QSS)
         self.setWindowTitle("Edit Event" if existing else "New Event")
         self.resize(460, 720)
         self._existing = existing
@@ -112,13 +200,12 @@ class _EventEditor(QWidget):
         self._all_day_check.setChecked(bool(existing["allDay"]) if existing else False)
         layout.addWidget(self._all_day_check)
 
-        layout.addWidget(_bold_label("Start (YYYY-MM-DD HH:MM)"))
-        self._start_edit = QLineEdit(default_start.strftime("%Y-%m-%d %H:%M"))
-        layout.addWidget(self._start_edit)
-
-        layout.addWidget(_bold_label("End (YYYY-MM-DD HH:MM)"))
-        self._end_edit = QLineEdit(default_end.strftime("%Y-%m-%d %H:%M"))
-        layout.addWidget(self._end_edit)
+        self._start_date_edit, self._start_time_slider = _build_datetime_picker(
+            layout, "Start", default_start
+        )
+        self._end_date_edit, self._end_time_slider = _build_datetime_picker(
+            layout, "End", default_end
+        )
 
         layout.addWidget(_bold_label("Color"))
         self._color = existing["color"] if existing else COLOR_PALETTE[0]
@@ -253,27 +340,18 @@ class _EventEditor(QWidget):
 
         controls = QHBoxLayout()
         self._reminder_preset_combo = QComboBox()
-        self._reminder_preset_combo.addItems([label for label, _ in REMINDER_PRESETS])
+        self._reminder_preset_combo.addItems([label for label, _ in REMINDER_PRESETS] + [_CUSTOM_REMINDER_LABEL])
         self._reminder_preset_combo.setCurrentIndex(1)
         controls.addWidget(self._reminder_preset_combo)
         add_button = QPushButton("Add")
+        add_button.setProperty("class", "AddButton")
         add_button.clicked.connect(self._add_preset_reminder)
         controls.addWidget(add_button)
         remove_button = QPushButton("Remove selected")
+        remove_button.setProperty("class", "RemoveButton")
         remove_button.clicked.connect(self._remove_selected_reminder)
         controls.addWidget(remove_button)
         layout.addLayout(controls)
-
-        custom_row = QHBoxLayout()
-        self._custom_minutes_edit = QLineEdit()
-        self._custom_minutes_edit.setFixedWidth(60)
-        custom_row.addWidget(self._custom_minutes_edit)
-        custom_row.addWidget(QLabel("custom minutes before"))
-        custom_add_button = QPushButton("Add")
-        custom_add_button.clicked.connect(self._add_custom_reminder)
-        custom_row.addWidget(custom_add_button)
-        custom_row.addStretch(1)
-        layout.addLayout(custom_row)
 
     def _refresh_reminders_list(self):
         self._reminders_widget.clear()
@@ -284,7 +362,15 @@ class _EventEditor(QWidget):
 
     def _add_preset_reminder(self):
         label = self._reminder_preset_combo.currentText()
-        offset = dict(REMINDER_PRESETS)[label]
+        presets = dict(REMINDER_PRESETS)
+        if label in presets:
+            offset = presets[label]
+        else:
+            offset, ok = QInputDialog.getInt(
+                self, "Custom reminder", "Minutes before start:", 10, 0, 100000, 1
+            )
+            if not ok:
+                return
         if offset not in self._reminders_list:
             self._reminders_list.append(offset)
             self._refresh_reminders_list()
@@ -294,16 +380,6 @@ class _EventEditor(QWidget):
         if row >= 0:
             del self._reminders_list[row]
             self._refresh_reminders_list()
-
-    def _add_custom_reminder(self):
-        try:
-            minutes = int(self._custom_minutes_edit.text())
-        except ValueError:
-            return
-        if minutes >= 0 and minutes not in self._reminders_list:
-            self._reminders_list.append(minutes)
-            self._refresh_reminders_list()
-        self._custom_minutes_edit.setText("")
 
     # --- focus integration ---
 
@@ -321,7 +397,8 @@ class _EventEditor(QWidget):
         layout.addWidget(self._focus_enabled_check)
 
         self._focus_subscreen = QWidget()
-        self._focus_subscreen.setStyleSheet("border: 1px solid #ddd;")
+        self._focus_subscreen.setObjectName("PopupBg")
+        self._focus_subscreen.setStyleSheet("border: 1px solid #444; background: #1e1e1e;")
         subscreen_layout = QVBoxLayout(self._focus_subscreen)
 
         lock_row = QHBoxLayout()
@@ -437,12 +514,12 @@ class _EventEditor(QWidget):
         if not title:
             self._status_label.setText("Title is required.")
             return
-        try:
-            start_dt = datetime.strptime(self._start_edit.text().strip(), "%Y-%m-%d %H:%M")
-            end_dt = datetime.strptime(self._end_edit.text().strip(), "%Y-%m-%d %H:%M")
-        except ValueError:
-            self._status_label.setText("Start/End must be in YYYY-MM-DD HH:MM format.")
-            return
+        start_dt = datetime.combine(
+            self._start_date_edit.date().toPython(), datetime.min.time()
+        ) + timedelta(minutes=self._start_time_slider.value())
+        end_dt = datetime.combine(
+            self._end_date_edit.date().toPython(), datetime.min.time()
+        ) + timedelta(minutes=self._end_time_slider.value())
         if end_dt <= start_dt:
             self._status_label.setText("End must be after start.")
             return
@@ -517,6 +594,40 @@ def _bold_label(text, size=9):
     label = QLabel(text)
     label.setStyleSheet(f"font-weight: bold; font-size: {size}pt;")
     return label
+
+
+def _build_datetime_picker(layout, label_text, default_dt):
+    """Adds a "<label_text>" row: a mini-calendar date picker plus a
+    time-of-day slider (15-minute steps) with a live HH:MM readout.
+    Returns (date_edit, time_slider) so the caller can read them back at
+    save time."""
+    layout.addWidget(_bold_label(label_text))
+
+    date_edit = QDateEdit(QDate(default_dt.year, default_dt.month, default_dt.day))
+    date_edit.setCalendarPopup(True)
+    date_edit.setDisplayFormat("yyyy-MM-dd")
+    layout.addWidget(date_edit)
+
+    time_row = QHBoxLayout()
+    time_slider = QSlider(Qt.Horizontal)
+    time_slider.setRange(0, 23 * 60 + 45)
+    time_slider.setSingleStep(15)
+    time_slider.setPageStep(15)
+    time_slider.setValue(default_dt.hour * 60 + (default_dt.minute // 15) * 15)
+    time_row.addWidget(time_slider, 1)
+
+    time_label = QLabel()
+    time_label.setFixedWidth(48)
+
+    def _update_label(minutes):
+        time_label.setText(f"{minutes // 60:02d}:{minutes % 60:02d}")
+
+    time_slider.valueChanged.connect(_update_label)
+    _update_label(time_slider.value())
+    time_row.addWidget(time_label)
+    layout.addLayout(time_row)
+
+    return date_edit, time_slider
 
 
 def _prefill_recurrence_from_rrule(rrule_str, weekday_checks):
