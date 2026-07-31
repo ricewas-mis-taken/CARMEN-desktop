@@ -707,12 +707,10 @@ class _TaskCard(QFrame):
             if review_problem:
                 # A review timer (started against this task's linked topic)
                 # is running underneath the task session -- name the actual
-                # problem/subject being reviewed instead of the generic
-                # elapsed-time text, same as the Focus tab.
-                subject = status.get("reviewSubjectName") or "—"
+                # problem being reviewed instead of the generic elapsed-time
+                # text, same as the Focus tab.
                 self._countdown_label.setText(
-                    f"{review_problem} in session, subject {subject}, "
-                    f"time elapsed {el_minutes}m {el_seconds}s{paused}{violation_text}"
+                    f"{review_problem}, time elapsed {el_minutes}m {el_seconds}s{paused}{violation_text}"
                 )
             elif self._active_is_burnout:
                 self._countdown_label.setText(

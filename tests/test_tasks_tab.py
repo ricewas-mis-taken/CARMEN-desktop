@@ -40,7 +40,7 @@ def test_review_session_for_linked_task_shows_as_running(qtbot, isolate_tasks, i
     assert not card.property("locked")
     text = card._countdown_label.text()
     assert "Quadratics 1" in text
-    assert "Algebra" in text
+    assert "Algebra" not in text
     assert "elapsed" in text.lower()
 
 

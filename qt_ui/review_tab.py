@@ -34,10 +34,10 @@ COLOR_PALETTE = [
 ]
 
 COLUMN_NAME, COLUMN_SUBJECT, COLUMN_STARS, COLUMN_REVIEWS, \
-    COLUMN_LAST_REVIEWED, COLUMN_FIRST_SOLVED, COLUMN_FASTEST, COLUMN_START = range(8)
+    COLUMN_LAST_REVIEWED, COLUMN_NEXT_REVIEW, COLUMN_FIRST_SOLVED, COLUMN_FASTEST, COLUMN_START = range(9)
 COLUMN_HEADERS = [
-    "Problem Name", "Subject", "Stars", "Reviews",
-    "Last Reviewed", "First Solved", "Fastest Time", "",
+    "Problem Name", "Subject", "Difficulty", "Reviews",
+    "Last Reviewed", "Next Review", "First Solved", "Fastest Time", "",
 ]
 
 _URL_RE = re.compile(r"^https?://[^\s]+\.[^\s]+$", re.IGNORECASE)
@@ -89,6 +89,27 @@ def _relative_time(iso_datetime_string):
         return f"{hours} hour{'s' if hours != 1 else ''} ago"
     days = int(seconds // 86400)
     return f"{days} day{'s' if days != 1 else ''} ago"
+
+
+def _next_review_display(iso_date_string):
+    """Days until the problem's next scheduled review, e.g. "in 3 days",
+    "Today", "Tomorrow", or "N days overdue" if it's past due."""
+    if not iso_date_string:
+        return "—"
+    days = (date.fromisoformat(iso_date_string) - date.today()).days
+    if days == 0:
+        return "Today"
+    if days == 1:
+        return "Tomorrow"
+    if days > 1:
+        return f"in {days} days"
+    if days == -1:
+        return "Yesterday"
+    return f"{-days} days ago"
+
+
+def _is_overdue(iso_date_string):
+    return bool(iso_date_string) and date.fromisoformat(iso_date_string) < date.today()
 
 
 def _fastest_display(problem):
@@ -387,6 +408,7 @@ class _TopicView(QWidget):
         self._table.setColumnWidth(COLUMN_STARS, 90)
         self._table.setColumnWidth(COLUMN_REVIEWS, 70)
         self._table.setColumnWidth(COLUMN_LAST_REVIEWED, 120)
+        self._table.setColumnWidth(COLUMN_NEXT_REVIEW, 110)
         self._table.setColumnWidth(COLUMN_FIRST_SOLVED, 100)
         self._table.setColumnWidth(COLUMN_FASTEST, 100)
         self._table.setColumnWidth(COLUMN_START, 90)
@@ -431,6 +453,11 @@ class _TopicView(QWidget):
 
     def refresh(self):
         self._problems = review_store.list_problems(self._topic_id, due_only=self._due_only)
+        if self._due_only:
+            # Overdue problems are the most urgent -- pin them above ones
+            # merely due today, on top of the store's next_review_date/stars
+            # ordering (stable sort keeps that ordering within each group).
+            self._problems.sort(key=lambda p: not _is_overdue(p.get("nextReviewDate")))
         self._render_table()
 
     def _render_table(self):
@@ -447,6 +474,10 @@ class _TopicView(QWidget):
 
             last_item = QTableWidgetItem(_relative_time(problem["lastReviewedAt"]))
             self._table.setItem(row, COLUMN_LAST_REVIEWED, last_item)
+
+            next_review_item = QTableWidgetItem(_next_review_display(problem.get("nextReviewDate")))
+            next_review_item.setTextAlignment(Qt.AlignCenter)
+            self._table.setItem(row, COLUMN_NEXT_REVIEW, next_review_item)
 
             first_item = QTableWidgetItem(_format_dmy(problem["dateAdded"]))
             self._table.setItem(row, COLUMN_FIRST_SOLVED, first_item)
@@ -465,10 +496,19 @@ class _TopicView(QWidget):
             subject_item.setBackground(QColor(tint))
             self._table.setItem(row, COLUMN_SUBJECT, subject_item)
 
-            for col in (COLUMN_NAME, COLUMN_REVIEWS, COLUMN_LAST_REVIEWED, COLUMN_FIRST_SOLVED, COLUMN_FASTEST):
+            text_cols = (COLUMN_NAME, COLUMN_REVIEWS, COLUMN_LAST_REVIEWED, COLUMN_NEXT_REVIEW, COLUMN_FIRST_SOLVED, COLUMN_FASTEST)
+            for col in text_cols:
                 self._table.item(row, col).setForeground(QColor("#1F2328"))
-            for col in (COLUMN_NAME, COLUMN_REVIEWS, COLUMN_LAST_REVIEWED, COLUMN_FIRST_SOLVED, COLUMN_FASTEST, COLUMN_STARS):
+            for col in text_cols + (COLUMN_STARS,):
                 self._table.item(row, col).setBackground(QColor(tint))
+
+            if _is_overdue(problem.get("nextReviewDate")):
+                for col in text_cols:
+                    item = self._table.item(row, col)
+                    item.setForeground(QColor("#c62828"))
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
 
             self._table.setCellWidget(row, COLUMN_START, self._build_start_cell(problem, tint))
 
@@ -850,7 +890,8 @@ class _PostReviewDialog(QWidget):
         self.setWindowTitle("Carmen Focus — Review complete")
         self.resize(360, 250)
         self._on_submit = on_submit
-        self._self_solved = True
+        self._self_solved = None
+        self._method_chosen = False
         self._shakiness = 3
         self._submitted = False
 
@@ -900,21 +941,35 @@ class _PostReviewDialog(QWidget):
 
         submit_btn = QPushButton("Submit")
         submit_btn.setProperty("class", "AccentButton")
+        submit_btn.setEnabled(False)
         submit_btn.clicked.connect(self._submit)
         layout.addWidget(submit_btn)
+        self._submit_btn = submit_btn
+
+        self._hint_label = QLabel('Choose "Solved it!" or "Checked the answer" first.')
+        self._hint_label.setStyleSheet("color: #c62828; font-size: 11px;")
+        self._hint_label.setAlignment(Qt.AlignCenter)
+        self._hint_label.setWordWrap(True)
+        self._hint_label.setVisible(False)
+        layout.addWidget(self._hint_label)
 
         _register_popup(self)
         self.show()
 
     def _set_method(self, self_solved):
         self._self_solved = self_solved
+        self._method_chosen = True
         self._shak_section.setVisible(self_solved)
+        self._submit_btn.setEnabled(True)
+        self._hint_label.setVisible(False)
 
     def _set_shakiness(self, val):
         self._shakiness = val
 
     def _submit(self):
-        if self._submitted:
+        # Guards both a disabled-button click getting through somehow and a
+        # double-submit -- an outcome must be chosen before this can fire.
+        if self._submitted or not self._method_chosen:
             return
         self._submitted = True
         self.close()
@@ -924,6 +979,13 @@ class _PostReviewDialog(QWidget):
         self._on_submit(self._self_solved, self._shakiness if self._self_solved else None)
 
     def closeEvent(self, event):
+        # The review outcome must be recorded as either "solved it" or
+        # "checked the answer" -- closing the window (title-bar X) before
+        # picking one used to silently record it as solved by default.
+        if not self._method_chosen:
+            self._hint_label.setVisible(True)
+            event.ignore()
+            return
         if not self._submitted:
             self._submitted = True
             self._on_submit(self._self_solved, self._shakiness if self._self_solved else None)
