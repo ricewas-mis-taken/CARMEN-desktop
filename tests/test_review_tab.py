@@ -201,6 +201,7 @@ def test_begin_review_starts_and_ends_linked_task_session(
     view._review_banner._finish()
     # _finish() shows the post-review grading dialog; submit it to complete the flow.
     dlg = next(p for p in review_tab._popup_refs if isinstance(p, review_tab._PostReviewDialog))
+    dlg._solved_btn.setChecked(True)
     dlg._submit()
 
     assert not session_manager.is_active(), "session should end when review finishes"

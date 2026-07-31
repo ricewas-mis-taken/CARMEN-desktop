@@ -128,10 +128,10 @@ class FocusTab(QWidget):
             # A review timer running underneath a linked task's session --
             # name the actual problem/subject being reviewed, same as the
             # Tasks tab's running card, instead of the generic elapsed text.
-            subject = status.get("reviewSubjectName") or "—"
+            subject = status.get("reviewSubjectName")
+            problem_label = f"{review_problem}, {subject}" if subject else review_problem
             self._status_label.setText(
-                f"{review_problem} in session, subject {subject}, "
-                f"time elapsed {minutes}m {seconds}s{paused}\n"
+                f"{problem_label}, time elapsed {minutes}m {seconds}s{paused}\n"
                 f"Lock mode: {status['lockMode']}   Violations: {status['violationCount']}"
             )
             return
