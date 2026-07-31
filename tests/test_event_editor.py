@@ -3,8 +3,17 @@ Uses isolate_calendar_db so these tests never touch the real calendar.db.
 """
 from datetime import date
 
+from PySide6.QtCore import QDate
+
 import calendar_store as store
 import qt_ui.event_editor as event_editor
+
+
+def _set_datetime(date_edit, time_slider, iso_date, hh_mm):
+    y, m, d = (int(p) for p in iso_date.split("-"))
+    date_edit.setDate(QDate(y, m, d))
+    hh, mm = (int(p) for p in hh_mm.split(":"))
+    time_slider.setValue(hh * 60 + mm)
 
 
 def test_new_event_requires_title(qtbot, isolate_calendar_db):
@@ -19,8 +28,8 @@ def test_new_event_rejects_end_before_start(qtbot, isolate_calendar_db):
     win = event_editor._EventEditor(existing=None, initial_date=date(2026, 1, 15))
     qtbot.addWidget(win)
     win._title_edit.setText("Test Event")
-    win._start_edit.setText("2026-01-15 10:00")
-    win._end_edit.setText("2026-01-15 09:00")
+    _set_datetime(win._start_date_edit, win._start_time_slider, "2026-01-15", "10:00")
+    _set_datetime(win._end_date_edit, win._end_time_slider, "2026-01-15", "09:00")
     win._save()
     assert "end must be after start" in win._status_label.text().lower()
 
@@ -29,8 +38,8 @@ def test_save_creates_event_in_store(qtbot, isolate_calendar_db):
     win = event_editor._EventEditor(existing=None, initial_date=date(2026, 1, 15))
     qtbot.addWidget(win)
     win._title_edit.setText("Standup")
-    win._start_edit.setText("2026-01-15 09:00")
-    win._end_edit.setText("2026-01-15 09:30")
+    _set_datetime(win._start_date_edit, win._start_time_slider, "2026-01-15", "09:00")
+    _set_datetime(win._end_date_edit, win._end_time_slider, "2026-01-15", "09:30")
     win._save()
 
     events = store.list_events()
@@ -46,8 +55,8 @@ def test_save_with_focus_integration_writes_focus_profile(qtbot, isolate_calenda
     win = event_editor._EventEditor(existing=None, initial_date=date(2026, 1, 15))
     qtbot.addWidget(win)
     win._title_edit.setText("Deep Work")
-    win._start_edit.setText("2026-01-15 09:00")
-    win._end_edit.setText("2026-01-15 11:00")
+    _set_datetime(win._start_date_edit, win._start_time_slider, "2026-01-15", "09:00")
+    _set_datetime(win._end_date_edit, win._end_time_slider, "2026-01-15", "11:00")
     win._focus_enabled_check.setChecked(True)
     win._hard_radio.setChecked(True)
     win._save()
