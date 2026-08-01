@@ -96,6 +96,7 @@ def _init_schema(conn):
             review_count INTEGER NOT NULL DEFAULT 0,
             last_reviewed_at TIMESTAMP,
             fastest_time_seconds INTEGER,
+            fastest_time_is_solved INTEGER,
             schedule_stage INTEGER NOT NULL DEFAULT 0,
             next_review_date DATE NOT NULL,
             first_attempt_seconds INTEGER,
@@ -136,10 +137,21 @@ def _init_schema(conn):
     # Add first_attempt_* columns to review_problems for DBs that predate them
     # ("Start First Attempt" from the Add Problem dialog).
     problem_cols = {row[1] for row in conn.execute("PRAGMA table_info(review_problems)").fetchall()}
-    for col in ("first_attempt_seconds", "first_attempt_shakiness", "first_attempt_self_solved"):
+    for col in ("first_attempt_seconds", "first_attempt_shakiness", "first_attempt_self_solved", "fastest_time_is_solved"):
         if col not in problem_cols:
             conn.execute(f"ALTER TABLE review_problems ADD COLUMN {col} INTEGER")
             conn.commit()
+            if col == "fastest_time_is_solved":
+                # Backfill: before this column existed, fastest_time_seconds
+                # was only ever set on a genuine solve (checked-answer
+                # attempts never touched it), so every pre-existing row with
+                # a fastest time on record is a real solve, not an estimate
+                # -- without this they'd wrongly show the "(A)" marker.
+                conn.execute(
+                    "UPDATE review_problems SET fastest_time_is_solved = 1 "
+                    "WHERE fastest_time_seconds IS NOT NULL AND fastest_time_is_solved IS NULL"
+                )
+                conn.commit()
 
     # Add self_solved/shakiness to review_sessions for DBs that predate them
     # -- every logged review's full outcome, not just its duration.
@@ -186,6 +198,7 @@ def _row_to_problem(row):
         "reviewCount": row["review_count"],
         "lastReviewedAt": row["last_reviewed_at"],
         "fastestTimeSeconds": row["fastest_time_seconds"],
+        "fastestTimeIsSolved": bool(row["fastest_time_is_solved"]) if row["fastest_time_is_solved"] is not None else None,
         "scheduleStage": row["schedule_stage"],
         "nextReviewDate": row["next_review_date"],
         "firstAttemptSeconds": row["first_attempt_seconds"],
@@ -535,7 +548,8 @@ def _apply_review_outcome(problem_id, duration_seconds, self_solved, shakiness, 
         try:
             conn = _get_conn()
             row = conn.execute(
-                "SELECT stars, schedule_stage, fastest_time_seconds, review_count FROM review_problems WHERE id = ?",
+                "SELECT stars, schedule_stage, fastest_time_seconds, fastest_time_is_solved, review_count "
+                "FROM review_problems WHERE id = ?",
                 (problem_id,),
             ).fetchone()
             if row is None:
@@ -553,9 +567,21 @@ def _apply_review_outcome(problem_id, duration_seconds, self_solved, shakiness, 
                 ),
             )
 
+            # fastest_time_seconds tracks the fastest genuine solve once one
+            # exists. Until then, it stands in with the fastest "checked the
+            # answer" time instead of sitting blank -- a real solve always
+            # takes over from an estimate, but further checked-answer
+            # attempts never overwrite a genuine solve.
             fastest = row["fastest_time_seconds"]
-            if self_solved and (fastest is None or duration_seconds < fastest):
-                fastest = duration_seconds
+            fastest_is_solved = row["fastest_time_is_solved"]
+            if self_solved:
+                if fastest is None or not fastest_is_solved or duration_seconds < fastest:
+                    fastest = duration_seconds
+                    fastest_is_solved = 1
+            elif not fastest_is_solved:
+                if fastest is None or duration_seconds < fastest:
+                    fastest = duration_seconds
+                    fastest_is_solved = 0
 
             if self_solved:
                 schedule = review_scheduler.schedule_after_review(
@@ -584,6 +610,7 @@ def _apply_review_outcome(problem_id, duration_seconds, self_solved, shakiness, 
                     review_count = review_count + 1,
                     last_reviewed_at = ?,
                     fastest_time_seconds = ?,
+                    fastest_time_is_solved = ?,
                     schedule_stage = ?,
                     next_review_date = ?,
                     first_attempt_seconds = COALESCE(first_attempt_seconds, ?),
@@ -592,7 +619,7 @@ def _apply_review_outcome(problem_id, duration_seconds, self_solved, shakiness, 
                 WHERE id = ?
                 """,
                 (
-                    finished_at.isoformat(), fastest,
+                    finished_at.isoformat(), fastest, fastest_is_solved,
                     schedule["schedule_stage"], schedule["next_review_date"].isoformat(),
                     first_attempt_seconds, first_attempt_shakiness, first_attempt_self_solved,
                     problem_id,

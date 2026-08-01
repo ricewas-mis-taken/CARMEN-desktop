@@ -156,6 +156,39 @@ def test_fastest_time_only_updates_when_faster(isolate_review_db, monkeypatch):
     assert second["fastestTimeSeconds"] == 30
 
 
+def test_fastest_time_stands_in_with_checked_answer_until_real_solve(isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+
+    # No solve yet -- a checked-answer attempt should still populate
+    # fastest_time_seconds instead of leaving it blank.
+    token = review_store.start_review(problem["id"])
+    first = review_store.finish_review(token, self_solved=False)
+    assert first["fastestTimeSeconds"] is not None
+    assert first["fastestTimeIsSolved"] is False
+
+    # Another checked-answer attempt keeps the stand-in as a checked-answer
+    # time (not flipped to "solved" just because it recorded a duration).
+    token2 = review_store.start_review(problem["id"])
+    second = review_store.finish_review(token2, self_solved=False)
+    assert second["fastestTimeIsSolved"] is False
+
+    # A genuine solve always takes over from the checked-answer estimate,
+    # even if the estimate happened to be numerically "faster".
+    token3 = review_store.start_review(problem["id"])
+    third = review_store.finish_review(token3, self_solved=True, shakiness=2)
+    assert third["fastestTimeIsSolved"] is True
+
+    # Once a genuine solve is on record, further checked-answer attempts
+    # must not overwrite it.
+    token4 = review_store.start_review(problem["id"])
+    fourth = review_store.finish_review(token4, self_solved=False)
+    assert fourth["fastestTimeSeconds"] == third["fastestTimeSeconds"]
+    assert fourth["fastestTimeIsSolved"] is True
+
+
 def test_save_photo_bytes_copies_into_photos_dir(isolate_review_db):
     path = review_store.save_photo_bytes(b"fake-image-bytes", "original.PNG")
     assert path.startswith(review_store.PHOTOS_DIR)

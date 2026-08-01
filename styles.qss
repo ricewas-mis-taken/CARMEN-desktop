@@ -81,6 +81,17 @@ QWidget#PopupBg QPushButton.AccentButton:hover {
     background: #4A7CDE;
 }
 
+/* Without this, QWidget#PopupBg QPushButton's plain background rule above
+   (an ID selector) outranks QPushButton.SecondaryButton:checked's blue
+   background (class + pseudo, no ID) -- a checked day-of-week/recurrence
+   toggle inside a popup dialog would keep its bold text but lose the blue
+   fill entirely. */
+QWidget#PopupBg QPushButton.SecondaryButton:checked {
+    background: #5B8DEF;
+    color: #FFFFFF;
+    font-weight: 600;
+}
+
 QWidget#Sidebar {
     background: #20242C;
 }
