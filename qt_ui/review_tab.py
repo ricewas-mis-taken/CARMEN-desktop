@@ -33,11 +33,15 @@ COLOR_PALETTE = [
     "#00acc1", "#f4511e", "#3949ab", "#6d4c41", "#546e7a",
 ]
 
-COLUMN_NAME, COLUMN_SUBJECT, COLUMN_STARS, COLUMN_REVIEWS, \
-    COLUMN_LAST_REVIEWED, COLUMN_NEXT_REVIEW, COLUMN_FIRST_SOLVED, COLUMN_FASTEST, COLUMN_START = range(9)
+# Start is first, not last -- with this many columns the table is wider
+# than the window and needs horizontal scrolling, and a trailing Start
+# button would get scrolled out of view. Leading keeps it reachable without
+# scrolling at all.
+COLUMN_START, COLUMN_NAME, COLUMN_SUBJECT, COLUMN_STARS, COLUMN_REVIEWS, \
+    COLUMN_LAST_REVIEWED, COLUMN_NEXT_REVIEW, COLUMN_FIRST_SOLVED, COLUMN_FASTEST = range(9)
 COLUMN_HEADERS = [
-    "Problem Name", "Subject", "Difficulty", "Reviews",
-    "Last Reviewed", "Next Review", "First Solved", "Fastest Time", "",
+    "", "Problem Name", "Subject", "Difficulty", "Reviews",
+    "Last Reviewed", "Next Review", "First Solved", "Fastest Time",
 ]
 
 _URL_RE = re.compile(r"^https?://[^\s]+\.[^\s]+$", re.IGNORECASE)
@@ -114,20 +118,15 @@ def _is_overdue(iso_date_string):
 
 def _fastest_display(problem):
     """The Fastest Time column's text. A real solved time always wins. With
-    no solve recorded yet, but a single unsolved first attempt on record,
-    show that time anyway with an "(A)" (attempt) marker so it's not just a
-    blank dash -- the moment a real solve happens, fastestTimeSeconds gets
-    set and this falls through to the plain mm:ss branch above it."""
+    no solve recorded yet, fastestTimeSeconds instead stands in with the
+    fastest "checked the answer" time (see review_store._apply_review_outcome)
+    so it's not just a blank dash -- shown with an "(A)" (attempt) marker
+    until an actual solve happens and takes over."""
     fastest = problem.get("fastestTimeSeconds")
-    if fastest is not None:
-        return _format_mmss(fastest)
-    if (
-        problem.get("reviewCount") == 1
-        and problem.get("firstAttemptSelfSolved") is False
-        and problem.get("firstAttemptSeconds") is not None
-    ):
-        return f"{_format_mmss(problem['firstAttemptSeconds'])} (A)"
-    return "--:--"
+    if fastest is None:
+        return "--:--"
+    marker = "" if problem.get("fastestTimeIsSolved") else " (A)"
+    return f"{_format_mmss(fastest)}{marker}"
 
 
 def _first_attempt_text(problem):
@@ -403,6 +402,7 @@ class _TopicView(QWidget):
         self._table.setSelectionMode(QTableWidget.NoSelection)
         self._table.horizontalHeader().setStretchLastSection(False)
         self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._table.setColumnWidth(COLUMN_START, 90)
         self._table.setColumnWidth(COLUMN_NAME, 220)
         self._table.setColumnWidth(COLUMN_SUBJECT, 120)
         self._table.setColumnWidth(COLUMN_STARS, 90)
@@ -411,7 +411,6 @@ class _TopicView(QWidget):
         self._table.setColumnWidth(COLUMN_NEXT_REVIEW, 110)
         self._table.setColumnWidth(COLUMN_FIRST_SOLVED, 100)
         self._table.setColumnWidth(COLUMN_FASTEST, 100)
-        self._table.setColumnWidth(COLUMN_START, 90)
         self._table.cellClicked.connect(self._on_cell_clicked)
         self._table.setContextMenuPolicy(Qt.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._on_table_context_menu)
@@ -1143,21 +1142,12 @@ class _RenameTopicDialog(QWidget):
         self._on_renamed(self._topic_id, name)
 
 
-_HISTORY_DATE, _HISTORY_DURATION, _HISTORY_OUTCOME, _HISTORY_SHAKINESS = range(4)
-_HISTORY_HEADERS = ["Date", "Duration", "Outcome", "Shakiness"]
-
-
-def _format_session_datetime(iso_datetime_string):
-    d = datetime.fromisoformat(iso_datetime_string)
-    return f"{d.strftime('%b')} {d.day}, {d.year} {d.strftime('%H:%M')}"
-
-
 class _DescriptionPopup(QWidget):
     def __init__(self, problem):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle(problem["name"])
-        self.resize(520, 560)
+        self.resize(480, 400)
 
         layout = QVBoxLayout(self)
 
@@ -1177,57 +1167,8 @@ class _DescriptionPopup(QWidget):
 
         _build_description_content(layout, problem)
 
-        layout.addWidget(_bold_label("Review History"))
-        self._history_table = _build_history_table(problem["id"])
-        layout.addWidget(self._history_table)
-
         self.show()
         _register_popup(self)
-
-
-def _build_history_table(problem_id):
-    """Every logged review for a problem -- date, how long it took, and how
-    it went -- not just the aggregate stats (fastest time, review count)
-    shown elsewhere. Backed by review_store.list_sessions(), which is the
-    permanent per-session log every finish_review()/record_first_attempt()
-    call writes to."""
-    sessions = review_store.list_sessions(problem_id)
-    table = QTableWidget(len(sessions), len(_HISTORY_HEADERS))
-    table.setHorizontalHeaderLabels(_HISTORY_HEADERS)
-    table.verticalHeader().setVisible(False)
-    table.setEditTriggers(QTableWidget.NoEditTriggers)
-    table.setSelectionMode(QTableWidget.NoSelection)
-    table.setFixedHeight(160)
-    table.setColumnWidth(_HISTORY_DATE, 170)
-    table.setColumnWidth(_HISTORY_DURATION, 90)
-    table.setColumnWidth(_HISTORY_OUTCOME, 140)
-    table.setColumnWidth(_HISTORY_SHAKINESS, 80)
-
-    if not sessions:
-        table.setRowCount(1)
-        empty_item = QTableWidgetItem("No reviews logged yet.")
-        empty_item.setForeground(QColor("#5A6070"))
-        table.setItem(0, 0, empty_item)
-        table.setSpan(0, 0, 1, len(_HISTORY_HEADERS))
-        return table
-
-    for row, session in enumerate(sessions):
-        date_item = QTableWidgetItem(_format_session_datetime(session["finishedAt"]))
-        table.setItem(row, _HISTORY_DATE, date_item)
-
-        duration_item = QTableWidgetItem(_format_mmss(session["durationSeconds"]))
-        duration_item.setTextAlignment(Qt.AlignCenter)
-        table.setItem(row, _HISTORY_DURATION, duration_item)
-
-        outcome_item = QTableWidgetItem("Solved it" if session["selfSolved"] else "Checked the answer")
-        table.setItem(row, _HISTORY_OUTCOME, outcome_item)
-
-        shakiness = session["shakiness"]
-        shakiness_item = QTableWidgetItem(f"{shakiness}/5" if shakiness is not None else "—")
-        shakiness_item.setTextAlignment(Qt.AlignCenter)
-        table.setItem(row, _HISTORY_SHAKINESS, shakiness_item)
-
-    return table
 
 
 _popup_refs = set()
