@@ -209,7 +209,7 @@ def _start_focus_session(event, occ_end):
 
     if session_manager.is_active():
         # Deliberately simple per spec: don't try to stack/queue lock types
-        # or reconcile whitelists — the new event's profile wins, same as
+        # or reconcile blocklists — the new event's profile wins, same as
         # calling start_session() again from the tray's timer dialog would.
         # start_session() itself finalizes the session being replaced to
         # history first, so this is a visible handoff, not silent data loss.
@@ -224,7 +224,7 @@ def _start_focus_session(event, occ_end):
         session_manager.start_session(
             duration_minutes,
             focus.get("lockMode", "soft"),
-            list(focus.get("processWhitelist", [])),
+            list(focus.get("processBlocklist", [])),
             list(focus.get("domainWhitelist", [])),
             source="calendar-event",
             event_id=event.get("id"),

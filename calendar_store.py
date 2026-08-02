@@ -73,7 +73,7 @@ def _init_schema(conn):
             event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
             enabled INTEGER NOT NULL DEFAULT 0,
             lock_mode TEXT NOT NULL DEFAULT 'soft',
-            process_whitelist TEXT NOT NULL DEFAULT '[]',
+            process_blocklist TEXT NOT NULL DEFAULT '[]',
             domain_whitelist TEXT NOT NULL DEFAULT '[]',
             warning_minutes INTEGER
         );
@@ -83,6 +83,21 @@ def _init_schema(conn):
         """
     )
     conn.commit()
+
+    # Add process_blocklist to focus_profiles for DBs that predate the
+    # apps-are-a-blocklist restructure -- CREATE TABLE IF NOT EXISTS above
+    # is a no-op against an already-existing table, so an existing
+    # focus_profiles still only has the old process_whitelist column
+    # without this. Domains stay an allow list (domain_whitelist), so that
+    # column needs no migration -- it already exists under this same name.
+    # Deliberately does not migrate process_whitelist's old values over: an
+    # "allow only these apps" list means the opposite of a "block these
+    # apps" list, so every event's saved app block list starts fresh empty
+    # (nothing blocked) rather than silently inverting what it used to allow.
+    focus_cols = {row[1] for row in conn.execute("PRAGMA table_info(focus_profiles)").fetchall()}
+    if "process_blocklist" not in focus_cols:
+        conn.execute("ALTER TABLE focus_profiles ADD COLUMN process_blocklist TEXT NOT NULL DEFAULT '[]'")
+        conn.commit()
 
 
 def _row_to_event(conn, row):
@@ -98,7 +113,7 @@ def _row_to_event(conn, row):
         focus_profile = {
             "enabled": bool(focus["enabled"]),
             "lockMode": focus["lock_mode"],
-            "processWhitelist": json.loads(focus["process_whitelist"]),
+            "processBlocklist": json.loads(focus["process_blocklist"]),
             "domainWhitelist": json.loads(focus["domain_whitelist"]),
             "warningMinutes": focus["warning_minutes"],
         }
@@ -183,17 +198,17 @@ def save_event(event):
             if focus and focus.get("enabled"):
                 conn.execute(
                     """
-                    INSERT INTO focus_profiles (event_id, enabled, lock_mode, process_whitelist, domain_whitelist, warning_minutes)
+                    INSERT INTO focus_profiles (event_id, enabled, lock_mode, process_blocklist, domain_whitelist, warning_minutes)
                     VALUES (?, 1, ?, ?, ?, ?)
                     ON CONFLICT(event_id) DO UPDATE SET
                         enabled=1, lock_mode=excluded.lock_mode,
-                        process_whitelist=excluded.process_whitelist,
+                        process_blocklist=excluded.process_blocklist,
                         domain_whitelist=excluded.domain_whitelist,
                         warning_minutes=excluded.warning_minutes
                     """,
                     (
                         event_id, focus.get("lockMode", "soft"),
-                        json.dumps(focus.get("processWhitelist", [])),
+                        json.dumps(focus.get("processBlocklist", [])),
                         json.dumps(focus.get("domainWhitelist", [])),
                         focus.get("warningMinutes"),
                     ),

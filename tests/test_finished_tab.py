@@ -13,8 +13,8 @@ def _fake_session(title=None, end_type="manual", start=None, minutes=30):
     return {
         "startTime": start.isoformat(), "endTime": end.isoformat(),
         "endType": end_type, "reason": None, "lockMode": "soft",
-        "processWhitelist": [], "domainWhitelist": [], "violationCount": 0,
-        "violationLog": [], "domainWhitelistAdditions": [], "processWhitelistAdditions": [],
+        "processBlocklist": [], "domainWhitelist": [], "violationCount": 0,
+        "violationLog": [], "domainWhitelistAdditions": [], "processBlocklistExceptions": [],
         "source": "manual", "eventId": None, "eventTitle": title,
     }
 

@@ -7,8 +7,8 @@
    at all, so source #1 alone silently misses them.
 
 Both feed the same deduplicated-by-process-name result, which is what the
-whitelist picker draws from so you don't have to have an app open to
-whitelist it."""
+blocklist picker draws from so you don't have to have an app open to
+blocklist it."""
 import json
 import os
 import re
@@ -71,7 +71,7 @@ _GENERIC_INSTALLER_RE = re.compile(
 # package's Name (e.g. "Microsoft.AV1VideoExtension"). Everything else that
 # declares at least one real .exe is left in as a normal pickable app,
 # including plenty of first-party Microsoft ones (Calculator, Xbox App,
-# Teams, ...) — those are genuine apps someone might want to whitelist (or
+# Teams, ...) — those are genuine apps someone might want to blocklist (or
 # deliberately leave off), not clutter to hide.
 _MSIX_NON_APP_PACKAGE_KEYWORDS = (
     "videoextension", "imageextension", "mediaextensions", "webpimage",
@@ -101,7 +101,7 @@ def list_installed_apps():
     sorted by display name. Apps that are always-allowed (session_manager's
     exempt list — Settings, Explorer, Windows Terminal, NVIDIA/Git tools,
     etc.), native Windows utility folders, and generic installer executables
-    are left out entirely, since they're never a meaningful whitelist choice."""
+    are left out entirely, since they're never a meaningful blocklist choice."""
     apps = {}
     _scan_start_menu_shortcuts(apps)
     _scan_msix_packages(apps)

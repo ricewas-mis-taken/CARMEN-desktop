@@ -4,8 +4,8 @@ implementation (_ScrollableChecklist) -- both existed for the same reason
 the original checklist_widget.py did (factored out so more than one caller
 can share it), but picker_gui.py's Tk version never actually adopted the
 shared module it was extracted from. This is the single implementation
-both the whitelist picker and the event editor's two checklists
-(process/domain whitelist) use from Stage 5 on.
+both the blocklist picker and the event editor's two checklists
+(process/domain blocklist) use from Stage 5 on.
 
 Same signature shape as the original Tk build_checklist()/get_checked(),
 deliberately preserved to minimize call-site churn: build the rows once,

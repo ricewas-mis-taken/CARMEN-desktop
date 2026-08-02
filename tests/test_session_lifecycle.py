@@ -13,7 +13,7 @@ def test_start_and_natural_end_lifecycle(isolate_state):
     assert session_manager.is_active()
     status = session_manager.get_status()
     assert status["lockMode"] == "soft"
-    assert status["processWhitelist"] == ["good.exe"]
+    assert status["processBlocklist"] == ["good.exe"]
 
     summary = session_manager.end_session(end_type="manual")
     assert not session_manager.is_active()

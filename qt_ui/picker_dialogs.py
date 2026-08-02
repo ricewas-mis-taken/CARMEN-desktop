@@ -1,9 +1,9 @@
-"""Qt port of picker_gui.py's three dialogs: the app whitelist picker, its
+"""Qt port of picker_gui.py's three dialogs: the app blocklist picker, its
 follow-up mid-session reason dialog, and the start-session timer dialog.
 
-Uses the shared qt_ui/checklist.py component for the whitelist picker's
+Uses the shared qt_ui/checklist.py component for the blocklist picker's
 checkbox list -- the same component the event editor's process/domain
-whitelist checklists use (qt_ui/event_editor.py), replacing both this
+blocklist checklists use (qt_ui/event_editor.py), replacing both this
 module's original Stage-1 ad-hoc duplicate and the old Tk
 checklist_widget.py.
 
@@ -42,8 +42,8 @@ def _track(win):
     return win
 
 
-def open_whitelist_picker():
-    _track(_WhitelistPicker()).show()
+def open_blocklist_picker():
+    _track(_BlocklistPicker()).show()
 
 
 def open_timer_dialog():
@@ -54,7 +54,7 @@ class _Checklist:
     """Thin wrapper around qt_ui.checklist's function-based API, giving
     callers in this module the same object-with-methods shape the Stage-1
     ad-hoc _ScrollableChecklist had (add_row / add_separator_label /
-    checked_keys / has_key), so _WhitelistPicker's logic below didn't need
+    checked_keys / has_key), so _BlocklistPicker's logic below didn't need
     to change shape when the underlying checklist implementation was
     unified in Stage 5."""
 
@@ -76,29 +76,35 @@ class _Checklist:
         return key.lower() in self._checkboxes_by_key
 
 
-class _WhitelistPicker(QWidget):
+class _BlocklistPicker(QWidget):
     def __init__(self):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
-        self.setWindowTitle("Carmen Focus — Pick Apps to Whitelist")
+        self.setWindowTitle("Carmen Focus — Pick Apps to Blocklist")
         self.resize(440, 640)
 
         self._session_active = session_manager.is_active()
         if self._session_active:
-            self._saved = {name.lower() for name in session_manager.get_status()["processWhitelist"]}
+            # Mid-session, this picker isn't for adding new restrictions --
+            # it lists what's *currently* blocked so the user can pick which
+            # of those to lift (see _save()/_ReasonDialog below), the same
+            # accountability-gated "explain why" flow as the lock overlay's
+            # own per-violation Unblock button, just reachable in general
+            # instead of only from an active violation.
+            self._current_blocklist = list(session_manager.get_status()["processBlocklist"])
         else:
-            self._saved = {name.lower() for name in config.load_config().get("processWhitelist", [])}
+            self._saved = {name.lower() for name in config.load_config().get("processBlocklist", [])}
 
         layout = QVBoxLayout(self)
 
         if self._session_active:
             instructions = (
-                "A session is active — checked apps below are already allowed.\n"
-                "Check any more you want to add. You'll be asked to explain each\n"
-                "new one before it's added."
+                "A session is active — these apps are currently blocked.\n"
+                "Check any you want to unblock. You'll be asked to explain each\n"
+                "one before it's let through."
             )
         else:
-            instructions = "Check the apps allowed during a focus session.\nPreviously saved picks are pre-checked."
+            instructions = "Check the apps to block during a focus session.\nPreviously saved picks are pre-checked."
         instructions_label = QLabel(instructions)
         instructions_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(instructions_label)
@@ -106,65 +112,59 @@ class _WhitelistPicker(QWidget):
         self._checklist = _Checklist()
         layout.addWidget(self._checklist.widget)
 
-        if not self._session_active:
+        if self._session_active:
+            if not self._current_blocklist:
+                self._checklist.add_separator_label("Nothing is currently blocked.")
+            for process_name in self._current_blocklist:
+                self._checklist.add_row(process_name, process_name, checked=False)
+        else:
             self._add_quick_readd_rows()
 
-        apps = installed_apps.list_installed_apps()
-        if not apps:
-            self._checklist.add_separator_label("No installed apps found.")
-        for app in apps:
-            self._checklist.add_row(
-                app["process_name"],
-                f"{app['display_name']}   ({app['process_name']})",
-                checked=app["process_name"].lower() in self._saved,
-            )
+            apps = installed_apps.list_installed_apps()
+            if not apps:
+                self._checklist.add_separator_label("No installed apps found.")
+            for app in apps:
+                self._checklist.add_row(
+                    app["process_name"],
+                    f"{app['display_name']}   ({app['process_name']})",
+                    checked=app["process_name"].lower() in self._saved,
+                )
 
-        manual_label = QLabel("Not listed? Add by name or file:")
-        layout.addWidget(manual_label)
+            manual_label = QLabel("Not listed? Add by name or file:")
+            layout.addWidget(manual_label)
 
-        manual_row = QHBoxLayout()
-        self._manual_edit = QLineEdit()
-        browse_button = QPushButton("Browse...")
-        add_button = QPushButton("Add")
-        browse_button.clicked.connect(self._browse_for_exe)
-        add_button.clicked.connect(lambda: self._add_manual_entry(self._manual_edit.text()))
-        self._manual_edit.returnPressed.connect(lambda: self._add_manual_entry(self._manual_edit.text()))
-        manual_row.addWidget(self._manual_edit)
-        manual_row.addWidget(browse_button)
-        manual_row.addWidget(add_button)
-        layout.addLayout(manual_row)
+            manual_row = QHBoxLayout()
+            self._manual_edit = QLineEdit()
+            browse_button = QPushButton("Browse...")
+            add_button = QPushButton("Add")
+            browse_button.clicked.connect(self._browse_for_exe)
+            add_button.clicked.connect(lambda: self._add_manual_entry(self._manual_edit.text()))
+            self._manual_edit.returnPressed.connect(lambda: self._add_manual_entry(self._manual_edit.text()))
+            manual_row.addWidget(self._manual_edit)
+            manual_row.addWidget(browse_button)
+            manual_row.addWidget(add_button)
+            layout.addLayout(manual_row)
 
-        self._manual_status = QLabel()
-        self._manual_status.setStyleSheet("color: #c62828;")
-        layout.addWidget(self._manual_status)
+            self._manual_status = QLabel()
+            self._manual_status.setStyleSheet("color: #c62828;")
+            layout.addWidget(self._manual_status)
 
         self._status_label = QLabel()
         self._status_label.setStyleSheet("color: #2e7d32;")
         layout.addWidget(self._status_label)
 
-        button_label = "Add Selected to Session" if self._session_active else "Save Whitelist"
+        button_label = "Unblock Selected" if self._session_active else "Save Blocklist"
         save_button = QPushButton(button_label)
         save_button.clicked.connect(self._save)
         layout.addWidget(save_button, alignment=Qt.AlignCenter)
 
     def _add_quick_readd_rows(self):
-        # Only offered when picking the whitelist for the *next* session, not
+        # Only offered when picking the blocklist for the *next* session, not
         # mid-session -- a quick way to re-check whatever the previous
-        # session actually ended up whitelisting.
+        # session actually ended up blocklisting.
         history = session_history.load_all()
         prev_session = history[-1] if history else None
-        prev_additions = prev_session.get("processWhitelistAdditions", []) if prev_session else []
-        prev_apps = prev_session.get("processWhitelist", []) if prev_session else []
-
-        if prev_additions:
-            self._checklist.add_separator_label("Added mid-session last time — quick re-add:")
-            for addition in prev_additions:
-                process_name = addition.get("process")
-                if not process_name:
-                    continue
-                reason = addition.get("reason")
-                label = f"{process_name}   — {reason}" if reason else process_name
-                self._checklist.add_row(process_name, label, checked=False)
+        prev_apps = prev_session.get("processBlocklist", []) if prev_session else []
 
         if prev_apps:
             self._checklist.add_separator_label("From your last session — quick re-add:")
@@ -173,7 +173,7 @@ class _WhitelistPicker(QWidget):
 
     def _add_manual_entry(self, process_name):
         # Reduce to just the basename even for a typed (not browsed) entry --
-        # is_whitelisted() and enforcement everywhere else compare on
+        # is_blocked() and enforcement everywhere else compare on
         # process name alone, never a full path.
         process_name = os.path.basename(process_name.strip())
         if not process_name:
@@ -197,35 +197,34 @@ class _WhitelistPicker(QWidget):
         selected = self._checklist.checked_keys()
 
         if self._session_active:
-            extras = [name for name in selected if name.lower() not in self._saved]
-            if not extras:
-                self._status_label.setText("No new apps selected — nothing to add.")
+            if not selected:
+                self._status_label.setText("Nothing selected — nothing to unblock.")
                 return
             self.close()
-            _track(_ReasonDialog(extras)).show()
+            _track(_ReasonDialog(selected)).show()
             return
 
         current_cfg = config.load_config()
-        current_cfg["processWhitelist"] = selected
+        current_cfg["processBlocklist"] = selected
         config.save_config(current_cfg)
-        self._status_label.setText(f"Saved {len(selected)} app(s) to the whitelist.")
+        self._status_label.setText(f"Saved {len(selected)} app(s) to the blocklist.")
 
 
 class _ReasonDialog(QWidget):
-    """Second page shown after saving mid-session extras -- one reason field
-    per newly selected app, all required, before add_process_to_whitelist()
-    actually applies any of them."""
+    """Second page shown after picking apps to unblock mid-session -- one
+    reason field per selected app, all required, before
+    remove_process_from_blocklist() actually applies any of them."""
 
     def __init__(self, process_names):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
-        self.setWindowTitle("Carmen Focus — Explain Additions")
+        self.setWindowTitle("Carmen Focus — Explain Unblocks")
         self.resize(440, 480)
         self._process_names = process_names
 
         layout = QVBoxLayout(self)
 
-        prompt = QLabel("Why does each of these need to be added to this session?")
+        prompt = QLabel("Why does each of these need to be unblocked for this session?")
         prompt.setWordWrap(True)
         prompt.setAlignment(Qt.AlignCenter)
         layout.addWidget(prompt)
@@ -271,24 +270,24 @@ class _ReasonDialog(QWidget):
             self._status_label.setText(f"Enter a reason for: {', '.join(missing)}")
             return
 
-        added = 0
+        unblocked = 0
         for process_name, reason in reasons.items():
-            _, addition = session_manager.add_process_to_whitelist(process_name, reason)
-            if addition is not None:
-                added += 1
+            _, exception_entry = session_manager.remove_process_from_blocklist(process_name, reason)
+            if exception_entry is not None:
+                unblocked += 1
 
         self.close()
-        if added < len(reasons):
+        if unblocked < len(reasons):
             # Session ended mid-form (naturally, nuclear, or via the API)
             # before every entry could be applied.
             QMessageBox.warning(
                 None, "Carmen Focus",
-                f"Session ended before all apps could be added — "
-                f"{added} of {len(reasons)} were whitelisted.",
+                f"Session ended before all apps could be unblocked — "
+                f"{unblocked} of {len(reasons)} were unblocked.",
             )
         else:
             QMessageBox.information(
-                None, "Carmen Focus", f"Added {added} app(s) to the session whitelist."
+                None, "Carmen Focus", f"Unblocked {unblocked} app(s) for the rest of the session."
             )
 
 
@@ -322,8 +321,8 @@ class _TimerDialog(QWidget):
         mode_row.addWidget(self._hard_radio)
         layout.addLayout(mode_row)
 
-        process_count = len(cfg.get("processWhitelist", []))
-        count_label = QLabel(f"Using saved whitelist: {process_count} app(s)")
+        process_count = len(cfg.get("processBlocklist", []))
+        count_label = QLabel(f"Using saved blocklist: {process_count} app(s)")
         count_label.setStyleSheet("color: #888;")
         layout.addWidget(count_label)
 
@@ -346,12 +345,12 @@ class _TimerDialog(QWidget):
 
         lock_mode = "hard" if self._hard_radio.isChecked() else "soft"
         current_cfg = config.load_config()
-        process_whitelist = current_cfg.get("processWhitelist", [])
+        process_blocklist = current_cfg.get("processBlocklist", [])
         domain_whitelist = current_cfg.get("domainWhitelist", [])
 
         # Calls the same function POST /session/start uses, so this session
         # is immediately visible to the browser extension via GET /status.
-        session_manager.start_session(duration_minutes, lock_mode, process_whitelist, domain_whitelist)
+        session_manager.start_session(duration_minutes, lock_mode, process_blocklist, domain_whitelist)
 
         current_cfg["last_duration_minutes"] = duration_minutes
         current_cfg["last_lock_mode"] = lock_mode

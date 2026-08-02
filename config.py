@@ -1,4 +1,5 @@
-"""Loads and saves config.json (whitelist defaults, last-used settings)."""
+"""Loads and saves config.json (app blocklist + domain allow list defaults,
+last-used settings)."""
 import copy
 import json
 import os
@@ -6,7 +7,7 @@ import os
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
 DEFAULT_CONFIG = {
-    "processWhitelist": [],
+    "processBlocklist": [],
     "domainWhitelist": [],
     "last_duration_minutes": 25,
     "last_lock_mode": "soft",

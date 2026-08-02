@@ -564,7 +564,7 @@ class _TopicView(QWidget):
                 session_manager.start_session(
                     duration_minutes=tasks_store.BURNOUT_MINUTES,
                     lock_mode=task["lockMode"],
-                    process_whitelist=task.get("processWhitelist", []),
+                    process_blocklist=task.get("processBlocklist", []),
                     domain_whitelist=task.get("domainWhitelist", []),
                     source="review",
                     event_id=task["id"],
@@ -608,7 +608,7 @@ class _TopicView(QWidget):
                 session_manager.start_session(
                     duration_minutes=tasks_store.BURNOUT_MINUTES,
                     lock_mode=task["lockMode"],
-                    process_whitelist=task.get("processWhitelist", []),
+                    process_blocklist=task.get("processBlocklist", []),
                     domain_whitelist=task.get("domainWhitelist", []),
                     source="review",
                     event_id=task["id"],

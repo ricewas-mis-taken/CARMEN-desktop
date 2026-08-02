@@ -25,8 +25,8 @@ def soft_lock_warning(offending_process_name=None):
 
 def hard_lock_redirect(offending_process_name=None):
     """Minimizes the offending foreground window (unless it's exempt/our own
-    process), then brings the last whitelisted app's window back to the
-    foreground without disturbing its size or snap position.
+    process), then brings the last acceptable (non-blocklisted) app's window
+    back to the foreground without disturbing its size or snap position.
 
     Note: a previous version of this deliberately skipped minimizing the
     offending window at all, after it turned out to close a lightweight
@@ -46,7 +46,7 @@ def hard_lock_redirect(offending_process_name=None):
     except Exception:
         pass
 
-    # Re-check against the whitelist too, not just is_exempt() — the
+    # Re-check against the blocklist too, not just is_exempt() — the
     # foreground window can change between the polling tick that detected
     # this violation and this call actually running (e.g. the user already
     # switched to an allowed app in that gap). Minimizing whatever happens
@@ -55,7 +55,8 @@ def hard_lock_redirect(offending_process_name=None):
     if (
         hwnd
         and not session_manager.is_exempt(hwnd_process, hwnd_pid)
-        and not (hwnd_process and session_manager.is_whitelisted(hwnd_process))
+        and hwnd_process
+        and session_manager.is_blocked(hwnd_process)
     ):
         try:
             win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
@@ -88,6 +89,36 @@ def hard_lock_redirect(offending_process_name=None):
         duration_ms=3000,
         offending_process_name=label if label != "that app" else None,
     )
+
+
+def sweep_minimize_blocked_windows():
+    """Minimizes every visible, non-iconic window belonging to a blocklisted
+    process -- not just whichever one happens to be in the foreground on a
+    given poll tick. hard_lock_redirect() alone only ever reacts to the
+    current foreground window, so a blocklisted app that's open in the
+    background (already running before the session started, or reopened in
+    the gap between two polls without ever becoming the foreground window)
+    would otherwise just sit there, unminimized and usable, until the user
+    happened to switch to it directly."""
+    def callback(hwnd, _):
+        if not win32gui.IsWindowVisible(hwnd) or win32gui.IsIconic(hwnd):
+            return
+        if not win32gui.GetWindowText(hwnd):
+            return
+        try:
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            name = psutil.Process(pid).name()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, Exception):
+            return
+        if session_manager.is_exempt(name, pid):
+            return
+        if session_manager.is_blocked(name):
+            try:
+                win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+            except Exception:
+                pass
+
+    win32gui.EnumWindows(callback, None)
 
 
 def _find_window_by_process_name(process_name):
@@ -129,11 +160,11 @@ def _show_lock_overlay(message, duration_ms, offending_process_name=None):
     Guarded two ways against ever getting stuck open: the overlay's own
     tick-driven close, and a backup timer -- see qt_ui/enforcer_overlay.py.
 
-    offending_process_name, when known, adds a "Whitelist" button -- lets
+    offending_process_name, when known, adds an "Unblock" button -- lets
     the user let that exe through for the rest of the session without
     ending hard/soft lock enforcement entirely, same as the "Pick Apps to
-    Whitelist" tray flow, just reachable from the moment of redirect
-    itself.
+    Blocklist" picker's own removal flow, just reachable from the moment of
+    redirect itself.
     """
     qt_gui_thread.run_on_gui_thread(
         lambda: enforcer_overlay.build_overlay(message, duration_ms, offending_process_name)

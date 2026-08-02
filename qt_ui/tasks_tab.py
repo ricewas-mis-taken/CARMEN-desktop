@@ -307,40 +307,40 @@ class _TaskCard(QFrame):
         self._lock_label.setStyleSheet("font-size: 36px; font-weight: 600; color: #262A32;")
         layout.addWidget(self._lock_label)
 
-        self._whitelist_button = QPushButton("(see whitelist)")
-        self._whitelist_button.setFlat(True)
-        self._whitelist_button.setCursor(Qt.PointingHandCursor)
-        self._whitelist_button.setStyleSheet(
+        self._blocklist_button = QPushButton("(see restrictions)")
+        self._blocklist_button.setFlat(True)
+        self._blocklist_button.setCursor(Qt.PointingHandCursor)
+        self._blocklist_button.setStyleSheet(
             "color: #3A3F48; font-size: 36px; text-align: left; border: none; "
             "background: transparent; padding: 0;"
         )
-        self._whitelist_button.clicked.connect(self._open_whitelist_viewer)
-        layout.addWidget(self._whitelist_button)
+        self._blocklist_button.clicked.connect(self._open_blocklist_viewer)
+        layout.addWidget(self._blocklist_button)
 
         self._refresh_description()
         return container
 
-    def _whitelist_items(self):
-        return list(self._task.get("processWhitelist", [])) + list(self._task.get("domainWhitelist", []))
+    def _blocklist_items(self):
+        return list(self._task.get("processBlocklist", [])) + list(self._task.get("domainWhitelist", []))
 
     def _refresh_description(self):
         self._lock_label.setText("Hard Lock" if self._task.get("lockMode") == "hard" else "Soft Lock")
 
-    def _open_whitelist_viewer(self):
+    def _open_blocklist_viewer(self):
         from PySide6.QtWidgets import QDialog, QPlainTextEdit
         dlg = QDialog(self.window())
-        dlg.setWindowTitle(f"{self._task['name']} — Whitelist")
+        dlg.setWindowTitle(f"{self._task['name']} — Restrictions")
         dlg.setObjectName("PopupBg")
         dlg.setMinimumWidth(340)
         lay = QVBoxLayout(dlg)
         lay.setContentsMargins(20, 16, 20, 16)
         lay.setSpacing(8)
 
-        proc_lbl = QLabel("Allowed apps:")
+        proc_lbl = QLabel("Blocked apps:")
         proc_lbl.setStyleSheet("font-weight: 600; font-size: 13px; color: #1F2328;")
         lay.addWidget(proc_lbl)
         proc_view = QPlainTextEdit()
-        proc_view.setPlainText("\n".join(self._task.get("processWhitelist", [])) or "(none)")
+        proc_view.setPlainText("\n".join(self._task.get("processBlocklist", [])) or "(none)")
         proc_view.setFixedHeight(100)
         proc_view.setReadOnly(True)
         lay.addWidget(proc_view)
@@ -388,7 +388,7 @@ class _TaskCard(QFrame):
         col.setSpacing(4)
 
         # The balance text itself is the cash-in trigger (clickable, like
-        # _whitelist_button's "(see whitelist)") rather than a separate
+        # _blocklist_button's "(see restrictions)") rather than a separate
         # hover-only button -- always visible so there's no discoverability
         # gap, and disabled (no pointer cursor, no click) when there's
         # nothing banked to cash in.
@@ -555,7 +555,7 @@ class _TaskCard(QFrame):
         session_manager.start_session(
             duration_minutes,
             self._task.get("lockMode", "soft"),
-            self._task.get("processWhitelist", []),
+            self._task.get("processBlocklist", []),
             self._task.get("domainWhitelist", []),
             source="task",
             event_id=self._task["id"],

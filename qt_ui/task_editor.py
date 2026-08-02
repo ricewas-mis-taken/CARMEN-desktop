@@ -1,9 +1,9 @@
 """Add/edit dialog for a Tasks-tab task -- name, color, daily target minutes,
 recurrence (every day / specific weekdays), soft/hard lock mode, and the
-process/domain whitelist to apply while it's running. Mirrors the shape of
-qt_ui/event_editor.py's focus-integration section (same checklist component,
-same whitelist defaulting from config.load_config()) but without any of the
-calendar-event scheduling fields this doesn't need.
+process block list / domain allow list to apply while it's running. Mirrors
+the shape of qt_ui/event_editor.py's focus-integration section (same
+checklist component, same list defaulting from config.load_config()) but
+without any of the calendar-event scheduling fields this doesn't need.
 
 Non-modal (.show()), same convention as the rest of this app's dialogs.
 """
@@ -136,9 +136,9 @@ class _TaskEditor(QWidget):
         lock_row.addStretch(1)
         layout.addLayout(lock_row)
 
-        layout.addWidget(_bold_label("Whitelisted apps while this task runs"))
+        layout.addWidget(_bold_label("Blocklisted apps while this task runs"))
         apps = installed_apps.list_installed_apps()
-        default_processes = (task or {}).get("processWhitelist") if task else config.load_config().get("processWhitelist", [])
+        default_processes = (task or {}).get("processBlocklist") if task else config.load_config().get("processBlocklist", [])
         existing_process_set = {p.lower() for p in (default_processes or [])}
         process_widget, self._process_checks, process_add_row = checklist.build_checklist(
             apps, existing_process_set, height=160,
@@ -158,7 +158,7 @@ class _TaskEditor(QWidget):
         process_manual_row.addWidget(process_manual_add)
         layout.addLayout(process_manual_row)
 
-        layout.addWidget(_bold_label("Whitelisted domains while this task runs"))
+        layout.addWidget(_bold_label("Allowed domains while this task runs"))
         default_domains = (task or {}).get("domainWhitelist") if task else config.load_config().get("domainWhitelist", [])
         domain_widget, self._domain_checks, domain_add_row = checklist.build_checklist(
             list(default_domains or []), {d.lower() for d in (default_domains or [])}, height=100,
@@ -254,7 +254,7 @@ class _TaskEditor(QWidget):
             "recurrence": recurrence_kind,
             "weekdays": weekdays,
             "lockMode": "hard" if self._hard_radio.isChecked() else "soft",
-            "processWhitelist": checklist.get_checked(self._process_checks),
+            "processBlocklist": checklist.get_checked(self._process_checks),
             "domainWhitelist": checklist.get_checked(self._domain_checks),
         }
 
