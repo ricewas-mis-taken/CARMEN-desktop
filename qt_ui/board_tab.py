@@ -84,6 +84,14 @@ def _build_info_content(layout, task):
         text_view.setReadOnly(True)
         text_view.setPlainText(text)
         text_view.setMaximumHeight(160)
+        # No parent styling reaches this widget reliably (it's not under
+        # #ContentArea or #PopupBg), so without an explicit color it falls
+        # back to the OS palette -- white text on Windows dark mode, which
+        # is unreadable against the panel's light background.
+        text_view.setStyleSheet(
+            "background: #FAFBFC; border: 1px solid #E3E5E9; border-radius: 8px; "
+            "padding: 4px 6px; color: #1F2328;"
+        )
         layout.addWidget(text_view)
 
     photo_path = task.get("descriptionPhotoPath")

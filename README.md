@@ -8,9 +8,9 @@ A Windows desktop productivity app for scheduling events, running timed focus se
 Month grid + day schedule view. Create and edit timed events, see what is coming up next via the "Next Up" banner, and navigate days by clicking cells in the month grid.
 
 ### Focus
-Start an ad-hoc focus session with a custom duration and a whitelist of allowed apps/sites. While a session is running, the app enforces the whitelist:
-- **Soft lock** — a full-screen overlay warns you when you switch to a non-whitelisted app.
-- **Hard lock** — the offending window is minimized and focus is returned to your last whitelisted app.
+Start an ad-hoc focus session with a custom duration and a block list of disallowed apps/sites. While a session is running, the app enforces the block list:
+- **Soft lock** — a full-screen overlay warns you when you switch to a blocklisted app.
+- **Hard lock** — the offending window is minimized and focus is returned to your last acceptable (non-blocklisted) app.
 
 Pause, resume, or end the session at any time. A "Nuclear End" option is available for breaking out of a hard lock.
 

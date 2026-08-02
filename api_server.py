@@ -12,8 +12,8 @@ Endpoints:
     GET  /history
     GET  /apps/running
     GET  /apps/installed
-    POST /whitelist/apps
-    POST /whitelist/apps/add
+    POST /blocklist/apps
+    POST /blocklist/apps/remove
     GET  /whitelist/domains
     POST /whitelist/domains
     POST /whitelist/domains/add
@@ -24,9 +24,9 @@ through this API instead of tracking their own state. It's also the
 boundary Carmen's main system will call into once this module runs as an
 independent process — see README.md for the documented contract.
 
-The whitelist picker and the start-session timer are now a native Tkinter
+The blocklist picker and the start-session timer are now a native Tkinter
 GUI (picker_gui.py, launched from the tray menu) rather than a served web
-page — /apps/installed and /whitelist/apps remain here as the same API
+page — /apps/installed and /blocklist/apps remain here as the same API
 surface for any other caller (e.g. Carmen) to drive the same picks
 programmatically.
 """
@@ -90,13 +90,13 @@ def session_start():
 
     duration_minutes = body.get("duration_minutes")
     lock_mode = body.get("lock_mode")
-    process_whitelist = body.get("process_whitelist")
+    process_blocklist = body.get("process_blocklist")
     domain_whitelist = body.get("domain_whitelist")
-    # "manual" (popup/picker_gui, using the saved whitelist) or
-    # "calendar-event" (a temporary per-session override tagged with the
-    # event it came from) — purely descriptive, surfaced back through
-    # GET /status so the extension popup can show why the active whitelist
-    # doesn't match the user's manually saved one.
+    # "manual" (popup/picker_gui, using the saved lists) or "calendar-event"
+    # (a temporary per-session override tagged with the event it came from)
+    # — purely descriptive, surfaced back through GET /status so the
+    # extension popup can show why the active lists don't match the user's
+    # manually saved ones.
     source = body.get("source", "manual")
     event_id = body.get("event_id")
     event_title = body.get("event_title")
@@ -110,14 +110,14 @@ def session_start():
     if source == "calendar-event" and (not isinstance(event_id, str) or not event_id.strip()):
         return jsonify({"error": "event_id is required when source is 'calendar-event'"}), 400
 
-    if process_whitelist is None:
+    if process_blocklist is None:
         # Caller didn't send one (e.g. the browser extension, which no
-        # longer collects an app whitelist and sends null) — fall back to
+        # longer collects an app blocklist and sends null) — fall back to
         # whatever was last saved on this side via the app picker, instead
-        # of rejecting the request or wiping the whitelist out.
-        process_whitelist = config.load_config().get("processWhitelist", [])
-    elif not isinstance(process_whitelist, list):
-        return jsonify({"error": "process_whitelist must be a list, null, or omitted"}), 400
+        # of rejecting the request or wiping the blocklist out.
+        process_blocklist = config.load_config().get("processBlocklist", [])
+    elif not isinstance(process_blocklist, list):
+        return jsonify({"error": "process_blocklist must be a list, null, or omitted"}), 400
 
     if not isinstance(domain_whitelist, list):
         return jsonify({"error": "domain_whitelist must be a list of domain/URL substrings"}), 400
@@ -125,7 +125,7 @@ def session_start():
     result = session_manager.start_session(
         duration_minutes,
         lock_mode,
-        process_whitelist,
+        process_blocklist,
         domain_whitelist,
         source=source,
         event_id=event_id,
@@ -194,9 +194,10 @@ def violation_resolved():
 
 @app.route("/history", methods=["GET"])
 def history():
-    """Every completed session — start/end time, lock mode, the whitelists
-    used, and every violation with its resolution time/duration if any. Same
-    data the tray's "Session History" viewer shows."""
+    """Every completed session — start/end time, lock mode, the app block
+    list and domain allow list used, and every violation with its
+    resolution time/duration if any. Same data the tray's "Session History"
+    viewer shows."""
     return jsonify(session_history.load_all())
 
 
@@ -210,25 +211,25 @@ def apps_installed():
     return jsonify(installed_apps.list_installed_apps())
 
 
-@app.route("/whitelist/apps", methods=["POST"])
-def whitelist_apps():
+@app.route("/blocklist/apps", methods=["POST"])
+def blocklist_apps():
     body = request.get_json(force=True, silent=True) or {}
-    process_whitelist = body.get("process_whitelist")
+    process_blocklist = body.get("process_blocklist")
 
-    if not isinstance(process_whitelist, list):
-        return jsonify({"error": "process_whitelist must be a list of process names"}), 400
+    if not isinstance(process_blocklist, list):
+        return jsonify({"error": "process_blocklist must be a list of process names"}), 400
 
     cfg = config.load_config()
-    cfg["processWhitelist"] = list(process_whitelist)
+    cfg["processBlocklist"] = list(process_blocklist)
     config.save_config(cfg)
-    return jsonify({"processWhitelist": cfg["processWhitelist"]})
+    return jsonify({"processBlocklist": cfg["processBlocklist"]})
 
 
 @app.route("/whitelist/domains", methods=["GET"])
 def whitelist_domains_get():
     """Returns config.json's global domainWhitelist — the same "manual/
-    on-demand default" processWhitelist already is. Meant for the browser
-    extension to poll so a domain-whitelist edit made on the desktop side
+    on-demand default" processBlocklist already is. Meant for the browser
+    extension to poll so a domain-allow-list edit made on the desktop side
     (calendar_gui.py's event editor defaults new focus profiles from this
     same field) shows up on the extension side too."""
     cfg = config.load_config()
@@ -238,14 +239,14 @@ def whitelist_domains_get():
 @app.route("/whitelist/domains", methods=["POST"])
 def whitelist_domains_set():
     """Overwrites config.json's global domainWhitelist — the domain
-    counterpart to POST /whitelist/apps. Meant to be called by the browser
-    extension whenever its own domain whitelist changes, so that edit is
+    counterpart to POST /blocklist/apps. Meant to be called by the browser
+    extension whenever its own domain allow list changes, so that edit is
     reflected back into the desktop app (and from there, into any calendar
     event's default domain picks) instead of the two sides silently
     diverging. Deliberately separate from POST /whitelist/domains/add below,
     which only ever touches the *active session's* domainWhitelist and
     requires a reason — this endpoint is the same "just replace the saved
-    default" shape as /whitelist/apps, with no session or reason involved."""
+    default" shape as /blocklist/apps, with no session or reason involved."""
     body = request.get_json(force=True, silent=True) or {}
     domain_whitelist = body.get("domain_whitelist")
 
@@ -258,12 +259,12 @@ def whitelist_domains_set():
     return jsonify({"domainWhitelist": cfg["domainWhitelist"]})
 
 
-@app.route("/whitelist/apps/add", methods=["POST"])
-def whitelist_apps_add():
-    """Adds a single process to the active session's processWhitelist, with a
-    required reason logged for the audit trail (session_manager's
-    processWhitelistAdditions) — the API-level counterpart to the lock
-    overlay's own "Whitelist" button (enforcer.py), for any other caller
+@app.route("/blocklist/apps/remove", methods=["POST"])
+def blocklist_apps_remove():
+    """Removes a single process from the active session's processBlocklist,
+    with a required reason logged for the audit trail (session_manager's
+    processBlocklistExceptions) — the API-level counterpart to the lock
+    overlay's own "Unblock" button (enforcer.py), for any other caller
     (e.g. Carmen) that wants to drive the same mid-session unblock."""
     body = request.get_json(force=True, silent=True) or {}
     process_name = body.get("process_name")
@@ -274,16 +275,16 @@ def whitelist_apps_add():
     if not isinstance(reason, str) or not reason.strip():
         return jsonify({"error": "reason must be a non-empty string"}), 400
 
-    # is_active() is checked atomically inside add_process_to_whitelist,
+    # is_active() is checked atomically inside remove_process_from_blocklist,
     # under the same lock as the write itself, rather than as a separate
     # check-then-act step here — a session can end in the gap between a
     # pre-check and the write actually happening.
-    process_whitelist, addition = session_manager.add_process_to_whitelist(
+    process_blocklist, exception_entry = session_manager.remove_process_from_blocklist(
         process_name.strip(), reason.strip()
     )
-    if addition is None:
+    if exception_entry is None:
         return jsonify({"error": "no active session"}), 409
-    return jsonify({"processWhitelist": process_whitelist, "addition": addition})
+    return jsonify({"processBlocklist": process_blocklist, "exception": exception_entry})
 
 
 @app.route("/whitelist/domains/add", methods=["POST"])
@@ -301,7 +302,7 @@ def whitelist_domains_add():
     if not isinstance(reason, str) or not reason.strip():
         return jsonify({"error": "reason must be a non-empty string"}), 400
 
-    # See whitelist_apps_add() above for why is_active() is checked
+    # See blocklist_apps_remove() above for why is_active() is checked
     # atomically inside add_domain_to_whitelist rather than as a separate
     # pre-check here.
     domain_whitelist, addition = session_manager.add_domain_to_whitelist(

@@ -55,10 +55,10 @@ def _wrap_html(body):
 
 def format_session_html(session):
     """Returns an HTML fragment (a <div>...</div>) describing one completed
-    session -- header line, allowed apps/sites, violation timeline, and any
-    mid-session whitelist additions. Same content/order as the original
-    Tk _write_session(), just emitted as HTML instead of Text-widget tag
-    inserts."""
+    session -- header line, blocked apps / allowed sites, violation
+    timeline, and any mid-session exceptions. Same content/order as the
+    original Tk _write_session(), just emitted as HTML instead of
+    Text-widget tag inserts."""
     start = _parse(session.get("startTime"))
     end = _parse(session.get("endTime"))
 
@@ -89,9 +89,9 @@ def format_session_html(session):
             f'{_esc(reason or "(none given)")}</span><br>'
         )
 
-    process_whitelist = session.get("processWhitelist") or []
+    process_blocklist = session.get("processBlocklist") or []
     domain_whitelist = session.get("domainWhitelist") or []
-    parts.append(f"Allowed apps:&nbsp; {_esc(', '.join(process_whitelist) or '(none)')}<br>")
+    parts.append(f"Blocked apps:&nbsp; {_esc(', '.join(process_blocklist) or '(none)')}<br>")
     parts.append(f"Allowed sites: {_esc(', '.join(domain_whitelist) or '(none)')}<br>")
 
     violation_log = session.get("violationLog") or []
@@ -108,14 +108,14 @@ def format_session_html(session):
             line, color = _format_violation(entry)
             parts.append(f'<span style="color:{color};">&nbsp;&nbsp;{_esc(line)}</span><br>')
 
-    process_additions = session.get("processWhitelistAdditions") or []
+    process_exceptions = session.get("processBlocklistExceptions") or []
     domain_additions = session.get("domainWhitelistAdditions") or []
-    if process_additions or domain_additions:
-        parts.append('<span style="color:#888888;">Mid-session whitelist additions:</span><br>')
-        for entry in process_additions:
-            parts.append(f"&nbsp;&nbsp;{_esc(_format_addition('app', entry, 'process'))}<br>")
+    if process_exceptions or domain_additions:
+        parts.append('<span style="color:#888888;">Mid-session exceptions:</span><br>')
+        for entry in process_exceptions:
+            parts.append(f"&nbsp;&nbsp;{_esc(_format_exception('app unblocked', entry, 'process'))}<br>")
         for entry in domain_additions:
-            parts.append(f"&nbsp;&nbsp;{_esc(_format_addition('site', entry, 'domain'))}<br>")
+            parts.append(f"&nbsp;&nbsp;{_esc(_format_exception('site allowed', entry, 'domain'))}<br>")
 
     parts.append(f'<br><span style="color:#888888;">{SEPARATOR}</span><br><br>')
     return "".join(parts)
@@ -145,7 +145,7 @@ def _format_pause_event(entry):
     return f"{label} at {time_text}"
 
 
-def _format_addition(kind_label, entry, key):
+def _format_exception(kind_label, entry, key):
     name = entry.get(key, "?")
     reason = entry.get("reason") or "(no reason given)"
     ts = _parse(entry.get("timestamp"))

@@ -1,4 +1,4 @@
-"""Qt port of enforcer.py's lock-overlay popup and its follow-up whitelist-
+"""Qt port of enforcer.py's lock-overlay popup and its follow-up unblock-
 reason dialog. Stage 1 of the Tkinter->PySide6 migration: functional port
 only, default Qt look, no QSS styling yet (that lands in Stage 5's final
 style pass alongside the other Stage-1 dialogs).
@@ -56,8 +56,8 @@ def build_overlay(message, duration_ms, offending_process_name=None):
     return win
 
 
-def build_whitelist_reason_dialog(process_name):
-    win = _WhitelistReasonDialog(process_name)
+def build_unblock_reason_dialog(process_name):
+    win = _UnblockReasonDialog(process_name)
     _open_windows.add(win)
     win.destroyed.connect(lambda: _open_windows.discard(win))
     win.show()
@@ -100,11 +100,11 @@ class _LockOverlay(QWidget):
         layout.addWidget(self._progress)
 
         if offending_process_name:
-            whitelist_button = QPushButton("Whitelist")
-            whitelist_button.clicked.connect(
-                lambda: self._on_whitelist_click(offending_process_name)
+            unblock_button = QPushButton("Unblock")
+            unblock_button.clicked.connect(
+                lambda: self._on_unblock_click(offending_process_name)
             )
-            layout.addWidget(whitelist_button, alignment=Qt.AlignCenter)
+            layout.addWidget(unblock_button, alignment=Qt.AlignCenter)
 
         # Backup auto-close, independent of the tick loop below — guarantees
         # the popup closes even if something in _tick() raises.
@@ -140,12 +140,12 @@ class _LockOverlay(QWidget):
         y = max(screen.y(), min(y, max_y))
         self.move(x, y)
 
-    def _on_whitelist_click(self, process_name):
+    def _on_unblock_click(self, process_name):
         # Close this overlay first, not just hide it — otherwise its own
         # raise_()/activateWindow() tick would keep stealing focus back
         # from the reason dialog below every 50ms.
         self.close()
-        build_whitelist_reason_dialog(process_name)
+        build_unblock_reason_dialog(process_name)
 
     def _tick(self):
         if self._closed:
@@ -182,18 +182,24 @@ class _LockOverlay(QWidget):
         return super().close()
 
 
-class _WhitelistReasonDialog(QWidget):
+class _UnblockReasonDialog(QWidget):
+    """Lets the offending app through for the rest of the session by
+    removing it from processBlocklist (see
+    session_manager.remove_process_from_blocklist) -- reachable straight
+    from a violation's lock overlay, same destination as the "Pick Apps to
+    Blocklist" picker's own removal flow."""
+
     def __init__(self, process_name):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
-        self.setWindowTitle("Carmen Focus — Whitelist App")
+        self.setWindowTitle("Carmen Focus — Unblock App")
         self.resize(360, 180)
         self._process_name = process_name
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
 
-        prompt = QLabel(f"Whitelist {process_name} for the rest of this session — why?")
+        prompt = QLabel(f"Unblock {process_name} for the rest of this session — why?")
         prompt.setWordWrap(True)
         prompt.setAlignment(Qt.AlignCenter)
         layout.addWidget(prompt)
@@ -207,12 +213,12 @@ class _WhitelistReasonDialog(QWidget):
         layout.addWidget(self._status_label)
 
         button_row = QHBoxLayout()
-        whitelist_button = QPushButton("Whitelist")
+        unblock_button = QPushButton("Unblock")
         cancel_button = QPushButton("Cancel")
-        whitelist_button.clicked.connect(self._confirm)
+        unblock_button.clicked.connect(self._confirm)
         cancel_button.clicked.connect(self.close)
         button_row.addStretch(1)
-        button_row.addWidget(whitelist_button)
+        button_row.addWidget(unblock_button)
         button_row.addWidget(cancel_button)
         button_row.addStretch(1)
         layout.addLayout(button_row)
@@ -223,14 +229,14 @@ class _WhitelistReasonDialog(QWidget):
     def _confirm(self):
         reason = self._reason_edit.text().strip()
         if not reason:
-            self._status_label.setText("Enter a reason before whitelisting.")
+            self._status_label.setText("Enter a reason before unblocking.")
             return
-        _, addition = session_manager.add_process_to_whitelist(self._process_name, reason)
-        if addition is None:
+        _, exception_entry = session_manager.remove_process_from_blocklist(self._process_name, reason)
+        if exception_entry is None:
             # Session ended (naturally, nuclear, or via the API) between this
-            # popup opening and the user confirming — nothing to whitelist
+            # popup opening and the user confirming — nothing to unblock
             # anymore, and applying it anyway would silently bleed into
             # whatever session starts next.
-            self._status_label.setText("Session already ended — nothing to whitelist.")
+            self._status_label.setText("Session already ended — nothing to unblock.")
             return
         self.close()

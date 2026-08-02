@@ -39,7 +39,7 @@ def get_active_window():
         process_name = psutil.Process(pid).name()
     except (psutil.NoSuchProcess, psutil.AccessDenied, Exception):
         process_name = None
-    return {"title": title, "process_name": process_name, "pid": pid}
+    return {"title": title, "process_name": process_name, "pid": pid, "hwnd": hwnd}
 
 
 def list_running_apps():
@@ -88,7 +88,7 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None):
     """
     last_flagged_process = None
     last_menu_state = None
-    last_hard_redirect = {"process": None, "time": 0.0}
+    last_hard_redirect = {"process": None, "hwnd": None, "time": 0.0}
     last_violation_time = {}  # process_name -> time.time() of last logged violation
 
     while not stop_event.is_set():
@@ -115,16 +115,14 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None):
                 window = get_active_window()
                 process_name = window["process_name"]
                 pid = window["pid"]
+                hwnd = window["hwnd"]
 
                 if session_manager.is_exempt(process_name, pid):
                     # Core shell/system processes (taskbar, alt-tab, wifi/time
                     # flyouts) and our own tray/popup windows are never
                     # violations — don't touch dedupe state either way.
                     pass
-                elif process_name and session_manager.is_whitelisted(process_name):
-                    session_manager.record_acceptable(process_name)
-                    last_flagged_process = None
-                elif process_name:
+                elif process_name and session_manager.is_blocked(process_name):
                     if process_name != last_flagged_process:
                         last_flagged_process = process_name
                         now = time.time()
@@ -134,28 +132,55 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None):
                         lock_mode = session_manager.get_lock_mode()
                         if lock_mode == "hard":
                             now = time.time()
+                            # Keyed on hwnd, not just process name -- a
+                            # process name match alone can't tell "this exact
+                            # window never actually left the foreground"
+                            # (the Discord-popup case this cooldown exists
+                            # for) apart from "the user closed it and
+                            # reopened a brand new window of the same app"
+                            # (a fresh violation that deserves an immediate
+                            # redirect, not a wait for the old window's
+                            # cooldown to expire).
                             recently_redirected = (
                                 last_hard_redirect["process"] == process_name
+                                and last_hard_redirect["hwnd"] == hwnd
                                 and (now - last_hard_redirect["time"]) < HARD_REDIRECT_COOLDOWN_SECONDS
                             )
                             if not recently_redirected:
                                 enforcer.hard_lock_redirect(process_name)
                                 last_hard_redirect["process"] = process_name
+                                last_hard_redirect["hwnd"] = hwnd
                                 last_hard_redirect["time"] = now
                             # hard_lock_redirect() forces focus back to the
-                            # whitelisted app right here, so the dedupe check
-                            # above must not keep treating this process as
-                            # "already handled" — if the user alt-tabs straight
-                            # back to it before the next tick observes the
-                            # whitelisted app (which is what normally resets
-                            # this via record_acceptable), the reopened app
-                            # would otherwise compare equal and get skipped,
+                            # last acceptable (non-blocklisted) app right
+                            # here, so the dedupe check above must not keep
+                            # treating this process as "already handled" — if
+                            # the user alt-tabs straight back to it before the
+                            # next tick observes an acceptable app (which is
+                            # what normally resets this via
+                            # record_acceptable), the reopened app would
+                            # otherwise compare equal and get skipped,
                             # silently defeating hard lock. The cooldown above
                             # (not this reset) is what stops a stuck-in-
                             # foreground app from spamming redirects/overlays.
                             last_flagged_process = None
                         else:
                             enforcer.soft_lock_warning(process_name)
+                elif process_name:
+                    session_manager.record_acceptable(process_name)
+                    last_flagged_process = None
+
+                # Everything above only ever looks at whichever window is
+                # currently in the foreground on this tick. That misses two
+                # cases entirely: a blocklisted app already open (but not
+                # focused) when the session started, and the same app
+                # reopened right after being minimized -- if it doesn't
+                # happen to be the foreground window at the exact moment of
+                # a poll tick, it just sits there open and usable. Sweeping
+                # every visible window each tick in hard-lock mode closes
+                # that gap independently of focus.
+                if session_manager.get_lock_mode() == "hard":
+                    enforcer.sweep_minimize_blocked_windows()
             else:
                 # Reset dedupe state when paused or idle so the first process
                 # seen after resuming is always evaluated fresh.

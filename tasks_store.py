@@ -32,7 +32,7 @@ DEFAULT_TASK = {
     "recurrence": "daily",  # "daily" or "weekly_days"
     "weekdays": [],  # WEEKDAY_CODES entries, only used for "weekly_days"
     "lockMode": "soft",
-    "processWhitelist": [],
+    "processBlocklist": [],
     "domainWhitelist": [],
     "cashedInDates": {},  # {"YYYY-MM-DD": minutes} spent from the vacation balance
     "archived": False,
@@ -237,8 +237,13 @@ def cash_in(task_id, target_date, minutes, sessions):
     if task is None:
         raise ValueError("no such task")
     balance = vacation_balance_minutes(task, sessions)
-    if minutes > balance:
-        raise ValueError(f"only {balance:.0f} vacation minute(s) available")
+    # Round rather than compare against the raw float -- the UI shows and
+    # accepts whole minutes rounded from the true balance (e.g. 0.97m reads
+    # as "1m banked"), so comparing a whole-minute request against the
+    # unrounded balance would reject exactly the amount the user was shown.
+    available = int(round(balance))
+    if minutes > available:
+        raise ValueError(f"only {available} vacation minute(s) available")
 
     cashed_in_dates = dict(task.get("cashedInDates") or {})
     key = target_date.isoformat()

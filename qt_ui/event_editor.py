@@ -1,7 +1,7 @@
 """Qt port of calendar_gui.py's event editor (_build_event_editor) --
 title/time/color/notes, recurrence, reminders, and the per-event Focus
-Timer integration (lock mode + process/domain whitelist via the shared
-qt_ui/checklist.py component). Business logic untouched: calendar_store,
+Timer integration (lock mode + process block list/domain allow list via the
+shared qt_ui/checklist.py component). Business logic untouched: calendar_store,
 calendar_recurrence, config, installed_apps are called exactly as the Tk
 version called them.
 
@@ -417,16 +417,16 @@ class _EventEditor(QWidget):
         lock_row.addStretch(1)
         subscreen_layout.addLayout(lock_row)
 
-        subscreen_layout.addWidget(_bold_label("Process whitelist (for this event)", size=8))
+        subscreen_layout.addWidget(_bold_label("Process blocklist (for this event)", size=8))
         apps = installed_apps.list_installed_apps()
         # A brand-new "Integrate with Focus Timer" toggle (no per-event
-        # profile saved yet) defaults to the global whitelist, same as the
+        # profile saved yet) defaults to the global blocklist, same as the
         # Tk version -- an event with its own saved profile keeps exactly
         # what was checked for it.
         if existing_focus:
-            default_processes = existing_focus.get("processWhitelist", [])
+            default_processes = existing_focus.get("processBlocklist", [])
         else:
-            default_processes = config.load_config().get("processWhitelist", [])
+            default_processes = config.load_config().get("processBlocklist", [])
         existing_process_set = {p.lower() for p in default_processes}
         process_widget, self._process_checks, process_add_row = checklist.build_checklist(
             apps, existing_process_set,
@@ -453,7 +453,7 @@ class _EventEditor(QWidget):
         subscreen_layout.addLayout(process_manual_row)
 
         subscreen_layout.addWidget(
-            _bold_label("Domain whitelist (for this event, sent to the browser extension)", size=8)
+            _bold_label("Domain allow list (for this event, sent to the browser extension)", size=8)
         )
         global_domains = config.load_config().get("domainWhitelist", [])
         existing_domains = list((existing_focus or {}).get("domainWhitelist", []))
@@ -549,7 +549,7 @@ class _EventEditor(QWidget):
             focus_profile = {
                 "enabled": True,
                 "lockMode": "hard" if self._hard_radio.isChecked() else "soft",
-                "processWhitelist": checklist.get_checked(self._process_checks),
+                "processBlocklist": checklist.get_checked(self._process_checks),
                 "domainWhitelist": checklist.get_checked(self._domain_checks),
                 "warningMinutes": warn_minutes,
             }

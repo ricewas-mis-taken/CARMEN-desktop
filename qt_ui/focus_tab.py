@@ -43,10 +43,10 @@ class FocusTab(QWidget):
         start_button.clicked.connect(picker_gui.open_timer_dialog)
         button_row.addWidget(start_button)
 
-        whitelist_button = QPushButton("Pick Apps to Whitelist")
-        whitelist_button.setProperty("class", "SecondaryButton")
-        whitelist_button.clicked.connect(picker_gui.open_whitelist_picker)
-        button_row.addWidget(whitelist_button)
+        blocklist_button = QPushButton("Pick Apps to Blocklist")
+        blocklist_button.setProperty("class", "SecondaryButton")
+        blocklist_button.clicked.connect(picker_gui.open_blocklist_picker)
+        button_row.addWidget(blocklist_button)
 
         # Pause/Resume and Nuclear End only make sense while a session is
         # actually running -- same reasoning as tray.py's pystray menu items

@@ -19,23 +19,29 @@ _state = {
     "startTime": None,
     "endTime": None,
     "lockMode": "soft",
-    "processWhitelist": [],
+    # Apps are a block list (checked = blocked, everything else allowed);
+    # domains stay an allow list (checked = allowed, everything else
+    # blocked) -- a deliberate mixed model, not an oversight. See is_blocked()
+    # for the process side; the browser extension applies domainWhitelist
+    # itself for the domain side (this module doesn't interpret domains).
+    "processBlocklist": [],
     "domainWhitelist": [],
     "violationCount": 0,
     "violationLog": [],
     "lastAcceptableProcess": None,
     "domainWhitelistAdditions": [],
-    "processWhitelistAdditions": [],
+    "processBlocklistExceptions": [],
     "isPaused": False,
     "pausedAt": None,
     "frozenSecondsRemaining": None,
-    # Where this session's whitelist/lock_mode came from: "manual" (popup or
-    # picker_gui, using config.json's saved whitelist) or "calendar-event"
-    # (a per-session override tagged with the event it came from). Purely
-    # descriptive — enforcement itself doesn't branch on this, it just reads
-    # domainWhitelist/lockMode as usual. Exists so the extension popup can
-    # show *why* the active whitelist doesn't match what's saved locally,
-    # instead of leaving the user thinking their manual whitelist broke.
+    # Where this session's block/allow lists and lock_mode came from:
+    # "manual" (popup or picker_gui, using config.json's saved lists) or
+    # "calendar-event" (a per-session override tagged with the event it came
+    # from). Purely descriptive — enforcement itself doesn't branch on this,
+    # it just reads domainWhitelist/lockMode as usual. Exists so the
+    # extension popup can show *why* the active lists don't match what's
+    # saved locally, instead of leaving the user thinking their manual
+    # picks broke.
     "source": "manual",
     "eventId": None,
     "eventTitle": None,
@@ -64,7 +70,7 @@ _open_violation_index = {"process": None, "domain": None}
 _pending_natural_end = {"value": None}
 
 # Core Windows shell / system processes that are never treated as violations,
-# regardless of the session whitelist. Without this, enforcement fights the
+# regardless of the session blocklist. Without this, enforcement fights the
 # taskbar, alt-tab, wifi/time flyouts, and the shell itself — and minimizing
 # explorer.exe specifically has been observed to crash it and disturb the
 # size of unrelated snapped windows.
@@ -138,7 +144,7 @@ ALWAYS_ALLOWED_PROCESSES = {
 def is_exempt(process_name, pid=None):
     """True for our own process (tray/popups) or core shell/system processes
     that must always remain usable — alt-tab, taskbar, wifi/time flyouts,
-    the tray icon itself — no matter what the session whitelist says."""
+    the tray icon itself — no matter what the session blocklist says."""
     if pid is not None and pid == os.getpid():
         return True
     if process_name and process_name.lower() in ALWAYS_ALLOWED_PROCESSES:
@@ -179,7 +185,7 @@ _load()
 def start_session(
     duration_minutes,
     lock_mode,
-    process_whitelist,
+    process_blocklist,
     domain_whitelist,
     source="manual",
     event_id=None,
@@ -193,11 +199,11 @@ def start_session(
             # A session is already running (e.g. a calendar event fires
             # mid-way through a manual session, or two events overlap) —
             # the new session still wins outright rather than trying to
-            # stack/queue lock types or reconcile whitelists, but the one
-            # being replaced must not just vanish. Finalize it to history
-            # first, same as a normal end, so its violation count/log and
-            # whichever whitelist it was actually running under aren't
-            # silently discarded.
+            # stack/queue lock types or reconcile the block/allow lists, but
+            # the one being replaced must not just vanish. Finalize it to
+            # history first, same as a normal end, so its violation
+            # count/log and whichever lists it was actually running under
+            # aren't silently discarded.
             _finalize_to_history_locked(
                 now,
                 end_type="superseded",
@@ -208,13 +214,13 @@ def start_session(
         _state["startTime"] = now.isoformat()
         _state["endTime"] = end_time.isoformat()
         _state["lockMode"] = lock_mode
-        _state["processWhitelist"] = list(process_whitelist)
+        _state["processBlocklist"] = list(process_blocklist)
         _state["domainWhitelist"] = list(domain_whitelist)
         _state["violationCount"] = 0
         _state["violationLog"] = []
         _state["lastAcceptableProcess"] = None
         _state["domainWhitelistAdditions"] = []
-        _state["processWhitelistAdditions"] = []
+        _state["processBlocklistExceptions"] = []
         _state["isPaused"] = False
         _state["pausedAt"] = None
         _state["frozenSecondsRemaining"] = None
@@ -232,12 +238,13 @@ def start_session(
     return get_status()
 
 
-def update_whitelist(process_whitelist, domain_whitelist):
-    """Replace the active session's whitelist in-place, effective immediately."""
+def update_blocklist(process_blocklist, domain_whitelist):
+    """Replace the active session's block/allow lists in-place, effective
+    immediately."""
     with _lock:
         if not _state["isActive"]:
             return
-        _state["processWhitelist"] = list(process_whitelist)
+        _state["processBlocklist"] = list(process_blocklist)
         _state["domainWhitelist"] = list(domain_whitelist)
         _save()
 
@@ -279,10 +286,10 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
     summary_count = _state["violationCount"]
     summary_log = list(_state["violationLog"])
     lock_mode = _state["lockMode"]
-    process_whitelist = list(_state["processWhitelist"])
+    process_blocklist = list(_state["processBlocklist"])
     domain_whitelist = list(_state["domainWhitelist"])
     domain_whitelist_additions = list(_state["domainWhitelistAdditions"])
-    process_whitelist_additions = list(_state["processWhitelistAdditions"])
+    process_blocklist_exceptions = list(_state["processBlocklistExceptions"])
     start_time = _state["startTime"]
     source = _state["source"]
     event_id = _state["eventId"]
@@ -296,12 +303,12 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
                 "endType": end_type,
                 "reason": reason,
                 "lockMode": lock_mode,
-                "processWhitelist": process_whitelist,
+                "processBlocklist": process_blocklist,
                 "domainWhitelist": domain_whitelist,
                 "violationCount": summary_count,
                 "violationLog": summary_log,
                 "domainWhitelistAdditions": domain_whitelist_additions,
-                "processWhitelistAdditions": process_whitelist_additions,
+                "processBlocklistExceptions": process_blocklist_exceptions,
                 "source": source,
                 "eventId": event_id,
                 "eventTitle": event_title,
@@ -315,7 +322,7 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
     _state["violationLog"] = []
     _state["lastAcceptableProcess"] = None
     _state["domainWhitelistAdditions"] = []
-    _state["processWhitelistAdditions"] = []
+    _state["processBlocklistExceptions"] = []
     _state["isPaused"] = False
     _state["pausedAt"] = None
     _state["frozenSecondsRemaining"] = None
@@ -336,13 +343,13 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
         "endType": end_type,
         "reason": reason,
         "lockMode": lock_mode,
-        "processWhitelist": process_whitelist,
+        "processBlocklist": process_blocklist,
         "domainWhitelist": domain_whitelist,
         "violationCount": summary_count,
         "lastAcceptableProcess": None,
         "violationLog": summary_log,
         "domainWhitelistAdditions": domain_whitelist_additions,
-        "processWhitelistAdditions": process_whitelist_additions,
+        "processBlocklistExceptions": process_blocklist_exceptions,
         "source": source,
         "eventId": event_id,
         "eventTitle": event_title,
@@ -376,13 +383,13 @@ def _get_status_locked():
         "startTime": _state["startTime"],
         "secondsRemaining": seconds_remaining,
         "lockMode": _state["lockMode"],
-        "processWhitelist": list(_state["processWhitelist"]),
+        "processBlocklist": list(_state["processBlocklist"]),
         "domainWhitelist": list(_state["domainWhitelist"]),
         "violationCount": _state["violationCount"],
         "violationLog": list(_state["violationLog"]),
         "lastAcceptableProcess": _state["lastAcceptableProcess"],
         "domainWhitelistAdditions": list(_state["domainWhitelistAdditions"]),
-        "processWhitelistAdditions": list(_state["processWhitelistAdditions"]),
+        "processBlocklistExceptions": list(_state["processBlocklistExceptions"]),
         "source": _state["source"],
         "eventId": _state["eventId"],
         "eventTitle": _state["eventTitle"],
@@ -392,7 +399,7 @@ def _get_status_locked():
 
 
 def pause_session():
-    """Freezes the countdown only — isActive, lockMode, whitelists, and
+    """Freezes the countdown only — isActive, lockMode, blocklists, and
     violation tracking are all untouched, so lock enforcement keeps working
     exactly as before while paused. Idempotent: no active session, or a
     session that's already paused, just returns the current status unchanged.
@@ -451,16 +458,16 @@ def pop_pending_natural_end():
     return summary
 
 
-def is_whitelisted(process_name):
-    """Checks process_name against processWhitelist — this is what the
+def is_blocked(process_name):
+    """Checks process_name against processBlocklist — this is what the
     desktop app's own window-polling loop uses. The browser extension is
     expected to read domainWhitelist from GET /status itself and apply its
     own tab-matching logic; this module doesn't interpret domains."""
     if not process_name:
         return False
     with _lock:
-        whitelist_lower = [p.lower() for p in _state["processWhitelist"]]
-        return process_name.lower() in whitelist_lower
+        blocklist_lower = [p.lower() for p in _state["processBlocklist"]]
+        return process_name.lower() in blocklist_lower
 
 
 def _resolve_open_violation_locked(kind, now):
@@ -468,10 +475,11 @@ def _resolve_open_violation_locked(kind, now):
     ("process" / "domain"), filling in resolvedAt/durationSeconds. Must be
     called with _lock held. A no-op if there's nothing open — record_violation
     calls this before opening its own new entry, so switching straight from
-    one distraction to another (bad app A -> bad app B, with no whitelisted
-    app in between) still closes A's entry: its duration is "how long you
-    stayed on that one" rather than "time until back on track", which is the
-    only sensible definition once B has already started."""
+    one distraction to another (blocklisted app A -> blocklisted app B, with
+    no acceptable app in between) still closes A's entry: its duration is
+    "how long you stayed on that one" rather than "time until back on
+    track", which is the only sensible definition once B has already
+    started."""
     index = _open_violation_index.get(kind)
     if index is None:
         return
@@ -487,9 +495,9 @@ def _resolve_open_violation_locked(kind, now):
 
 
 def record_acceptable(process_name):
-    """Called when the foreground app is on processWhitelist — resolves any
-    open *process* violation (switching to an allowed app is what "back on
-    track" means for this kind; it says nothing about the browser's active
+    """Called when the foreground app is NOT on processBlocklist — resolves
+    any open *process* violation (switching to an allowed app is what "back
+    on track" means for this kind; it says nothing about the browser's active
     tab, which is tracked/resolved independently via resolve_domain_violation)."""
     with _lock:
         now = datetime.now()
@@ -535,8 +543,8 @@ def record_violation(process_name):
 
 def record_domain_violation(url):
     """Same violationCount/violationLog the process-based record_violation()
-    uses, for a violation reported by the browser extension (an off-whitelist
-    domain) instead of this app's own window-polling loop."""
+    uses, for a violation reported by the browser extension (a domain not on
+    domainWhitelist) instead of this app's own window-polling loop."""
     with _lock:
         if not _state["isActive"]:
             # Reachable when the browser extension's POST /violation lands
@@ -575,14 +583,14 @@ def resolve_domain_violation():
 def add_domain_to_whitelist(domain, reason):
     """Adds domain to domainWhitelist mid-session (e.g. via POST
     /whitelist/domains/add) and logs why in domainWhitelistAdditions — the
-    audit trail of every site let in outside the original whitelist picked
+    audit trail of every site let in outside the original allow list picked
     at session start. Takes effect immediately: the browser extension
     re-reads domainWhitelist from GET /status on every tab check, so there's
     no need to restart the session for the unblock to apply.
 
     Skips the append (but still logs the addition) if domain is already on
-    the whitelist, case-insensitive — same "don't grow the list with
-    duplicates" behavior as the rest of this module's whitelist handling.
+    the allow list, case-insensitive — same "don't grow the list with
+    duplicates" behavior as the rest of this module's list handling.
 
     Returns (None, None) if no session is active. This is checked here,
     inside the same lock as the actual write, rather than leaving it to
@@ -612,18 +620,19 @@ def add_domain_to_whitelist(domain, reason):
         return list(_state["domainWhitelist"]), addition
 
 
-def add_process_to_whitelist(process_name, reason):
-    """Adds process_name to processWhitelist mid-session (e.g. via the
-    "Pick Apps to Whitelist" picker, opened while a session is already
-    running) and logs why in processWhitelistAdditions — the audit trail of
-    every app let in outside the original whitelist picked at session
-    start. Takes effect immediately: is_whitelisted() and the window-polling
-    loop both read processWhitelist straight off this same in-memory state,
-    so there's no need to restart the session for the unblock to apply.
+def remove_process_from_blocklist(process_name, reason):
+    """Removes process_name from processBlocklist mid-session (e.g. via the
+    lock overlay's "Unblock" button on a violation, or the "Pick Apps to
+    Blocklist" picker's own remove flow, opened while a session is already
+    running) and logs why in processBlocklistExceptions — the audit trail of
+    every app let through despite being on the original blocklist picked at
+    session start. Takes effect immediately: is_blocked() and the
+    window-polling loop both read processBlocklist straight off this same
+    in-memory state, so there's no need to restart the session for the
+    unblock to apply.
 
-    Skips the append (but still logs the addition) if process_name is
-    already on the whitelist, case-insensitive — same "don't grow the list
-    with duplicates" behavior as add_domain_to_whitelist().
+    Skips the actual removal (but still logs the exception) if process_name
+    isn't on the blocklist to begin with, case-insensitive.
 
     Returns (None, None) if no session is active — see add_domain_to_whitelist()
     for why this is checked atomically inside the lock rather than by callers
@@ -632,18 +641,20 @@ def add_process_to_whitelist(process_name, reason):
         if not _state["isActive"]:
             return None, None
         now = datetime.now()
-        existing_lower = {p.lower() for p in _state["processWhitelist"]}
-        if process_name.lower() not in existing_lower:
-            _state["processWhitelist"].append(process_name)
+        existing_lower = {p.lower() for p in _state["processBlocklist"]}
+        if process_name.lower() in existing_lower:
+            _state["processBlocklist"] = [
+                p for p in _state["processBlocklist"] if p.lower() != process_name.lower()
+            ]
 
-        addition = {
+        exception_entry = {
             "process": process_name,
             "reason": reason,
             "timestamp": now.isoformat(),
         }
-        _state["processWhitelistAdditions"].append(addition)
+        _state["processBlocklistExceptions"].append(exception_entry)
         _save()
-        return list(_state["processWhitelist"]), addition
+        return list(_state["processBlocklist"]), exception_entry
 
 
 def get_lock_mode():

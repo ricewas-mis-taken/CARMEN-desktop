@@ -1,7 +1,7 @@
 """Persisted log of completed focus sessions.
 
 Each entry covers one session start-to-finish: when it started and ended,
-the lock mode, the process/domain whitelists in effect, and every violation
+the lock mode, the process/domain blocklists in effect, and every violation
 that happened (with how long it took to get back on track, if it ever did).
 Lives in session_history.json, appended to whenever a session ends —
 manually (tray "End Session" / POST /session/end) or by running out the

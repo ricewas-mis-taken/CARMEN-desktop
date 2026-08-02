@@ -1,6 +1,6 @@
 """Widget-level tests for the unified checklist component
-(qt_ui/checklist.py) -- used by both the whitelist picker and the event
-editor's process/domain whitelist sections."""
+(qt_ui/checklist.py) -- used by both the blocklist picker and the event
+editor's process/domain blocklist sections."""
 import qt_ui.checklist as checklist
 
 
@@ -21,7 +21,7 @@ def test_checked_keys_is_case_insensitive(qtbot):
 
 
 def test_get_checked_returns_original_case_keys_from_custom_key_fn(qtbot):
-    # With a custom key_fn (as the process/domain whitelist checklists use),
+    # With a custom key_fn (as the process/domain blocklist checklists use),
     # the original casing passed through key_fn is preserved. With the
     # *default* key_fn (str(item).lower()), the "original" key is already
     # lowercase by the time it reaches add_row -- that's inherited as-is
