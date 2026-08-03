@@ -33,9 +33,10 @@ def test_sweep_minimizes_blocked_background_window(isolate_state, monkeypatch):
     _patch_single_window(monkeypatch, hwnd=555, pid=4242, process_name="discord.exe")
     monkeypatch.setattr(enforcer.win32gui, "ShowWindow", lambda h, cmd: minimize_calls.append((h, cmd)))
 
-    enforcer.sweep_minimize_blocked_windows()
+    swept = enforcer.sweep_minimize_blocked_windows()
 
     assert minimize_calls == [(555, enforcer.win32con.SW_MINIMIZE)]
+    assert swept == ["discord.exe"]
 
 
 def test_sweep_leaves_unblocked_app_alone_after_unblock(isolate_state, monkeypatch):

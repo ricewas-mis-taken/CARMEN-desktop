@@ -180,7 +180,26 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None):
                 # every visible window each tick in hard-lock mode closes
                 # that gap independently of focus.
                 if session_manager.get_lock_mode() == "hard":
-                    enforcer.sweep_minimize_blocked_windows()
+                    swept = enforcer.sweep_minimize_blocked_windows()
+                    for swept_process in swept:
+                        # If this is the same process the foreground branch
+                        # above already just violated/redirected this exact
+                        # tick, hard_lock_redirect() already minimized its
+                        # window before this sweep ran -- IsIconic would have
+                        # skipped it, so it can't appear in `swept` at all
+                        # (unless that redirect was itself cooldown-suppressed,
+                        # in which case last_violation_time below still
+                        # dedupes it). A window minimized here without ever
+                        # passing through the foreground branch (it opened
+                        # but never actually became the sampled foreground
+                        # window before disappearing back into the taskbar)
+                        # would otherwise vanish with no violation recorded
+                        # and no overlay shown -- no way to unblock it at all.
+                        now = time.time()
+                        if now - last_violation_time.get(swept_process, 0) >= VIOLATION_COOLDOWN_SECONDS:
+                            last_violation_time[swept_process] = now
+                            session_manager.record_violation(swept_process)
+                            enforcer.show_blocked_notice(swept_process)
             else:
                 # Reset dedupe state when paused or idle so the first process
                 # seen after resuming is always evaluated fresh.
