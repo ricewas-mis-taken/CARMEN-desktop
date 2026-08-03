@@ -114,8 +114,10 @@ def test_unblock_reason_dialog_requires_reason(qtbot, isolate_state):
     win.close()
 
 
-def test_unblock_reason_dialog_confirm_calls_remove_process_from_blocklist(qtbot, isolate_state):
+def test_unblock_reason_dialog_confirm_calls_remove_process_from_blocklist(qtbot, isolate_state, monkeypatch):
     import session_manager
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
 
     session_manager.start_session(25, "soft", ["app.exe"], [])
 

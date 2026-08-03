@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QVBoxLayout,
@@ -240,3 +241,6 @@ class _UnblockReasonDialog(QWidget):
             self._status_label.setText("Session already ended — nothing to unblock.")
             return
         self.close()
+        QMessageBox.information(
+            None, "Carmen Focus", f"{self._process_name} is unblocked for the rest of this session."
+        )
