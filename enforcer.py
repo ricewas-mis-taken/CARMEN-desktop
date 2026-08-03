@@ -121,6 +121,25 @@ def sweep_minimize_blocked_windows():
     win32gui.EnumWindows(callback, None)
 
 
+def restore_window_for_process(process_name):
+    """Un-minimizes and foregrounds process_name's window, if it has one --
+    called right after a mid-session unblock so "let this through" is
+    immediately visible. Without this, a window that hard lock already
+    minimized before the unblock stays minimized: the user has to go dig
+    it out of the taskbar themselves, and in the meantime it looks
+    identical to "the unblock didn't work" even though processBlocklist
+    was updated correctly."""
+    hwnd = _find_window_by_process_name(process_name)
+    if not hwnd:
+        return
+    try:
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        win32gui.SetForegroundWindow(hwnd)
+    except Exception:
+        pass
+
+
 def _find_window_by_process_name(process_name):
     found = {"hwnd": None}
 

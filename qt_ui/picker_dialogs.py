@@ -270,11 +270,17 @@ class _ReasonDialog(QWidget):
             self._status_label.setText(f"Enter a reason for: {', '.join(missing)}")
             return
 
+        import enforcer
+
         unblocked = 0
         for process_name, reason in reasons.items():
             _, exception_entry = session_manager.remove_process_from_blocklist(process_name, reason)
             if exception_entry is not None:
                 unblocked += 1
+                # Bring the app's window straight up rather than leaving it
+                # minimized for the user to go dig out of the taskbar --
+                # see enforcer.restore_window_for_process()'s docstring.
+                enforcer.restore_window_for_process(process_name)
 
         self.close()
         if unblocked < len(reasons):

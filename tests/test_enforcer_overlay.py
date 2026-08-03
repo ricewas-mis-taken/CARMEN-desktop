@@ -115,9 +115,10 @@ def test_unblock_reason_dialog_requires_reason(qtbot, isolate_state):
 
 
 def test_unblock_reason_dialog_confirm_calls_remove_process_from_blocklist(qtbot, isolate_state, monkeypatch):
+    import enforcer
     import session_manager
-    from PySide6.QtWidgets import QMessageBox
-    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+    restore_calls = []
+    monkeypatch.setattr(enforcer, "restore_window_for_process", lambda name: restore_calls.append(name))
 
     session_manager.start_session(25, "soft", ["app.exe"], [])
 
@@ -128,3 +129,5 @@ def test_unblock_reason_dialog_confirm_calls_remove_process_from_blocklist(qtbot
 
     status = session_manager.get_status()
     assert "app.exe" not in status["processBlocklist"]
+    assert restore_calls == ["app.exe"]
+    assert "unblocked" in win._status_label.text().lower()

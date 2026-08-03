@@ -94,8 +94,11 @@ def test_blocklist_picker_active_session_lists_current_blocklist_for_unblocking(
 
 
 def test_reason_dialog_confirm_requires_all_reasons(qtbot, isolate_state, monkeypatch):
+    import enforcer
     from PySide6.QtWidgets import QMessageBox
     monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+    restore_calls = []
+    monkeypatch.setattr(enforcer, "restore_window_for_process", lambda name: restore_calls.append(name))
 
     session_manager.start_session(25, "soft", ["a.exe", "b.exe"], [])
     win = picker_dialogs._ReasonDialog(["a.exe", "b.exe"])
@@ -112,3 +115,4 @@ def test_reason_dialog_confirm_requires_all_reasons(qtbot, isolate_state, monkey
     status = session_manager.get_status()
     assert "a.exe" not in status["processBlocklist"]
     assert "b.exe" not in status["processBlocklist"]
+    assert sorted(restore_calls) == ["a.exe", "b.exe"]
