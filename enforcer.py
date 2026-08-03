@@ -102,12 +102,18 @@ def sweep_minimize_blocked_windows():
     check ran) would otherwise just sit there, unminimized and usable,
     until the user happened to switch to it directly.
 
-    Returns the list of process names actually minimized this call (i.e.
-    the ones that weren't already iconic) -- window_tracker.py's polling
-    loop uses this to raise the same violation/overlay treatment as the
-    foreground-focused path, since a window caught here never otherwise
+    Returns a list of (process_name, hwnd) actually minimized this call
+    (i.e. the ones that weren't already iconic) -- window_tracker.py's
+    polling loop uses this to raise the same violation/overlay treatment as
+    the foreground-focused path, since a window caught here never otherwise
     passes through that code and would silently vanish with no way to
-    unblock it."""
+    unblock it. hwnd is included (not just the name) so the caller can key
+    its own notice cooldown on the exact window, the same reasoning as
+    HARD_REDIRECT_COOLDOWN_SECONDS's hwnd-keyed cooldown: a process-name-only
+    cooldown can't tell "this exact window keeps coming right back" (needs
+    throttling, or a stuck popup spams a notice every tick) apart from "the
+    user restored/reopened a window they haven't been told about yet"
+    (deserves an immediate notice)."""
     minimized = []
 
     def callback(hwnd, _):
@@ -125,7 +131,7 @@ def sweep_minimize_blocked_windows():
         if session_manager.is_blocked(name):
             try:
                 win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
-                minimized.append(name)
+                minimized.append((name, hwnd))
             except Exception:
                 pass
 
