@@ -394,6 +394,7 @@ class _TopicView(QWidget):
 
         self._review_banner = _ReviewBanner(on_finished=self._banner_finished)
         layout.addWidget(self._review_banner)
+        self._resume_if_active()
 
         self._table = QTableWidget(0, len(COLUMN_HEADERS))
         self._table.setHorizontalHeaderLabels(COLUMN_HEADERS)
@@ -417,6 +418,40 @@ class _TopicView(QWidget):
         layout.addWidget(self._table, 1)
 
         self.refresh()
+
+    def _resume_if_active(self):
+        # A review-linked task session survives independently of this
+        # widget (it lives in session_manager, persisted to
+        # session_state.json) -- but the banner that shows its timer is
+        # pure in-memory widget state that only ever gets set by
+        # _begin_review()/_start_first_attempt() below. If this _TopicView
+        # is constructed while such a session is already running (most
+        # commonly: the app restarted -- e.g. --dev's watch-and-restart on
+        # every .py save -- while a review was mid-flight), the Tasks tab
+        # still shows it correctly (it reads session_manager.get_status()
+        # fresh every time) but this banner would otherwise just sit
+        # hidden, showing no timer at all for a session that's very much
+        # still active and still enforcing.
+        status = session_manager.get_status()
+        if not status.get("isActive") or status.get("source") != "review":
+            return
+        topic = review_store.get_topic(self._topic_id)
+        if not topic or not topic.get("linkedTaskId") or topic["linkedTaskId"] != status.get("eventId"):
+            return
+        problem_name = status.get("reviewProblemName") or "this review"
+        if self._review_tab:
+            self._review_tab.on_review_started()
+        # token=None: review_store's own active-session tracking
+        # (_active_sessions) is in-memory only and didn't survive whatever
+        # took this session_manager session and this widget out of sync in
+        # the first place, so there's no per-attempt outcome to record on
+        # Finish for this problem -- but the linked task's timer,
+        # pause/resume, and enforcement (all driven by session_manager,
+        # which did survive) pick back up correctly, and End/Finish still
+        # correctly end the underlying session either way.
+        self._review_banner.start(
+            {"name": problem_name}, token=None, end_session_on_finish=True,
+        )
 
     def _build_header(self):
         header = QHBoxLayout()
