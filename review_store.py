@@ -161,6 +161,73 @@ def _init_schema(conn):
             conn.execute(f"ALTER TABLE review_sessions ADD COLUMN {col} INTEGER")
             conn.commit()
 
+    # Sync scaffolding (multi-device sync, Phase 2 of that work): every
+    # review_* table gets sync_id/updated_at/device_id/is_deleted.
+    #
+    # sync_id exists ONLY because these four tables use INTEGER PRIMARY KEY
+    # (plain autoincrement) -- two devices would independently mint
+    # id=1, id=2, ... and collide the instant a sync merges rows from both.
+    # calendar.db's other tables (events/reminders/focus_profiles) already
+    # use a TEXT uuid4().hex primary key, which is already
+    # globally-unique-enough to sync on directly, so they get no sync_id of
+    # their own -- see calendar_store._init_schema()'s sync-columns block.
+    #
+    # sync_id is sync-only: nothing outside the sync module (still to be
+    # built) should ever read or write it. Every other existing
+    # relationship/reference/route/UI in this codebase keeps using the
+    # original integer id exactly as before -- this column rides alongside
+    # it, not in place of it.
+    _add_sync_columns(conn, "review_topics", backfill_updated_at_from="created_at")
+    _add_sync_columns(conn, "review_subjects", backfill_updated_at_from="created_at")
+    _add_sync_columns(conn, "review_problems", backfill_updated_at_from="created_at")
+    _add_sync_columns(conn, "review_sessions", backfill_updated_at_from="finished_at")
+
+
+def _add_sync_columns(conn, table, backfill_updated_at_from):
+    """Adds sync_id/updated_at/device_id/is_deleted to `table` if they don't
+    already exist, then backfills every pre-existing row: sync_id gets a
+    fresh uuid4().hex each (can't be done in the ALTER TABLE itself --
+    SQLite has no per-row default expression), updated_at is backfilled
+    from `backfill_updated_at_from` (the closest existing "when was this
+    row last touched" column this table already has -- our best guess
+    for rows that predate sync tracking, not a real modification history).
+    device_id and is_deleted are left at NULL/0 for existing rows -- they
+    were never written by any known device and were never deleted.
+
+    Schema-only: nothing here makes any *write path* (save_event-equivalent
+    functions elsewhere in this module) actually populate updated_at/
+    device_id or flip is_deleted going forward. That happens in the sync
+    module itself (Phase 3), which is what will actually know "which
+    device is this" and needs the soft-delete-instead-of-hard-delete
+    rewrite some of this module's own DELETE-then-reinsert write patterns
+    still need before tombstones can propagate correctly."""
+    cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if "sync_id" in cols:
+        return
+
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN sync_id TEXT")
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN updated_at TIMESTAMP")
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN device_id TEXT")
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0")
+    conn.commit()
+
+    rows = conn.execute(f"SELECT id, {backfill_updated_at_from} AS ts FROM {table}").fetchall()
+    for row in rows:
+        conn.execute(
+            f"UPDATE {table} SET sync_id = ?, updated_at = ? WHERE id = ?",
+            (uuid.uuid4().hex, row["ts"] or datetime.now().isoformat(), row["id"]),
+        )
+    conn.commit()
+
+    # Only safe to enforce uniqueness once every row actually has a value --
+    # attempted before the backfill loop above, a table with more than one
+    # pre-existing row would have every sync_id sitting NULL at once, and
+    # while SQLite itself allows multiple NULLs in a UNIQUE column, it's
+    # simpler and less surprising to just never have a transient NULL state
+    # under a unique index at all.
+    conn.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_sync_id ON {table}(sync_id)")
+    conn.commit()
+
 
 def _row_to_topic(row):
     return {
