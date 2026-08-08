@@ -1,12 +1,12 @@
 __pycache__/
 *.pyc
-session_state.json
-calendar.db
-calendar.db-journal
-calendar.db-wal
-calendar.db-shm
-calendar_errors.log
 venv/
 build/
 dist/
 *.spec
+
+# All real user data (calendar.db, tasks.json, board.json, session state/
+# history, config.json, calendar_errors.log, .env, review/board photo
+# attachments) lives here now -- see each store module's *_PATH/PHOTOS_DIR
+# constant. Never committed.
+private/

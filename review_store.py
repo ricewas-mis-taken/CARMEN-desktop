@@ -22,7 +22,7 @@ import calendar_store
 import review_scheduler
 from calendar_log import logger
 
-PHOTOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "review_photos")
+PHOTOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "data", "review_photos")
 
 
 # The same lock calendar_store.py serializes its own writes through, not a

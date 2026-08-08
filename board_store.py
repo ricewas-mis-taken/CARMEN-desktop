@@ -27,8 +27,8 @@ from datetime import date, datetime, timedelta
 
 from tasks_store import WEEKDAY_CODES
 
-BOARD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "board.json")
-PHOTOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "board_photos")
+BOARD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "board.json")
+PHOTOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "data", "board_photos")
 
 RECURRENCE_PATTERNS = ("days", "weekly", "monthly", "yearly")
 
@@ -104,6 +104,9 @@ def load_board():
 
 
 def save_board(tasks):
+    # private/ (gitignored, holds every real data file) won't exist yet on
+    # a fresh clone.
+    os.makedirs(os.path.dirname(BOARD_PATH), exist_ok=True)
     tmp_path = BOARD_PATH + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump({"tasks": tasks}, f, indent=2)

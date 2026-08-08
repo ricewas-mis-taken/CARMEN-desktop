@@ -16,7 +16,7 @@ import os
 import uuid
 from datetime import date, datetime, timedelta
 
-TASKS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tasks.json")
+TASKS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "tasks.json")
 
 WEEKDAY_CODES = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
 
@@ -96,6 +96,9 @@ def load_tasks():
 
 
 def save_tasks(tasks):
+    # private/ (gitignored, holds every real data file) won't exist yet on
+    # a fresh clone.
+    os.makedirs(os.path.dirname(TASKS_PATH), exist_ok=True)
     tmp_path = TASKS_PATH + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump({"tasks": tasks}, f, indent=2)

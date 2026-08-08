@@ -24,7 +24,7 @@ from datetime import datetime
 
 from calendar_log import logger
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calendar.db")
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "calendar.db")
 
 # How long a soft-deleted event stays recoverable via undo_delete_event()
 # before being purged for good. The UI's undo toast is shown for 10s; this
@@ -39,6 +39,10 @@ _conn = None
 def _get_conn():
     global _conn
     if _conn is None:
+        # private/ (gitignored, holds every real data file) won't exist yet
+        # on a fresh clone -- sqlite3.connect() doesn't create its parent
+        # directory itself.
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
         _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         _conn.row_factory = sqlite3.Row
         _conn.execute("PRAGMA journal_mode=WAL")

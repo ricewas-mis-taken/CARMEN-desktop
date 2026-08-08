@@ -20,7 +20,7 @@ import os
 from datetime import date, datetime
 
 SUMMARY_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "data", "daily_summaries.json"
+    os.path.dirname(os.path.abspath(__file__)), "private", "data", "daily_summaries.json"
 )
 
 
@@ -35,6 +35,9 @@ def _load():
 
 
 def _save(data):
+    # private/ (gitignored, holds every real data file) won't exist yet on
+    # a fresh clone.
+    os.makedirs(os.path.dirname(SUMMARY_PATH), exist_ok=True)
     tmp = SUMMARY_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)

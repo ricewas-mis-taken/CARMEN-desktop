@@ -4,7 +4,7 @@ import copy
 import json
 import os
 
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "config.json")
 
 DEFAULT_CONFIG = {
     "processBlocklist": [],
@@ -42,6 +42,9 @@ def save_config(config):
     # Atomic write — config.json is written from both the Flask thread and
     # the Tkinter GUI thread; a plain in-place write killed mid-save would
     # leave a truncated file that crashes the next load_config() call.
+    # private/ (gitignored, holds every real data file) won't exist yet on
+    # a fresh clone.
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
     tmp_path = CONFIG_PATH + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
