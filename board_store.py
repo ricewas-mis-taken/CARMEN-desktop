@@ -27,8 +27,8 @@ from datetime import date, datetime, timedelta
 
 from tasks_store import WEEKDAY_CODES
 
-BOARD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "board.json")
-PHOTOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "board_photos")
+BOARD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "board.json")
+PHOTOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "data", "board_photos")
 
 RECURRENCE_PATTERNS = ("days", "weekly", "monthly", "yearly")
 
@@ -44,11 +44,43 @@ DEFAULT_BOARD_TASK = {
     "finished": False,
     "finishedAt": None,
     "nextDueDate": None,  # recurring tasks only, set when finished
+    # Sync scaffolding (multi-device sync) -- board.json has no schema
+    # versioning of its own, so pre-existing tasks get these backfilled by
+    # _backfill_sync_fields() below rather than a one-time migration step.
+    # deviceId/isDeleted are left untouched here and by every write in this
+    # module -- populating "which device" and rewriting delete_task()'s
+    # current hard delete (the row is filtered out and gone -- no
+    # tombstone, so a deletion could never propagate to another device) into
+    # a real soft-delete is the sync module's job (Phase 3), not this
+    # schema-shape change.
+    "updatedAt": None,
+    "deviceId": None,
+    "isDeleted": False,
 }
 
 
 def _new_id():
     return uuid.uuid4().hex
+
+
+def _backfill_sync_fields(task):
+    """Adds updatedAt/deviceId/isDeleted to a task dict saved before they
+    existed. updatedAt backfills from createdAt (the closest existing
+    "when was this last touched" a task already has) instead of "now", to
+    avoid manufacturing a fake recent-write time for old data. Returns
+    True if the dict was actually changed, so callers only need to rewrite
+    board.json when something really was migrated."""
+    changed = False
+    if "updatedAt" not in task:
+        task["updatedAt"] = task.get("createdAt") or datetime.now().isoformat()
+        changed = True
+    if "deviceId" not in task:
+        task["deviceId"] = None
+        changed = True
+    if "isDeleted" not in task:
+        task["isDeleted"] = False
+        changed = True
+    return changed
 
 
 def load_board():
@@ -60,10 +92,21 @@ def load_board():
     except (json.JSONDecodeError, OSError):
         return []
     tasks = data.get("tasks", []) if isinstance(data, dict) else []
-    return [t for t in tasks if isinstance(t, dict)]
+    tasks = [t for t in tasks if isinstance(t, dict)]
+
+    # Not any(...) -- that would short-circuit on the first task that
+    # actually needs backfilling and leave every task after it unmigrated.
+    needs_save = [_backfill_sync_fields(task) for task in tasks]
+    if any(needs_save):
+        save_board(tasks)
+
+    return tasks
 
 
 def save_board(tasks):
+    # private/ (gitignored, holds every real data file) won't exist yet on
+    # a fresh clone.
+    os.makedirs(os.path.dirname(BOARD_PATH), exist_ok=True)
     tmp_path = BOARD_PATH + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump({"tasks": tasks}, f, indent=2)
@@ -113,6 +156,7 @@ def create_task(
     if photo_bytes is not None:
         task["descriptionPhotoPath"] = save_photo_bytes(photo_bytes, photo_filename)
     task["createdAt"] = datetime.now().isoformat()
+    task["updatedAt"] = task["createdAt"]
 
     tasks = load_board()
     tasks.append(task)
@@ -141,6 +185,7 @@ def update_task(
                 task["descriptionPhotoPath"] = None
             if photo_bytes is not None:
                 task["descriptionPhotoPath"] = save_photo_bytes(photo_bytes, photo_filename)
+            task["updatedAt"] = datetime.now().isoformat()
     save_board(tasks)
     return get_task(task_id)
 
@@ -155,6 +200,7 @@ def update_importance(task_id, importance):
     for task in tasks:
         if task["id"] == task_id:
             task["importance"] = max(1, min(10, int(importance)))
+            task["updatedAt"] = datetime.now().isoformat()
     save_board(tasks)
     return get_task(task_id)
 
@@ -168,6 +214,7 @@ def mark_opened(task_id):
     for task in tasks:
         if task["id"] == task_id and not task.get("firstOpenedAt"):
             task["firstOpenedAt"] = datetime.now().isoformat()
+            task["updatedAt"] = task["firstOpenedAt"]
             changed = True
     if changed:
         save_board(tasks)
@@ -216,6 +263,7 @@ def finish_task(task_id):
         if task["id"] == task_id:
             task["finished"] = True
             task["finishedAt"] = datetime.now().isoformat()
+            task["updatedAt"] = task["finishedAt"]
             pattern = task.get("recurrencePattern") or ("days" if task.get("recurringDays") else "none")
             if pattern == "days" and task.get("recurringDays"):
                 task["nextDueDate"] = _next_weekday_date(task["recurringDays"], today).isoformat()
@@ -245,6 +293,7 @@ def reactivate_due_recurring():
                 task["finishedAt"] = None
                 task["nextDueDate"] = None
                 task["firstOpenedAt"] = None
+                task["updatedAt"] = datetime.now().isoformat()
                 changed = True
     if changed:
         save_board(tasks)

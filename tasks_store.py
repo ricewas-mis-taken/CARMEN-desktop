@@ -16,7 +16,7 @@ import os
 import uuid
 from datetime import date, datetime, timedelta
 
-TASKS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tasks.json")
+TASKS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "tasks.json")
 
 WEEKDAY_CODES = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
 
@@ -36,11 +36,43 @@ DEFAULT_TASK = {
     "domainWhitelist": [],
     "cashedInDates": {},  # {"YYYY-MM-DD": minutes} spent from the vacation balance
     "archived": False,
+    # Sync scaffolding (multi-device sync) -- tasks.json has no schema
+    # versioning of its own, so pre-existing tasks get these backfilled by
+    # _backfill_sync_fields() below rather than a one-time migration step.
+    # deviceId/isDeleted are left untouched here and by every write in this
+    # module -- populating "which device" and rewriting delete_task()'s
+    # current hard delete (the row is filtered out and gone -- no
+    # tombstone, so a deletion could never propagate to another device) into
+    # a real soft-delete is the sync module's job (Phase 3), not this
+    # schema-shape change.
+    "updatedAt": None,
+    "deviceId": None,
+    "isDeleted": False,
 }
 
 
 def _new_id():
     return uuid.uuid4().hex
+
+
+def _backfill_sync_fields(task):
+    """Adds updatedAt/deviceId/isDeleted to a task dict saved before they
+    existed. updatedAt backfills from createdAt (the closest existing
+    "when was this last touched" a task already has) instead of "now", to
+    avoid manufacturing a fake recent-write time for old data. Returns
+    True if the dict was actually changed, so callers only need to rewrite
+    tasks.json when something really was migrated."""
+    changed = False
+    if "updatedAt" not in task:
+        task["updatedAt"] = task.get("createdAt") or datetime.now().isoformat()
+        changed = True
+    if "deviceId" not in task:
+        task["deviceId"] = None
+        changed = True
+    if "isDeleted" not in task:
+        task["isDeleted"] = False
+        changed = True
+    return changed
 
 
 def load_tasks():
@@ -52,10 +84,21 @@ def load_tasks():
     except (json.JSONDecodeError, OSError):
         return []
     tasks = data.get("tasks", []) if isinstance(data, dict) else []
-    return [t for t in tasks if isinstance(t, dict)]
+    tasks = [t for t in tasks if isinstance(t, dict)]
+
+    # Not any(...) -- that would short-circuit on the first task that
+    # actually needs backfilling and leave every task after it unmigrated.
+    needs_save = [_backfill_sync_fields(task) for task in tasks]
+    if any(needs_save):
+        save_tasks(tasks)
+
+    return tasks
 
 
 def save_tasks(tasks):
+    # private/ (gitignored, holds every real data file) won't exist yet on
+    # a fresh clone.
+    os.makedirs(os.path.dirname(TASKS_PATH), exist_ok=True)
     tmp_path = TASKS_PATH + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump({"tasks": tasks}, f, indent=2)
@@ -74,6 +117,7 @@ def create_task(data):
     task.update(data)
     task["id"] = _new_id()
     task["createdAt"] = datetime.now().isoformat()
+    task["updatedAt"] = task["createdAt"]
     tasks = load_tasks()
     tasks.append(task)
     save_tasks(tasks)
@@ -86,6 +130,7 @@ def update_task(task_id, data):
     for task in tasks:
         if task["id"] == task_id:
             task.update(data)
+            task["updatedAt"] = datetime.now().isoformat()
             updated = task
             break
     if updated is not None:

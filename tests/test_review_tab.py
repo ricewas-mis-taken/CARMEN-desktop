@@ -207,6 +207,39 @@ def test_begin_review_starts_and_ends_linked_task_session(
     assert not session_manager.is_active(), "session should end when review finishes"
 
 
+def test_topic_view_resumes_banner_for_already_active_linked_session(
+    qtbot, isolate_review_db, isolate_state, tmp_path, monkeypatch
+):
+    """Regression test: if a review-linked task session is already active in
+    session_manager (e.g. the app restarted mid-review -- dev_watcher
+    restarts on every .py save under --dev) by the time a _TopicView is
+    constructed, the banner used to just sit hidden with no way to tell a
+    review was running at all, even though the Tasks tab (which reads
+    session_manager.get_status() fresh) showed it correctly the whole time."""
+    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
+    task = tasks_store.create_task({"name": "Math Session", "lockMode": "hard"})
+
+    topic = review_store.create_topic("Math")
+    review_store.update_topic_link(topic["id"], task["id"])
+
+    # Simulate the session already being active -- as if a previous process
+    # (before a restart) had started it via _begin_review().
+    session_manager.start_session(
+        25, "hard", [], [], source="review",
+        event_id=task["id"], event_title="Math Session - Quadratics review",
+        review_problem_name="Solve for x", review_subject_name="Quadratics",
+    )
+
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    tab.show()
+    view = tab._topic_views[topic["id"]]
+
+    assert view._review_banner.isVisible()
+    assert "Solve for x" in view._review_banner._problem_label.text()
+    assert not tab.can_start_review()
+
+
 def test_pause_button_visible_for_standalone_review(qtbot, isolate_review_db, isolate_state):
     """A review not linked to any task session (no underlying session_manager
     session to pause) must still show a working Pause button on its own

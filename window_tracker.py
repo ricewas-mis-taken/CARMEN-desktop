@@ -90,6 +90,7 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None):
     last_menu_state = None
     last_hard_redirect = {"process": None, "hwnd": None, "time": 0.0}
     last_violation_time = {}  # process_name -> time.time() of last logged violation
+    last_sweep_notice = {}  # hwnd -> time.time() of last overlay shown for that window
 
     while not stop_event.is_set():
         try:
@@ -180,7 +181,36 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None):
                 # every visible window each tick in hard-lock mode closes
                 # that gap independently of focus.
                 if session_manager.get_lock_mode() == "hard":
-                    enforcer.sweep_minimize_blocked_windows()
+                    swept = enforcer.sweep_minimize_blocked_windows()
+                    for swept_process, swept_hwnd in swept:
+                        now = time.time()
+                        # Deliberately two *independent* cooldowns, not one
+                        # shared check -- this used to gate both the
+                        # violation log AND the notice on the same
+                        # last_violation_time entry, which is wrong: the
+                        # foreground branch above can log a violation for
+                        # this exact process moments earlier (e.g. right
+                        # before hard_lock_redirect() itself gets
+                        # cooldown-suppressed for still being the same
+                        # window), which then also silently blocked the
+                        # notice here for the next several seconds even
+                        # though the window kept getting re-minimized on
+                        # every tick in that gap -- exactly "the app won't
+                        # even appear, but there's no message at all".
+                        if now - last_violation_time.get(swept_process, 0) >= VIOLATION_COOLDOWN_SECONDS:
+                            last_violation_time[swept_process] = now
+                            session_manager.record_violation(swept_process)
+                        # Keyed on hwnd (like HARD_REDIRECT_COOLDOWN_SECONDS
+                        # above) so a genuinely different window -- the user
+                        # closed and relaunched the app, or this is simply
+                        # the first time this window's been caught -- always
+                        # gets an immediate notice, while a window that
+                        # keeps re-appearing in `swept` every single tick
+                        # (the stuck-popup case, e.g. Discord) doesn't spam
+                        # a fresh overlay every 1.5s forever.
+                        if now - last_sweep_notice.get(swept_hwnd, 0) >= HARD_REDIRECT_COOLDOWN_SECONDS:
+                            last_sweep_notice[swept_hwnd] = now
+                            enforcer.show_blocked_notice(swept_process)
             else:
                 # Reset dedupe state when paused or idle so the first process
                 # seen after resuming is always evaluated fresh.

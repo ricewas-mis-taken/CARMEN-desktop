@@ -11,7 +11,7 @@ import json
 import os
 import threading
 
-HISTORY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "session_history.json")
+HISTORY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "session_history.json")
 
 _lock = threading.Lock()
 
@@ -44,6 +44,9 @@ def _load_all_locked():
 
 
 def _save_all_locked(history):
+    # private/ (gitignored, holds every real data file) won't exist yet on
+    # a fresh clone.
+    os.makedirs(os.path.dirname(HISTORY_PATH), exist_ok=True)
     tmp_path = HISTORY_PATH + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(history, f, indent=2)

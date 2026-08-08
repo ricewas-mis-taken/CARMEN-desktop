@@ -239,4 +239,19 @@ class _UnblockReasonDialog(QWidget):
             # whatever session starts next.
             self._status_label.setText("Session already ended — nothing to unblock.")
             return
-        self.close()
+        # Bring the app's own (already-minimized, from the violation that
+        # triggered this dialog) window straight up, rather than leaving the
+        # user to go find it in the taskbar and hope hard lock doesn't just
+        # minimize it right back -- is_blocked() is False from this point on
+        # so nothing will.
+        import enforcer
+        enforcer.restore_window_for_process(self._process_name)
+        # Confirm success as text in this still-focused, already-on-top
+        # dialog instead of popping a brand new window -- hard lock's own
+        # SetForegroundWindow calls (for any other still-open violation) can
+        # bury a fresh QMessageBox behind other windows before the user
+        # sees it, making a successful unblock look like it silently failed.
+        self._status_label.setStyleSheet("color: #2e7d32;")
+        self._status_label.setText(f"{self._process_name} unblocked for the rest of this session.")
+        self._reason_edit.setEnabled(False)
+        QTimer.singleShot(1500, self.close)

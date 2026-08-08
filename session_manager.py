@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 import session_history
 
-STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "session_state.json")
+STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "session_state.json")
 
 _lock = threading.Lock()
 
@@ -158,6 +158,9 @@ def _save():
     # wide window where killing the process mid-write truncates the file.
     # os.replace() is atomic on Windows, so a crash mid-save can never leave
     # session_state.json partially written.
+    # private/ (gitignored, holds every real data file) won't exist yet on
+    # a fresh clone.
+    os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
     tmp_path = STATE_PATH + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(_state, f, indent=2)

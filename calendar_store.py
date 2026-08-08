@@ -24,7 +24,7 @@ from datetime import datetime
 
 from calendar_log import logger
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calendar.db")
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "calendar.db")
 
 # How long a soft-deleted event stays recoverable via undo_delete_event()
 # before being purged for good. The UI's undo toast is shown for 10s; this
@@ -39,6 +39,10 @@ _conn = None
 def _get_conn():
     global _conn
     if _conn is None:
+        # private/ (gitignored, holds every real data file) won't exist yet
+        # on a fresh clone -- sqlite3.connect() doesn't create its parent
+        # directory itself.
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
         _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         _conn.row_factory = sqlite3.Row
         _conn.execute("PRAGMA journal_mode=WAL")
@@ -97,6 +101,54 @@ def _init_schema(conn):
     focus_cols = {row[1] for row in conn.execute("PRAGMA table_info(focus_profiles)").fetchall()}
     if "process_blocklist" not in focus_cols:
         conn.execute("ALTER TABLE focus_profiles ADD COLUMN process_blocklist TEXT NOT NULL DEFAULT '[]'")
+        conn.commit()
+
+    # Sync scaffolding (multi-device sync, Phase 2 of that work). Unlike
+    # review_store.py's tables, nothing here needs a separate sync_id --
+    # every table below already uses a TEXT uuid4().hex primary key
+    # (events.id, reminders.id) or a natural globally-unique key
+    # (focus_profiles.event_id), so the existing primary key already is a
+    # safe thing to sync on directly.
+    #
+    # events already carries updated_at (kept current by every save_event()
+    # write) and deleted_at (already the soft-delete tombstone -- non-NULL
+    # means deleted). Both are reused as-is for sync rather than duplicated;
+    # events only gains device_id here. reminders/focus_profiles never had
+    # any timestamp columns at all, so they gain the full set.
+    #
+    # Schema-only, same as review_store.py's equivalent block: nothing here
+    # makes save_event() (or its DELETE-then-reinsert handling of reminders/
+    # focus_profiles) actually populate device_id or flip is_deleted on a
+    # real write yet -- see review_store._add_sync_columns()'s docstring for
+    # why that's deferred to the sync module itself (Phase 3).
+    events_cols = {row[1] for row in conn.execute("PRAGMA table_info(events)").fetchall()}
+    if "device_id" not in events_cols:
+        conn.execute("ALTER TABLE events ADD COLUMN device_id TEXT")
+        conn.commit()
+
+    reminders_cols = {row[1] for row in conn.execute("PRAGMA table_info(reminders)").fetchall()}
+    if "updated_at" not in reminders_cols:
+        conn.execute("ALTER TABLE reminders ADD COLUMN updated_at TEXT")
+        conn.execute("ALTER TABLE reminders ADD COLUMN device_id TEXT")
+        conn.execute("ALTER TABLE reminders ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+        # Best-effort backfill -- reminders never tracked their own write
+        # time before this, so "now" (migration time) is the closest
+        # available stand-in for pre-existing rows, not a real history.
+        conn.execute(
+            "UPDATE reminders SET updated_at = ? WHERE updated_at IS NULL", (datetime.now().isoformat(),)
+        )
+        conn.commit()
+
+    focus_cols = {row[1] for row in conn.execute("PRAGMA table_info(focus_profiles)").fetchall()}
+    if "updated_at" not in focus_cols:
+        conn.execute("ALTER TABLE focus_profiles ADD COLUMN updated_at TEXT")
+        conn.execute("ALTER TABLE focus_profiles ADD COLUMN device_id TEXT")
+        conn.execute("ALTER TABLE focus_profiles ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+        conn.execute(
+            "UPDATE focus_profiles SET updated_at = ? WHERE updated_at IS NULL", (datetime.now().isoformat(),)
+        )
         conn.commit()
 
 

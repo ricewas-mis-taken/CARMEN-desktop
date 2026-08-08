@@ -97,9 +97,25 @@ def sweep_minimize_blocked_windows():
     given poll tick. hard_lock_redirect() alone only ever reacts to the
     current foreground window, so a blocklisted app that's open in the
     background (already running before the session started, or reopened in
-    the gap between two polls without ever becoming the foreground window)
-    would otherwise just sit there, unminimized and usable, until the user
-    happened to switch to it directly."""
+    the gap between two polls without ever becoming the foreground window,
+    or simply not fully focused yet by the time this tick's foreground
+    check ran) would otherwise just sit there, unminimized and usable,
+    until the user happened to switch to it directly.
+
+    Returns a list of (process_name, hwnd) actually minimized this call
+    (i.e. the ones that weren't already iconic) -- window_tracker.py's
+    polling loop uses this to raise the same violation/overlay treatment as
+    the foreground-focused path, since a window caught here never otherwise
+    passes through that code and would silently vanish with no way to
+    unblock it. hwnd is included (not just the name) so the caller can key
+    its own notice cooldown on the exact window, the same reasoning as
+    HARD_REDIRECT_COOLDOWN_SECONDS's hwnd-keyed cooldown: a process-name-only
+    cooldown can't tell "this exact window keeps coming right back" (needs
+    throttling, or a stuck popup spams a notice every tick) apart from "the
+    user restored/reopened a window they haven't been told about yet"
+    (deserves an immediate notice)."""
+    minimized = []
+
     def callback(hwnd, _):
         if not win32gui.IsWindowVisible(hwnd) or win32gui.IsIconic(hwnd):
             return
@@ -115,10 +131,48 @@ def sweep_minimize_blocked_windows():
         if session_manager.is_blocked(name):
             try:
                 win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+                minimized.append((name, hwnd))
             except Exception:
                 pass
 
     win32gui.EnumWindows(callback, None)
+    return minimized
+
+
+def show_blocked_notice(process_name):
+    """Shows the lock overlay (with its "Unblock" button) for a window that
+    sweep_minimize_blocked_windows() just minimized, without touching
+    whatever's actually in the foreground right now -- unlike
+    hard_lock_redirect(), which assumes the blocked app IS the foreground
+    window and redirects focus away from it. A sweep-caught window usually
+    isn't the foreground window (that's exactly why the foreground check
+    missed it), so redirecting focus here would yank it away from whatever
+    the user is legitimately doing instead."""
+    status = session_manager.get_status()
+    if status.get("source") == "review":
+        message = f"Finish {status.get('eventTitle') or 'this review'} first"
+    else:
+        message = f"{process_name} is blocked and was minimized."
+    _show_lock_overlay(message, duration_ms=5000, offending_process_name=process_name)
+
+
+def restore_window_for_process(process_name):
+    """Un-minimizes and foregrounds process_name's window, if it has one --
+    called right after a mid-session unblock so "let this through" is
+    immediately visible. Without this, a window that hard lock already
+    minimized before the unblock stays minimized: the user has to go dig
+    it out of the taskbar themselves, and in the meantime it looks
+    identical to "the unblock didn't work" even though processBlocklist
+    was updated correctly."""
+    hwnd = _find_window_by_process_name(process_name)
+    if not hwnd:
+        return
+    try:
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        win32gui.SetForegroundWindow(hwnd)
+    except Exception:
+        pass
 
 
 def _find_window_by_process_name(process_name):
