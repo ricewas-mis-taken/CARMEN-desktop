@@ -25,6 +25,7 @@ import os
 import uuid
 from datetime import date, datetime, timedelta
 
+import device_id
 from tasks_store import WEEKDAY_CODES
 
 BOARD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "board.json")
@@ -44,15 +45,8 @@ DEFAULT_BOARD_TASK = {
     "finished": False,
     "finishedAt": None,
     "nextDueDate": None,  # recurring tasks only, set when finished
-    # Sync scaffolding (multi-device sync) -- board.json has no schema
-    # versioning of its own, so pre-existing tasks get these backfilled by
-    # _backfill_sync_fields() below rather than a one-time migration step.
-    # deviceId/isDeleted are left untouched here and by every write in this
-    # module -- populating "which device" and rewriting delete_task()'s
-    # current hard delete (the row is filtered out and gone -- no
-    # tombstone, so a deletion could never propagate to another device) into
-    # a real soft-delete is the sync module's job (Phase 3), not this
-    # schema-shape change.
+    # Sync scaffolding (multi-device sync). See load_board()/delete_task()
+    # for how isDeleted is populated and filtered.
     "updatedAt": None,
     "deviceId": None,
     "isDeleted": False,
@@ -83,7 +77,12 @@ def _backfill_sync_fields(task):
     return changed
 
 
-def load_board():
+def load_board(include_deleted=False):
+    """By default excludes soft-deleted tasks (see delete_task()), matching
+    the pre-tombstone behavior every existing caller expects. Callers that
+    read-modify-write the whole file (create_task, update_task, etc.) must
+    pass include_deleted=True so a save doesn't silently drop tombstones
+    that a sync module will need later."""
     if not os.path.exists(BOARD_PATH):
         return []
     try:
@@ -100,6 +99,8 @@ def load_board():
     if any(needs_save):
         save_board(tasks)
 
+    if not include_deleted:
+        tasks = [t for t in tasks if not t.get("isDeleted")]
     return tasks
 
 
@@ -158,7 +159,7 @@ def create_task(
     task["createdAt"] = datetime.now().isoformat()
     task["updatedAt"] = task["createdAt"]
 
-    tasks = load_board()
+    tasks = load_board(include_deleted=True)
     tasks.append(task)
     save_board(tasks)
     return task
@@ -172,7 +173,7 @@ def update_task(
     """Replaces a task's editable details (name, recurrence, info) in
     place. Importance is intentionally not touched here -- it has its own
     dedicated editor on the board card's badge."""
-    tasks = load_board()
+    tasks = load_board(include_deleted=True)
     for task in tasks:
         if task["id"] == task_id:
             task["name"] = name
@@ -191,12 +192,26 @@ def update_task(
 
 
 def delete_task(task_id):
-    tasks = [t for t in load_board() if t["id"] != task_id]
-    save_board(tasks)
+    """Soft-deletes: the row is tombstoned (isDeleted=True) rather than
+    removed, so a future sync push can tell other devices this task was
+    deleted instead of the deletion silently never propagating. Permanent
+    physical removal is deliberately not implemented yet -- a follow-up
+    once sync_now() can confirm every known device has seen the tombstone."""
+    tasks = load_board(include_deleted=True)
+    found = False
+    for task in tasks:
+        if task["id"] == task_id and not task.get("isDeleted"):
+            task["isDeleted"] = True
+            task["updatedAt"] = datetime.now().isoformat()
+            task["deviceId"] = device_id.get_device_id()
+            found = True
+    if found:
+        save_board(tasks)
+    return found
 
 
 def update_importance(task_id, importance):
-    tasks = load_board()
+    tasks = load_board(include_deleted=True)
     for task in tasks:
         if task["id"] == task_id:
             task["importance"] = max(1, min(10, int(importance)))
@@ -209,7 +224,7 @@ def mark_opened(task_id):
     """Records the first time a task's detail popup is opened -- shown in
     place of a "first reviewed" date, since board tasks have no review
     concept. A no-op after the first call."""
-    tasks = load_board()
+    tasks = load_board(include_deleted=True)
     changed = False
     for task in tasks:
         if task["id"] == task_id and not task.get("firstOpenedAt"):
@@ -257,7 +272,7 @@ def finish_task(task_id):
     """Marks a task finished. Recurring tasks get a next_due_date instead of
     staying finished forever -- reactivate_due_recurring() pulls them back
     into the active list once that date arrives."""
-    tasks = load_board()
+    tasks = load_board(include_deleted=True)
     today = date.today()
     for task in tasks:
         if task["id"] == task_id:
@@ -283,7 +298,7 @@ def reactivate_due_recurring():
     """Moves finished recurring tasks whose next_due_date has arrived back
     into the active list, resetting their "opened" stamp for the new
     occurrence. Call on every Board tab refresh."""
-    tasks = load_board()
+    tasks = load_board(include_deleted=True)
     today = date.today().isoformat()
     changed = False
     for task in tasks:

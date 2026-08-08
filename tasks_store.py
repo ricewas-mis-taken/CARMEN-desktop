@@ -16,6 +16,8 @@ import os
 import uuid
 from datetime import date, datetime, timedelta
 
+import device_id
+
 TASKS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "tasks.json")
 
 WEEKDAY_CODES = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
@@ -36,15 +38,8 @@ DEFAULT_TASK = {
     "domainWhitelist": [],
     "cashedInDates": {},  # {"YYYY-MM-DD": minutes} spent from the vacation balance
     "archived": False,
-    # Sync scaffolding (multi-device sync) -- tasks.json has no schema
-    # versioning of its own, so pre-existing tasks get these backfilled by
-    # _backfill_sync_fields() below rather than a one-time migration step.
-    # deviceId/isDeleted are left untouched here and by every write in this
-    # module -- populating "which device" and rewriting delete_task()'s
-    # current hard delete (the row is filtered out and gone -- no
-    # tombstone, so a deletion could never propagate to another device) into
-    # a real soft-delete is the sync module's job (Phase 3), not this
-    # schema-shape change.
+    # Sync scaffolding (multi-device sync). See load_tasks()/delete_task()
+    # for how isDeleted is populated and filtered.
     "updatedAt": None,
     "deviceId": None,
     "isDeleted": False,
@@ -75,7 +70,12 @@ def _backfill_sync_fields(task):
     return changed
 
 
-def load_tasks():
+def load_tasks(include_deleted=False):
+    """By default excludes soft-deleted tasks (see delete_task()), matching
+    the pre-tombstone behavior every existing caller expects. Callers that
+    read-modify-write the whole file (create_task, update_task, etc.) must
+    pass include_deleted=True so a save doesn't silently drop tombstones
+    that a sync module will need later."""
     if not os.path.exists(TASKS_PATH):
         return []
     try:
@@ -92,6 +92,8 @@ def load_tasks():
     if any(needs_save):
         save_tasks(tasks)
 
+    if not include_deleted:
+        tasks = [t for t in tasks if not t.get("isDeleted")]
     return tasks
 
 
@@ -118,14 +120,14 @@ def create_task(data):
     task["id"] = _new_id()
     task["createdAt"] = datetime.now().isoformat()
     task["updatedAt"] = task["createdAt"]
-    tasks = load_tasks()
+    tasks = load_tasks(include_deleted=True)
     tasks.append(task)
     save_tasks(tasks)
     return task
 
 
 def update_task(task_id, data):
-    tasks = load_tasks()
+    tasks = load_tasks(include_deleted=True)
     updated = None
     for task in tasks:
         if task["id"] == task_id:
@@ -139,12 +141,22 @@ def update_task(task_id, data):
 
 
 def delete_task(task_id):
-    tasks = load_tasks()
-    remaining = [t for t in tasks if t["id"] != task_id]
-    if len(remaining) != len(tasks):
-        save_tasks(remaining)
-        return True
-    return False
+    """Soft-deletes: the row is tombstoned (isDeleted=True) rather than
+    removed, so a future sync push can tell other devices this task was
+    deleted instead of the deletion silently never propagating. Permanent
+    physical removal is deliberately not implemented yet -- a follow-up
+    once sync_now() can confirm every known device has seen the tombstone."""
+    tasks = load_tasks(include_deleted=True)
+    found = False
+    for task in tasks:
+        if task["id"] == task_id and not task.get("isDeleted"):
+            task["isDeleted"] = True
+            task["updatedAt"] = datetime.now().isoformat()
+            task["deviceId"] = device_id.get_device_id()
+            found = True
+    if found:
+        save_tasks(tasks)
+    return found
 
 
 # --- scheduling ---

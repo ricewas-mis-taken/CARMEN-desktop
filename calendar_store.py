@@ -18,10 +18,10 @@ import json
 import os
 import sqlite3
 import threading
-import time
 import uuid
 from datetime import datetime
 
+import device_id
 from calendar_log import logger
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "calendar.db")
@@ -116,11 +116,11 @@ def _init_schema(conn):
     # events only gains device_id here. reminders/focus_profiles never had
     # any timestamp columns at all, so they gain the full set.
     #
-    # Schema-only, same as review_store.py's equivalent block: nothing here
-    # makes save_event() (or its DELETE-then-reinsert handling of reminders/
-    # focus_profiles) actually populate device_id or flip is_deleted on a
-    # real write yet -- see review_store._add_sync_columns()'s docstring for
-    # why that's deferred to the sync module itself (Phase 3).
+    # save_event() now populates reminders.device_id/is_deleted directly
+    # (see its diff-based reminder handling below); focus_profiles rows are
+    # still hard-deleted on disable rather than tombstoned -- narrower in
+    # scope than the reminder/task/board/event deletes fixed in Phase 3
+    # Part A, left for a later pass.
     events_cols = {row[1] for row in conn.execute("PRAGMA table_info(events)").fetchall()}
     if "device_id" not in events_cols:
         conn.execute("ALTER TABLE events ADD COLUMN device_id TEXT")
@@ -156,7 +156,8 @@ def _row_to_event(conn, row):
     reminders = [
         r["offset_minutes"]
         for r in conn.execute(
-            "SELECT offset_minutes FROM reminders WHERE event_id = ? ORDER BY offset_minutes", (row["id"],)
+            "SELECT offset_minutes FROM reminders WHERE event_id = ? AND is_deleted = 0 ORDER BY offset_minutes",
+            (row["id"],),
         )
     ]
     focus = conn.execute("SELECT * FROM focus_profiles WHERE event_id = ?", (row["id"],)).fetchone()
@@ -239,11 +240,38 @@ def save_event(event):
                 ),
             )
 
-            conn.execute("DELETE FROM reminders WHERE event_id = ?", (event_id,))
-            for offset in event.get("reminderOffsets", []) or []:
+            # Diff against existing reminder rows instead of DELETE-then-
+            # reinsert-everything -- the old approach rewrote every reminder
+            # on every single edit (even ones that changed nothing about
+            # reminders), which would generate spurious tombstones and
+            # device_id churn once these rows matter for sync. Only rows
+            # that actually change get touched.
+            requested = {int(o) for o in (event.get("reminderOffsets") or [])}
+            existing_rows = conn.execute(
+                "SELECT id, offset_minutes, is_deleted FROM reminders WHERE event_id = ?", (event_id,)
+            ).fetchall()
+            active_offsets = {r["offset_minutes"] for r in existing_rows if not r["is_deleted"]}
+            deleted_row_by_offset = {r["offset_minutes"]: r["id"] for r in existing_rows if r["is_deleted"]}
+            this_device = device_id.get_device_id()
+
+            for offset in requested - active_offsets:
+                if offset in deleted_row_by_offset:
+                    conn.execute(
+                        "UPDATE reminders SET is_deleted = 0, updated_at = ?, device_id = ? WHERE id = ?",
+                        (now, this_device, deleted_row_by_offset[offset]),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO reminders (id, event_id, offset_minutes, updated_at, device_id, is_deleted) "
+                        "VALUES (?, ?, ?, ?, ?, 0)",
+                        (uuid.uuid4().hex, event_id, offset, now, this_device),
+                    )
+
+            for offset in active_offsets - requested:
                 conn.execute(
-                    "INSERT INTO reminders (id, event_id, offset_minutes) VALUES (?, ?, ?)",
-                    (uuid.uuid4().hex, event_id, int(offset)),
+                    "UPDATE reminders SET is_deleted = 1, updated_at = ?, device_id = ? "
+                    "WHERE event_id = ? AND offset_minutes = ? AND is_deleted = 0",
+                    (now, this_device, event_id, offset),
                 )
 
             focus = event.get("focusProfile")
@@ -309,25 +337,17 @@ def undo_delete_event(event_id):
 
 
 def purge_expired_soft_deletes():
-    """Permanently removes events whose soft-delete grace period has
-    elapsed. Meant to be called periodically from the scheduler loop —
-    failures here are logged and swallowed, same as every other write in
-    this module, so a purge failure never takes down the scheduler."""
-    with _lock:
-        try:
-            conn = _get_conn()
-            cutoff = time.time() - SOFT_DELETE_GRACE_SECONDS
-            rows = conn.execute("SELECT id, deleted_at FROM events WHERE deleted_at IS NOT NULL").fetchall()
-            for row in rows:
-                try:
-                    deleted_ts = datetime.fromisoformat(row["deleted_at"]).timestamp()
-                except ValueError:
-                    continue
-                if deleted_ts <= cutoff:
-                    conn.execute("DELETE FROM events WHERE id = ?", (row["id"],))
-            conn.commit()
-        except Exception:
-            logger.exception("purge_expired_soft_deletes failed")
+    """Used to permanently DELETE events past their undo grace period.
+    Now a no-op by design: a hard delete here can never propagate to other
+    devices, so a soft-deleted event (deleted_at set) is left in place
+    indefinitely once SOFT_DELETE_GRACE_SECONDS passes -- undo_delete_event()
+    simply becomes unreachable from the UI at that point. Permanent physical
+    purge is a deliberate future cleanup task (once sync_now() can confirm
+    every known device has seen the tombstone), not an oversight. Kept as a
+    function (rather than removed) since calendar_scheduler.py's polling
+    loop already calls it every tick and that call site is harmless to leave
+    in place for when real purge logic lands here."""
+    return
 
 
 def export_db(dest_path):
