@@ -8,5 +8,8 @@ python-dateutil
 winsdk
 PySide6
 watchdog
+supabase
+keyring
+python-dotenv
 pytest
 pytest-qt

@@ -19,6 +19,7 @@ from datetime import datetime
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -126,6 +127,7 @@ class BoardTab(QWidget):
         layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(12)
 
+        self._tag_filter = "all"
         layout.addLayout(self._build_header())
 
         scroll = QScrollArea()
@@ -155,6 +157,17 @@ class BoardTab(QWidget):
         header.addWidget(title)
         header.addStretch(1)
 
+        self._tag_filter_combo = QComboBox()
+        self._tag_filter_combo.addItem("All Tags", "all")
+        for tag in board_store.PRESET_TAGS:
+            self._tag_filter_combo.addItem(tag["label"], tag["id"])
+        self._tag_filter_combo.setStyleSheet(
+            "QComboBox { border: 1px solid #D8DCE3; border-radius: 8px; padding: 5px 10px; "
+            "background: #FFFFFF; color: #1F2328; font-size: 13px; }"
+        )
+        self._tag_filter_combo.currentIndexChanged.connect(self._on_tag_filter_changed)
+        header.addWidget(self._tag_filter_combo)
+
         self._upcoming_button = QPushButton("Upcoming")
         self._upcoming_button.setProperty("class", "SecondaryButton")
         self._upcoming_button.clicked.connect(self._open_upcoming_dialog)
@@ -171,6 +184,10 @@ class BoardTab(QWidget):
         header.addWidget(add_button)
         return header
 
+    def _on_tag_filter_changed(self, _index):
+        self._tag_filter = self._tag_filter_combo.currentData()
+        self.refresh()
+
     def refresh(self):
         while self._list_layout.count():
             item = self._list_layout.takeAt(0)
@@ -179,8 +196,14 @@ class BoardTab(QWidget):
                 widget.deleteLater()
 
         tasks = board_store.list_active_tasks()
+        if self._tag_filter != "all":
+            tasks = [t for t in tasks if self._tag_filter in (t.get("tags") or [])]
         if not tasks:
-            empty_label = QLabel("No tasks yet -- click “+ Add Task” to create one.")
+            empty_label = QLabel(
+                "No tasks with this tag."
+                if self._tag_filter != "all"
+                else "No tasks yet -- click “+ Add Task” to create one."
+            )
             empty_label.setStyleSheet("color: #8A8F98; font-size: 14px;")
             self._list_layout.addWidget(empty_label)
         for task in tasks:
@@ -200,6 +223,16 @@ class BoardTab(QWidget):
 
     def _open_upcoming_dialog(self):
         _UpcomingListDialog(on_changed=self.refresh)
+
+
+def _make_tag_pill(tag):
+    pill = QLabel(tag["label"])
+    pill.setStyleSheet(
+        f"background: {tag['bg']}; color: {tag['color']}; "
+        f"border: 1px solid {tag['color']}; border-radius: 9px; "
+        f"padding: 1px 9px; font-size: 11px; font-weight: 600;"
+    )
+    return pill
 
 
 class _BoardCard(QFrame):
@@ -225,9 +258,17 @@ class _BoardCard(QFrame):
 
         text_col = QVBoxLayout()
         text_col.setSpacing(2)
+        name_row = QHBoxLayout()
+        name_row.setSpacing(8)
         name_label = QLabel(task["name"])
         name_label.setStyleSheet("font-size: 16px; font-weight: 600; color: #1F2328;")
-        text_col.addWidget(name_label)
+        name_row.addWidget(name_label)
+        for tag_id in task.get("tags") or []:
+            tag = board_store.PRESET_TAGS_BY_ID.get(tag_id)
+            if tag:
+                name_row.addWidget(_make_tag_pill(tag))
+        name_row.addStretch(1)
+        text_col.addLayout(name_row)
 
         recurring_text = _recurring_text(task)
         if recurring_text:
@@ -608,6 +649,31 @@ class _UpcomingListDialog(QWidget):
             self._on_changed()
 
 
+def _build_tag_picker(layout, initial_tags=None):
+    """Checkable pills for each preset tag (board_store.PRESET_TAGS). Returns
+    a dict of tag id -> checkable QPushButton, styled like the tag pills
+    themselves so the picker previews what the pill will look like."""
+    initial_tags = initial_tags or []
+    buttons = {}
+
+    layout.addWidget(_bold_label("Tags (optional)"))
+    row = QHBoxLayout()
+    for tag in board_store.PRESET_TAGS:
+        btn = QPushButton(tag["label"])
+        btn.setCheckable(True)
+        btn.setChecked(tag["id"] in initial_tags)
+        btn.setStyleSheet(
+            "QPushButton { border-radius: 9px; padding: 3px 12px; font-size: 12px; font-weight: 600; "
+            f"background: #F0F1F5; color: {tag['color']}; border: 1px solid {tag['color']}; }}"
+            f"QPushButton:checked {{ background: {tag['bg']}; }}"
+        )
+        row.addWidget(btn)
+        buttons[tag["id"]] = btn
+    row.addStretch(1)
+    layout.addLayout(row)
+    return buttons
+
+
 def _build_recurrence_pickers(layout, initial_days=None, initial_pattern=None):
     """Builds the "specific days" + "fixed schedule" button rows shared by
     the Add and Edit dialogs, wired so picking one clears the other (a task
@@ -679,6 +745,7 @@ class _AddTaskDialog(QWidget):
         layout.addLayout(self._importance_row)
 
         self._day_buttons, self._pattern_buttons = _build_recurrence_pickers(layout)
+        self._tag_buttons = _build_tag_picker(layout)
 
         layout.addWidget(_bold_label("Info (any mix of text, photo, link)"))
         self._text_edit = QTextEdit()
@@ -771,6 +838,8 @@ class _AddTaskDialog(QWidget):
                 photo_bytes = f.read()
             photo_filename = os.path.basename(self._photo_path)
 
+        tags = [tag_id for tag_id, btn in self._tag_buttons.items() if btn.isChecked()]
+
         task = board_store.create_task(
             name,
             self._importance,
@@ -780,6 +849,7 @@ class _AddTaskDialog(QWidget):
             description_link=self._link_edit.text().strip(),
             photo_bytes=photo_bytes,
             photo_filename=photo_filename,
+            tags=tags,
         )
 
         self.close()
@@ -811,6 +881,7 @@ class _EditTaskDialog(QWidget):
         self._day_buttons, self._pattern_buttons = _build_recurrence_pickers(
             layout, initial_days=task.get("recurringDays"), initial_pattern=task.get("recurrencePattern")
         )
+        self._tag_buttons = _build_tag_picker(layout, initial_tags=task.get("tags"))
 
         layout.addWidget(_bold_label("Info (any mix of text, photo, link)"))
         self._text_edit = QTextEdit()
@@ -900,6 +971,8 @@ class _EditTaskDialog(QWidget):
                 photo_bytes = f.read()
             photo_filename = os.path.basename(self._photo_path)
 
+        tags = [tag_id for tag_id, btn in self._tag_buttons.items() if btn.isChecked()]
+
         task = board_store.update_task(
             self._task_id,
             name,
@@ -910,6 +983,7 @@ class _EditTaskDialog(QWidget):
             photo_bytes=photo_bytes,
             photo_filename=photo_filename,
             remove_photo=self._remove_photo,
+            tags=tags,
         )
 
         self.close()
