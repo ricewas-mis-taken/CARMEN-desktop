@@ -33,11 +33,21 @@ PHOTOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private",
 
 RECURRENCE_PATTERNS = ("days", "weekly", "monthly", "yearly")
 
+# Preset tags a task can be labeled with. "color" is the pill's outline/text
+# color; "bg" is a lighter pastel derived from it for the pill's background.
+# Custom (user-defined) tags aren't supported yet -- only these presets.
+PRESET_TAGS = [
+    {"id": "long-term", "label": "Long-term", "color": "#6B46C1", "bg": "#EDE4FB"},
+    {"id": "quick", "label": "Quick", "color": "#B45309", "bg": "#FCEEDD"},
+]
+PRESET_TAGS_BY_ID = {tag["id"]: tag for tag in PRESET_TAGS}
+
 DEFAULT_BOARD_TASK = {
     "name": "",
     "importance": 5,  # 1-10, most important sorts first
     "recurringDays": [],  # WEEKDAY_CODES entries; used when recurrencePattern == "days"
     "recurrencePattern": "none",  # "none" | one of RECURRENCE_PATTERNS
+    "tags": [],  # PRESET_TAGS ids
     "descriptionText": "",
     "descriptionPhotoPath": None,
     "descriptionLink": "",
@@ -73,6 +83,9 @@ def _backfill_sync_fields(task):
         changed = True
     if "isDeleted" not in task:
         task["isDeleted"] = False
+        changed = True
+    if "tags" not in task:
+        task["tags"] = []
         changed = True
     return changed
 
@@ -145,13 +158,14 @@ def _resolve_recurrence(recurring_days, recurrence_pattern):
 def create_task(
     name, importance, recurring_days=None, recurrence_pattern=None,
     description_text="", description_link="",
-    photo_bytes=None, photo_filename=None,
+    photo_bytes=None, photo_filename=None, tags=None,
 ):
     task = copy.deepcopy(DEFAULT_BOARD_TASK)
     task["id"] = _new_id()
     task["name"] = name
     task["importance"] = max(1, min(10, int(importance)))
     task["recurringDays"], task["recurrencePattern"] = _resolve_recurrence(recurring_days, recurrence_pattern)
+    task["tags"] = [t for t in (tags or []) if t in PRESET_TAGS_BY_ID]
     task["descriptionText"] = description_text or ""
     task["descriptionLink"] = description_link or ""
     if photo_bytes is not None:
@@ -168,9 +182,9 @@ def create_task(
 def update_task(
     task_id, name, recurring_days=None, recurrence_pattern=None,
     description_text="", description_link="",
-    photo_bytes=None, photo_filename=None, remove_photo=False,
+    photo_bytes=None, photo_filename=None, remove_photo=False, tags=None,
 ):
-    """Replaces a task's editable details (name, recurrence, info) in
+    """Replaces a task's editable details (name, recurrence, info, tags) in
     place. Importance is intentionally not touched here -- it has its own
     dedicated editor on the board card's badge."""
     tasks = load_board(include_deleted=True)
@@ -180,6 +194,7 @@ def update_task(
             task["recurringDays"], task["recurrencePattern"] = _resolve_recurrence(
                 recurring_days, recurrence_pattern
             )
+            task["tags"] = [t for t in (tags or []) if t in PRESET_TAGS_BY_ID]
             task["descriptionText"] = description_text or ""
             task["descriptionLink"] = description_link or ""
             if remove_photo and not photo_bytes:
