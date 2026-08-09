@@ -12,7 +12,7 @@ import session_manager
 def soft_lock_warning(offending_process_name=None):
     status = session_manager.get_status()
     if status.get("source") == "review":
-        message = f"Finish {status.get('eventTitle') or 'this review'} first"
+        message = f"Finish {status.get('reviewProblemName') or 'this review'} first"
     else:
         last_ok = status["lastAcceptableProcess"] or "your focus app"
         message = f"You're off track — back to {last_ok}?"
@@ -80,7 +80,7 @@ def hard_lock_redirect(offending_process_name=None):
     label = offending_process_name or hwnd_process or "that app"
     status = session_manager.get_status()
     if status.get("source") == "review":
-        message = f"Finish {status.get('eventTitle') or 'this review'} first"
+        message = f"Finish {status.get('reviewProblemName') or 'this review'} first"
     else:
         back_to = last_acceptable or "your focus app"
         message = f"Redirected from {label} — back to {back_to}."
@@ -150,7 +150,7 @@ def show_blocked_notice(process_name):
     the user is legitimately doing instead."""
     status = session_manager.get_status()
     if status.get("source") == "review":
-        message = f"Finish {status.get('eventTitle') or 'this review'} first"
+        message = f"Finish {status.get('reviewProblemName') or 'this review'} first"
     else:
         message = f"{process_name} is blocked and was minimized."
     _show_lock_overlay(message, duration_ms=5000, offending_process_name=process_name)
