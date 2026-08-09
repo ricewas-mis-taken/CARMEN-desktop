@@ -131,9 +131,14 @@ def _fastest_display(problem):
 
 def _first_attempt_text(problem):
     """None if this problem was never started via "Add & Start First
-    Attempt" -- older/regular problems just don't have this stat."""
+    Attempt" -- older/regular problems just don't have this stat. Also
+    hidden once the problem has more than one real review -- the first
+    attempt's "(checked the answer)" note is only useful before later
+    reviews make it stale."""
     seconds = problem.get("firstAttemptSeconds")
     if seconds is None:
+        return None
+    if problem.get("reviewCount", 0) > 1:
         return None
     if problem.get("firstAttemptSelfSolved"):
         shakiness = problem.get("firstAttemptShakiness")
