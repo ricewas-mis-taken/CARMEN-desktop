@@ -19,6 +19,7 @@ from datetime import datetime
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -202,6 +203,16 @@ class BoardTab(QWidget):
         _UpcomingListDialog(on_changed=self.refresh)
 
 
+def _make_tag_pill(tag):
+    pill = QLabel(tag["label"])
+    pill.setStyleSheet(
+        f"background: {tag['bg']}; color: {tag['color']}; "
+        f"border: 1px solid {tag['color']}; border-radius: 9px; "
+        f"padding: 1px 9px; font-size: 11px; font-weight: 600;"
+    )
+    return pill
+
+
 class _BoardCard(QFrame):
     def __init__(self, task, on_changed):
         super().__init__()
@@ -225,9 +236,17 @@ class _BoardCard(QFrame):
 
         text_col = QVBoxLayout()
         text_col.setSpacing(2)
+        name_row = QHBoxLayout()
+        name_row.setSpacing(8)
         name_label = QLabel(task["name"])
         name_label.setStyleSheet("font-size: 16px; font-weight: 600; color: #1F2328;")
-        text_col.addWidget(name_label)
+        name_row.addWidget(name_label)
+        for tag_id in task.get("tags") or []:
+            tag = board_store.PRESET_TAGS_BY_ID.get(tag_id)
+            if tag:
+                name_row.addWidget(_make_tag_pill(tag))
+        name_row.addStretch(1)
+        text_col.addLayout(name_row)
 
         recurring_text = _recurring_text(task)
         if recurring_text:
