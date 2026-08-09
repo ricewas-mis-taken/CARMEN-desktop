@@ -17,6 +17,8 @@ Endpoints:
     GET  /whitelist/domains
     POST /whitelist/domains
     POST /whitelist/domains/add
+    GET  /api/focus/rules
+    POST /api/focus/rules
 
 This is the shared source of truth for focus session state: both this
 desktop app and the separate browser extension read/write the same session
@@ -30,6 +32,7 @@ page — /apps/installed and /blocklist/apps remain here as the same API
 surface for any other caller (e.g. Carmen) to drive the same picks
 programmatically.
 """
+import re
 import threading
 
 from flask import Flask, jsonify, request
@@ -47,7 +50,23 @@ app = Flask(__name__)
 # Localhost-only API, so permissive CORS is fine — this explicitly allows a
 # chrome-extension:// origin (the browser extension) alongside anything else,
 # since the server only ever listens on 127.0.0.1 regardless.
-CORS(app, resources={r"/*": {"origins": "*"}})
+#
+# /api/focus/rules gets its own, narrower entry (extension origins only)
+# per the cross-browser sync design — flask-cors matches the longest/most
+# specific resource pattern first, so this takes precedence over the
+# blanket "/*" rule below for that one path. Both chrome-extension:// (also
+# what Edge uses, being Chromium-based) and moz-extension:// (Firefox) are
+# allowed since the same core/rules-client.js polls this route from every
+# browser variant.
+_EXTENSION_ORIGIN_RE = re.compile(r"^(chrome|moz)-extension://.*$")
+
+CORS(
+    app,
+    resources={
+        r"/api/focus/rules": {"origins": _EXTENSION_ORIGIN_RE},
+        r"/*": {"origins": "*"},
+    },
+)
 
 API_PORT = 5847
 
@@ -311,6 +330,47 @@ def whitelist_domains_add():
     if addition is None:
         return jsonify({"error": "no active session"}), 409
     return jsonify({"domainWhitelist": domain_whitelist, "addition": addition})
+
+
+@app.route("/api/focus/rules", methods=["GET"])
+def focus_rules_get():
+    """Returns the synced domain-whitelist ruleset for the browser extension
+    (every Chrome profile, Edge, and Firefox instance on this machine poll
+    this same route — see carmen-extension/core/rules-client.js) alongside
+    version/updatedAt so clients can cheaply tell whether it changed since
+    their last fetch instead of re-diffing the whole list every time."""
+    cfg = config.load_config()
+    return jsonify(
+        {
+            "domainWhitelist": cfg.get("domainWhitelist", []),
+            "version": cfg.get("focusRulesVersion", 0),
+            "updatedAt": cfg.get("focusRulesUpdatedAt"),
+        }
+    )
+
+
+@app.route("/api/focus/rules", methods=["POST"])
+def focus_rules_set():
+    """Overwrites the synced domain-whitelist ruleset and bumps its version,
+    so every other browser instance's next poll picks up the change. Called
+    by the extension whenever the user edits their saved whitelist in the
+    popup (see chrome/popup/popup.js and firefox/popup/popup.js)."""
+    body = request.get_json(force=True, silent=True) or {}
+    domain_whitelist = body.get("domainWhitelist")
+
+    if not isinstance(domain_whitelist, list) or not all(
+        isinstance(d, str) for d in domain_whitelist
+    ):
+        return jsonify({"error": "domainWhitelist must be a list of strings"}), 400
+
+    cfg = config.set_focus_rules(domain_whitelist)
+    return jsonify(
+        {
+            "domainWhitelist": cfg["domainWhitelist"],
+            "version": cfg["focusRulesVersion"],
+            "updatedAt": cfg["focusRulesUpdatedAt"],
+        }
+    )
 
 
 @app.route("/review/topics", methods=["GET"])
