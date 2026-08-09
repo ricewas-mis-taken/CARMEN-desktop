@@ -127,6 +127,7 @@ class BoardTab(QWidget):
         layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(12)
 
+        self._tag_filter = "all"
         layout.addLayout(self._build_header())
 
         scroll = QScrollArea()
@@ -156,6 +157,17 @@ class BoardTab(QWidget):
         header.addWidget(title)
         header.addStretch(1)
 
+        self._tag_filter_combo = QComboBox()
+        self._tag_filter_combo.addItem("All Tags", "all")
+        for tag in board_store.PRESET_TAGS:
+            self._tag_filter_combo.addItem(tag["label"], tag["id"])
+        self._tag_filter_combo.setStyleSheet(
+            "QComboBox { border: 1px solid #D8DCE3; border-radius: 8px; padding: 5px 10px; "
+            "background: #FFFFFF; color: #1F2328; font-size: 13px; }"
+        )
+        self._tag_filter_combo.currentIndexChanged.connect(self._on_tag_filter_changed)
+        header.addWidget(self._tag_filter_combo)
+
         self._upcoming_button = QPushButton("Upcoming")
         self._upcoming_button.setProperty("class", "SecondaryButton")
         self._upcoming_button.clicked.connect(self._open_upcoming_dialog)
@@ -172,6 +184,10 @@ class BoardTab(QWidget):
         header.addWidget(add_button)
         return header
 
+    def _on_tag_filter_changed(self, _index):
+        self._tag_filter = self._tag_filter_combo.currentData()
+        self.refresh()
+
     def refresh(self):
         while self._list_layout.count():
             item = self._list_layout.takeAt(0)
@@ -180,8 +196,14 @@ class BoardTab(QWidget):
                 widget.deleteLater()
 
         tasks = board_store.list_active_tasks()
+        if self._tag_filter != "all":
+            tasks = [t for t in tasks if self._tag_filter in (t.get("tags") or [])]
         if not tasks:
-            empty_label = QLabel("No tasks yet -- click “+ Add Task” to create one.")
+            empty_label = QLabel(
+                "No tasks with this tag."
+                if self._tag_filter != "all"
+                else "No tasks yet -- click “+ Add Task” to create one."
+            )
             empty_label.setStyleSheet("color: #8A8F98; font-size: 14px;")
             self._list_layout.addWidget(empty_label)
         for task in tasks:
