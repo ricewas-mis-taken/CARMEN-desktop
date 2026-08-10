@@ -80,6 +80,11 @@ def format_session_html(session):
         parts.append(f'<b style="color:{header_color};">{_esc(header)}</b><br>')
     else:
         parts.append(f"<b>{_esc(header)}</b><br>")
+
+    source_label = _format_source_label(session)
+    if source_label:
+        parts.append(f'<span style="color:#3f8f86;">{_esc(source_label)}</span><br>')
+
     parts.append(f'<span style="color:#888888;">{"─" * len(header)}</span><br>')
 
     reason = session.get("reason")
@@ -119,6 +124,31 @@ def format_session_html(session):
 
     parts.append(f'<br><span style="color:#888888;">{SEPARATOR}</span><br><br>')
     return "".join(parts)
+
+
+def _format_source_label(session):
+    """Task/review context for a completed session's header -- a plain
+    manual session (the common case, no linked task/event) shows nothing
+    extra. Mirrors the same source-based labeling the browser extension's
+    popup already shows for a *live* session (see chrome/popup/popup.js's
+    renderActiveSession), applied here to completed history entries."""
+    source = session.get("source")
+    event_title = session.get("eventTitle")
+    review_problem_name = session.get("reviewProblemName")
+    review_subject_name = session.get("reviewSubjectName")
+
+    if source == "review":
+        label = f"Review: {review_problem_name or '?'}"
+        if review_subject_name:
+            label += f"  •  Subject: {review_subject_name}"
+        if event_title:
+            label += f"  •  Task: {event_title}"
+        return label
+    if source == "task":
+        return f"Task: {event_title}" if event_title else None
+    if source == "calendar-event":
+        return f"Calendar event: {event_title}" if event_title else None
+    return None
 
 
 def _format_violation(entry):
