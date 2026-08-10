@@ -195,6 +195,26 @@ def test_cash_in_rejects_overspend(isolate_tasks):
         tasks_store.cash_in(task["id"], date.today(), 15, sessions=[])
 
 
+def test_create_task_rejects_color_already_used_by_another_task(isolate_tasks):
+    tasks_store.create_task({"name": "Writing", "color": "#5B8DEF"})
+    with pytest.raises(tasks_store.DuplicateColorError):
+        tasks_store.create_task({"name": "Reading", "color": "#5B8DEF"})
+
+
+def test_update_task_rejects_color_already_used_by_another_task(isolate_tasks):
+    tasks_store.create_task({"name": "Writing", "color": "#5B8DEF"})
+    other = tasks_store.create_task({"name": "Reading", "color": "#e53935"})
+    with pytest.raises(tasks_store.DuplicateColorError):
+        tasks_store.update_task(other["id"], {"color": "#5B8DEF"})
+
+
+def test_update_task_keeping_its_own_color_is_not_a_collision(isolate_tasks):
+    task = tasks_store.create_task({"name": "Writing", "color": "#5B8DEF"})
+    updated = tasks_store.update_task(task["id"], {"color": "#5B8DEF", "targetMinutes": 60})
+    assert updated["color"] == "#5B8DEF"
+    assert updated["targetMinutes"] == 60
+
+
 def test_create_update_delete_roundtrip(isolate_tasks):
     task = tasks_store.create_task({"name": "Writing", "targetMinutes": 45})
     assert task["name"] == "Writing"
