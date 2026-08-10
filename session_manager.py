@@ -297,6 +297,8 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
     source = _state["source"]
     event_id = _state["eventId"]
     event_title = _state["eventTitle"]
+    review_problem_name = _state["reviewProblemName"]
+    review_subject_name = _state["reviewSubjectName"]
 
     if was_active:
         session_history.append_entry(
@@ -315,6 +317,13 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
                 "source": source,
                 "eventId": event_id,
                 "eventTitle": event_title,
+                # get_status() has always returned these live (see
+                # _get_status_locked below) -- they were just never carried
+                # into the history entry itself, so a review session's
+                # history/log entry showed no more than "manual", with no
+                # way to tell which task/subject/problem it was.
+                "reviewProblemName": review_problem_name,
+                "reviewSubjectName": review_subject_name,
             }
         )
 
@@ -336,6 +345,8 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
     _state["source"] = "manual"
     _state["eventId"] = None
     _state["eventTitle"] = None
+    _state["reviewProblemName"] = None
+    _state["reviewSubjectName"] = None
     _open_violation_index["process"] = None
     _open_violation_index["domain"] = None
     _save()
