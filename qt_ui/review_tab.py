@@ -177,6 +177,9 @@ def _timeline_sessions(sessions):
     return newest_three + first_two_ever, True
 
 
+_TIMELINE_HEADER_TEXT = "#   —   Time   —   Shakiness   —   Date"
+
+
 def _build_review_timeline(layout, problem):
     sessions = review_store.list_sessions(problem["id"])
     if not sessions:
@@ -184,17 +187,40 @@ def _build_review_timeline(layout, problem):
     shown, has_gap = _timeline_sessions(sessions)
 
     layout.addWidget(_bold_label("Review Timeline"))
-    for index, (number, session) in enumerate(shown):
+
+    header_label = QLabel(_TIMELINE_HEADER_TEXT)
+    header_label.setStyleSheet("font-size: 11px; font-weight: 700; color: #8A8F98;")
+    layout.addWidget(header_label)
+
+    row_labels = []
+    for number, session in shown:
         row_label = QLabel(_session_summary_text(number, session))
         row_label.setStyleSheet("font-size: 12px; color: #5A6070;")
-        layout.addWidget(row_label)
+        row_labels.append(row_label)
+
+    # Rows and the gap marker live in their own left-anchored, shrink-to-fit
+    # container instead of going straight into the popup's full-width
+    # layout -- otherwise the dots' own AlignCenter centers them against the
+    # whole popup width, landing well right of the much narrower (and
+    # left-aligned) row text above them.
+    timeline_container = QWidget()
+    container_layout = QVBoxLayout(timeline_container)
+    container_layout.setContentsMargins(0, 0, 0, 0)
+    container_layout.setSpacing(4)
+
+    for index, row_label in enumerate(row_labels):
+        container_layout.addWidget(row_label)
         if has_gap and index == 2:
             dots_label = QLabel("⋮")
             dots_label.setStyleSheet(
                 "font-size: 26px; font-weight: 700; color: #5A6070; padding: 2px 0;"
             )
             dots_label.setAlignment(Qt.AlignCenter)
-            layout.addWidget(dots_label)
+            container_layout.addWidget(dots_label)
+
+    widest_row = max((rl.sizeHint().width() for rl in row_labels), default=0)
+    timeline_container.setFixedWidth(widest_row)
+    layout.addWidget(timeline_container, alignment=Qt.AlignLeft)
 
 
 def _build_description_content(layout, problem):

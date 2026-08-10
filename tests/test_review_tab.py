@@ -231,6 +231,31 @@ def test_description_popup_shows_review_timeline(qtbot, isolate_review_db):
     labels = [w.text() for w in popup.findChildren(review_tab.QLabel)]
     assert any("Review Timeline" in text for text in labels)
     assert any("(A)" in text for text in labels)
+    assert review_tab._TIMELINE_HEADER_TEXT in labels
+
+
+def test_timeline_gap_marker_is_centered_on_row_width_not_popup_width(qtbot, isolate_review_db):
+    """Regression test: the "more history" gap marker must be centered
+    against the (much narrower) session-row text, not the popup's full
+    width -- see _build_review_timeline's timeline_container."""
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Gap Marker Problem", stars=3,
+        description_type="text", description_text="x",
+    )
+    for _ in range(7):
+        token = review_store.start_review(problem["id"])
+        review_store.finish_review(token, self_solved=True, shakiness=2)
+    problem = review_store.get_problem(problem["id"])
+
+    popup = review_tab._DescriptionPopup(problem)
+    qtbot.addWidget(popup)
+    popup.show()
+
+    dots_label = next(w for w in popup.findChildren(review_tab.QLabel) if w.text() == "⋮")
+    container = dots_label.parentWidget()
+    assert container.width() < popup.width()
+    assert container.width() == container.minimumWidth() == container.maximumWidth()
 
 
 def test_begin_review_starts_and_ends_linked_task_session(
