@@ -351,24 +351,36 @@ def focus_rules_get():
 
 @app.route("/api/focus/rules", methods=["POST"])
 def focus_rules_set():
-    """Overwrites the synced domain-whitelist ruleset and bumps its version,
-    so every other browser instance's next poll picks up the change. Called
-    by the extension whenever the user edits their saved whitelist in the
-    popup (see chrome/popup/popup.js and firefox/popup/popup.js)."""
+    """Replaces the synced domain-whitelist ruleset and bumps its version, so
+    every other browser instance's next poll picks up the change. Called by
+    the extension whenever the user edits their saved whitelist in the popup
+    (see chrome/popup/popup.js and firefox/popup/popup.js).
+
+    baseVersion (optional) is the version the caller's edit was based on. If
+    it doesn't match the server's current version — another instance pushed
+    a change this caller never polled — the edit is merged (union + dedupe)
+    with the current list instead of overwriting it outright, so a stale
+    push can't silently erase someone else's addition. See
+    config.set_focus_rules() for why a merge can only ever add domains, not
+    remove them."""
     body = request.get_json(force=True, silent=True) or {}
     domain_whitelist = body.get("domainWhitelist")
+    base_version = body.get("baseVersion")
 
     if not isinstance(domain_whitelist, list) or not all(
         isinstance(d, str) for d in domain_whitelist
     ):
         return jsonify({"error": "domainWhitelist must be a list of strings"}), 400
+    if base_version is not None and not isinstance(base_version, int):
+        return jsonify({"error": "baseVersion must be an integer or omitted"}), 400
 
-    cfg = config.set_focus_rules(domain_whitelist)
+    cfg, conflict = config.set_focus_rules(domain_whitelist, base_version=base_version)
     return jsonify(
         {
             "domainWhitelist": cfg["domainWhitelist"],
             "version": cfg["focusRulesVersion"],
             "updatedAt": cfg["focusRulesUpdatedAt"],
+            "merged": conflict,
         }
     )
 
