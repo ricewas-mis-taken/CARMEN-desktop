@@ -201,18 +201,18 @@ def test_timeline_sessions_shows_latest_three_and_first_two_ever_when_more_than_
     assert [(number, s["id"]) for number, s in shown] == [(7, 7), (6, 6), (5, 5), (1, 1), (2, 2)]
 
 
-def test_session_summary_text_shows_number_duration_shakiness_and_a_marker():
+def test_session_summary_fields_shows_number_duration_shakiness_and_a_marker():
     solved = _fake_session(1, self_solved=True, shakiness=2)
     checked = _fake_session(2, self_solved=False)
-    solved_text = review_tab._session_summary_text(3, solved)
-    checked_text = review_tab._session_summary_text(4, checked)
-    assert solved_text.startswith("#3")
-    assert "2/5" in solved_text
-    assert "(A)" not in solved_text
-    assert "checked the answer" not in solved_text.lower()
-    assert checked_text.startswith("#4")
-    assert "-/5" in checked_text
-    assert "(A)" in checked_text
+    solved_fields = review_tab._session_summary_fields(3, solved)
+    checked_fields = review_tab._session_summary_fields(4, checked)
+    assert solved_fields[0] == "#3"
+    assert "2/5" in solved_fields[2]
+    assert "(A)" not in solved_fields[2]
+    assert "checked the answer" not in "".join(solved_fields).lower()
+    assert checked_fields[0] == "#4"
+    assert "-/5" in checked_fields[2]
+    assert "(A)" in checked_fields[2]
 
 
 def test_description_popup_shows_review_timeline(qtbot, isolate_review_db):
@@ -231,13 +231,14 @@ def test_description_popup_shows_review_timeline(qtbot, isolate_review_db):
     labels = [w.text() for w in popup.findChildren(review_tab.QLabel)]
     assert any("Review Timeline" in text for text in labels)
     assert any("(A)" in text for text in labels)
-    assert review_tab._TIMELINE_HEADER_TEXT in labels
+    for header_cell in review_tab._TIMELINE_HEADER_CELLS:
+        assert header_cell in labels
 
 
-def test_timeline_gap_marker_is_centered_on_row_width_not_popup_width(qtbot, isolate_review_db):
-    """Regression test: the "more history" gap marker must be centered
-    against the (much narrower) session-row text, not the popup's full
-    width -- see _build_review_timeline's timeline_container."""
+def test_timeline_gap_marker_has_three_straight_dots_spanning_all_columns(qtbot, isolate_review_db):
+    """Regression test: the "more history" gap marker is 3 independently
+    centered dot labels (straight line, no off-axis glyph) spanning every
+    column of the timeline grid -- see _timeline_gap_marker."""
     topic, subject = _make_topic_and_subject()
     problem = review_store.create_problem(
         topic["id"], subject["id"], "Gap Marker Problem", stars=3,
@@ -252,10 +253,16 @@ def test_timeline_gap_marker_is_centered_on_row_width_not_popup_width(qtbot, iso
     qtbot.addWidget(popup)
     popup.show()
 
-    dots_label = next(w for w in popup.findChildren(review_tab.QLabel) if w.text() == "⋮")
-    container = dots_label.parentWidget()
-    assert container.width() < popup.width()
-    assert container.width() == container.minimumWidth() == container.maximumWidth()
+    dot_labels = [w for w in popup.findChildren(review_tab.QLabel) if w.text() == "•"]
+    assert len(dot_labels) == 3
+    dots_widget = dot_labels[0].parentWidget()
+    assert all(dot.parentWidget() is dots_widget for dot in dot_labels)
+
+    grid = popup.findChild(review_tab.QGridLayout)
+    assert grid.columnCount() == len(review_tab._TIMELINE_HEADER_CELLS)
+    index = grid.indexOf(dots_widget)
+    _, _, _, col_span = grid.getItemPosition(index)
+    assert col_span == len(review_tab._TIMELINE_HEADER_CELLS)
 
 
 def test_begin_review_starts_and_ends_linked_task_session(
