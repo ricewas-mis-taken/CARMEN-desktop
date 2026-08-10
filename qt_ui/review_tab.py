@@ -146,6 +146,57 @@ def _first_attempt_text(problem):
     return f"First attempt: {_format_mmss(seconds)} (checked the answer)"
 
 
+def _format_session_date(iso_datetime_string):
+    if not iso_datetime_string:
+        return "?"
+    return _format_dmy(iso_datetime_string[:10])
+
+
+def _session_summary_text(number, session):
+    duration = _format_mmss(session.get("durationSeconds"))
+    shakiness = session.get("shakiness")
+    shakiness_text = f"{shakiness if shakiness is not None else '-'}/5"
+    a_marker = " (A)" if not session.get("selfSolved") else ""
+    date_text = _format_session_date(session.get("finishedAt"))
+    return f"#{number}  —  {duration}  —  {shakiness_text}{a_marker}  —  {date_text}"
+
+
+def _timeline_sessions(sessions):
+    """Picks which of a problem's full session history (newest first, from
+    review_store.list_sessions) to show in the review timeline, each paired
+    with its session number (1 = first ever): everything if there are 5 or
+    fewer, otherwise the newest 3 plus the first-ever and second-ever
+    session (in that chronological order), with a gap marker in between so
+    it's clear there's more history not shown."""
+    total = len(sessions)
+    numbered = [(total - i, session) for i, session in enumerate(sessions)]
+    if total <= 5:
+        return numbered, False
+    newest_three = numbered[:3]
+    first_two_ever = [numbered[-1], numbered[-2]]
+    return newest_three + first_two_ever, True
+
+
+def _build_review_timeline(layout, problem):
+    sessions = review_store.list_sessions(problem["id"])
+    if not sessions:
+        return
+    shown, has_gap = _timeline_sessions(sessions)
+
+    layout.addWidget(_bold_label("Review Timeline"))
+    for index, (number, session) in enumerate(shown):
+        row_label = QLabel(_session_summary_text(number, session))
+        row_label.setStyleSheet("font-size: 12px; color: #5A6070;")
+        layout.addWidget(row_label)
+        if has_gap and index == 2:
+            dots_label = QLabel("⋮")
+            dots_label.setStyleSheet(
+                "font-size: 26px; font-weight: 700; color: #5A6070; padding: 2px 0;"
+            )
+            dots_label.setAlignment(Qt.AlignCenter)
+            layout.addWidget(dots_label)
+
+
 def _build_description_content(layout, problem):
     description_type = problem["descriptionType"]
     if description_type == "text":
@@ -1204,6 +1255,8 @@ class _DescriptionPopup(QWidget):
             first_attempt_label = QLabel(first_attempt_text)
             first_attempt_label.setStyleSheet("font-size: 12px; color: #5A6070;")
             layout.addWidget(first_attempt_label)
+
+        _build_review_timeline(layout, problem)
 
         _build_description_content(layout, problem)
 

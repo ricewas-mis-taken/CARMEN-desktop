@@ -172,6 +172,67 @@ def test_lighten_produces_valid_hex():
     assert len(result) == 7
 
 
+def _fake_session(n, self_solved=True, shakiness=3):
+    """n=1 is the oldest/first-ever session -- matches how real sessions
+    sort (list_sessions returns newest first), so callers build a fake
+    newest-first list with _fake_session(5), _fake_session(4), ..., _fake_session(1)."""
+    return {
+        "id": n,
+        "startedAt": f"2026-01-{n:02d}T10:00:00",
+        "finishedAt": f"2026-01-{n:02d}T10:05:00",
+        "durationSeconds": 300,
+        "selfSolved": self_solved,
+        "shakiness": shakiness if self_solved else None,
+    }
+
+
+def test_timeline_sessions_shows_everything_when_five_or_fewer():
+    sessions = [_fake_session(n) for n in (5, 4, 3, 2, 1)]
+    shown, has_gap = review_tab._timeline_sessions(sessions)
+    assert [(number, s["id"]) for number, s in shown] == [(5, 5), (4, 4), (3, 3), (2, 2), (1, 1)]
+    assert has_gap is False
+
+
+def test_timeline_sessions_shows_latest_three_and_first_two_ever_when_more_than_five():
+    # Newest first, id 7 is the latest session, id 1 the first ever.
+    sessions = [_fake_session(n) for n in range(7, 0, -1)]
+    shown, has_gap = review_tab._timeline_sessions(sessions)
+    assert has_gap is True
+    assert [(number, s["id"]) for number, s in shown] == [(7, 7), (6, 6), (5, 5), (1, 1), (2, 2)]
+
+
+def test_session_summary_text_shows_number_duration_shakiness_and_a_marker():
+    solved = _fake_session(1, self_solved=True, shakiness=2)
+    checked = _fake_session(2, self_solved=False)
+    solved_text = review_tab._session_summary_text(3, solved)
+    checked_text = review_tab._session_summary_text(4, checked)
+    assert solved_text.startswith("#3")
+    assert "2/5" in solved_text
+    assert "(A)" not in solved_text
+    assert "checked the answer" not in solved_text.lower()
+    assert checked_text.startswith("#4")
+    assert "-/5" in checked_text
+    assert "(A)" in checked_text
+
+
+def test_description_popup_shows_review_timeline(qtbot, isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Timeline Problem", stars=3,
+        description_type="text", description_text="x",
+    )
+    token = review_store.start_review(problem["id"])
+    review_store.finish_review(token, self_solved=False, shakiness=3)
+    problem = review_store.get_problem(problem["id"])
+
+    popup = review_tab._DescriptionPopup(problem)
+    qtbot.addWidget(popup)
+
+    labels = [w.text() for w in popup.findChildren(review_tab.QLabel)]
+    assert any("Review Timeline" in text for text in labels)
+    assert any("(A)" in text for text in labels)
+
+
 def test_begin_review_starts_and_ends_linked_task_session(
     qtbot, isolate_review_db, isolate_state, tmp_path, monkeypatch
 ):
