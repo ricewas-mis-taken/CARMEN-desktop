@@ -167,6 +167,54 @@ def test_vacation_balance_excludes_today():
     assert tasks_store.vacation_balance_minutes(task, sessions) == 0
 
 
+def test_vacation_balance_unaffected_by_later_goal_time_increase(isolate_tasks):
+    week_ago = date.today() - timedelta(days=7)
+    yesterday = date.today() - timedelta(days=1)
+    task = {
+        "id": "t1", "recurrence": "daily", "weekdays": [], "cashedInDates": {},
+        "targetMinutes": 30,
+        "targetMinutesHistory": [{"date": week_ago.isoformat(), "minutes": 30}],
+    }
+    sessions = [{
+        "source": "task", "eventId": "t1",
+        "startTime": _iso(yesterday, 9, 0), "endTime": _iso(yesterday, 9, 50),
+        "violationLog": [],
+    }]  # 50m logged yesterday against a 30m target -> 20m banked
+
+    assert tasks_store.vacation_balance_minutes(task, sessions) == 20
+
+    # Raising today's goal to 200m appends a new history entry dated today
+    # (mirroring what update_task does) instead of overwriting the old one.
+    task["targetMinutes"] = 200
+    task["targetMinutesHistory"].append({"date": date.today().isoformat(), "minutes": 200})
+
+    # Yesterday's target must still resolve to 30, and its already-banked
+    # 20m of vacation must be untouched by today's goal-time change.
+    assert tasks_store.vacation_balance_minutes(task, sessions) == 20
+    assert tasks_store.required_minutes_for_date(task, yesterday) == 30
+    assert tasks_store.required_minutes_for_date(task, date.today()) == 200
+
+
+def test_update_task_appends_target_minutes_history_entry(isolate_tasks):
+    task = tasks_store.create_task({
+        "name": "Deep Work", "recurrence": "daily", "weekdays": [], "targetMinutes": 30,
+    })
+    created_date = task["createdAt"][:10]
+    assert task["targetMinutesHistory"] == [{"date": created_date, "minutes": 30}]
+
+    task = tasks_store.update_task(task["id"], {"targetMinutes": 200})
+    today_key = date.today().isoformat()
+    if created_date == today_key:
+        # Same-day change: the creation-day entry is updated in place, not
+        # duplicated -- only one target is ever "in effect" for a given day.
+        assert task["targetMinutesHistory"] == [{"date": today_key, "minutes": 200}]
+    else:
+        assert task["targetMinutesHistory"] == [
+            {"date": created_date, "minutes": 30},
+            {"date": today_key, "minutes": 200},
+        ]
+
+
 def test_cash_in_reduces_balance_and_todays_requirement(isolate_tasks):
     yesterday = date.today() - timedelta(days=1)
     task = tasks_store.create_task({
