@@ -29,7 +29,22 @@ curl -s -X POST "$API_BASE/api/focus/rules" \
 echo
 
 echo "--- GET /api/focus/rules (confirms version/updatedAt advanced) ---"
-curl -s "$API_BASE/api/focus/rules"
+CURRENT=$(curl -s "$API_BASE/api/focus/rules")
+echo "$CURRENT"
+CURRENT_VERSION=$(echo "$CURRENT" | grep -o '"version":[0-9]*' | grep -o '[0-9]*')
+echo
+
+echo "--- POST with a stale baseVersion (simulates a conflicting edit from another browser instance) ---"
+echo "--- should MERGE with the current list instead of overwriting it: 'merged' should be true ---"
+curl -s -X POST "$API_BASE/api/focus/rules" \
+  -H "Content-Type: application/json" \
+  -d '{"domainWhitelist": ["conflict-test.example"], "baseVersion": 0}'
+echo
+
+echo "--- POST with the current baseVersion (no conflict) -- should overwrite outright: 'merged' should be false ---"
+curl -s -X POST "$API_BASE/api/focus/rules" \
+  -H "Content-Type: application/json" \
+  -d "{\"domainWhitelist\": [\"docs.google.com\"], \"baseVersion\": $((CURRENT_VERSION + 1))}"
 echo
 
 echo "--- CORS preflight check: extension origin should be echoed back ---"

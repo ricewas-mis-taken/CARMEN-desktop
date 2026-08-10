@@ -69,15 +69,57 @@ def save_config(config):
 _focus_rules_lock = threading.Lock()
 
 
-def set_focus_rules(domain_whitelist):
+def _dedupe_domains(*domain_lists):
+    """Merges any number of domain lists into one, keeping only the first
+    occurrence of each domain (case-insensitive, trimmed) — so a domain
+    typed as "Example.com" in one browser profile and "example.com" in
+    another still collapses to a single entry instead of two."""
+    seen = set()
+    merged = []
+    for domains in domain_lists:
+        for domain in domains or []:
+            trimmed = (domain or "").strip()
+            key = trimmed.lower()
+            if not trimmed or key in seen:
+                continue
+            seen.add(key)
+            merged.append(trimmed)
+    return merged
+
+
+def set_focus_rules(domain_whitelist, base_version=None):
     """Persists domain_whitelist as the synced browser-extension ruleset and
     bumps focusRulesVersion/focusRulesUpdatedAt so polling clients (see
     carmen-extension/core/rules-client.js) can cheaply detect the change.
-    Returns the updated config dict."""
+
+    base_version is the focusRulesVersion the caller's edit was based on
+    (whatever it last polled/pushed successfully). Two possibilities:
+
+    - It matches the server's current version (or is omitted) -- no other
+      instance changed anything in between, so this is a plain edit
+      (including deletions) and the caller's list replaces the old one
+      outright.
+    - It's stale (another Chrome profile/Edge/Firefox instance pushed a
+      change this caller never saw) -- replacing outright would silently
+      drop that other edit, so this merges instead: union of the current
+      server list and the caller's list, deduped. A merge can't tell
+      "caller deleted this domain" apart from "caller's view never
+      included it," so conflicting edits only ever grow the list; a plain,
+      non-conflicting edit is still how a domain actually gets removed.
+
+    Returns the updated config dict.
+    """
     with _focus_rules_lock:
         cfg = load_config()
-        cfg["domainWhitelist"] = list(domain_whitelist)
-        cfg["focusRulesVersion"] = int(cfg.get("focusRulesVersion") or 0) + 1
+        current_version = int(cfg.get("focusRulesVersion") or 0)
+        conflict = base_version is not None and int(base_version) != current_version
+
+        if conflict:
+            cfg["domainWhitelist"] = _dedupe_domains(cfg.get("domainWhitelist", []), domain_whitelist)
+        else:
+            cfg["domainWhitelist"] = _dedupe_domains(domain_whitelist)
+
+        cfg["focusRulesVersion"] = current_version + 1
         cfg["focusRulesUpdatedAt"] = datetime.now(timezone.utc).isoformat()
         save_config(cfg)
-        return cfg
+        return cfg, conflict
