@@ -1,5 +1,7 @@
 from datetime import date, timedelta
 
+import pytest
+
 import review_store
 
 
@@ -21,6 +23,19 @@ def test_create_and_list_subjects(isolate_review_db):
     assert subject["name"] == "Quadratics"
     assert subject["color"] == "#4A90D9"
     assert review_store.list_subjects(topic["id"]) == [subject]
+
+
+def test_create_subject_rejects_color_already_used_by_another_subject(isolate_review_db):
+    topic, _ = _make_topic_and_subject(subject_name="Quadratics", color="#4A90D9")
+    with pytest.raises(review_store.DuplicateColorError):
+        review_store.create_subject(topic["id"], "Linear Equations", "#4A90D9")
+
+
+def test_create_subject_rejects_color_used_by_subject_in_another_topic(isolate_review_db):
+    _make_topic_and_subject(name="Math", subject_name="Quadratics", color="#4A90D9")
+    other_topic = review_store.create_topic("Science")
+    with pytest.raises(review_store.DuplicateColorError):
+        review_store.create_subject(other_topic["id"], "Physics", "#4A90D9")
 
 
 def test_create_problem_sets_schedule_from_scheduler(isolate_review_db):

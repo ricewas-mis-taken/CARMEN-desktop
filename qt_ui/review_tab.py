@@ -1501,7 +1501,7 @@ class _AddProblemDialog(QWidget):
             subject = review_store.create_subject(
                 self._topic_id, name, self._new_subject_color
             )
-        except review_store.DuplicateNameError as e:
+        except (review_store.DuplicateNameError, review_store.DuplicateColorError) as e:
             self._status_label.setText(str(e))
             return
         if subject is None:

@@ -114,7 +114,27 @@ def get_task(task_id):
     return None
 
 
+class DuplicateColorError(Exception):
+    """Raised when a task's color collides with another (non-deleted) task's
+    color -- colors are how tasks are told apart at a glance elsewhere in
+    the app (progress bars, calendar blocks), so two tasks sharing one
+    defeats that instantly. Callers (the Qt task editor) catch this to show
+    a real message instead of silently letting the colors collide."""
+
+
+def _color_in_use(color, exclude_id=None):
+    color = color.lower()
+    return any(
+        task["id"] != exclude_id and (task.get("color") or "").lower() == color
+        for task in load_tasks()
+    )
+
+
 def create_task(data):
+    color = data.get("color")
+    if color and _color_in_use(color):
+        raise DuplicateColorError("Another task is already using this color.")
+
     task = copy.deepcopy(DEFAULT_TASK)
     task.update(data)
     task["id"] = _new_id()
@@ -127,6 +147,10 @@ def create_task(data):
 
 
 def update_task(task_id, data):
+    new_color = data.get("color")
+    if new_color and _color_in_use(new_color, exclude_id=task_id):
+        raise DuplicateColorError("Another task is already using this color.")
+
     tasks = load_tasks(include_deleted=True)
     updated = None
     for task in tasks:

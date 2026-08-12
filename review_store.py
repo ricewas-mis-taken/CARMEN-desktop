@@ -53,6 +53,13 @@ class DuplicateNameError(Exception):
     generic "could not save" one."""
 
 
+class DuplicateColorError(Exception):
+    """Raised when a subject's color collides with another subject's color,
+    globally across every topic -- colors are how subjects are told apart
+    at a glance (tags, calendar blocks), so two subjects sharing one
+    defeats that. Callers catch this the same way as DuplicateNameError."""
+
+
 def _get_conn():
     global _schema_ready
     conn = calendar_store._get_conn()
@@ -401,6 +408,10 @@ def create_subject(topic_id, name, color, linked_task_id=None):
                 (topic_id, name),
             ).fetchone():
                 raise DuplicateNameError(f'A subject named "{name}" already exists in this topic.')
+            if conn.execute(
+                "SELECT id FROM review_subjects WHERE LOWER(color) = LOWER(?)", (color,),
+            ).fetchone():
+                raise DuplicateColorError("Another subject is already using this color.")
             cur = conn.execute(
                 "INSERT INTO review_subjects (topic_id, name, color, linked_task_id) VALUES (?, ?, ?, ?)",
                 (topic_id, name, color, linked_task_id),
@@ -408,7 +419,7 @@ def create_subject(topic_id, name, color, linked_task_id=None):
             conn.commit()
             row = conn.execute("SELECT * FROM review_subjects WHERE id = ?", (cur.lastrowid,)).fetchone()
             return _row_to_subject(row)
-        except DuplicateNameError:
+        except (DuplicateNameError, DuplicateColorError):
             raise
         except Exception:
             logger.exception("review_store.create_subject failed for topic %s", topic_id)

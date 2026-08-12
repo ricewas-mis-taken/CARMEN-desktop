@@ -258,10 +258,14 @@ class _TaskEditor(QWidget):
             "domainWhitelist": checklist.get_checked(self._domain_checks),
         }
 
-        if self._task:
-            saved = tasks_store.update_task(self._task["id"], data)
-        else:
-            saved = tasks_store.create_task(data)
+        try:
+            if self._task:
+                saved = tasks_store.update_task(self._task["id"], data)
+            else:
+                saved = tasks_store.create_task(data)
+        except tasks_store.DuplicateColorError as e:
+            self._status_label.setText(str(e))
+            return
 
         self.close()
         if self._on_saved is not None:
