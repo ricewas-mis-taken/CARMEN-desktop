@@ -292,6 +292,16 @@ class _BoardCard(QFrame):
         self._importance_editor = None
         self.setProperty("class", "BoardCard")
         self.setAttribute(Qt.WA_StyledBackground, True)
+        if not (task.get("tags") or []):
+            # Un-labeled isn't a real tag a task can be assigned, so it
+            # doesn't get a pill next to the name like the others -- it's
+            # marked with a tinted card background instead. Only sets
+            # background/border; QFrame.BoardCard:hover's border still
+            # applies on top since it isn't redefined here.
+            self.setStyleSheet(
+                f"QFrame.BoardCard {{ background: {UNLABELED_TAG['bg']}; "
+                f"border: 1px solid {UNLABELED_TAG['color']}; border-radius: 12px; }}"
+            )
 
         self._outer = QVBoxLayout(self)
         self._outer.setContentsMargins(18, 14, 18, 14)
@@ -311,8 +321,6 @@ class _BoardCard(QFrame):
         name_label.setStyleSheet("font-size: 16px; font-weight: 600; color: #1F2328;")
         name_row.addWidget(name_label)
         tag_ids = task.get("tags") or []
-        if not tag_ids:
-            name_row.addWidget(_make_tag_pill(UNLABELED_TAG))
         for tag_id in tag_ids:
             tag = board_store.PRESET_TAGS_BY_ID.get(tag_id)
             if tag:
