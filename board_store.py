@@ -39,6 +39,7 @@ RECURRENCE_PATTERNS = ("days", "weekly", "monthly", "yearly")
 PRESET_TAGS = [
     {"id": "long-term", "label": "Long-term", "color": "#6B46C1", "bg": "#EDE4FB"},
     {"id": "quick", "label": "Quick", "color": "#B45309", "bg": "#FCEEDD"},
+    {"id": "shopping", "label": "Shopping", "color": "#2B6CB0", "bg": "#DCEEFC"},
 ]
 PRESET_TAGS_BY_ID = {tag["id"]: tag for tag in PRESET_TAGS}
 
