@@ -23,22 +23,15 @@ def test_unlabeled_tag_is_not_assignable():
     assert "unlabeled" not in board_store.PRESET_TAGS_BY_ID
 
 
-def test_card_marks_unlabeled_tasks_via_background_not_a_pill(qtbot, isolate_board):
+def test_card_shows_no_visible_trace_of_unlabeled_status(qtbot, isolate_board):
+    """"Un-labeled" is a purely backend/filtering concept -- a tagless
+    task's card must look completely ordinary, no pill and no styling
+    change of any kind."""
     task = board_store.create_task("Bare task", importance=5)
     card = board_tab._BoardCard(task, on_changed=lambda: None)
     qtbot.addWidget(card)
     labels = [w.text() for w in card.findChildren(board_tab.QLabel)]
     assert "Un-labeled" not in labels
-    assert board_tab.UNLABELED_TAG["bg"] in card.styleSheet()
-
-
-def test_card_with_tags_gets_no_unlabeled_background_tint(qtbot, isolate_board):
-    task = board_store.create_task("Tagged task", importance=5, tags=["quick"])
-    card = board_tab._BoardCard(task, on_changed=lambda: None)
-    qtbot.addWidget(card)
-    labels = [w.text() for w in card.findChildren(board_tab.QLabel)]
-    assert "Un-labeled" not in labels
-    assert "Quick" in labels
     assert card.styleSheet() == ""
 
 
