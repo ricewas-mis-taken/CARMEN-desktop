@@ -715,7 +715,7 @@ def _apply_review_outcome(problem_id, duration_seconds, self_solved, shakiness, 
     return get_problem(problem_id)
 
 
-def finish_review(session_token, self_solved=True, shakiness=3):
+def finish_review(session_token, self_solved=True, shakiness=3, duration_seconds=None):
     """Ends a review started via start_review(): logs the session, bumps
     review_count/last_reviewed_at, and reschedules the problem.
 
@@ -724,16 +724,34 @@ def finish_review(session_token, self_solved=True, shakiness=3):
     shakiness (1–5)   → 1 solid, 5 very shaky; higher shakiness shortens the
                         next interval (only applies when self_solved=True).
 
+    duration_seconds, if given, is used as-is instead of being recomputed
+    from raw wall-clock time here -- callers with a paused/resumed review
+    (qt_ui/review_tab.py's _ReviewBanner) already track pause-aware elapsed
+    time themselves, and recomputing "now - started_at" from scratch would
+    silently count paused time (and any time the PC was off) as worked.
+
     Returns the updated problem dict, or None if the token is unknown/already used."""
     entry = _active_sessions.pop(session_token, None)
     if entry is None:
         return None
 
     started_at = entry["started_at"]
-    duration_seconds = max(0, int((datetime.now() - started_at).total_seconds()))
+    if duration_seconds is None:
+        duration_seconds = max(0, int((datetime.now() - started_at).total_seconds()))
     return _apply_review_outcome(
         entry["problem_id"], duration_seconds, self_solved, shakiness, started_at=started_at
     )
+
+
+def finish_review_for_problem(problem_id, duration_seconds, self_solved=True, shakiness=3, started_at=None):
+    """Same outcome as finish_review(), but keyed directly on problem_id
+    instead of a start_review() token -- for a review resumed after an app
+    restart (see qt_ui/review_tab.py's _TopicView._resume_if_active), where
+    the original token lived only in _active_sessions (deliberately
+    in-memory, see its docstring) and didn't survive. session_manager's own
+    persisted state is what supplies problem_id/started_at/duration_seconds
+    in that case."""
+    return _apply_review_outcome(problem_id, max(0, int(duration_seconds)), self_solved, shakiness, started_at=started_at)
 
 
 def list_sessions(problem_id):

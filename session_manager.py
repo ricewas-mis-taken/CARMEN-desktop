@@ -51,6 +51,16 @@ _state = {
     # reviewed right now instead of just the generic eventTitle string.
     "reviewProblemName": None,
     "reviewSubjectName": None,
+    # review_store's problem id (an int, unlike the above two display
+    # strings) -- the ONLY way a review session recovered after an app
+    # restart (see _TopicView._resume_if_active in qt_ui/review_tab.py) can
+    # still log a real review_sessions row on Finish. review_store's own
+    # start_review()/finish_review() token lives in an in-memory dict that
+    # deliberately does NOT survive a restart, but this whole _state dict
+    # does (persisted to session_state.json) -- so this is what lets a
+    # paused-then-PC-shutdown-then-resumed review still get recorded instead
+    # of silently vanishing on Finish.
+    "reviewProblemId": None,
 }
 
 # Index into violationLog of the most recent still-unresolved violation of
@@ -195,6 +205,7 @@ def start_session(
     event_title=None,
     review_problem_name=None,
     review_subject_name=None,
+    review_problem_id=None,
 ):
     with _lock:
         now = datetime.now()
@@ -235,6 +246,7 @@ def start_session(
         _state["eventTitle"] = event_title
         _state["reviewProblemName"] = review_problem_name
         _state["reviewSubjectName"] = review_subject_name
+        _state["reviewProblemId"] = review_problem_id
         _open_violation_index["process"] = None
         _open_violation_index["domain"] = None
         _save()
@@ -347,6 +359,7 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
     _state["eventTitle"] = None
     _state["reviewProblemName"] = None
     _state["reviewSubjectName"] = None
+    _state["reviewProblemId"] = None
     _open_violation_index["process"] = None
     _open_violation_index["domain"] = None
     _save()
@@ -409,6 +422,7 @@ def _get_status_locked():
         "eventTitle": _state["eventTitle"],
         "reviewProblemName": _state["reviewProblemName"],
         "reviewSubjectName": _state["reviewSubjectName"],
+        "reviewProblemId": _state["reviewProblemId"],
     }
 
 
