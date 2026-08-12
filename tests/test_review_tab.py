@@ -265,6 +265,59 @@ def test_timeline_gap_marker_has_three_straight_dots_spanning_all_columns(qtbot,
     assert col_span == len(review_tab._TIMELINE_HEADER_CELLS)
 
 
+def test_review_start_dialog_shows_subject_and_task_name(
+    qtbot, isolate_review_db, isolate_state, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
+    task = tasks_store.create_task({"name": "Math Session", "lockMode": "soft"})
+    topic = review_store.create_topic("Math")
+    review_store.update_topic_link(topic["id"], task["id"])
+    subject = review_store.create_subject(topic["id"], "Quadratics", "#5B8DEF")
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve for x", stars=3,
+        description_type="text", description_text="factor",
+    )
+
+    dialog = review_tab._ReviewStartDialog(problem, on_start=lambda _p: None)
+    qtbot.addWidget(dialog)
+
+    labels = [w.text() for w in dialog.findChildren(review_tab.QLabel)]
+    assert any("Quadratics" in text and "Math Session" in text for text in labels)
+
+
+def test_review_start_dialog_shows_subject_only_when_no_linked_task(qtbot, isolate_review_db):
+    topic = review_store.create_topic("Math")
+    subject = review_store.create_subject(topic["id"], "Quadratics", "#5B8DEF")
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve for x", stars=3,
+        description_type="text", description_text="factor",
+    )
+
+    dialog = review_tab._ReviewStartDialog(problem, on_start=lambda _p: None)
+    qtbot.addWidget(dialog)
+
+    labels = [w.text() for w in dialog.findChildren(review_tab.QLabel)]
+    assert "Quadratics" in labels
+
+
+def test_review_start_dialog_shows_review_timeline(qtbot, isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Timeline Problem", stars=3,
+        description_type="text", description_text="x",
+    )
+    token = review_store.start_review(problem["id"])
+    review_store.finish_review(token, self_solved=False, shakiness=3)
+    problem = review_store.get_problem(problem["id"])
+
+    dialog = review_tab._ReviewStartDialog(problem, on_start=lambda _p: None)
+    qtbot.addWidget(dialog)
+
+    labels = [w.text() for w in dialog.findChildren(review_tab.QLabel)]
+    assert any("Review Timeline" in text for text in labels)
+    assert any("(A)" in text for text in labels)
+
+
 def test_begin_review_starts_and_ends_linked_task_session(
     qtbot, isolate_review_db, isolate_state, tmp_path, monkeypatch
 ):

@@ -130,6 +130,20 @@ def _fastest_display(problem):
     return f"{_format_mmss(fastest)}{marker}"
 
 
+def _subject_and_task_text(problem):
+    """"Subject — linked task" (or just the subject if its topic has no
+    linked task) -- the linked task is the one review sessions for this
+    topic actually start/end a focus session against, see
+    _TopicView._begin_review."""
+    text = problem["subjectName"]
+    topic = review_store.get_topic(problem["topicId"])
+    task_id = topic.get("linkedTaskId") if topic else None
+    task = tasks_store.get_task(task_id) if task_id else None
+    if task:
+        text = f"{text} — {task['name']}"
+    return text
+
+
 def _first_attempt_text(problem):
     """None if this problem was never started via "Add & Start First
     Attempt" -- older/regular problems just don't have this stat. Also
@@ -1130,7 +1144,7 @@ class _ReviewStartDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle(problem["name"])
-        self.resize(380, 300)
+        self.resize(380, 460)
         self._problem = problem
         self._on_start = on_start
 
@@ -1144,6 +1158,10 @@ class _ReviewStartDialog(QWidget):
         stars_label.setStyleSheet("color: #F5A623; font-size: 22px;")
         header_row.addWidget(stars_label)
         layout.addLayout(header_row)
+
+        subject_task_label = QLabel(_subject_and_task_text(problem))
+        subject_task_label.setStyleSheet("font-size: 13px; color: #5A6070;")
+        layout.addWidget(subject_task_label)
 
         stats_row = QHBoxLayout()
         fastest_label = QLabel(f"Fastest: {_fastest_display(problem)}")
@@ -1160,6 +1178,8 @@ class _ReviewStartDialog(QWidget):
             first_attempt_label = QLabel(first_attempt_text)
             first_attempt_label.setStyleSheet("font-size: 12px; color: #5A6070;")
             layout.addWidget(first_attempt_label)
+
+        _build_review_timeline(layout, problem)
 
         _build_description_content(layout, problem)
 
