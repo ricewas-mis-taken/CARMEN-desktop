@@ -61,12 +61,35 @@ def save_config(config):
     os.replace(tmp_path, CONFIG_PATH)
 
 
-# Guards the read-modify-write in set_focus_rules() — Flask serves each
-# request on its own worker thread, so two POST /api/focus/rules calls
-# landing close together could otherwise both read the same starting
-# version and each save with the same bumped value, silently losing one of
-# the two updates instead of producing two distinct versions.
-_focus_rules_lock = threading.Lock()
+# Guards every config.json read-modify-write, not just set_focus_rules()'s
+# own (the bug that originally motivated adding a lock here at all: two
+# POST /api/focus/rules calls landing close together could otherwise both
+# read the same starting version and each save with the same bumped
+# value, losing one of the two updates). The same class of race exists for
+# every other read-load-mutate-save call site -- api_server.py's Flask
+# handlers run on their own worker threads, and qt_ui/picker_dialogs.py's
+# Save handlers run on the Qt GUI thread of that same process, so a
+# blocklist save from the app-picker dialog landing at the same moment as
+# a whitelist push from the browser extension could interleave: both read
+# the same starting config.json, and whichever finishes last silently
+# overwrites the other's change. Route every config mutation through
+# update_config() below instead of a raw load/mutate/save sequence.
+_config_lock = threading.Lock()
+
+
+def update_config(mutator):
+    """Thread-safe read-modify-write: loads the current config, calls
+    mutator(cfg) to mutate it (in place, or by returning a replacement
+    dict), saves the result, and returns it. See _config_lock above for
+    why every config mutation needs to go through this rather than its own
+    ad hoc load/mutate/save."""
+    with _config_lock:
+        cfg = load_config()
+        replacement = mutator(cfg)
+        if replacement is not None:
+            cfg = replacement
+        save_config(cfg)
+        return cfg
 
 
 def _dedupe_domains(*domain_lists):
@@ -109,7 +132,7 @@ def set_focus_rules(domain_whitelist, base_version=None):
 
     Returns the updated config dict.
     """
-    with _focus_rules_lock:
+    with _config_lock:
         cfg = load_config()
         current_version = int(cfg.get("focusRulesVersion") or 0)
         conflict = base_version is not None and int(base_version) != current_version

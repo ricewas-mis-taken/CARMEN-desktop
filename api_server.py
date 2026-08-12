@@ -272,9 +272,10 @@ def blocklist_apps():
     if not _is_string_list(process_blocklist):
         return jsonify({"error": "process_blocklist must be a list of non-empty process names"}), 400
 
-    cfg = config.load_config()
-    cfg["processBlocklist"] = list(process_blocklist)
-    config.save_config(cfg)
+    def _mutate(cfg):
+        cfg["processBlocklist"] = list(process_blocklist)
+
+    cfg = config.update_config(_mutate)
     return jsonify({"processBlocklist": cfg["processBlocklist"]})
 
 
@@ -306,9 +307,10 @@ def whitelist_domains_set():
     if not _is_string_list(domain_whitelist):
         return jsonify({"error": "domain_whitelist must be a list of non-empty strings"}), 400
 
-    cfg = config.load_config()
-    cfg["domainWhitelist"] = list(domain_whitelist)
-    config.save_config(cfg)
+    def _mutate(cfg):
+        cfg["domainWhitelist"] = list(domain_whitelist)
+
+    cfg = config.update_config(_mutate)
     return jsonify({"domainWhitelist": cfg["domainWhitelist"]})
 
 
