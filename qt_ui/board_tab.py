@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QScrollArea,
     QTextEdit,
@@ -33,6 +34,12 @@ from PySide6.QtWidgets import (
 )
 
 import board_store
+
+# Not a real preset tag -- board_store.PRESET_TAGS only holds tags a task can
+# actually be assigned, and this one can't be (a task either has tags or it
+# doesn't). It exists purely so "no tags" has a pill/filter/hide entry of its
+# own, styled like every other tag.
+UNLABELED_TAG = {"id": "unlabeled", "label": "Un-labeled", "color": "#4A5568", "bg": "#E2E8F0"}
 from qt_ui.confetti import show_confetti
 from tasks_store import WEEKDAY_CODES
 
@@ -128,6 +135,7 @@ class BoardTab(QWidget):
         layout.setSpacing(12)
 
         self._tag_filter = "all"
+        self._hidden_tags = set()
         layout.addLayout(self._build_header())
 
         scroll = QScrollArea()
@@ -168,6 +176,11 @@ class BoardTab(QWidget):
         self._tag_filter_combo.currentIndexChanged.connect(self._on_tag_filter_changed)
         header.addWidget(self._tag_filter_combo)
 
+        self._hide_tags_button = QPushButton("Hide Tags")
+        self._hide_tags_button.setProperty("class", "SecondaryButton")
+        self._hide_tags_button.clicked.connect(self._open_hide_tags_menu)
+        header.addWidget(self._hide_tags_button)
+
         self._upcoming_button = QPushButton("Upcoming")
         self._upcoming_button.setProperty("class", "SecondaryButton")
         self._upcoming_button.clicked.connect(self._open_upcoming_dialog)
@@ -188,6 +201,30 @@ class BoardTab(QWidget):
         self._tag_filter = self._tag_filter_combo.currentData()
         self.refresh()
 
+    def _open_hide_tags_menu(self):
+        menu = QMenu(self)
+        for tag in list(board_store.PRESET_TAGS) + [UNLABELED_TAG]:
+            action = menu.addAction(tag["label"])
+            action.setCheckable(True)
+            action.setChecked(tag["id"] in self._hidden_tags)
+            action.toggled.connect(
+                lambda checked, tag_id=tag["id"]: self._toggle_hidden_tag(tag_id, checked)
+            )
+        menu.exec(self._hide_tags_button.mapToGlobal(self._hide_tags_button.rect().bottomLeft()))
+
+    def _toggle_hidden_tag(self, tag_id, checked):
+        if checked:
+            self._hidden_tags.add(tag_id)
+        else:
+            self._hidden_tags.discard(tag_id)
+        self.refresh()
+
+    def _is_hidden(self, task):
+        tags = task.get("tags") or []
+        if not tags:
+            return "unlabeled" in self._hidden_tags
+        return any(tag_id in self._hidden_tags for tag_id in tags)
+
     def refresh(self):
         while self._list_layout.count():
             item = self._list_layout.takeAt(0)
@@ -195,15 +232,25 @@ class BoardTab(QWidget):
             if widget is not None:
                 widget.deleteLater()
 
+        self._hide_tags_button.setText(
+            f"Hide Tags ({len(self._hidden_tags)})" if self._hidden_tags else "Hide Tags"
+        )
+
         tasks = board_store.list_active_tasks()
         if self._tag_filter != "all":
             tasks = [t for t in tasks if self._tag_filter in (t.get("tags") or [])]
+        tasks_before_hide = tasks
+        if self._hidden_tags:
+            tasks = [t for t in tasks if not self._is_hidden(t)]
+
         if not tasks:
-            empty_label = QLabel(
-                "No tasks with this tag."
-                if self._tag_filter != "all"
-                else "No tasks yet -- click “+ Add Task” to create one."
-            )
+            if tasks_before_hide and self._hidden_tags:
+                empty_text = "All tasks are hidden right now -- adjust Hide Tags to see them."
+            elif self._tag_filter != "all":
+                empty_text = "No tasks with this tag."
+            else:
+                empty_text = "No tasks yet -- click “+ Add Task” to create one."
+            empty_label = QLabel(empty_text)
             empty_label.setStyleSheet("color: #8A8F98; font-size: 14px;")
             self._list_layout.addWidget(empty_label)
         for task in tasks:
@@ -245,6 +292,16 @@ class _BoardCard(QFrame):
         self._importance_editor = None
         self.setProperty("class", "BoardCard")
         self.setAttribute(Qt.WA_StyledBackground, True)
+        if not (task.get("tags") or []):
+            # Un-labeled isn't a real tag a task can be assigned, so it
+            # doesn't get a pill next to the name like the others -- it's
+            # marked with a tinted card background instead. Only sets
+            # background/border; QFrame.BoardCard:hover's border still
+            # applies on top since it isn't redefined here.
+            self.setStyleSheet(
+                f"QFrame.BoardCard {{ background: {UNLABELED_TAG['bg']}; "
+                f"border: 1px solid {UNLABELED_TAG['color']}; border-radius: 12px; }}"
+            )
 
         self._outer = QVBoxLayout(self)
         self._outer.setContentsMargins(18, 14, 18, 14)
@@ -263,7 +320,8 @@ class _BoardCard(QFrame):
         name_label = QLabel(task["name"])
         name_label.setStyleSheet("font-size: 16px; font-weight: 600; color: #1F2328;")
         name_row.addWidget(name_label)
-        for tag_id in task.get("tags") or []:
+        tag_ids = task.get("tags") or []
+        for tag_id in tag_ids:
             tag = board_store.PRESET_TAGS_BY_ID.get(tag_id)
             if tag:
                 name_row.addWidget(_make_tag_pill(tag))
