@@ -4,6 +4,7 @@ State is kept in memory and persisted to session_state.json after every
 mutation so an in-progress session survives a crash/restart.
 """
 import json
+import math
 import os
 import threading
 from datetime import datetime, timedelta
@@ -207,6 +208,21 @@ def start_session(
     review_subject_name=None,
     review_problem_id=None,
 ):
+    # api_server.py's /session/start already validates this for the
+    # network-facing path, but start_session() is also called in-process
+    # (picker_dialogs.py, review_tab.py, tasks_tab.py, calendar_scheduler.py)
+    # without going through that validation -- guard here too, at the
+    # actual point the crash would happen (timedelta can't represent NaN
+    # -- ValueError -- or Infinity/an enormous value -- OverflowError),
+    # rather than relying on every caller to have already checked.
+    if (
+        not isinstance(duration_minutes, (int, float))
+        or isinstance(duration_minutes, bool)
+        or not math.isfinite(duration_minutes)
+        or duration_minutes <= 0
+    ):
+        raise ValueError(f"duration_minutes must be a finite positive number, got {duration_minutes!r}")
+
     with _lock:
         now = datetime.now()
         if _state["isActive"]:
