@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -152,13 +153,17 @@ def _format_session_date(iso_datetime_string):
     return _format_dmy(iso_datetime_string[:10])
 
 
-def _session_summary_text(number, session):
+def _session_summary_fields(number, session):
+    """The 4 timeline columns for one session, as separate strings so they
+    can go in their own QGridLayout column and actually line up -- a single
+    dash-joined string can't stay aligned across rows in a proportional
+    font."""
     duration = _format_mmss(session.get("durationSeconds"))
     shakiness = session.get("shakiness")
     shakiness_text = f"{shakiness if shakiness is not None else '-'}/5"
     a_marker = " (A)" if not session.get("selfSolved") else ""
     date_text = _format_session_date(session.get("finishedAt"))
-    return f"#{number}  —  {duration}  —  {shakiness_text}{a_marker}  —  {date_text}"
+    return (f"#{number}", duration, f"{shakiness_text}{a_marker}", date_text)
 
 
 def _timeline_sessions(sessions):
@@ -177,6 +182,28 @@ def _timeline_sessions(sessions):
     return newest_three + first_two_ever, True
 
 
+_TIMELINE_HEADER_CELLS = ("#", "Time", "Shakiness", "Date")
+
+
+def _timeline_gap_marker():
+    """3 stacked dot labels, each its own widget centered in a tight
+    QVBoxLayout -- rendering the vertical-ellipsis glyph ("⋮") as a
+    single QLabel comes out visibly off-axis in some fonts, so 3
+    independently-centered dots are used instead to guarantee a straight
+    vertical line."""
+    dots_widget = QWidget()
+    dots_layout = QVBoxLayout(dots_widget)
+    dots_layout.setContentsMargins(0, 4, 0, 4)
+    dots_layout.setSpacing(3)
+    dots_layout.setAlignment(Qt.AlignHCenter)
+    for _ in range(3):
+        dot_label = QLabel("•")
+        dot_label.setStyleSheet("font-size: 13px; font-weight: 700; color: #5A6070;")
+        dot_label.setAlignment(Qt.AlignHCenter)
+        dots_layout.addWidget(dot_label)
+    return dots_widget
+
+
 def _build_review_timeline(layout, problem):
     sessions = review_store.list_sessions(problem["id"])
     if not sessions:
@@ -184,17 +211,33 @@ def _build_review_timeline(layout, problem):
     shown, has_gap = _timeline_sessions(sessions)
 
     layout.addWidget(_bold_label("Review Timeline"))
+
+    # A real grid, not a dash-joined string -- each column (#, Time,
+    # Shakiness, Date) is its own cell so rows and the header actually line
+    # up under each other in a proportional font, instead of drifting based
+    # on how wide each value happens to be.
+    grid_container = QWidget()
+    grid = QGridLayout(grid_container)
+    grid.setContentsMargins(0, 0, 0, 0)
+    grid.setHorizontalSpacing(18)
+    grid.setVerticalSpacing(4)
+    for column, header_text in enumerate(_TIMELINE_HEADER_CELLS):
+        header_label = QLabel(header_text)
+        header_label.setStyleSheet("font-size: 11px; font-weight: 700; color: #8A8F98;")
+        grid.addWidget(header_label, 0, column)
+
+    row = 1
     for index, (number, session) in enumerate(shown):
-        row_label = QLabel(_session_summary_text(number, session))
-        row_label.setStyleSheet("font-size: 12px; color: #5A6070;")
-        layout.addWidget(row_label)
+        for column, field_text in enumerate(_session_summary_fields(number, session)):
+            field_label = QLabel(field_text)
+            field_label.setStyleSheet("font-size: 12px; color: #5A6070;")
+            grid.addWidget(field_label, row, column)
+        row += 1
         if has_gap and index == 2:
-            dots_label = QLabel("⋮")
-            dots_label.setStyleSheet(
-                "font-size: 26px; font-weight: 700; color: #5A6070; padding: 2px 0;"
-            )
-            dots_label.setAlignment(Qt.AlignCenter)
-            layout.addWidget(dots_label)
+            grid.addWidget(_timeline_gap_marker(), row, 0, 1, len(_TIMELINE_HEADER_CELLS))
+            row += 1
+
+    layout.addWidget(grid_container, alignment=Qt.AlignLeft)
 
 
 def _build_description_content(layout, problem):

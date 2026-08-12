@@ -37,6 +37,7 @@ DEFAULT_TASK = {
     "processBlocklist": [],
     "domainWhitelist": [],
     "cashedInDates": {},  # {"YYYY-MM-DD": minutes} spent from the vacation balance
+    "targetMinutesHistory": [],  # [{"date": "YYYY-MM-DD", "minutes": N}], oldest first
     "archived": False,
     # Sync scaffolding (multi-device sync). See load_tasks()/delete_task()
     # for how isDeleted is populated and filtered.
@@ -66,6 +67,17 @@ def _backfill_sync_fields(task):
         changed = True
     if "isDeleted" not in task:
         task["isDeleted"] = False
+        changed = True
+    if "targetMinutesHistory" not in task:
+        # Best-effort backfill for tasks saved before target-minute history
+        # was tracked -- there's no way to recover what the target actually
+        # was on past days, so this assumes it's always been today's value.
+        # Not perfect for pre-existing data, but every change from now on
+        # is recorded, so required_minutes_for_date stops drifting for good.
+        created_date = (task.get("createdAt") or datetime.now().isoformat())[:10]
+        task["targetMinutesHistory"] = [
+            {"date": created_date, "minutes": task.get("targetMinutes", 0)}
+        ]
         changed = True
     return changed
 
@@ -140,6 +152,9 @@ def create_task(data):
     task["id"] = _new_id()
     task["createdAt"] = datetime.now().isoformat()
     task["updatedAt"] = task["createdAt"]
+    task["targetMinutesHistory"] = [
+        {"date": task["createdAt"][:10], "minutes": task.get("targetMinutes", 0)}
+    ]
     tasks = load_tasks(include_deleted=True)
     tasks.append(task)
     save_tasks(tasks)
@@ -155,6 +170,20 @@ def update_task(task_id, data):
     updated = None
     for task in tasks:
         if task["id"] == task_id:
+            new_target = data.get("targetMinutes")
+            if new_target is not None and new_target != task.get("targetMinutes"):
+                # Record when the target changed instead of overwriting it in
+                # place, so vacation_balance_minutes can look up whatever
+                # target was actually in effect on a given past day -- a
+                # goal-time change today must never retroactively change
+                # what counted as "surplus" on days before it.
+                history = list(task.get("targetMinutesHistory") or [])
+                today_key = date.today().isoformat()
+                if history and history[-1]["date"] == today_key:
+                    history[-1] = {"date": today_key, "minutes": new_target}
+                else:
+                    history.append({"date": today_key, "minutes": new_target})
+                task["targetMinutesHistory"] = history
             task.update(data)
             task["updatedAt"] = datetime.now().isoformat()
             updated = task
@@ -194,13 +223,32 @@ def is_scheduled_on(task, day):
     return True
 
 
+def _target_minutes_for_date(task, day):
+    """The goal-time value that was actually in effect on `day`, from
+    targetMinutesHistory (oldest first) -- not necessarily today's
+    targetMinutes. A later goal-time change must not reach backward and
+    change what counted as surplus/vacation on earlier days."""
+    history = task.get("targetMinutesHistory") or []
+    if not history:
+        return task.get("targetMinutes", 0)
+    day_key = day.isoformat()
+    applicable = history[0]["minutes"]
+    for entry in history:
+        if entry["date"] <= day_key:
+            applicable = entry["minutes"]
+        else:
+            break
+    return applicable
+
+
 def required_minutes_for_date(task, day):
-    """Target minutes for `day`, after subtracting whatever vacation time was
-    cashed in against that specific date. Never negative, and 0 on a day the
-    task isn't scheduled at all (nothing to cash in against, either)."""
+    """Target minutes for `day` (as of whatever the goal time actually was
+    on that day), after subtracting whatever vacation time was cashed in
+    against that specific date. Never negative, and 0 on a day the task
+    isn't scheduled at all (nothing to cash in against, either)."""
     if not is_scheduled_on(task, day):
         return 0
-    target = task.get("targetMinutes", 0)
+    target = _target_minutes_for_date(task, day)
     cashed = (task.get("cashedInDates") or {}).get(day.isoformat(), 0)
     return max(0, target - cashed)
 
