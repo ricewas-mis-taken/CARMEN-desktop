@@ -44,3 +44,21 @@ def test_pause_resume_round_trip(isolate_state):
 
     session_manager.resume_session()
     assert not session_manager.get_status()["isPaused"]
+
+
+def test_review_problem_id_persists_through_pause_and_clears_on_end(isolate_state):
+    """reviewProblemId is what lets a review resumed after an app restart
+    (session_manager's own persisted state survives; review_store's
+    start_review() token does not) still get logged on Finish -- see
+    qt_ui/review_tab.py's _TopicView._resume_if_active."""
+    session_manager.start_session(
+        25, "soft", [], [], source="review",
+        review_problem_name="Solve it", review_subject_name="Algebra", review_problem_id=42,
+    )
+    assert session_manager.get_status()["reviewProblemId"] == 42
+
+    session_manager.pause_session()
+    assert session_manager.get_status()["reviewProblemId"] == 42
+
+    session_manager.end_session()
+    assert session_manager.get_status()["reviewProblemId"] is None

@@ -2,7 +2,7 @@
 strip, due/all filtering, the problems table, and the Add Problem flow.
 Uses isolate_review_db (tests/conftest.py) so nothing touches the real
 calendar.db or review_photos folder."""
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import review_store
 import session_manager
@@ -293,7 +293,7 @@ def test_begin_review_starts_and_ends_linked_task_session(
 
     view._review_banner._finish()
     # _finish() shows the post-review grading dialog; submit it to complete the flow.
-    dlg = next(p for p in review_tab._popup_refs if isinstance(p, review_tab._PostReviewDialog))
+    dlg = next(p for p in review_tab._popup_refs if isinstance(p, review_tab._PostReviewDialog) and not p._submitted)
     dlg._solved_btn.setChecked(True)
     dlg._submit()
 
@@ -331,6 +331,79 @@ def test_topic_view_resumes_banner_for_already_active_linked_session(
     assert view._review_banner.isVisible()
     assert "Solve for x" in view._review_banner._problem_label.text()
     assert not tab.can_start_review()
+
+
+def test_resumed_banner_shows_real_elapsed_time_not_zero_while_paused(
+    qtbot, isolate_review_db, isolate_state, tmp_path, monkeypatch
+):
+    """Regression test: a review resumed after an app restart (see the test
+    above) that was PAUSED at the time of the restart used to show a stuck
+    "00:00" timer -- start() hardcoded that text and _tick() never updates
+    the label while paused, so a freshly-built banner had no real value to
+    fall back on until Resume was pressed."""
+    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
+    task = tasks_store.create_task({"name": "Math Session", "lockMode": "hard"})
+    topic = review_store.create_topic("Math")
+    review_store.update_topic_link(topic["id"], task["id"])
+
+    session_manager.start_session(
+        25, "hard", [], [], source="review",
+        event_id=task["id"], event_title="Math Session - Quadratics review",
+        review_problem_name="Solve for x", review_subject_name="Quadratics",
+        review_problem_id=1,
+    )
+    # 5 real minutes worked before pausing, matching a session that ran for
+    # a while, got paused, and (in the real bug) the PC was shut down.
+    started_at = datetime.now() - timedelta(minutes=5)
+    session_manager._state["startTime"] = started_at.isoformat()
+    session_manager.pause_session()
+
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    view = tab._topic_views[topic["id"]]
+
+    assert view._review_banner._timer_label.text() != "00:00"
+    assert view._review_banner._pause_btn.text() == "Resume"
+
+
+def test_finish_after_restart_still_records_a_review_session(
+    qtbot, isolate_review_db, isolate_state, tmp_path, monkeypatch
+):
+    """Regression test: finishing a review recovered after an app restart
+    (token=None, see _TopicView._resume_if_active) used to silently record
+    nothing at all -- reviewProblemId (persisted in session_manager) now
+    lets _ReviewBanner._complete_finish log it directly instead."""
+    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
+    task = tasks_store.create_task({"name": "Math Session", "lockMode": "hard"})
+    topic = review_store.create_topic("Math")
+    review_store.update_topic_link(topic["id"], task["id"])
+    subject = review_store.create_subject(topic["id"], "Quadratics", "#5B8DEF")
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve for x", stars=3,
+        description_type="text", description_text="factor",
+    )
+    assert problem["reviewCount"] == 0
+
+    session_manager.start_session(
+        25, "hard", [], [], source="review",
+        event_id=task["id"], event_title="Math Session - Quadratics review",
+        review_problem_name="Solve for x", review_subject_name="Quadratics",
+        review_problem_id=problem["id"],
+    )
+
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    view = tab._topic_views[topic["id"]]
+    assert view._review_banner._session_token is None
+
+    view._review_banner._finish()
+    dlg = next(p for p in review_tab._popup_refs if isinstance(p, review_tab._PostReviewDialog) and not p._submitted)
+    dlg._solved_btn.setChecked(True)
+    dlg._submit()
+
+    updated = review_store.get_problem(problem["id"])
+    assert updated["reviewCount"] == 1
+    assert len(review_store.list_sessions(problem["id"])) == 1
 
 
 def test_pause_button_visible_for_standalone_review(qtbot, isolate_review_db, isolate_state):

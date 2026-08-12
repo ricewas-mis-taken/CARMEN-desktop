@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -119,6 +119,47 @@ def test_finish_review_updates_counters_and_reschedules(isolate_review_db):
 
     # Token is single-use.
     assert review_store.finish_review(token) is None
+
+
+def test_finish_review_uses_explicit_duration_instead_of_wall_clock(isolate_review_db):
+    """A caller that already tracks pause-aware elapsed time (the review
+    banner) must be able to override the raw now-minus-started_at duration
+    finish_review would otherwise compute -- otherwise paused time (and any
+    time the PC was off) gets counted as worked."""
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    token = review_store.start_review(problem["id"])
+
+    updated = review_store.finish_review(token, self_solved=True, shakiness=2, duration_seconds=1163)
+
+    sessions = review_store.list_sessions(problem["id"])
+    assert sessions[0]["durationSeconds"] == 1163
+    assert updated["fastestTimeSeconds"] == 1163
+
+
+def test_finish_review_for_problem_logs_a_session_without_a_token(isolate_review_db):
+    """The recovery path used when a review resumes after an app restart --
+    the original start_review() token lived only in memory and didn't
+    survive, but the review must still get recorded on Finish instead of
+    silently vanishing."""
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    assert problem["reviewCount"] == 0
+
+    started_at = datetime.now() - timedelta(minutes=10)
+    updated = review_store.finish_review_for_problem(
+        problem["id"], 600, self_solved=True, shakiness=1, started_at=started_at,
+    )
+
+    assert updated["reviewCount"] == 1
+    sessions = review_store.list_sessions(problem["id"])
+    assert len(sessions) == 1
+    assert sessions[0]["durationSeconds"] == 600
+    assert sessions[0]["startedAt"] == started_at.isoformat()
 
 
 def test_finish_review_records_first_attempt_once(isolate_review_db):

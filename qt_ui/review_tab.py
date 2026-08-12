@@ -543,13 +543,13 @@ class _TopicView(QWidget):
         # token=None: review_store's own active-session tracking
         # (_active_sessions) is in-memory only and didn't survive whatever
         # took this session_manager session and this widget out of sync in
-        # the first place, so there's no per-attempt outcome to record on
-        # Finish for this problem -- but the linked task's timer,
-        # pause/resume, and enforcement (all driven by session_manager,
-        # which did survive) pick back up correctly, and End/Finish still
-        # correctly end the underlying session either way.
+        # the first place. Finish still logs a real review_sessions row
+        # though, via reviewProblemId (persisted in session_manager's own
+        # state, unlike _active_sessions) and _ReviewBanner's
+        # finish_review_for_problem fallback -- see _complete_finish.
         self._review_banner.start(
-            {"name": problem_name}, token=None, end_session_on_finish=True,
+            {"name": problem_name, "id": status.get("reviewProblemId")},
+            token=None, end_session_on_finish=True,
         )
 
     def _build_header(self):
@@ -705,6 +705,7 @@ class _TopicView(QWidget):
                     event_title=f"{task['name']} - {problem['subjectName']} review",
                     review_problem_name=problem["name"],
                     review_subject_name=problem["subjectName"],
+                    review_problem_id=problem["id"],
                 )
                 end_session_on_finish = True
 
@@ -879,8 +880,13 @@ class _ReviewBanner(QWidget):
         self._is_paused = False
         label = "Timing first attempt" if first_attempt_callback is not None else f"Reviewing: {problem['name']}"
         self._problem_label.setText(label)
-        self._timer_label.setText("00:00")
-        self._pause_btn.setText("Pause")
+        # Not hardcoded "00:00" -- when this is _resume_if_active() rebuilding
+        # a fresh banner for a session that survived an app restart, real
+        # elapsed (pause-aware, from session_manager) can already be nonzero,
+        # and a paused session's _tick() never gets a chance to correct a
+        # wrong initial value (see _tick()'s own comment).
+        self._timer_label.setText(_format_mmss(self._elapsed_seconds_now()))
+        self._pause_btn.setText("Resume" if self._currently_paused() else "Pause")
         # Always available -- pausing here freezes the review's own elapsed
         # timer (and _start_first_attempt.../ordinary reviews that aren't
         # tied to a linked task session still get to pause) rather than only
@@ -904,8 +910,14 @@ class _ReviewBanner(QWidget):
     def _tick(self):
         is_paused = self._currently_paused()
         self._pause_btn.setText("Resume" if is_paused else "Pause")
-        if not is_paused:
-            self._timer_label.setText(_format_mmss(self._elapsed_seconds_now()))
+        # Updated unconditionally, even while paused -- _elapsed_seconds_now()
+        # already freezes correctly at the pause point on its own (pause-aware
+        # worked_seconds for a linked task, or the stored _accumulated_seconds
+        # otherwise), so there's nothing wrong with recomputing it while
+        # paused, and skipping the update here is what used to leave a
+        # freshly-rebuilt-after-restart banner stuck showing "00:00" the
+        # entire time it stayed paused.
+        self._timer_label.setText(_format_mmss(self._elapsed_seconds_now()))
 
     def _pause_resume(self):
         if self._currently_paused():
@@ -947,6 +959,11 @@ class _ReviewBanner(QWidget):
         end_session = self._end_session_on_finish
         problem = self._problem
         elapsed = self._elapsed_seconds_now()
+        # Grabbed now, before end_session() (called from _complete_finish,
+        # after the post-review dialog closes) resets session_manager's
+        # state -- only needed for the token=None recovery path below, but
+        # harmless to capture unconditionally.
+        started_at_iso = session_manager.get_status().get("startTime")
         first_attempt_callback = self._first_attempt_callback
         self._session_token = None
         self._end_session_on_finish = False
@@ -956,18 +973,34 @@ class _ReviewBanner(QWidget):
         _PostReviewDialog(
             problem_name=problem["name"],
             on_submit=lambda self_solved, shakiness: self._complete_finish(
-                token, end_session, self_solved, shakiness, elapsed, first_attempt_callback
+                token, end_session, self_solved, shakiness, elapsed,
+                first_attempt_callback, problem, started_at_iso,
             ),
         )
 
-    def _complete_finish(self, token, end_session, self_solved, shakiness, elapsed, first_attempt_callback):
+    def _complete_finish(
+        self, token, end_session, self_solved, shakiness, elapsed,
+        first_attempt_callback, problem, started_at_iso,
+    ):
         if first_attempt_callback is not None:
             # No problem exists yet -- hand the timing/outcome back to the
             # Add Problem dialog instead of writing to review_store, which
             # needs a real problem_id to attach a session to.
             first_attempt_callback(elapsed, self_solved, shakiness)
-        else:
-            review_store.finish_review(token, self_solved=self_solved, shakiness=shakiness)
+        elif token is not None:
+            review_store.finish_review(
+                token, self_solved=self_solved, shakiness=shakiness, duration_seconds=elapsed,
+            )
+        elif problem and problem.get("id") is not None:
+            # Recovered after an app restart (see _TopicView._resume_if_active)
+            # -- the original start_review() token lived only in
+            # review_store's in-memory _active_sessions and didn't survive,
+            # but the problem id did (persisted via session_manager), so the
+            # review still gets logged instead of silently vanishing.
+            review_store.finish_review_for_problem(
+                problem["id"], elapsed, self_solved=self_solved, shakiness=shakiness,
+                started_at=datetime.fromisoformat(started_at_iso) if started_at_iso else None,
+            )
         if end_session:
             session_manager.end_session()
         self._on_finished()
