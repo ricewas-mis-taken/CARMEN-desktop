@@ -37,9 +37,9 @@ import board_store
 
 # Not a real preset tag -- board_store.PRESET_TAGS only holds tags a task can
 # actually be assigned, and this one can't be (a task either has tags or it
-# doesn't). It exists purely so "no tags" has a pill/filter/hide entry of its
-# own, styled like every other tag.
-UNLABELED_TAG = {"id": "unlabeled", "label": "Un-labeled", "color": "#4A5568", "bg": "#E2E8F0"}
+# doesn't). It exists purely so "no tags" has a Hide Tags menu entry of its
+# own; deliberately no color/bg, since it's never rendered anywhere on a card.
+UNLABELED_TAG = {"id": "unlabeled", "label": "Un-labeled"}
 from qt_ui.confetti import show_confetti
 from tasks_store import WEEKDAY_CODES
 
@@ -292,16 +292,10 @@ class _BoardCard(QFrame):
         self._importance_editor = None
         self.setProperty("class", "BoardCard")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        if not (task.get("tags") or []):
-            # Un-labeled isn't a real tag a task can be assigned, so it
-            # doesn't get a pill next to the name like the others -- it's
-            # marked with a tinted card background instead. Only sets
-            # background/border; QFrame.BoardCard:hover's border still
-            # applies on top since it isn't redefined here.
-            self.setStyleSheet(
-                f"QFrame.BoardCard {{ background: {UNLABELED_TAG['bg']}; "
-                f"border: 1px solid {UNLABELED_TAG['color']}; border-radius: 12px; }}"
-            )
+        # "Un-labeled" (no tags) is deliberately invisible on the card itself
+        # -- no pill, no tint, nothing a user sees. It only exists as a
+        # filterable concept for the Hide Tags menu (see BoardTab._is_hidden),
+        # derived purely from an empty tags list.
 
         self._outer = QVBoxLayout(self)
         self._outer.setContentsMargins(18, 14, 18, 14)
