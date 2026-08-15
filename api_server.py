@@ -32,6 +32,7 @@ page — /apps/installed and /blocklist/apps remain here as the same API
 surface for any other caller (e.g. Carmen) to drive the same picks
 programmatically.
 """
+import math
 import re
 import threading
 
@@ -82,6 +83,20 @@ def register_quit_callback(fn):
     _quit_callback = fn
 
 
+def _is_string_list(value):
+    """True if value is a list where every element is a non-empty (after
+    stripping whitespace) string. Used to reject process/domain lists whose
+    elements aren't strings before they ever reach session_manager -- a bad
+    element there raises deep inside is_blocked()/add_domain_to_whitelist()
+    (AttributeError from calling .lower() on a non-string). is_blocked() is
+    called from window_tracker's polling loop, which wraps each tick in a
+    blanket try/except and swallows the error -- so a single non-string
+    process/domain entry silently disables ALL enforcement for the rest of
+    the session, with no visible error to the user, instead of failing loud
+    and clear at the point the bad list was actually submitted."""
+    return isinstance(value, list) and all(isinstance(item, str) and item.strip() for item in value)
+
+
 @app.route("/internal/quit", methods=["POST"])
 def internal_quit():
     # Runs the real on_quit() on its own thread rather than inline in this
@@ -120,8 +135,27 @@ def session_start():
     event_id = body.get("event_id")
     event_title = body.get("event_title")
 
-    if not isinstance(duration_minutes, (int, float)) or duration_minutes <= 0:
-        return jsonify({"error": "duration_minutes must be a positive number"}), 400
+    # isinstance(duration_minutes, (int, float)) alone lets NaN/Infinity
+    # through -- every comparison against NaN (including "<= 0") is False,
+    # and "inf <= 0" is also False, so both silently passed this check
+    # before math.isfinite() was added here. Downstream, datetime.timedelta
+    # can't represent either (ValueError for NaN, OverflowError for
+    # Infinity or anything that many minutes converts to), so a session
+    # start with duration_minutes: NaN/Infinity/1e18 crashed the request
+    # with an unhandled 500 instead of a clean 400. bool is also an int
+    # subclass in Python, so duration_minutes: true would otherwise pass as
+    # 1 -- excluded explicitly since it's not a meaningful duration.
+    if (
+        not isinstance(duration_minutes, (int, float))
+        or isinstance(duration_minutes, bool)
+        or not math.isfinite(duration_minutes)
+        or duration_minutes <= 0
+        or duration_minutes > 1_000_000
+    ):
+        return (
+            jsonify({"error": "duration_minutes must be a finite positive number (at most 1,000,000 minutes)"}),
+            400,
+        )
     if lock_mode not in ("soft", "hard"):
         return jsonify({"error": "lock_mode must be 'soft' or 'hard'"}), 400
     if source not in ("manual", "calendar-event"):
@@ -135,11 +169,11 @@ def session_start():
         # whatever was last saved on this side via the app picker, instead
         # of rejecting the request or wiping the blocklist out.
         process_blocklist = config.load_config().get("processBlocklist", [])
-    elif not isinstance(process_blocklist, list):
-        return jsonify({"error": "process_blocklist must be a list, null, or omitted"}), 400
+    elif not _is_string_list(process_blocklist):
+        return jsonify({"error": "process_blocklist must be a list of non-empty strings, null, or omitted"}), 400
 
-    if not isinstance(domain_whitelist, list):
-        return jsonify({"error": "domain_whitelist must be a list of domain/URL substrings"}), 400
+    if not _is_string_list(domain_whitelist):
+        return jsonify({"error": "domain_whitelist must be a list of non-empty domain/URL strings"}), 400
 
     result = session_manager.start_session(
         duration_minutes,
@@ -235,12 +269,13 @@ def blocklist_apps():
     body = request.get_json(force=True, silent=True) or {}
     process_blocklist = body.get("process_blocklist")
 
-    if not isinstance(process_blocklist, list):
-        return jsonify({"error": "process_blocklist must be a list of process names"}), 400
+    if not _is_string_list(process_blocklist):
+        return jsonify({"error": "process_blocklist must be a list of non-empty process names"}), 400
 
-    cfg = config.load_config()
-    cfg["processBlocklist"] = list(process_blocklist)
-    config.save_config(cfg)
+    def _mutate(cfg):
+        cfg["processBlocklist"] = list(process_blocklist)
+
+    cfg = config.update_config(_mutate)
     return jsonify({"processBlocklist": cfg["processBlocklist"]})
 
 
@@ -269,12 +304,13 @@ def whitelist_domains_set():
     body = request.get_json(force=True, silent=True) or {}
     domain_whitelist = body.get("domain_whitelist")
 
-    if not isinstance(domain_whitelist, list) or not all(isinstance(d, str) for d in domain_whitelist):
-        return jsonify({"error": "domain_whitelist must be a list of strings"}), 400
+    if not _is_string_list(domain_whitelist):
+        return jsonify({"error": "domain_whitelist must be a list of non-empty strings"}), 400
 
-    cfg = config.load_config()
-    cfg["domainWhitelist"] = list(domain_whitelist)
-    config.save_config(cfg)
+    def _mutate(cfg):
+        cfg["domainWhitelist"] = list(domain_whitelist)
+
+    cfg = config.update_config(_mutate)
     return jsonify({"domainWhitelist": cfg["domainWhitelist"]})
 
 

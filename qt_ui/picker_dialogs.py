@@ -204,9 +204,7 @@ class _BlocklistPicker(QWidget):
             _track(_ReasonDialog(selected)).show()
             return
 
-        current_cfg = config.load_config()
-        current_cfg["processBlocklist"] = selected
-        config.save_config(current_cfg)
+        config.update_config(lambda cfg: cfg.update({"processBlocklist": selected}))
         self._status_label.setText(f"Saved {len(selected)} app(s) to the blocklist.")
 
 
@@ -358,8 +356,16 @@ class _TimerDialog(QWidget):
         # is immediately visible to the browser extension via GET /status.
         session_manager.start_session(duration_minutes, lock_mode, process_blocklist, domain_whitelist)
 
-        current_cfg["last_duration_minutes"] = duration_minutes
-        current_cfg["last_lock_mode"] = lock_mode
-        config.save_config(current_cfg)
+        # Mutates a freshly-loaded config inside update_config()'s lock
+        # rather than saving the current_cfg read above wholesale -- that
+        # would silently clobber any processBlocklist/domainWhitelist
+        # change made concurrently (e.g. a whitelist push from the browser
+        # extension) during the window between reading current_cfg and
+        # this save, since it was the entire stale dict being written
+        # back, not just these two fields.
+        config.update_config(lambda cfg: cfg.update({
+            "last_duration_minutes": duration_minutes,
+            "last_lock_mode": lock_mode,
+        }))
 
         self.close()
