@@ -19,7 +19,12 @@ import session_manager
 # same "cheese" risk on the extension side. This attribute disables both the
 # live taskbar thumbnail and Peek for the specific hwnd it's set on, so a
 # minimized blocked window is only ever seen as a plain static icon.
-_DWMWA_DISALLOW_PEEK = 12
+#
+# The DWMWINDOWATTRIBUTE enum value for DWMWA_DISALLOW_PEEK is 11, not 12
+# (12 is DWMWA_EXCLUDED_FROM_PEEK, an unrelated attribute) -- an earlier
+# version of this used the wrong number, which silently did nothing useful
+# here instead of erroring, so the peek-hover cheese kept working.
+_DWMWA_DISALLOW_PEEK = 11
 
 
 def _set_disallow_peek(hwnd, disallow):
@@ -43,6 +48,11 @@ def soft_lock_warning(offending_process_name=None):
         message,
         duration_ms=5000,
         offending_process_name=offending_process_name,
+        # Soft lock's whole point is a warning the user can't just keep
+        # reading the blocked page underneath -- blackout makes the page
+        # itself genuinely inaccessible for the warning's duration, not
+        # just covered by a small popup floating on top of it.
+        blackout=True,
     )
 
 
@@ -112,6 +122,13 @@ def hard_lock_redirect(offending_process_name=None):
         message,
         duration_ms=3000,
         offending_process_name=label if label != "that app" else None,
+        # The offending window was just minimized and SetForegroundWindow
+        # above may or may not actually succeed (Windows silently ignores
+        # foreground-focus steals from background processes under some
+        # conditions) -- blackout means the user's screen goes black either
+        # way for the redirect's duration, instead of the offending app
+        # potentially staying visible if the redirect quietly failed.
+        blackout=True,
     )
 
 
@@ -226,7 +243,7 @@ def _find_window_by_process_name(process_name):
     return found["hwnd"]
 
 
-def _show_lock_overlay(message, duration_ms, offending_process_name=None):
+def _show_lock_overlay(message, duration_ms, offending_process_name=None, blackout=False):
     """Shows a small always-on-top, borderless popup for duration_ms while a
     progress bar fills, then closes automatically. It repeatedly raises and
     refocuses itself so it's hard to ignore, but deliberately does not take
@@ -248,7 +265,17 @@ def _show_lock_overlay(message, duration_ms, offending_process_name=None):
     ending hard/soft lock enforcement entirely, same as the "Pick Apps to
     Blocklist" picker's own removal flow, just reachable from the moment of
     redirect itself.
+
+    blackout, when True, also covers every monitor in solid black
+    (qt_ui/enforcer_overlay.py's _BlackoutOverlay) alongside the small
+    notification popup, for the same duration -- used by soft_lock_warning
+    and hard_lock_redirect (the user is looking straight at the blocked app
+    right now) but not show_blocked_notice (a window caught in the
+    background, where blacking out the whole screen would cover up
+    whatever allowed app the user is actually using).
     """
     qt_gui_thread.run_on_gui_thread(
-        lambda: enforcer_overlay.build_overlay(message, duration_ms, offending_process_name)
+        lambda: enforcer_overlay.build_overlay(
+            message, duration_ms, offending_process_name, blackout=blackout
+        )
     )

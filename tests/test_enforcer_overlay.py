@@ -104,6 +104,34 @@ def test_overlay_alone_is_still_centered(qtbot, isolate_state):
     win.close()
 
 
+def test_overlay_without_blackout_has_no_blackout_window(qtbot, isolate_state):
+    win = enforcer_overlay.build_overlay("test message", duration_ms=200)
+    qtbot.addWidget(win)
+
+    assert win._blackout_win is None
+    win.close()
+
+
+def test_overlay_with_blackout_shows_black_fullscreen_window(qtbot, isolate_state):
+    win = enforcer_overlay.build_overlay("test message", duration_ms=200, blackout=True)
+    qtbot.addWidget(win)
+
+    assert win._blackout_win is not None
+    assert win._blackout_win.isVisible()
+    assert "black" in win._blackout_win.styleSheet().lower()
+    win.close()
+
+
+def test_closing_overlay_also_closes_its_blackout_window(qtbot, isolate_state):
+    win = enforcer_overlay.build_overlay("test message", duration_ms=200, blackout=True)
+    qtbot.addWidget(win)
+    blackout_win = win._blackout_win
+
+    win.close()
+
+    assert blackout_win._closed is True
+
+
 def test_unblock_reason_dialog_requires_reason(qtbot, isolate_state):
     win = enforcer_overlay.build_unblock_reason_dialog("app.exe")
     qtbot.addWidget(win)

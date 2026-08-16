@@ -145,3 +145,52 @@ def test_set_disallow_peek_calls_dwm_api(monkeypatch):
     enforcer._set_disallow_peek(555, True)
 
     assert calls == [(555, enforcer._DWMWA_DISALLOW_PEEK)]
+
+
+def test_disallow_peek_attribute_is_the_real_dwm_constant():
+    """Regression test: an earlier version used 12 (DWMWA_EXCLUDED_FROM_PEEK,
+    an unrelated attribute) instead of 11 (the real DWMWA_DISALLOW_PEEK) --
+    the call silently "succeeded" without erroring, but did nothing to
+    actually stop the taskbar hover-peek cheese."""
+    assert enforcer._DWMWA_DISALLOW_PEEK == 11
+
+
+def test_soft_lock_warning_uses_blackout(isolate_state, monkeypatch):
+    session_manager.start_session(25, "soft", ["discord.exe"], [])
+    calls = []
+    monkeypatch.setattr(enforcer, "_show_lock_overlay", lambda *a, **kw: calls.append(kw))
+
+    enforcer.soft_lock_warning(offending_process_name="discord.exe")
+
+    assert calls == [{"duration_ms": 5000, "offending_process_name": "discord.exe", "blackout": True}]
+
+
+def test_hard_lock_redirect_uses_blackout(isolate_state, monkeypatch):
+    session_manager.start_session(25, "hard", ["discord.exe"], [])
+    calls = []
+    monkeypatch.setattr(enforcer.win32gui, "GetForegroundWindow", lambda: 555)
+    monkeypatch.setattr(enforcer.win32process, "GetWindowThreadProcessId", lambda h: (0, 4242))
+    monkeypatch.setattr(enforcer.psutil, "Process", lambda p: _FakeProcess("discord.exe"))
+    monkeypatch.setattr(enforcer.win32gui, "ShowWindow", lambda h, cmd: None)
+    monkeypatch.setattr(enforcer.win32gui, "SetForegroundWindow", lambda h: None)
+    monkeypatch.setattr(enforcer, "_find_window_by_process_name", lambda name: None)
+    monkeypatch.setattr(enforcer, "_set_disallow_peek", lambda hwnd, disallow: None)
+    monkeypatch.setattr(enforcer, "_show_lock_overlay", lambda *a, **kw: calls.append(kw))
+
+    enforcer.hard_lock_redirect(offending_process_name="discord.exe")
+
+    assert calls[0]["blackout"] is True
+
+
+def test_show_blocked_notice_does_not_use_blackout(isolate_state, monkeypatch):
+    """show_blocked_notice fires for a window caught in the background --
+    the user may be actively using a different, allowed app right now, so
+    blacking out the whole screen there would cover up legitimate work that
+    was never the violation."""
+    session_manager.start_session(25, "hard", ["discord.exe"], [])
+    calls = []
+    monkeypatch.setattr(enforcer, "_show_lock_overlay", lambda *a, **kw: calls.append(kw))
+
+    enforcer.show_blocked_notice("discord.exe")
+
+    assert calls == [{"duration_ms": 5000, "offending_process_name": "discord.exe"}]
