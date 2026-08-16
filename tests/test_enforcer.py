@@ -80,3 +80,68 @@ def test_sweep_skips_exempt_process(isolate_state, monkeypatch):
     enforcer.sweep_minimize_blocked_windows()
 
     assert minimize_calls == []
+
+
+def test_sweep_disallows_peek_on_minimized_blocked_window(isolate_state, monkeypatch):
+    """Regression test: minimizing a blocked window alone doesn't stop it
+    from being seen -- hovering its taskbar icon still shows a live
+    thumbnail, and hovering that (Aero Peek) reveals the real window without
+    ever un-minimizing it. Every window sweep_minimize_blocked_windows()
+    minimizes must also get peek disallowed."""
+    session_manager.start_session(25, "hard", ["discord.exe"], [])
+    peek_calls = []
+    _patch_single_window(monkeypatch, hwnd=555, pid=4242, process_name="discord.exe")
+    monkeypatch.setattr(enforcer.win32gui, "ShowWindow", lambda h, cmd: None)
+    monkeypatch.setattr(
+        enforcer, "_set_disallow_peek", lambda hwnd, disallow: peek_calls.append((hwnd, disallow))
+    )
+
+    enforcer.sweep_minimize_blocked_windows()
+
+    assert peek_calls == [(555, True)]
+
+
+def test_hard_lock_redirect_disallows_peek_on_minimized_offending_window(isolate_state, monkeypatch):
+    session_manager.start_session(25, "hard", ["discord.exe"], [])
+    peek_calls = []
+    monkeypatch.setattr(enforcer.win32gui, "GetForegroundWindow", lambda: 555)
+    monkeypatch.setattr(enforcer.win32process, "GetWindowThreadProcessId", lambda h: (0, 4242))
+    monkeypatch.setattr(enforcer.psutil, "Process", lambda p: _FakeProcess("discord.exe"))
+    monkeypatch.setattr(enforcer.win32gui, "ShowWindow", lambda h, cmd: None)
+    monkeypatch.setattr(enforcer.win32gui, "SetForegroundWindow", lambda h: None)
+    monkeypatch.setattr(enforcer, "_find_window_by_process_name", lambda name: None)
+    monkeypatch.setattr(enforcer, "_show_lock_overlay", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        enforcer, "_set_disallow_peek", lambda hwnd, disallow: peek_calls.append((hwnd, disallow))
+    )
+
+    enforcer.hard_lock_redirect(offending_process_name="discord.exe")
+
+    assert peek_calls == [(555, True)]
+
+
+def test_restore_window_for_process_re_allows_peek(isolate_state, monkeypatch):
+    peek_calls = []
+    monkeypatch.setattr(enforcer, "_find_window_by_process_name", lambda name: 555)
+    monkeypatch.setattr(enforcer.win32gui, "IsIconic", lambda h: True)
+    monkeypatch.setattr(enforcer.win32gui, "ShowWindow", lambda h, cmd: None)
+    monkeypatch.setattr(enforcer.win32gui, "SetForegroundWindow", lambda h: None)
+    monkeypatch.setattr(
+        enforcer, "_set_disallow_peek", lambda hwnd, disallow: peek_calls.append((hwnd, disallow))
+    )
+
+    enforcer.restore_window_for_process("discord.exe")
+
+    assert peek_calls == [(555, False)]
+
+
+def test_set_disallow_peek_calls_dwm_api(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        enforcer.ctypes.windll.dwmapi, "DwmSetWindowAttribute",
+        lambda hwnd, attr, value_ptr, size: calls.append((hwnd, attr)),
+    )
+
+    enforcer._set_disallow_peek(555, True)
+
+    assert calls == [(555, enforcer._DWMWA_DISALLOW_PEEK)]
