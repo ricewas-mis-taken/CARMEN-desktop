@@ -14,6 +14,20 @@ import device_id
 import review_store
 import session_history
 import session_manager
+import sync_trigger
+
+
+@pytest.fixture(autouse=True)
+def disable_sync_trigger(monkeypatch):
+    """sync_trigger.note_change() (Phase 4 Part 1, push-on-change) is now
+    called from many tasks_store/board_store/calendar_store/review_store
+    write paths. Without this, any test exercising those write paths
+    would hit auth_manager.is_logged_in() -- which can reach the real
+    Windows Credential Manager (and, on a cache miss, real Supabase) --
+    during an ordinary automated test run. No-op it globally; tests that
+    specifically exercise sync_trigger's own debounce/enable/disable
+    behavior override this themselves."""
+    monkeypatch.setattr(sync_trigger, "note_change", lambda: None)
 
 
 @pytest.fixture

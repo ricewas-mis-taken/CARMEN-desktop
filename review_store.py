@@ -21,6 +21,7 @@ from datetime import date, datetime, timedelta
 import calendar_store
 import device_id
 import review_scheduler
+import sync_trigger
 from calendar_log import logger
 
 PHOTOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "data", "review_photos")
@@ -321,12 +322,13 @@ def create_topic(name):
             )
             conn.commit()
             row = conn.execute("SELECT * FROM review_topics WHERE id = ?", (cur.lastrowid,)).fetchone()
-            return _row_to_topic(row)
         except DuplicateNameError:
             raise
         except Exception:
             logger.exception("review_store.create_topic failed for %s", name)
             return None
+    sync_trigger.note_change()
+    return _row_to_topic(row)
 
 
 def get_topic(topic_id):
@@ -352,6 +354,8 @@ def update_topic_link(topic_id, task_id):
             conn.commit()
         except Exception:
             logger.exception("review_store.update_topic_link failed for topic %s", topic_id)
+            return
+    sync_trigger.note_change()
 
 
 def rename_topic(topic_id, name):
@@ -372,6 +376,8 @@ def rename_topic(topic_id, name):
             raise
         except Exception:
             logger.exception("review_store.rename_topic failed for %s", topic_id)
+            return
+    sync_trigger.note_change()
 
 
 def delete_topic(topic_id):
@@ -390,6 +396,8 @@ def delete_topic(topic_id):
             conn.commit()
         except Exception:
             logger.exception("review_store.delete_topic failed for %s", topic_id)
+            return
+    sync_trigger.note_change()
 
 
 def list_subjects(topic_id):
@@ -428,12 +436,13 @@ def create_subject(topic_id, name, color, linked_task_id=None):
             )
             conn.commit()
             row = conn.execute("SELECT * FROM review_subjects WHERE id = ?", (cur.lastrowid,)).fetchone()
-            return _row_to_subject(row)
         except (DuplicateNameError, DuplicateColorError):
             raise
         except Exception:
             logger.exception("review_store.create_subject failed for topic %s", topic_id)
             return None
+    sync_trigger.note_change()
+    return _row_to_subject(row)
 
 
 def update_subject_link(subject_id, task_id):
@@ -448,6 +457,8 @@ def update_subject_link(subject_id, task_id):
             conn.commit()
         except Exception:
             logger.exception("review_store.update_subject_link failed for subject %s", subject_id)
+            return
+    sync_trigger.note_change()
 
 
 def list_problems(topic_id, due_only=True):
@@ -536,6 +547,7 @@ def create_problem(
         except Exception:
             logger.exception("review_store.create_problem failed for %s", name)
             return None
+    sync_trigger.note_change()
     return get_problem(problem_id)
 
 
@@ -602,6 +614,7 @@ def update_problem(
             logger.exception("review_store.update_problem failed for %s", problem_id)
             return None
 
+    sync_trigger.note_change()
     return get_problem(problem_id)
 
 
@@ -730,6 +743,7 @@ def _apply_review_outcome(problem_id, duration_seconds, self_solved, shakiness, 
                 pass
             return None
 
+    sync_trigger.note_change()
     return get_problem(problem_id)
 
 
