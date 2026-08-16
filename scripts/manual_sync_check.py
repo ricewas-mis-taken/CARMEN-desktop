@@ -52,7 +52,9 @@ def main():
     print("\n--- sync_now() ---")
     result = sync_client.sync_now()
     print(f"success={result.success}")
-    print(f"pushed={result.pushed} pulled={result.pulled} skipped={result.skipped}")
+    print(f"pushed={result.pushed} pulled={result.pulled} skipped={result.skipped} failed={result.failed}")
+    if result.failed:
+        print("failed > 0 -- check the terminal above for _log_record_failure's per-record traceback(s).")
     if result.error:
         print(f"error={result.error}")
     print(f"not_logged_in={result.not_logged_in}")

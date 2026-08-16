@@ -48,7 +48,6 @@ photo file itself does not (no blob storage in this phase), so a pulled
 problem with a photo will show a broken image on the receiving device
 until file sync is built.
 """
-import contextlib
 import logging
 import os
 import uuid
@@ -70,22 +69,37 @@ from calendar_log import logger as calendar_logger
 logger = logging.getLogger("carmen_sync")
 
 
-@contextlib.contextmanager
-def _log_record_failure(record):
+class _log_record_failure:
     """Wraps one pulled record's apply step so a failure logs exactly
     which record it choked on (table_name/sync_id/device_id) and the
-    real exception with its traceback, instead of surfacing only
-    sync_now()'s generic "Sync failed while applying incoming changes."
-    Still re-raises -- apply stays stop-on-first-failure, this only adds
-    the diagnostics needed to find the real cause."""
-    try:
-        yield
-    except Exception:
+    real exception with its traceback -- e.g. leftover malformed test
+    data in sync_records missing a field a real client always sends
+    (confirmed cause of a real KeyError crash: a hand-crafted curl test
+    event with no start/end).
+
+    Suppresses the exception rather than re-raising: one bad record
+    (malformed, wrong types, a stale manual-test row) must not block
+    every other record in the same pull batch from applying. Sets
+    self.failed so the caller can count it separately from a normal
+    last-write-wins skip."""
+
+    def __init__(self, record):
+        self.record = record
+        self.failed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            return False
         logger.exception(
             "sync_client: failed applying pulled record table_name=%s sync_id=%s device_id=%s data=%r",
-            record.get("table_name"), record.get("sync_id"), record.get("device_id"), record.get("data"),
+            self.record.get("table_name"), self.record.get("sync_id"),
+            self.record.get("device_id"), self.record.get("data"),
         )
-        raise
+        self.failed = True
+        return True
 
 # httpx logs one INFO line per outgoing request -- with push/pull making
 # one request per changed record, that floods any terminal where the
@@ -120,6 +134,12 @@ class SyncResult:
     skipped: int
     error: Optional[str]
     not_logged_in: bool = False
+    # Pulled records that failed to apply (malformed/incomplete data, a
+    # missing required field, etc.) -- distinct from `skipped`, which
+    # means "correctly skipped because the local copy is already newer."
+    # A nonzero failed count means real data didn't make it in; check the
+    # log for exactly which record and why (see _log_record_failure).
+    failed: int = 0
 
 
 # --- watermark persistence (private/last_sync.txt, mirrors device_id.py's
@@ -439,13 +459,14 @@ def _gather_all(cutoff_local):
 
 def _apply_json_store(records, load_fn, save_fn, id_field):
     if not records:
-        return 0, 0
+        return 0, 0, 0
     local = load_fn(include_deleted=True)
     index_by_id = {item[id_field]: i for i, item in enumerate(local)}
-    applied = skipped = 0
+    applied = skipped = failed = 0
     changed = False
     for record in records:
-        with _log_record_failure(record):
+        ctx = _log_record_failure(record)
+        with ctx:
             incoming_updated_at = _from_wire_ts(record["updated_at"])
             idx = index_by_id.get(record["sync_id"])
             existing = local[idx] if idx is not None else None
@@ -464,9 +485,11 @@ def _apply_json_store(records, load_fn, save_fn, id_field):
                 local.append(new_item)
             changed = True
             applied += 1
+        if ctx.failed:
+            failed += 1
     if changed:
         save_fn(local)
-    return applied, skipped
+    return applied, skipped, failed
 
 
 def _apply_tasks(records):
@@ -480,9 +503,10 @@ def _apply_board(records):
 # --- apply: calendar.db ---
 
 def _apply_events(conn, records):
-    applied = skipped = 0
+    applied = skipped = failed = 0
     for record in records:
-        with _log_record_failure(record):
+        ctx = _log_record_failure(record)
+        with ctx:
             incoming_updated_at = _from_wire_ts(record["updated_at"])
             row = conn.execute("SELECT updated_at FROM events WHERE id = ?", (record["sync_id"],)).fetchone()
             if row and not _is_newer(incoming_updated_at, row["updated_at"]):
@@ -506,15 +530,18 @@ def _apply_events(conn, records):
                 ),
             )
             applied += 1
+        if ctx.failed:
+            failed += 1
     if applied:
         conn.commit()
-    return applied, skipped
+    return applied, skipped, failed
 
 
 def _apply_reminders(conn, records):
-    applied = skipped = 0
+    applied = skipped = failed = 0
     for record in records:
-        with _log_record_failure(record):
+        ctx = _log_record_failure(record)
+        with ctx:
             incoming_updated_at = _from_wire_ts(record["updated_at"])
             row = conn.execute("SELECT updated_at FROM reminders WHERE id = ?", (record["sync_id"],)).fetchone()
             if row and row["updated_at"] and not _is_newer(incoming_updated_at, row["updated_at"]):
@@ -535,15 +562,18 @@ def _apply_reminders(conn, records):
                 ),
             )
             applied += 1
+        if ctx.failed:
+            failed += 1
     if applied:
         conn.commit()
-    return applied, skipped
+    return applied, skipped, failed
 
 
 def _apply_focus_profiles(conn, records):
-    applied = skipped = 0
+    applied = skipped = failed = 0
     for record in records:
-        with _log_record_failure(record):
+        ctx = _log_record_failure(record)
+        with ctx:
             incoming_updated_at = _from_wire_ts(record["updated_at"])
             row = conn.execute(
                 "SELECT updated_at FROM focus_profiles WHERE event_id = ?", (record["sync_id"],)
@@ -571,15 +601,18 @@ def _apply_focus_profiles(conn, records):
                 ),
             )
             applied += 1
+        if ctx.failed:
+            failed += 1
     if applied:
         conn.commit()
-    return applied, skipped
+    return applied, skipped, failed
 
 
 def _apply_review_topics(conn, records):
-    applied = skipped = 0
+    applied = skipped = failed = 0
     for record in records:
-        with _log_record_failure(record):
+        ctx = _log_record_failure(record)
+        with ctx:
             incoming_updated_at = _from_wire_ts(record["updated_at"])
             row = conn.execute("SELECT id, updated_at FROM review_topics WHERE sync_id = ?", (record["sync_id"],)).fetchone()
             if row and row["updated_at"] and not _is_newer(incoming_updated_at, row["updated_at"]):
@@ -605,15 +638,18 @@ def _apply_review_topics(conn, records):
                     ),
                 )
             applied += 1
+        if ctx.failed:
+            failed += 1
     if applied:
         conn.commit()
-    return applied, skipped
+    return applied, skipped, failed
 
 
 def _apply_review_subjects(conn, records):
-    applied = skipped = 0
+    applied = skipped = failed = 0
     for record in records:
-        with _log_record_failure(record):
+        ctx = _log_record_failure(record)
+        with ctx:
             data = record["data"]
             topic_row = conn.execute(
                 "SELECT id FROM review_topics WHERE sync_id = ?", (data.get("topicSyncId"),)
@@ -648,9 +684,11 @@ def _apply_review_subjects(conn, records):
                     ),
                 )
             applied += 1
+        if ctx.failed:
+            failed += 1
     if applied:
         conn.commit()
-    return applied, skipped
+    return applied, skipped, failed
 
 
 _PROBLEM_FIELDS = (
@@ -661,9 +699,10 @@ _PROBLEM_FIELDS = (
 
 
 def _apply_review_problems(conn, records):
-    applied = skipped = 0
+    applied = skipped = failed = 0
     for record in records:
-        with _log_record_failure(record):
+        ctx = _log_record_failure(record)
+        with ctx:
             data = record["data"]
             topic_row = conn.execute("SELECT id FROM review_topics WHERE sync_id = ?", (data.get("topicSyncId"),)).fetchone()
             subject_row = conn.execute("SELECT id FROM review_subjects WHERE sync_id = ?", (data.get("subjectSyncId"),)).fetchone()
@@ -717,15 +756,18 @@ def _apply_review_problems(conn, records):
                     values + (record["sync_id"], incoming_updated_at, record["device_id"], int(record["is_deleted"])),
                 )
             applied += 1
+        if ctx.failed:
+            failed += 1
     if applied:
         conn.commit()
-    return applied, skipped
+    return applied, skipped, failed
 
 
 def _apply_review_sessions(conn, records):
-    applied = skipped = 0
+    applied = skipped = failed = 0
     for record in records:
-        with _log_record_failure(record):
+        ctx = _log_record_failure(record)
+        with ctx:
             data = record["data"]
             problem_row = conn.execute(
                 "SELECT id FROM review_problems WHERE sync_id = ?", (data.get("problemSyncId"),)
@@ -760,16 +802,18 @@ def _apply_review_sessions(conn, records):
                     values + (record["sync_id"], incoming_updated_at, record["device_id"], int(record["is_deleted"])),
                 )
             applied += 1
+        if ctx.failed:
+            failed += 1
     if applied:
         conn.commit()
-    return applied, skipped
+    return applied, skipped, failed
 
 
 def _apply_calendar_records(by_table):
     with calendar_store._lock:
         review_store._get_conn()
         conn = calendar_store._get_conn()
-        applied = skipped = 0
+        applied = skipped = failed = 0
         # Parent-before-child, mirroring the gather order.
         for table_name, apply_fn in (
             ("events", _apply_events),
@@ -780,28 +824,37 @@ def _apply_calendar_records(by_table):
             ("review_problems", _apply_review_problems),
             ("review_sessions", _apply_review_sessions),
         ):
-            a, s = apply_fn(conn, by_table.get(table_name, []))
+            a, s, f = apply_fn(conn, by_table.get(table_name, []))
             applied += a
             skipped += s
-        return applied, skipped
+            failed += f
+        return applied, skipped, failed
 
 
 def _apply_all(pulled_records):
+    """Applies every pulled record. A single malformed/incomplete record
+    (e.g. leftover manual-test data missing a required field) is caught
+    and logged by _log_record_failure inside each per-table apply
+    function and counted in `failed` -- it does not stop the rest of the
+    batch from applying."""
     by_table = {}
     for record in pulled_records:
         by_table.setdefault(record["table_name"], []).append(record)
 
-    applied = skipped = 0
-    a, s = _apply_tasks(by_table.get("tasks", []))
+    applied = skipped = failed = 0
+    a, s, f = _apply_tasks(by_table.get("tasks", []))
     applied += a
     skipped += s
-    a, s = _apply_board(by_table.get("board", []))
+    failed += f
+    a, s, f = _apply_board(by_table.get("board", []))
     applied += a
     skipped += s
-    a, s = _apply_calendar_records(by_table)
+    failed += f
+    a, s, f = _apply_calendar_records(by_table)
     applied += a
     skipped += s
-    return applied, skipped
+    failed += f
+    return applied, skipped, failed
 
 
 # --- the public entry point ---
@@ -845,8 +898,11 @@ def sync_now():
         return SyncResult(success=False, pushed=0, pulled=0, skipped=0, error="Couldn't reach the sync server.")
 
     try:
-        pulled, skipped_pull = _apply_all(pulled_records)
+        pulled, skipped_pull, failed = _apply_all(pulled_records)
     except Exception:
+        # _log_record_failure already contains any single bad record's
+        # damage -- reaching here means something broke outside that
+        # per-record handling (e.g. the calendar.db connection itself).
         calendar_logger.exception("sync_client.sync_now: failed applying pulled changes")
         return SyncResult(
             success=False, pushed=pushed, pulled=0, skipped=skipped_push,
@@ -855,5 +911,5 @@ def sync_now():
 
     _save_last_sync(sync_start_wire)
     return SyncResult(
-        success=True, pushed=pushed, pulled=pulled, skipped=skipped_push + skipped_pull, error=None,
+        success=True, pushed=pushed, pulled=pulled, skipped=skipped_push + skipped_pull, error=None, failed=failed,
     )

@@ -136,6 +136,37 @@ def test_push_then_pull_round_trip_for_task_and_event(isolate_device, fake_logge
     assert pulled_events[0]["reminderOffsets"] == [10]
 
 
+def test_one_malformed_pulled_record_does_not_block_the_rest(isolate_device, fake_logged_in, fake_server):
+    """Regression test: a leftover malformed record on the server (e.g.
+    a hand-crafted curl test row missing required fields, the real cause
+    behind a live KeyError crash) must not stop every other pulled
+    record from applying -- only that one record should count as
+    failed."""
+    isolate_device("a")
+    tasks_store.create_task({"name": "Good task", "color": "#111111"})
+    sync_client.sync_now()
+
+    # Simulate a stale/malformed manual-test row already sitting in the
+    # server's data, missing fields a real client always sends.
+    fake_server[("events", "manual-test-event-1")] = {
+        "table_name": "events", "sync_id": "manual-test-event-1",
+        "data": {"title": "broken"},  # no start/end -- _apply_events would KeyError
+        "device_id": "manual-test-device", "updated_at": "2026-08-16T12:00:00+00:00",
+        "is_deleted": False,
+    }
+
+    isolate_device("b")
+    result = sync_client.sync_now()
+    assert result.success is True
+    assert result.failed == 1
+    assert result.pulled == 1  # the good task still applied
+
+    assert len(tasks_store.load_tasks()) == 1
+    assert tasks_store.load_tasks()[0]["name"] == "Good task"
+    # The malformed event must not have been silently inserted either.
+    assert calendar_store.list_events() == []
+
+
 def test_review_chain_fk_translation_across_devices(isolate_device, fake_logged_in, fake_server):
     isolate_device("a")
     topic = review_store.create_topic("Math")
