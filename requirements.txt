@@ -9,6 +9,7 @@ winsdk
 PySide6
 watchdog
 supabase
+httpx
 keyring
 python-dotenv
 pytest
