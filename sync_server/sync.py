@@ -55,9 +55,19 @@ async def _postgrest_request(client, method, **kwargs):
         resp.raise_for_status()
         return resp
     except httpx.HTTPStatusError as exc:
-        logger.error("PostgREST request failed: %s", exc.response.text)
-        raise HTTPException(status_code=502, detail="Sync storage request failed") from exc
+        logger.error(
+            "PostgREST %s %s -> %s: %s",
+            method,
+            exc.request.url,
+            exc.response.status_code,
+            exc.response.text,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Sync storage request failed ({exc.response.status_code}): {exc.response.text}",
+        ) from exc
     except httpx.HTTPError as exc:
+        logger.error("PostgREST %s %s -> could not reach server: %s", method, REST_URL, exc)
         raise HTTPException(status_code=502, detail="Could not reach sync storage") from exc
 
 
