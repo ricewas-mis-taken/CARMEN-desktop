@@ -48,6 +48,7 @@ photo file itself does not (no blob storage in this phase), so a pulled
 problem with a photo will show a broken image on the receiving device
 until file sync is built.
 """
+import contextlib
 import logging
 import os
 import uuid
@@ -67,6 +68,24 @@ import tasks_store
 from calendar_log import logger as calendar_logger
 
 logger = logging.getLogger("carmen_sync")
+
+
+@contextlib.contextmanager
+def _log_record_failure(record):
+    """Wraps one pulled record's apply step so a failure logs exactly
+    which record it choked on (table_name/sync_id/device_id) and the
+    real exception with its traceback, instead of surfacing only
+    sync_now()'s generic "Sync failed while applying incoming changes."
+    Still re-raises -- apply stays stop-on-first-failure, this only adds
+    the diagnostics needed to find the real cause."""
+    try:
+        yield
+    except Exception:
+        logger.exception(
+            "sync_client: failed applying pulled record table_name=%s sync_id=%s device_id=%s data=%r",
+            record.get("table_name"), record.get("sync_id"), record.get("device_id"), record.get("data"),
+        )
+        raise
 
 # httpx logs one INFO line per outgoing request -- with push/pull making
 # one request per changed record, that floods any terminal where the
@@ -426,24 +445,25 @@ def _apply_json_store(records, load_fn, save_fn, id_field):
     applied = skipped = 0
     changed = False
     for record in records:
-        incoming_updated_at = _from_wire_ts(record["updated_at"])
-        idx = index_by_id.get(record["sync_id"])
-        existing = local[idx] if idx is not None else None
-        if existing is not None and not _is_newer(incoming_updated_at, existing.get("updatedAt")):
-            skipped += 1
-            continue
-        new_item = dict(record["data"])
-        new_item[id_field] = record["sync_id"]
-        new_item["updatedAt"] = incoming_updated_at
-        new_item["deviceId"] = record["device_id"]
-        new_item["isDeleted"] = record["is_deleted"]
-        if idx is not None:
-            local[idx] = new_item
-        else:
-            index_by_id[record["sync_id"]] = len(local)
-            local.append(new_item)
-        changed = True
-        applied += 1
+        with _log_record_failure(record):
+            incoming_updated_at = _from_wire_ts(record["updated_at"])
+            idx = index_by_id.get(record["sync_id"])
+            existing = local[idx] if idx is not None else None
+            if existing is not None and not _is_newer(incoming_updated_at, existing.get("updatedAt")):
+                skipped += 1
+                continue
+            new_item = dict(record["data"])
+            new_item[id_field] = record["sync_id"]
+            new_item["updatedAt"] = incoming_updated_at
+            new_item["deviceId"] = record["device_id"]
+            new_item["isDeleted"] = record["is_deleted"]
+            if idx is not None:
+                local[idx] = new_item
+            else:
+                index_by_id[record["sync_id"]] = len(local)
+                local.append(new_item)
+            changed = True
+            applied += 1
     if changed:
         save_fn(local)
     return applied, skipped
@@ -462,29 +482,30 @@ def _apply_board(records):
 def _apply_events(conn, records):
     applied = skipped = 0
     for record in records:
-        incoming_updated_at = _from_wire_ts(record["updated_at"])
-        row = conn.execute("SELECT updated_at FROM events WHERE id = ?", (record["sync_id"],)).fetchone()
-        if row and not _is_newer(incoming_updated_at, row["updated_at"]):
-            skipped += 1
-            continue
-        data = record["data"]
-        deleted_at = incoming_updated_at if record["is_deleted"] else None
-        conn.execute(
-            """
-            INSERT INTO events (id, title, start, end, all_day, color, notes, rrule, created_at, updated_at, deleted_at, device_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                title=excluded.title, start=excluded.start, end=excluded.end, all_day=excluded.all_day,
-                color=excluded.color, notes=excluded.notes, rrule=excluded.rrule,
-                updated_at=excluded.updated_at, deleted_at=excluded.deleted_at, device_id=excluded.device_id
-            """,
-            (
-                record["sync_id"], data["title"], data["start"], data["end"], int(bool(data.get("allDay"))),
-                data.get("color", "#2d8cff"), data.get("notes", ""), data.get("rrule"),
-                data.get("createdAt") or incoming_updated_at, incoming_updated_at, deleted_at, record["device_id"],
-            ),
-        )
-        applied += 1
+        with _log_record_failure(record):
+            incoming_updated_at = _from_wire_ts(record["updated_at"])
+            row = conn.execute("SELECT updated_at FROM events WHERE id = ?", (record["sync_id"],)).fetchone()
+            if row and not _is_newer(incoming_updated_at, row["updated_at"]):
+                skipped += 1
+                continue
+            data = record["data"]
+            deleted_at = incoming_updated_at if record["is_deleted"] else None
+            conn.execute(
+                """
+                INSERT INTO events (id, title, start, end, all_day, color, notes, rrule, created_at, updated_at, deleted_at, device_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    title=excluded.title, start=excluded.start, end=excluded.end, all_day=excluded.all_day,
+                    color=excluded.color, notes=excluded.notes, rrule=excluded.rrule,
+                    updated_at=excluded.updated_at, deleted_at=excluded.deleted_at, device_id=excluded.device_id
+                """,
+                (
+                    record["sync_id"], data["title"], data["start"], data["end"], int(bool(data.get("allDay"))),
+                    data.get("color", "#2d8cff"), data.get("notes", ""), data.get("rrule"),
+                    data.get("createdAt") or incoming_updated_at, incoming_updated_at, deleted_at, record["device_id"],
+                ),
+            )
+            applied += 1
     if applied:
         conn.commit()
     return applied, skipped
@@ -493,26 +514,27 @@ def _apply_events(conn, records):
 def _apply_reminders(conn, records):
     applied = skipped = 0
     for record in records:
-        incoming_updated_at = _from_wire_ts(record["updated_at"])
-        row = conn.execute("SELECT updated_at FROM reminders WHERE id = ?", (record["sync_id"],)).fetchone()
-        if row and row["updated_at"] and not _is_newer(incoming_updated_at, row["updated_at"]):
-            skipped += 1
-            continue
-        data = record["data"]
-        conn.execute(
-            """
-            INSERT INTO reminders (id, event_id, offset_minutes, updated_at, device_id, is_deleted)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                event_id=excluded.event_id, offset_minutes=excluded.offset_minutes,
-                updated_at=excluded.updated_at, device_id=excluded.device_id, is_deleted=excluded.is_deleted
-            """,
-            (
-                record["sync_id"], data["eventId"], data["offsetMinutes"],
-                incoming_updated_at, record["device_id"], int(record["is_deleted"]),
-            ),
-        )
-        applied += 1
+        with _log_record_failure(record):
+            incoming_updated_at = _from_wire_ts(record["updated_at"])
+            row = conn.execute("SELECT updated_at FROM reminders WHERE id = ?", (record["sync_id"],)).fetchone()
+            if row and row["updated_at"] and not _is_newer(incoming_updated_at, row["updated_at"]):
+                skipped += 1
+                continue
+            data = record["data"]
+            conn.execute(
+                """
+                INSERT INTO reminders (id, event_id, offset_minutes, updated_at, device_id, is_deleted)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    event_id=excluded.event_id, offset_minutes=excluded.offset_minutes,
+                    updated_at=excluded.updated_at, device_id=excluded.device_id, is_deleted=excluded.is_deleted
+                """,
+                (
+                    record["sync_id"], data["eventId"], data["offsetMinutes"],
+                    incoming_updated_at, record["device_id"], int(record["is_deleted"]),
+                ),
+            )
+            applied += 1
     if applied:
         conn.commit()
     return applied, skipped
@@ -521,33 +543,34 @@ def _apply_reminders(conn, records):
 def _apply_focus_profiles(conn, records):
     applied = skipped = 0
     for record in records:
-        incoming_updated_at = _from_wire_ts(record["updated_at"])
-        row = conn.execute(
-            "SELECT updated_at FROM focus_profiles WHERE event_id = ?", (record["sync_id"],)
-        ).fetchone()
-        if row and row["updated_at"] and not _is_newer(incoming_updated_at, row["updated_at"]):
-            skipped += 1
-            continue
-        data = record["data"]
-        conn.execute(
-            """
-            INSERT INTO focus_profiles
-                (event_id, enabled, lock_mode, process_blocklist, domain_whitelist, warning_minutes,
-                 updated_at, device_id, is_deleted)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(event_id) DO UPDATE SET
-                enabled=excluded.enabled, lock_mode=excluded.lock_mode,
-                process_blocklist=excluded.process_blocklist, domain_whitelist=excluded.domain_whitelist,
-                warning_minutes=excluded.warning_minutes, updated_at=excluded.updated_at,
-                device_id=excluded.device_id, is_deleted=excluded.is_deleted
-            """,
-            (
-                record["sync_id"], int(bool(data.get("enabled"))), data.get("lockMode", "soft"),
-                data.get("processBlocklist", "[]"), data.get("domainWhitelist", "[]"), data.get("warningMinutes"),
-                incoming_updated_at, record["device_id"], int(record["is_deleted"]),
-            ),
-        )
-        applied += 1
+        with _log_record_failure(record):
+            incoming_updated_at = _from_wire_ts(record["updated_at"])
+            row = conn.execute(
+                "SELECT updated_at FROM focus_profiles WHERE event_id = ?", (record["sync_id"],)
+            ).fetchone()
+            if row and row["updated_at"] and not _is_newer(incoming_updated_at, row["updated_at"]):
+                skipped += 1
+                continue
+            data = record["data"]
+            conn.execute(
+                """
+                INSERT INTO focus_profiles
+                    (event_id, enabled, lock_mode, process_blocklist, domain_whitelist, warning_minutes,
+                     updated_at, device_id, is_deleted)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(event_id) DO UPDATE SET
+                    enabled=excluded.enabled, lock_mode=excluded.lock_mode,
+                    process_blocklist=excluded.process_blocklist, domain_whitelist=excluded.domain_whitelist,
+                    warning_minutes=excluded.warning_minutes, updated_at=excluded.updated_at,
+                    device_id=excluded.device_id, is_deleted=excluded.is_deleted
+                """,
+                (
+                    record["sync_id"], int(bool(data.get("enabled"))), data.get("lockMode", "soft"),
+                    data.get("processBlocklist", "[]"), data.get("domainWhitelist", "[]"), data.get("warningMinutes"),
+                    incoming_updated_at, record["device_id"], int(record["is_deleted"]),
+                ),
+            )
+            applied += 1
     if applied:
         conn.commit()
     return applied, skipped
@@ -556,31 +579,32 @@ def _apply_focus_profiles(conn, records):
 def _apply_review_topics(conn, records):
     applied = skipped = 0
     for record in records:
-        incoming_updated_at = _from_wire_ts(record["updated_at"])
-        row = conn.execute("SELECT id, updated_at FROM review_topics WHERE sync_id = ?", (record["sync_id"],)).fetchone()
-        if row and row["updated_at"] and not _is_newer(incoming_updated_at, row["updated_at"]):
-            skipped += 1
-            continue
-        data = record["data"]
-        if row:
-            conn.execute(
-                "UPDATE review_topics SET name=?, order_index=?, linked_task_id=?, updated_at=?, device_id=?, is_deleted=? "
-                "WHERE id=?",
-                (
-                    data["name"], data["orderIndex"], data.get("linkedTaskId"),
-                    incoming_updated_at, record["device_id"], int(record["is_deleted"]), row["id"],
-                ),
-            )
-        else:
-            conn.execute(
-                "INSERT INTO review_topics (name, order_index, linked_task_id, sync_id, updated_at, device_id, is_deleted) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    data["name"], data["orderIndex"], data.get("linkedTaskId"),
-                    record["sync_id"], incoming_updated_at, record["device_id"], int(record["is_deleted"]),
-                ),
-            )
-        applied += 1
+        with _log_record_failure(record):
+            incoming_updated_at = _from_wire_ts(record["updated_at"])
+            row = conn.execute("SELECT id, updated_at FROM review_topics WHERE sync_id = ?", (record["sync_id"],)).fetchone()
+            if row and row["updated_at"] and not _is_newer(incoming_updated_at, row["updated_at"]):
+                skipped += 1
+                continue
+            data = record["data"]
+            if row:
+                conn.execute(
+                    "UPDATE review_topics SET name=?, order_index=?, linked_task_id=?, updated_at=?, device_id=?, is_deleted=? "
+                    "WHERE id=?",
+                    (
+                        data["name"], data["orderIndex"], data.get("linkedTaskId"),
+                        incoming_updated_at, record["device_id"], int(record["is_deleted"]), row["id"],
+                    ),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO review_topics (name, order_index, linked_task_id, sync_id, updated_at, device_id, is_deleted) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        data["name"], data["orderIndex"], data.get("linkedTaskId"),
+                        record["sync_id"], incoming_updated_at, record["device_id"], int(record["is_deleted"]),
+                    ),
+                )
+            applied += 1
     if applied:
         conn.commit()
     return applied, skipped
@@ -589,40 +613,41 @@ def _apply_review_topics(conn, records):
 def _apply_review_subjects(conn, records):
     applied = skipped = 0
     for record in records:
-        data = record["data"]
-        topic_row = conn.execute(
-            "SELECT id FROM review_topics WHERE sync_id = ?", (data.get("topicSyncId"),)
-        ).fetchone()
-        if not topic_row:
-            logger.warning(
-                "sync_client: skipping pulled review_subject %s -- parent topic not found locally", record["sync_id"]
-            )
-            skipped += 1
-            continue
-        incoming_updated_at = _from_wire_ts(record["updated_at"])
-        row = conn.execute("SELECT id, updated_at FROM review_subjects WHERE sync_id = ?", (record["sync_id"],)).fetchone()
-        if row and row["updated_at"] and not _is_newer(incoming_updated_at, row["updated_at"]):
-            skipped += 1
-            continue
-        if row:
-            conn.execute(
-                "UPDATE review_subjects SET topic_id=?, name=?, color=?, linked_task_id=?, "
-                "updated_at=?, device_id=?, is_deleted=? WHERE id=?",
-                (
-                    topic_row["id"], data["name"], data["color"], data.get("linkedTaskId"),
-                    incoming_updated_at, record["device_id"], int(record["is_deleted"]), row["id"],
-                ),
-            )
-        else:
-            conn.execute(
-                "INSERT INTO review_subjects (topic_id, name, color, linked_task_id, sync_id, updated_at, device_id, is_deleted) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    topic_row["id"], data["name"], data["color"], data.get("linkedTaskId"),
-                    record["sync_id"], incoming_updated_at, record["device_id"], int(record["is_deleted"]),
-                ),
-            )
-        applied += 1
+        with _log_record_failure(record):
+            data = record["data"]
+            topic_row = conn.execute(
+                "SELECT id FROM review_topics WHERE sync_id = ?", (data.get("topicSyncId"),)
+            ).fetchone()
+            if not topic_row:
+                logger.warning(
+                    "sync_client: skipping pulled review_subject %s -- parent topic not found locally", record["sync_id"]
+                )
+                skipped += 1
+                continue
+            incoming_updated_at = _from_wire_ts(record["updated_at"])
+            row = conn.execute("SELECT id, updated_at FROM review_subjects WHERE sync_id = ?", (record["sync_id"],)).fetchone()
+            if row and row["updated_at"] and not _is_newer(incoming_updated_at, row["updated_at"]):
+                skipped += 1
+                continue
+            if row:
+                conn.execute(
+                    "UPDATE review_subjects SET topic_id=?, name=?, color=?, linked_task_id=?, "
+                    "updated_at=?, device_id=?, is_deleted=? WHERE id=?",
+                    (
+                        topic_row["id"], data["name"], data["color"], data.get("linkedTaskId"),
+                        incoming_updated_at, record["device_id"], int(record["is_deleted"]), row["id"],
+                    ),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO review_subjects (topic_id, name, color, linked_task_id, sync_id, updated_at, device_id, is_deleted) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        topic_row["id"], data["name"], data["color"], data.get("linkedTaskId"),
+                        record["sync_id"], incoming_updated_at, record["device_id"], int(record["is_deleted"]),
+                    ),
+                )
+            applied += 1
     if applied:
         conn.commit()
     return applied, skipped
@@ -638,59 +663,60 @@ _PROBLEM_FIELDS = (
 def _apply_review_problems(conn, records):
     applied = skipped = 0
     for record in records:
-        data = record["data"]
-        topic_row = conn.execute("SELECT id FROM review_topics WHERE sync_id = ?", (data.get("topicSyncId"),)).fetchone()
-        subject_row = conn.execute("SELECT id FROM review_subjects WHERE sync_id = ?", (data.get("subjectSyncId"),)).fetchone()
-        if not topic_row or not subject_row:
-            logger.warning(
-                "sync_client: skipping pulled review_problem %s -- parent topic/subject not found locally", record["sync_id"]
+        with _log_record_failure(record):
+            data = record["data"]
+            topic_row = conn.execute("SELECT id FROM review_topics WHERE sync_id = ?", (data.get("topicSyncId"),)).fetchone()
+            subject_row = conn.execute("SELECT id FROM review_subjects WHERE sync_id = ?", (data.get("subjectSyncId"),)).fetchone()
+            if not topic_row or not subject_row:
+                logger.warning(
+                    "sync_client: skipping pulled review_problem %s -- parent topic/subject not found locally", record["sync_id"]
+                )
+                skipped += 1
+                continue
+            incoming_updated_at = _from_wire_ts(record["updated_at"])
+            row = conn.execute("SELECT id, updated_at FROM review_problems WHERE sync_id = ?", (record["sync_id"],)).fetchone()
+            if row and row["updated_at"] and not _is_newer(incoming_updated_at, row["updated_at"]):
+                skipped += 1
+                continue
+            values = (
+                topic_row["id"], subject_row["id"], data["name"], data["stars"], data["descriptionType"],
+                data.get("descriptionText"), data.get("descriptionPhotoPath"), data.get("descriptionLink"),
+                data.get("dateAdded"), data.get("reviewCount", 0), data.get("lastReviewedAt"),
+                data.get("fastestTimeSeconds"), data.get("fastestTimeIsSolved"),
+                data.get("scheduleStage", 0), data.get("nextReviewDate"),
+                data.get("firstAttemptSeconds"), data.get("firstAttemptShakiness"), data.get("firstAttemptSelfSolved"),
             )
-            skipped += 1
-            continue
-        incoming_updated_at = _from_wire_ts(record["updated_at"])
-        row = conn.execute("SELECT id, updated_at FROM review_problems WHERE sync_id = ?", (record["sync_id"],)).fetchone()
-        if row and row["updated_at"] and not _is_newer(incoming_updated_at, row["updated_at"]):
-            skipped += 1
-            continue
-        values = (
-            topic_row["id"], subject_row["id"], data["name"], data["stars"], data["descriptionType"],
-            data.get("descriptionText"), data.get("descriptionPhotoPath"), data.get("descriptionLink"),
-            data.get("dateAdded"), data.get("reviewCount", 0), data.get("lastReviewedAt"),
-            data.get("fastestTimeSeconds"), data.get("fastestTimeIsSolved"),
-            data.get("scheduleStage", 0), data.get("nextReviewDate"),
-            data.get("firstAttemptSeconds"), data.get("firstAttemptShakiness"), data.get("firstAttemptSelfSolved"),
-        )
-        if row:
-            conn.execute(
-                """
-                UPDATE review_problems SET
-                    topic_id=?, subject_id=?, name=?, stars=?, description_type=?,
-                    description_text=?, description_photo_path=?, description_link=?,
-                    date_added=?, review_count=?, last_reviewed_at=?,
-                    fastest_time_seconds=?, fastest_time_is_solved=?,
-                    schedule_stage=?, next_review_date=?,
-                    first_attempt_seconds=?, first_attempt_shakiness=?, first_attempt_self_solved=?,
-                    updated_at=?, device_id=?, is_deleted=?
-                WHERE id=?
-                """,
-                values + (incoming_updated_at, record["device_id"], int(record["is_deleted"]), row["id"]),
-            )
-        else:
-            conn.execute(
-                """
-                INSERT INTO review_problems (
-                    topic_id, subject_id, name, stars, description_type,
-                    description_text, description_photo_path, description_link,
-                    date_added, review_count, last_reviewed_at,
-                    fastest_time_seconds, fastest_time_is_solved,
-                    schedule_stage, next_review_date,
-                    first_attempt_seconds, first_attempt_shakiness, first_attempt_self_solved,
-                    sync_id, updated_at, device_id, is_deleted
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                values + (record["sync_id"], incoming_updated_at, record["device_id"], int(record["is_deleted"])),
-            )
-        applied += 1
+            if row:
+                conn.execute(
+                    """
+                    UPDATE review_problems SET
+                        topic_id=?, subject_id=?, name=?, stars=?, description_type=?,
+                        description_text=?, description_photo_path=?, description_link=?,
+                        date_added=?, review_count=?, last_reviewed_at=?,
+                        fastest_time_seconds=?, fastest_time_is_solved=?,
+                        schedule_stage=?, next_review_date=?,
+                        first_attempt_seconds=?, first_attempt_shakiness=?, first_attempt_self_solved=?,
+                        updated_at=?, device_id=?, is_deleted=?
+                    WHERE id=?
+                    """,
+                    values + (incoming_updated_at, record["device_id"], int(record["is_deleted"]), row["id"]),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO review_problems (
+                        topic_id, subject_id, name, stars, description_type,
+                        description_text, description_photo_path, description_link,
+                        date_added, review_count, last_reviewed_at,
+                        fastest_time_seconds, fastest_time_is_solved,
+                        schedule_stage, next_review_date,
+                        first_attempt_seconds, first_attempt_shakiness, first_attempt_self_solved,
+                        sync_id, updated_at, device_id, is_deleted
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    values + (record["sync_id"], incoming_updated_at, record["device_id"], int(record["is_deleted"])),
+                )
+            applied += 1
     if applied:
         conn.commit()
     return applied, skipped
@@ -699,40 +725,41 @@ def _apply_review_problems(conn, records):
 def _apply_review_sessions(conn, records):
     applied = skipped = 0
     for record in records:
-        data = record["data"]
-        problem_row = conn.execute(
-            "SELECT id FROM review_problems WHERE sync_id = ?", (data.get("problemSyncId"),)
-        ).fetchone()
-        if not problem_row:
-            logger.warning(
-                "sync_client: skipping pulled review_session %s -- parent problem not found locally", record["sync_id"]
+        with _log_record_failure(record):
+            data = record["data"]
+            problem_row = conn.execute(
+                "SELECT id FROM review_problems WHERE sync_id = ?", (data.get("problemSyncId"),)
+            ).fetchone()
+            if not problem_row:
+                logger.warning(
+                    "sync_client: skipping pulled review_session %s -- parent problem not found locally", record["sync_id"]
+                )
+                skipped += 1
+                continue
+            incoming_updated_at = _from_wire_ts(record["updated_at"])
+            row = conn.execute("SELECT id, updated_at FROM review_sessions WHERE sync_id = ?", (record["sync_id"],)).fetchone()
+            if row and row["updated_at"] and not _is_newer(incoming_updated_at, row["updated_at"]):
+                skipped += 1
+                continue
+            values = (
+                problem_row["id"], data["startedAt"], data["finishedAt"], data["durationSeconds"],
+                data.get("selfSolved"), data.get("shakiness"),
             )
-            skipped += 1
-            continue
-        incoming_updated_at = _from_wire_ts(record["updated_at"])
-        row = conn.execute("SELECT id, updated_at FROM review_sessions WHERE sync_id = ?", (record["sync_id"],)).fetchone()
-        if row and row["updated_at"] and not _is_newer(incoming_updated_at, row["updated_at"]):
-            skipped += 1
-            continue
-        values = (
-            problem_row["id"], data["startedAt"], data["finishedAt"], data["durationSeconds"],
-            data.get("selfSolved"), data.get("shakiness"),
-        )
-        if row:
-            conn.execute(
-                "UPDATE review_sessions SET problem_id=?, started_at=?, finished_at=?, duration_seconds=?, "
-                "self_solved=?, shakiness=?, updated_at=?, device_id=?, is_deleted=? WHERE id=?",
-                values + (incoming_updated_at, record["device_id"], int(record["is_deleted"]), row["id"]),
-            )
-        else:
-            conn.execute(
-                "INSERT INTO review_sessions "
-                "(problem_id, started_at, finished_at, duration_seconds, self_solved, shakiness, "
-                " sync_id, updated_at, device_id, is_deleted) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                values + (record["sync_id"], incoming_updated_at, record["device_id"], int(record["is_deleted"])),
-            )
-        applied += 1
+            if row:
+                conn.execute(
+                    "UPDATE review_sessions SET problem_id=?, started_at=?, finished_at=?, duration_seconds=?, "
+                    "self_solved=?, shakiness=?, updated_at=?, device_id=?, is_deleted=? WHERE id=?",
+                    values + (incoming_updated_at, record["device_id"], int(record["is_deleted"]), row["id"]),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO review_sessions "
+                    "(problem_id, started_at, finished_at, duration_seconds, self_solved, shakiness, "
+                    " sync_id, updated_at, device_id, is_deleted) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    values + (record["sync_id"], incoming_updated_at, record["device_id"], int(record["is_deleted"])),
+                )
+            applied += 1
     if applied:
         conn.commit()
     return applied, skipped
