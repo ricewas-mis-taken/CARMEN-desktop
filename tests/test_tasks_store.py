@@ -119,7 +119,7 @@ def test_logged_seconds_for_date_sums_matching_sessions(isolate_tasks):
 def test_logged_seconds_for_date_includes_live_session(isolate_tasks):
     task = {"id": "t1"}
     day = date.today()
-    start = datetime.combine(day, datetime.min.time()).replace(hour=9)
+    start = datetime.now() - timedelta(minutes=5)
     live_status = {
         "isActive": True, "source": "task", "eventId": "t1",
         "startTime": start.isoformat(), "violationLog": [],
