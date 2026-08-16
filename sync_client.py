@@ -68,6 +68,15 @@ from calendar_log import logger as calendar_logger
 
 logger = logging.getLogger("carmen_sync")
 
+# httpx logs one INFO line per outgoing request -- with push/pull making
+# one request per changed record, that floods any terminal where the
+# root/httpx logger ends up at INFO (sync_server's uvicorn process,
+# scripts/manual_sync_check.py, or the main app if it ever configures
+# logging that broadly). Quiet httpx specifically here, at the point
+# this module actually starts making those requests, so every caller of
+# sync_client gets this for free instead of each needing its own fix.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", ".env")
 load_dotenv(ENV_PATH)
 

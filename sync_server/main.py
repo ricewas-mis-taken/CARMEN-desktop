@@ -14,6 +14,13 @@ from .sync import router as sync_router
 # sync.py) needs its own handler to reliably show up in this terminal.
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
+# httpx logs one INFO line per outgoing request ("HTTP Request: GET ...
+# 200 OK") -- with basicConfig set to INFO above, that's one line for
+# every single record pushed/pulled from PostgREST, which floods the
+# terminal during a real sync. Quiet httpx specifically; sync_server's
+# own logger stays at INFO so real errors still show.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 app = FastAPI(title="CARMEN sync_server")
 
 
