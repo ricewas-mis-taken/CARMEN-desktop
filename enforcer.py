@@ -1,4 +1,6 @@
 """Soft/hard lock enforcement actions."""
+import ctypes
+
 import psutil
 import win32con
 import win32gui
@@ -7,6 +9,27 @@ import win32process
 import qt_gui_thread
 import qt_ui.enforcer_overlay as enforcer_overlay
 import session_manager
+
+# DWM's "disallow peek" window attribute (dwmapi.h) -- undocumented in
+# win32con, so set via raw ctypes instead. Minimizing a blocked window alone
+# doesn't actually stop it from being seen: hovering its taskbar icon still
+# shows a live thumbnail, and hovering that thumbnail (Aero Peek) makes the
+# real window fully visible on the desktop without ever un-minimizing or
+# focusing it -- the browser extension's own hover-to-reveal block has the
+# same "cheese" risk on the extension side. This attribute disables both the
+# live taskbar thumbnail and Peek for the specific hwnd it's set on, so a
+# minimized blocked window is only ever seen as a plain static icon.
+_DWMWA_DISALLOW_PEEK = 12
+
+
+def _set_disallow_peek(hwnd, disallow):
+    try:
+        value = ctypes.c_int(1 if disallow else 0)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, _DWMWA_DISALLOW_PEEK, ctypes.byref(value), ctypes.sizeof(value)
+        )
+    except Exception:
+        pass
 
 
 def soft_lock_warning(offending_process_name=None):
@@ -60,6 +83,7 @@ def hard_lock_redirect(offending_process_name=None):
     ):
         try:
             win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+            _set_disallow_peek(hwnd, True)
         except Exception:
             pass
 
@@ -131,6 +155,7 @@ def sweep_minimize_blocked_windows():
         if session_manager.is_blocked(name):
             try:
                 win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+                _set_disallow_peek(hwnd, True)
                 minimized.append((name, hwnd))
             except Exception:
                 pass
@@ -171,6 +196,10 @@ def restore_window_for_process(process_name):
         if win32gui.IsIconic(hwnd):
             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
         win32gui.SetForegroundWindow(hwnd)
+        # Undo _set_disallow_peek from whichever minimize caught this window
+        # -- it's no longer blocked, so its taskbar preview/Peek should
+        # behave normally again like any other allowed app.
+        _set_disallow_peek(hwnd, False)
     except Exception:
         pass
 
