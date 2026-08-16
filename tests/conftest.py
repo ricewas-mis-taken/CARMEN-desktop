@@ -10,6 +10,7 @@ import pytest
 
 import calendar_store
 import config
+import device_id
 import review_store
 import session_history
 import session_manager
@@ -62,6 +63,8 @@ def isolate_calendar_db(tmp_path, monkeypatch):
     so every test gets a fresh, isolated on-disk database."""
     monkeypatch.setattr(calendar_store, "DB_PATH", str(tmp_path / "calendar.db"))
     monkeypatch.setattr(calendar_store, "_conn", None)
+    monkeypatch.setattr(device_id, "DEVICE_ID_PATH", str(tmp_path / "device_id.txt"))
+    monkeypatch.setattr(device_id, "_cached_id", None)
     yield
 
 
