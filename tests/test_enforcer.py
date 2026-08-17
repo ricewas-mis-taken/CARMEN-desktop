@@ -164,17 +164,34 @@ def test_dwm_peek_attribute_constants_are_the_real_values():
     assert enforcer._DWMWA_FORCE_ICONIC_REPRESENTATION == 7
 
 
-def test_soft_lock_warning_uses_blackout(isolate_state, monkeypatch):
+def test_soft_lock_warning_covers_just_the_offending_window(isolate_state, monkeypatch):
+    session_manager.start_session(25, "soft", ["discord.exe"], [])
+    calls = []
+    monkeypatch.setattr(enforcer.win32gui, "GetWindowRect", lambda h: (10, 20, 210, 320))
+    monkeypatch.setattr(enforcer, "_show_lock_overlay", lambda *a, **kw: calls.append(kw))
+
+    enforcer.soft_lock_warning(offending_process_name="discord.exe", hwnd=555)
+
+    assert calls == [{
+        "duration_ms": 5000, "offending_process_name": "discord.exe",
+        "blackout_rect": (10, 20, 200, 300),
+    }]
+
+
+def test_soft_lock_warning_without_hwnd_has_no_blackout(isolate_state, monkeypatch):
     session_manager.start_session(25, "soft", ["discord.exe"], [])
     calls = []
     monkeypatch.setattr(enforcer, "_show_lock_overlay", lambda *a, **kw: calls.append(kw))
 
     enforcer.soft_lock_warning(offending_process_name="discord.exe")
 
-    assert calls == [{"duration_ms": 5000, "offending_process_name": "discord.exe", "blackout": True}]
+    assert calls[0]["blackout_rect"] is None
 
 
-def test_hard_lock_redirect_uses_blackout(isolate_state, monkeypatch):
+def test_hard_lock_redirect_has_no_blackout(isolate_state, monkeypatch):
+    """Regression test: hard lock already minimizes the offending window and
+    hides its taskbar preview -- a full redirect notification shouldn't also
+    take over the screen the way soft lock's own warning does."""
     session_manager.start_session(25, "hard", ["discord.exe"], [])
     calls = []
     monkeypatch.setattr(enforcer.win32gui, "GetForegroundWindow", lambda: 555)
@@ -188,14 +205,14 @@ def test_hard_lock_redirect_uses_blackout(isolate_state, monkeypatch):
 
     enforcer.hard_lock_redirect(offending_process_name="discord.exe")
 
-    assert calls[0]["blackout"] is True
+    assert calls[0].get("blackout_rect") is None
 
 
-def test_show_blocked_notice_does_not_use_blackout(isolate_state, monkeypatch):
+def test_show_blocked_notice_has_no_blackout(isolate_state, monkeypatch):
     """show_blocked_notice fires for a window caught in the background --
     the user may be actively using a different, allowed app right now, so
-    blacking out the whole screen there would cover up legitimate work that
-    was never the violation."""
+    covering anything there would hide legitimate work that was never the
+    violation."""
     session_manager.start_session(25, "hard", ["discord.exe"], [])
     calls = []
     monkeypatch.setattr(enforcer, "_show_lock_overlay", lambda *a, **kw: calls.append(kw))
@@ -203,3 +220,19 @@ def test_show_blocked_notice_does_not_use_blackout(isolate_state, monkeypatch):
     enforcer.show_blocked_notice("discord.exe")
 
     assert calls == [{"duration_ms": 5000, "offending_process_name": "discord.exe"}]
+
+
+def test_window_rect_returns_left_top_width_height(monkeypatch):
+    import enforcer as enforcer_module
+    monkeypatch.setattr(enforcer_module.win32gui, "GetWindowRect", lambda h: (10, 20, 210, 320))
+    assert enforcer_module._window_rect(555) == (10, 20, 200, 300)
+
+
+def test_window_rect_returns_none_on_failure(monkeypatch):
+    import enforcer as enforcer_module
+
+    def raise_error(h):
+        raise Exception("window gone")
+
+    monkeypatch.setattr(enforcer_module.win32gui, "GetWindowRect", raise_error)
+    assert enforcer_module._window_rect(555) is None

@@ -112,18 +112,26 @@ def test_overlay_without_blackout_has_no_blackout_window(qtbot, isolate_state):
     win.close()
 
 
-def test_overlay_with_blackout_shows_black_fullscreen_window(qtbot, isolate_state):
-    win = enforcer_overlay.build_overlay("test message", duration_ms=200, blackout=True)
+def test_overlay_with_blackout_shows_black_window_covering_the_given_rect(qtbot, isolate_state):
+    win = enforcer_overlay.build_overlay(
+        "test message", duration_ms=200, blackout_rect=(10, 20, 200, 300),
+    )
     qtbot.addWidget(win)
 
     assert win._blackout_win is not None
     assert win._blackout_win.isVisible()
     assert "black" in win._blackout_win.styleSheet().lower()
+    # Covers exactly the given rect, not the whole screen -- soft lock's
+    # warning must not black out more than the offending window itself.
+    geo = win._blackout_win.geometry()
+    assert (geo.x(), geo.y(), geo.width(), geo.height()) == (10, 20, 200, 300)
     win.close()
 
 
 def test_closing_overlay_also_closes_its_blackout_window(qtbot, isolate_state):
-    win = enforcer_overlay.build_overlay("test message", duration_ms=200, blackout=True)
+    win = enforcer_overlay.build_overlay(
+        "test message", duration_ms=200, blackout_rect=(10, 20, 200, 300),
+    )
     qtbot.addWidget(win)
     blackout_win = win._blackout_win
 

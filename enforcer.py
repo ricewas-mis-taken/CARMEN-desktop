@@ -47,22 +47,27 @@ def _hide_taskbar_preview(hwnd, hide):
             pass
 
 
-def soft_lock_warning(offending_process_name=None):
+def soft_lock_warning(offending_process_name=None, hwnd=None):
     status = session_manager.get_status()
     if status.get("source") == "review":
         message = f"Finish {status.get('reviewProblemName') or 'this review'} first"
     else:
         last_ok = status["lastAcceptableProcess"] or "your focus app"
         message = f"You're off track — back to {last_ok}?"
+
+    # Covers just the offending window's own rectangle, not the whole
+    # screen -- soft lock's point is a warning the user can't just keep
+    # reading THAT page underneath for the warning's duration, not a
+    # full-screen takeover. No hwnd (or a window that's gone by the time
+    # GetWindowRect runs) just means no cover at all, not a full-screen
+    # fallback -- see hard_lock_redirect for the "no blackout at all" case
+    # this deliberately isn't.
+    blackout_rect = _window_rect(hwnd) if hwnd else None
     _show_lock_overlay(
         message,
         duration_ms=5000,
         offending_process_name=offending_process_name,
-        # Soft lock's whole point is a warning the user can't just keep
-        # reading the blocked page underneath -- blackout makes the page
-        # itself genuinely inaccessible for the warning's duration, not
-        # just covered by a small popup floating on top of it.
-        blackout=True,
+        blackout_rect=blackout_rect,
     )
 
 
@@ -132,13 +137,11 @@ def hard_lock_redirect(offending_process_name=None):
         message,
         duration_ms=3000,
         offending_process_name=label if label != "that app" else None,
-        # The offending window was just minimized and SetForegroundWindow
-        # above may or may not actually succeed (Windows silently ignores
-        # foreground-focus steals from background processes under some
-        # conditions) -- blackout means the user's screen goes black either
-        # way for the redirect's duration, instead of the offending app
-        # potentially staying visible if the redirect quietly failed.
-        blackout=True,
+        # No blackout -- hard lock already minimizes the offending window
+        # and (via _hide_taskbar_preview) hides its taskbar hover preview;
+        # a screen-covering overlay on top of a plain redirect is the
+        # taskbar-hover-cheese's fix, not something a normal click into the
+        # window needs too.
     )
 
 
@@ -253,7 +256,21 @@ def _find_window_by_process_name(process_name):
     return found["hwnd"]
 
 
-def _show_lock_overlay(message, duration_ms, offending_process_name=None, blackout=False):
+def _window_rect(hwnd):
+    """(left, top, width, height) for hwnd, or None if it's gone/invalid by
+    the time this runs -- soft_lock_warning's own hwnd->rect lookup, kept
+    here (not in qt_ui/enforcer_overlay.py) since that module has no win32
+    dependency of its own."""
+    try:
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        if right <= left or bottom <= top:
+            return None
+        return (left, top, right - left, bottom - top)
+    except Exception:
+        return None
+
+
+def _show_lock_overlay(message, duration_ms, offending_process_name=None, blackout_rect=None):
     """Shows a small always-on-top, borderless popup for duration_ms while a
     progress bar fills, then closes automatically. It repeatedly raises and
     refocuses itself so it's hard to ignore, but deliberately does not take
@@ -276,16 +293,18 @@ def _show_lock_overlay(message, duration_ms, offending_process_name=None, blacko
     Blocklist" picker's own removal flow, just reachable from the moment of
     redirect itself.
 
-    blackout, when True, also covers every monitor in solid black
-    (qt_ui/enforcer_overlay.py's _BlackoutOverlay) alongside the small
-    notification popup, for the same duration -- used by soft_lock_warning
-    and hard_lock_redirect (the user is looking straight at the blocked app
-    right now) but not show_blocked_notice (a window caught in the
-    background, where blacking out the whole screen would cover up
-    whatever allowed app the user is actually using).
+    blackout_rect, when given, covers exactly that (left, top, width,
+    height) in solid black (qt_ui/enforcer_overlay.py's _BlackoutOverlay)
+    alongside the small notification popup, for the same duration -- only
+    soft_lock_warning passes one, sized to the offending window itself (not
+    the whole screen), so its warning can't just be read straight through
+    for the duration it's up. hard_lock_redirect and show_blocked_notice
+    never pass one: hard lock already minimizes the window and hides its
+    taskbar preview, and show_blocked_notice's window is usually in the
+    background, where covering anything would hide unrelated, allowed work.
     """
     qt_gui_thread.run_on_gui_thread(
         lambda: enforcer_overlay.build_overlay(
-            message, duration_ms, offending_process_name, blackout=blackout
+            message, duration_ms, offending_process_name, blackout_rect=blackout_rect
         )
     )
