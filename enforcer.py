@@ -10,31 +10,41 @@ import qt_gui_thread
 import qt_ui.enforcer_overlay as enforcer_overlay
 import session_manager
 
-# DWM's "disallow peek" window attribute (dwmapi.h) -- undocumented in
-# win32con, so set via raw ctypes instead. Minimizing a blocked window alone
-# doesn't actually stop it from being seen: hovering its taskbar icon still
-# shows a live thumbnail, and hovering that thumbnail (Aero Peek) makes the
-# real window fully visible on the desktop without ever un-minimizing or
-# focusing it -- the browser extension's own hover-to-reveal block has the
-# same "cheese" risk on the extension side. This attribute disables both the
-# live taskbar thumbnail and Peek for the specific hwnd it's set on, so a
-# minimized blocked window is only ever seen as a plain static icon.
+# Two separate, undocumented-in-win32con DWM window attributes (dwmapi.h),
+# set via raw ctypes -- minimizing a blocked window alone doesn't stop it
+# from being seen. Windows offers two different hover-preview surfaces for
+# a taskbar button, and both need suppressing:
 #
-# The DWMWINDOWATTRIBUTE enum value for DWMWA_DISALLOW_PEEK is 11, not 12
-# (12 is DWMWA_EXCLUDED_FROM_PEEK, an unrelated attribute) -- an earlier
-# version of this used the wrong number, which silently did nothing useful
-# here instead of erroring, so the peek-hover cheese kept working.
+#   - DWMWA_DISALLOW_PEEK (11) stops the FULL "Peek" reveal -- hovering the
+#     enlarged thumbnail (in the taskbar strip or Alt+Tab) making the real
+#     window fully visible on the desktop without un-minimizing/focusing it.
+#     (An earlier version used 12 here -- DWMWA_EXCLUDED_FROM_PEEK, an
+#     unrelated attribute -- which silently did nothing useful instead of
+#     erroring, so this half of the cheese kept working.)
+#   - DWMWA_FORCE_ICONIC_REPRESENTATION (7) stops the SMALL live thumbnail
+#     shown the instant you hover the taskbar icon itself, before Peek is
+#     even invoked -- DISALLOW_PEEK alone does not touch this; it's a
+#     separate mechanism. The blocked app is never told to supply a custom
+#     thumbnail bitmap (that would need code running inside its own
+#     process), so DWM just falls back to a plain static icon instead.
+#
+# Together, a minimized blocked window is only ever seen as a plain static
+# taskbar icon -- no live content at any hover stage -- the same "cheese"
+# risk the browser extension's own click-and-hold block guards against on
+# the extension side.
+_DWMWA_FORCE_ICONIC_REPRESENTATION = 7
 _DWMWA_DISALLOW_PEEK = 11
 
 
-def _set_disallow_peek(hwnd, disallow):
-    try:
-        value = ctypes.c_int(1 if disallow else 0)
-        ctypes.windll.dwmapi.DwmSetWindowAttribute(
-            hwnd, _DWMWA_DISALLOW_PEEK, ctypes.byref(value), ctypes.sizeof(value)
-        )
-    except Exception:
-        pass
+def _hide_taskbar_preview(hwnd, hide):
+    for attribute in (_DWMWA_FORCE_ICONIC_REPRESENTATION, _DWMWA_DISALLOW_PEEK):
+        try:
+            value = ctypes.c_int(1 if hide else 0)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, attribute, ctypes.byref(value), ctypes.sizeof(value)
+            )
+        except Exception:
+            pass
 
 
 def soft_lock_warning(offending_process_name=None):
@@ -93,7 +103,7 @@ def hard_lock_redirect(offending_process_name=None):
     ):
         try:
             win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
-            _set_disallow_peek(hwnd, True)
+            _hide_taskbar_preview(hwnd, True)
         except Exception:
             pass
 
@@ -172,7 +182,7 @@ def sweep_minimize_blocked_windows():
         if session_manager.is_blocked(name):
             try:
                 win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
-                _set_disallow_peek(hwnd, True)
+                _hide_taskbar_preview(hwnd, True)
                 minimized.append((name, hwnd))
             except Exception:
                 pass
@@ -213,10 +223,10 @@ def restore_window_for_process(process_name):
         if win32gui.IsIconic(hwnd):
             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
         win32gui.SetForegroundWindow(hwnd)
-        # Undo _set_disallow_peek from whichever minimize caught this window
-        # -- it's no longer blocked, so its taskbar preview/Peek should
-        # behave normally again like any other allowed app.
-        _set_disallow_peek(hwnd, False)
+        # Undo _hide_taskbar_preview from whichever minimize caught this
+        # window -- it's no longer blocked, so its taskbar preview/Peek
+        # should behave normally again like any other allowed app.
+        _hide_taskbar_preview(hwnd, False)
     except Exception:
         pass
 
