@@ -5,8 +5,10 @@ time.sleep(), so shutdown stays responsive; every tick wrapped in
 try/except so a sync failure can never take the background thread down).
 
 sync_now() already never raises and already checks is_logged_in() itself,
-so a logged-out run is just a cheap early-return, not something this
-scheduler needs to guard against separately.
+so a logged-out run would just be a cheap early-return -- but Phase 4
+Part 2's sidebar UI explicitly wants "Log out" to stop the periodic
+timer, not just push-on-change, so enable()/disable() (mirroring
+sync_trigger.py's) gate _tick() itself instead of relying on that.
 """
 import threading
 
@@ -14,6 +16,17 @@ import sync_client
 from calendar_log import logger
 
 _stop_event = None
+_enabled = True
+
+
+def enable():
+    global _enabled
+    _enabled = True
+
+
+def disable():
+    global _enabled
+    _enabled = False
 
 
 def start(stop_event):
@@ -36,6 +49,8 @@ def _run(stop_event):
 
 
 def _tick():
+    if not _enabled:
+        return
     result = sync_client.sync_now()
     if not result.success and not result.not_logged_in:
         logger.warning("sync_scheduler: sync_now() failed: %s", result.error)
