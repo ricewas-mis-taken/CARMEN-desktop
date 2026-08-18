@@ -297,6 +297,15 @@ def end_session(end_type="manual", reason=None):
         result = _finalize_to_history_locked(datetime.now(), end_type=end_type, reason=reason)
     import daily_summary_store
     daily_summary_store.flush_through_yesterday()
+    # Local import, same reasoning as daily_summary_store above -- enforcer
+    # imports this module, so importing it back at module level here would
+    # be circular. Reverts every taskbar-hover-preview suppression hard lock
+    # applied this session (see enforcer._hide_taskbar_preview) -- without
+    # this, a window it hid from Alt+Tab/taskbar preview stayed hidden
+    # forever once the session ended, since that only otherwise got
+    # reverted by the mid-session "Unblock" flow (restore_window_for_process).
+    import enforcer
+    enforcer.restore_all_taskbar_previews()
     return result
 
 
@@ -499,6 +508,8 @@ def pop_pending_natural_end():
     if summary is not None:
         import daily_summary_store
         daily_summary_store.flush_through_yesterday()
+        import enforcer
+        enforcer.restore_all_taskbar_previews()
     return summary
 
 

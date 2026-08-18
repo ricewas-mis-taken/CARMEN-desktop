@@ -1,8 +1,21 @@
 """Tests for enforcer.py's sweep_minimize_blocked_windows() -- the
 hard-lock pass that minimizes every visible blocklisted window each poll
 tick, independent of which window happens to be in the foreground."""
+import pytest
+
 import enforcer
 import session_manager
+
+
+@pytest.fixture(autouse=True)
+def clear_hidden_hwnds():
+    """enforcer._hidden_hwnds is a module-level set mutated across this
+    whole process's life -- reset it so one test's hidden hwnd doesn't leak
+    into the next, same reasoning as test_enforcer_overlay.py's
+    clear_open_overlays fixture."""
+    enforcer._hidden_hwnds.clear()
+    yield
+    enforcer._hidden_hwnds.clear()
 
 
 class _FakeProcess:
@@ -236,3 +249,75 @@ def test_window_rect_returns_none_on_failure(monkeypatch):
 
     monkeypatch.setattr(enforcer_module.win32gui, "GetWindowRect", raise_error)
     assert enforcer_module._window_rect(555) is None
+
+
+def test_hide_taskbar_preview_tracks_hidden_hwnds(monkeypatch):
+    monkeypatch.setattr(
+        enforcer.ctypes.windll.dwmapi, "DwmSetWindowAttribute",
+        lambda hwnd, attr, value_ptr, size: None,
+    )
+
+    enforcer._hide_taskbar_preview(555, True)
+    assert 555 in enforcer._hidden_hwnds
+
+    enforcer._hide_taskbar_preview(555, False)
+    assert 555 not in enforcer._hidden_hwnds
+
+
+def test_restore_all_taskbar_previews_reverts_every_hidden_window(monkeypatch):
+    """Regression test: a window hard lock hid from Alt+Tab/taskbar preview
+    used to stay that way forever once the session ended normally --
+    restore_window_for_process only ever ran for an explicit mid-session
+    Unblock click, never for a plain session end."""
+    calls = []
+    monkeypatch.setattr(
+        enforcer.ctypes.windll.dwmapi, "DwmSetWindowAttribute",
+        lambda hwnd, attr, value_ptr, size: calls.append((hwnd, attr)),
+    )
+
+    enforcer._hide_taskbar_preview(111, True)
+    enforcer._hide_taskbar_preview(222, True)
+    calls.clear()
+
+    enforcer.restore_all_taskbar_previews()
+
+    assert set(calls) == {
+        (111, enforcer._DWMWA_FORCE_ICONIC_REPRESENTATION),
+        (111, enforcer._DWMWA_DISALLOW_PEEK),
+        (222, enforcer._DWMWA_FORCE_ICONIC_REPRESENTATION),
+        (222, enforcer._DWMWA_DISALLOW_PEEK),
+    }
+    assert enforcer._hidden_hwnds == set()
+
+
+def test_restore_all_taskbar_previews_tolerates_a_closed_window(monkeypatch):
+    monkeypatch.setattr(
+        enforcer.ctypes.windll.dwmapi, "DwmSetWindowAttribute",
+        lambda hwnd, attr, value_ptr, size: (_ for _ in ()).throw(Exception("window gone")),
+    )
+    enforcer._hide_taskbar_preview(555, True)
+
+    enforcer.restore_all_taskbar_previews()  # must not raise
+
+    assert enforcer._hidden_hwnds == set()
+
+
+def test_session_end_restores_all_taskbar_previews(isolate_state, monkeypatch):
+    restore_calls = []
+    monkeypatch.setattr(enforcer, "restore_all_taskbar_previews", lambda: restore_calls.append(1))
+
+    session_manager.start_session(25, "hard", ["discord.exe"], [])
+    session_manager.end_session()
+
+    assert restore_calls == [1]
+
+
+def test_natural_session_end_restores_all_taskbar_previews(isolate_state, monkeypatch):
+    restore_calls = []
+    monkeypatch.setattr(enforcer, "restore_all_taskbar_previews", lambda: restore_calls.append(1))
+    monkeypatch.setattr(session_manager, "_pending_natural_end", {"value": {"endType": "natural"}})
+
+    summary = session_manager.pop_pending_natural_end()
+
+    assert summary == {"endType": "natural"}
+    assert restore_calls == [1]

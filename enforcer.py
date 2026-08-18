@@ -35,8 +35,22 @@ import session_manager
 _DWMWA_FORCE_ICONIC_REPRESENTATION = 7
 _DWMWA_DISALLOW_PEEK = 11
 
+# Every hwnd currently hidden via _hide_taskbar_preview(hwnd, True) --
+# restore_all_taskbar_previews() (called whenever a session ends, see
+# session_manager.py) walks this to undo every one of them, not just
+# whichever single window restore_window_for_process's mid-session
+# "Unblock" flow happens to target. Without this, a window hard lock hid
+# from Alt+Tab/taskbar preview during the session stayed that way forever
+# once the session ended normally -- restore_window_for_process only ever
+# ran for an explicit Unblock click, never for a plain session end.
+_hidden_hwnds = set()
+
 
 def _hide_taskbar_preview(hwnd, hide):
+    if hide:
+        _hidden_hwnds.add(hwnd)
+    else:
+        _hidden_hwnds.discard(hwnd)
     for attribute in (_DWMWA_FORCE_ICONIC_REPRESENTATION, _DWMWA_DISALLOW_PEEK):
         try:
             value = ctypes.c_int(1 if hide else 0)
@@ -45,6 +59,17 @@ def _hide_taskbar_preview(hwnd, hide):
             )
         except Exception:
             pass
+
+
+def restore_all_taskbar_previews():
+    """Reverts _hide_taskbar_preview for every window hidden this session --
+    called on every session end (see session_manager.py's end_session() and
+    pop_pending_natural_end()), independent of whether any of them were
+    individually unblocked first. Safe to call with stale/closed hwnds
+    still in _hidden_hwnds -- _hide_taskbar_preview's own try/except already
+    swallows a DWM call against a hwnd that no longer exists."""
+    for hwnd in list(_hidden_hwnds):
+        _hide_taskbar_preview(hwnd, False)
 
 
 def soft_lock_warning(offending_process_name=None, hwnd=None):
