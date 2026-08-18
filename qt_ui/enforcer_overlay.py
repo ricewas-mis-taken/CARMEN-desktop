@@ -48,8 +48,8 @@ _CASCADE_OFFSET_PX = 46
 _CASCADE_MAX_STEPS = 6
 
 
-def build_overlay(message, duration_ms, offending_process_name=None):
-    win = _LockOverlay(message, duration_ms, offending_process_name)
+def build_overlay(message, duration_ms, offending_process_name=None, blackout_rect=None):
+    win = _LockOverlay(message, duration_ms, offending_process_name, blackout_rect=blackout_rect)
     _open_windows.add(win)
     win.destroyed.connect(lambda: _open_windows.discard(win))
     win.show()
@@ -64,8 +64,42 @@ def build_unblock_reason_dialog(process_name):
     return win
 
 
+class _BlackoutOverlay(QWidget):
+    """A solid black, click-capturing window covering exactly one rectangle
+    (the offending window's own, not the whole screen) -- shown alongside
+    _LockOverlay for soft_lock_warning specifically, so the warning can't
+    just be read straight through the small popup for its duration. Mirrors
+    the browser extension's own press-and-hold black-box block on the
+    extension side.
+
+    Deliberately not used for every lock-overlay call site -- see
+    enforcer.py's hard_lock_redirect() (already minimizes the window and
+    hides its taskbar preview -- a screen-covering overlay on top of a
+    plain redirect isn't needed) and show_blocked_notice() (catches windows
+    minimized in the background while the user is on a different, allowed
+    app; covering anything there would hide unrelated, legitimate work)."""
+
+    def __init__(self, duration_ms, rect):
+        super().__init__(
+            None,
+            Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool,
+        )
+        self._closed = False
+        self.setStyleSheet("background-color: black;")
+        left, top, width, height = rect
+        self.setGeometry(left, top, width, height)
+
+        QTimer.singleShot(duration_ms + 1000, self.close)
+
+    def close(self):
+        if self._closed:
+            return True
+        self._closed = True
+        return super().close()
+
+
 class _LockOverlay(QWidget):
-    def __init__(self, message, duration_ms, offending_process_name=None):
+    def __init__(self, message, duration_ms, offending_process_name=None, blackout_rect=None):
         super().__init__(
             None,
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool,
@@ -73,6 +107,12 @@ class _LockOverlay(QWidget):
         self._closed = False
         self._duration_ms = duration_ms
         self._start_time = time.time()
+        self._blackout_win = None
+        if blackout_rect is not None:
+            self._blackout_win = _BlackoutOverlay(duration_ms, blackout_rect)
+            _open_windows.add(self._blackout_win)
+            self._blackout_win.destroyed.connect(lambda: _open_windows.discard(self._blackout_win))
+            self._blackout_win.show()
 
         width, height = 380, 150
         if offending_process_name:
@@ -172,6 +212,8 @@ class _LockOverlay(QWidget):
             return True
         self._closed = True
         self._tick_timer.stop()
+        if self._blackout_win is not None:
+            self._blackout_win.close()
         # close() only hides the widget -- it doesn't delete the C++ object,
         # so `destroyed` (which build_overlay() relies on to prune
         # _open_windows) never fires. Without this, every closed overlay

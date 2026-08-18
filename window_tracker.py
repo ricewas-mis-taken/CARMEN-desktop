@@ -166,7 +166,7 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None):
                             # foreground app from spamming redirects/overlays.
                             last_flagged_process = None
                         else:
-                            enforcer.soft_lock_warning(process_name)
+                            enforcer.soft_lock_warning(process_name, hwnd)
                 elif process_name:
                     session_manager.record_acceptable(process_name)
                     last_flagged_process = None

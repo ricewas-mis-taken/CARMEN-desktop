@@ -10,39 +10,64 @@ import qt_gui_thread
 import qt_ui.enforcer_overlay as enforcer_overlay
 import session_manager
 
-# DWM's "disallow peek" window attribute (dwmapi.h) -- undocumented in
-# win32con, so set via raw ctypes instead. Minimizing a blocked window alone
-# doesn't actually stop it from being seen: hovering its taskbar icon still
-# shows a live thumbnail, and hovering that thumbnail (Aero Peek) makes the
-# real window fully visible on the desktop without ever un-minimizing or
-# focusing it -- the browser extension's own hover-to-reveal block has the
-# same "cheese" risk on the extension side. This attribute disables both the
-# live taskbar thumbnail and Peek for the specific hwnd it's set on, so a
-# minimized blocked window is only ever seen as a plain static icon.
-_DWMWA_DISALLOW_PEEK = 12
+# Two separate, undocumented-in-win32con DWM window attributes (dwmapi.h),
+# set via raw ctypes -- minimizing a blocked window alone doesn't stop it
+# from being seen. Windows offers two different hover-preview surfaces for
+# a taskbar button, and both need suppressing:
+#
+#   - DWMWA_DISALLOW_PEEK (11) stops the FULL "Peek" reveal -- hovering the
+#     enlarged thumbnail (in the taskbar strip or Alt+Tab) making the real
+#     window fully visible on the desktop without un-minimizing/focusing it.
+#     (An earlier version used 12 here -- DWMWA_EXCLUDED_FROM_PEEK, an
+#     unrelated attribute -- which silently did nothing useful instead of
+#     erroring, so this half of the cheese kept working.)
+#   - DWMWA_FORCE_ICONIC_REPRESENTATION (7) stops the SMALL live thumbnail
+#     shown the instant you hover the taskbar icon itself, before Peek is
+#     even invoked -- DISALLOW_PEEK alone does not touch this; it's a
+#     separate mechanism. The blocked app is never told to supply a custom
+#     thumbnail bitmap (that would need code running inside its own
+#     process), so DWM just falls back to a plain static icon instead.
+#
+# Together, a minimized blocked window is only ever seen as a plain static
+# taskbar icon -- no live content at any hover stage -- the same "cheese"
+# risk the browser extension's own click-and-hold block guards against on
+# the extension side.
+_DWMWA_FORCE_ICONIC_REPRESENTATION = 7
+_DWMWA_DISALLOW_PEEK = 11
 
 
-def _set_disallow_peek(hwnd, disallow):
-    try:
-        value = ctypes.c_int(1 if disallow else 0)
-        ctypes.windll.dwmapi.DwmSetWindowAttribute(
-            hwnd, _DWMWA_DISALLOW_PEEK, ctypes.byref(value), ctypes.sizeof(value)
-        )
-    except Exception:
-        pass
+def _hide_taskbar_preview(hwnd, hide):
+    for attribute in (_DWMWA_FORCE_ICONIC_REPRESENTATION, _DWMWA_DISALLOW_PEEK):
+        try:
+            value = ctypes.c_int(1 if hide else 0)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, attribute, ctypes.byref(value), ctypes.sizeof(value)
+            )
+        except Exception:
+            pass
 
 
-def soft_lock_warning(offending_process_name=None):
+def soft_lock_warning(offending_process_name=None, hwnd=None):
     status = session_manager.get_status()
     if status.get("source") == "review":
         message = f"Finish {status.get('reviewProblemName') or 'this review'} first"
     else:
         last_ok = status["lastAcceptableProcess"] or "your focus app"
         message = f"You're off track — back to {last_ok}?"
+
+    # Covers just the offending window's own rectangle, not the whole
+    # screen -- soft lock's point is a warning the user can't just keep
+    # reading THAT page underneath for the warning's duration, not a
+    # full-screen takeover. No hwnd (or a window that's gone by the time
+    # GetWindowRect runs) just means no cover at all, not a full-screen
+    # fallback -- see hard_lock_redirect for the "no blackout at all" case
+    # this deliberately isn't.
+    blackout_rect = _window_rect(hwnd) if hwnd else None
     _show_lock_overlay(
         message,
         duration_ms=5000,
         offending_process_name=offending_process_name,
+        blackout_rect=blackout_rect,
     )
 
 
@@ -83,7 +108,7 @@ def hard_lock_redirect(offending_process_name=None):
     ):
         try:
             win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
-            _set_disallow_peek(hwnd, True)
+            _hide_taskbar_preview(hwnd, True)
         except Exception:
             pass
 
@@ -112,6 +137,11 @@ def hard_lock_redirect(offending_process_name=None):
         message,
         duration_ms=3000,
         offending_process_name=label if label != "that app" else None,
+        # No blackout -- hard lock already minimizes the offending window
+        # and (via _hide_taskbar_preview) hides its taskbar hover preview;
+        # a screen-covering overlay on top of a plain redirect is the
+        # taskbar-hover-cheese's fix, not something a normal click into the
+        # window needs too.
     )
 
 
@@ -155,7 +185,7 @@ def sweep_minimize_blocked_windows():
         if session_manager.is_blocked(name):
             try:
                 win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
-                _set_disallow_peek(hwnd, True)
+                _hide_taskbar_preview(hwnd, True)
                 minimized.append((name, hwnd))
             except Exception:
                 pass
@@ -196,10 +226,10 @@ def restore_window_for_process(process_name):
         if win32gui.IsIconic(hwnd):
             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
         win32gui.SetForegroundWindow(hwnd)
-        # Undo _set_disallow_peek from whichever minimize caught this window
-        # -- it's no longer blocked, so its taskbar preview/Peek should
-        # behave normally again like any other allowed app.
-        _set_disallow_peek(hwnd, False)
+        # Undo _hide_taskbar_preview from whichever minimize caught this
+        # window -- it's no longer blocked, so its taskbar preview/Peek
+        # should behave normally again like any other allowed app.
+        _hide_taskbar_preview(hwnd, False)
     except Exception:
         pass
 
@@ -226,7 +256,21 @@ def _find_window_by_process_name(process_name):
     return found["hwnd"]
 
 
-def _show_lock_overlay(message, duration_ms, offending_process_name=None):
+def _window_rect(hwnd):
+    """(left, top, width, height) for hwnd, or None if it's gone/invalid by
+    the time this runs -- soft_lock_warning's own hwnd->rect lookup, kept
+    here (not in qt_ui/enforcer_overlay.py) since that module has no win32
+    dependency of its own."""
+    try:
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        if right <= left or bottom <= top:
+            return None
+        return (left, top, right - left, bottom - top)
+    except Exception:
+        return None
+
+
+def _show_lock_overlay(message, duration_ms, offending_process_name=None, blackout_rect=None):
     """Shows a small always-on-top, borderless popup for duration_ms while a
     progress bar fills, then closes automatically. It repeatedly raises and
     refocuses itself so it's hard to ignore, but deliberately does not take
@@ -248,7 +292,19 @@ def _show_lock_overlay(message, duration_ms, offending_process_name=None):
     ending hard/soft lock enforcement entirely, same as the "Pick Apps to
     Blocklist" picker's own removal flow, just reachable from the moment of
     redirect itself.
+
+    blackout_rect, when given, covers exactly that (left, top, width,
+    height) in solid black (qt_ui/enforcer_overlay.py's _BlackoutOverlay)
+    alongside the small notification popup, for the same duration -- only
+    soft_lock_warning passes one, sized to the offending window itself (not
+    the whole screen), so its warning can't just be read straight through
+    for the duration it's up. hard_lock_redirect and show_blocked_notice
+    never pass one: hard lock already minimizes the window and hides its
+    taskbar preview, and show_blocked_notice's window is usually in the
+    background, where covering anything would hide unrelated, allowed work.
     """
     qt_gui_thread.run_on_gui_thread(
-        lambda: enforcer_overlay.build_overlay(message, duration_ms, offending_process_name)
+        lambda: enforcer_overlay.build_overlay(
+            message, duration_ms, offending_process_name, blackout_rect=blackout_rect
+        )
     )

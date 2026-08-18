@@ -93,7 +93,7 @@ def test_sweep_disallows_peek_on_minimized_blocked_window(isolate_state, monkeyp
     _patch_single_window(monkeypatch, hwnd=555, pid=4242, process_name="discord.exe")
     monkeypatch.setattr(enforcer.win32gui, "ShowWindow", lambda h, cmd: None)
     monkeypatch.setattr(
-        enforcer, "_set_disallow_peek", lambda hwnd, disallow: peek_calls.append((hwnd, disallow))
+        enforcer, "_hide_taskbar_preview", lambda hwnd, disallow: peek_calls.append((hwnd, disallow))
     )
 
     enforcer.sweep_minimize_blocked_windows()
@@ -112,7 +112,7 @@ def test_hard_lock_redirect_disallows_peek_on_minimized_offending_window(isolate
     monkeypatch.setattr(enforcer, "_find_window_by_process_name", lambda name: None)
     monkeypatch.setattr(enforcer, "_show_lock_overlay", lambda *a, **kw: None)
     monkeypatch.setattr(
-        enforcer, "_set_disallow_peek", lambda hwnd, disallow: peek_calls.append((hwnd, disallow))
+        enforcer, "_hide_taskbar_preview", lambda hwnd, disallow: peek_calls.append((hwnd, disallow))
     )
 
     enforcer.hard_lock_redirect(offending_process_name="discord.exe")
@@ -127,7 +127,7 @@ def test_restore_window_for_process_re_allows_peek(isolate_state, monkeypatch):
     monkeypatch.setattr(enforcer.win32gui, "ShowWindow", lambda h, cmd: None)
     monkeypatch.setattr(enforcer.win32gui, "SetForegroundWindow", lambda h: None)
     monkeypatch.setattr(
-        enforcer, "_set_disallow_peek", lambda hwnd, disallow: peek_calls.append((hwnd, disallow))
+        enforcer, "_hide_taskbar_preview", lambda hwnd, disallow: peek_calls.append((hwnd, disallow))
     )
 
     enforcer.restore_window_for_process("discord.exe")
@@ -135,13 +135,104 @@ def test_restore_window_for_process_re_allows_peek(isolate_state, monkeypatch):
     assert peek_calls == [(555, False)]
 
 
-def test_set_disallow_peek_calls_dwm_api(monkeypatch):
+def test_hide_taskbar_preview_sets_both_dwm_attributes(monkeypatch):
+    """Regression test: DWMWA_DISALLOW_PEEK alone only suppresses the full
+    Peek reveal (hovering the enlarged thumbnail) -- the small live
+    thumbnail shown the instant you hover the taskbar icon itself is a
+    separate mechanism (DWMWA_FORCE_ICONIC_REPRESENTATION) that must also
+    be set, or that thumbnail still shows live content."""
     calls = []
     monkeypatch.setattr(
         enforcer.ctypes.windll.dwmapi, "DwmSetWindowAttribute",
         lambda hwnd, attr, value_ptr, size: calls.append((hwnd, attr)),
     )
 
-    enforcer._set_disallow_peek(555, True)
+    enforcer._hide_taskbar_preview(555, True)
 
-    assert calls == [(555, enforcer._DWMWA_DISALLOW_PEEK)]
+    assert set(calls) == {
+        (555, enforcer._DWMWA_FORCE_ICONIC_REPRESENTATION),
+        (555, enforcer._DWMWA_DISALLOW_PEEK),
+    }
+
+
+def test_dwm_peek_attribute_constants_are_the_real_values():
+    """Regression test: an earlier version used 12 (DWMWA_EXCLUDED_FROM_PEEK,
+    an unrelated attribute) instead of 11 (the real DWMWA_DISALLOW_PEEK) --
+    the call silently "succeeded" without erroring, but did nothing to
+    actually stop the taskbar hover-peek cheese."""
+    assert enforcer._DWMWA_DISALLOW_PEEK == 11
+    assert enforcer._DWMWA_FORCE_ICONIC_REPRESENTATION == 7
+
+
+def test_soft_lock_warning_covers_just_the_offending_window(isolate_state, monkeypatch):
+    session_manager.start_session(25, "soft", ["discord.exe"], [])
+    calls = []
+    monkeypatch.setattr(enforcer.win32gui, "GetWindowRect", lambda h: (10, 20, 210, 320))
+    monkeypatch.setattr(enforcer, "_show_lock_overlay", lambda *a, **kw: calls.append(kw))
+
+    enforcer.soft_lock_warning(offending_process_name="discord.exe", hwnd=555)
+
+    assert calls == [{
+        "duration_ms": 5000, "offending_process_name": "discord.exe",
+        "blackout_rect": (10, 20, 200, 300),
+    }]
+
+
+def test_soft_lock_warning_without_hwnd_has_no_blackout(isolate_state, monkeypatch):
+    session_manager.start_session(25, "soft", ["discord.exe"], [])
+    calls = []
+    monkeypatch.setattr(enforcer, "_show_lock_overlay", lambda *a, **kw: calls.append(kw))
+
+    enforcer.soft_lock_warning(offending_process_name="discord.exe")
+
+    assert calls[0]["blackout_rect"] is None
+
+
+def test_hard_lock_redirect_has_no_blackout(isolate_state, monkeypatch):
+    """Regression test: hard lock already minimizes the offending window and
+    hides its taskbar preview -- a full redirect notification shouldn't also
+    take over the screen the way soft lock's own warning does."""
+    session_manager.start_session(25, "hard", ["discord.exe"], [])
+    calls = []
+    monkeypatch.setattr(enforcer.win32gui, "GetForegroundWindow", lambda: 555)
+    monkeypatch.setattr(enforcer.win32process, "GetWindowThreadProcessId", lambda h: (0, 4242))
+    monkeypatch.setattr(enforcer.psutil, "Process", lambda p: _FakeProcess("discord.exe"))
+    monkeypatch.setattr(enforcer.win32gui, "ShowWindow", lambda h, cmd: None)
+    monkeypatch.setattr(enforcer.win32gui, "SetForegroundWindow", lambda h: None)
+    monkeypatch.setattr(enforcer, "_find_window_by_process_name", lambda name: None)
+    monkeypatch.setattr(enforcer, "_hide_taskbar_preview", lambda hwnd, disallow: None)
+    monkeypatch.setattr(enforcer, "_show_lock_overlay", lambda *a, **kw: calls.append(kw))
+
+    enforcer.hard_lock_redirect(offending_process_name="discord.exe")
+
+    assert calls[0].get("blackout_rect") is None
+
+
+def test_show_blocked_notice_has_no_blackout(isolate_state, monkeypatch):
+    """show_blocked_notice fires for a window caught in the background --
+    the user may be actively using a different, allowed app right now, so
+    covering anything there would hide legitimate work that was never the
+    violation."""
+    session_manager.start_session(25, "hard", ["discord.exe"], [])
+    calls = []
+    monkeypatch.setattr(enforcer, "_show_lock_overlay", lambda *a, **kw: calls.append(kw))
+
+    enforcer.show_blocked_notice("discord.exe")
+
+    assert calls == [{"duration_ms": 5000, "offending_process_name": "discord.exe"}]
+
+
+def test_window_rect_returns_left_top_width_height(monkeypatch):
+    import enforcer as enforcer_module
+    monkeypatch.setattr(enforcer_module.win32gui, "GetWindowRect", lambda h: (10, 20, 210, 320))
+    assert enforcer_module._window_rect(555) == (10, 20, 200, 300)
+
+
+def test_window_rect_returns_none_on_failure(monkeypatch):
+    import enforcer as enforcer_module
+
+    def raise_error(h):
+        raise Exception("window gone")
+
+    monkeypatch.setattr(enforcer_module.win32gui, "GetWindowRect", raise_error)
+    assert enforcer_module._window_rect(555) is None
