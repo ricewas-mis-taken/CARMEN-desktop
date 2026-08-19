@@ -115,16 +115,16 @@ class FocusTab(QWidget):
         if not active:
             self._status_label.setText("No active focus session.")
             return
-        # Elapsed, not remaining -- pause-aware, computed from startTime/
-        # violationLog rather than secondsRemaining against the session's
-        # duration.
-        elapsed_seconds = tasks_store.worked_seconds(
-            status.get("startTime"), None, status.get("violationLog")
-        ) if status.get("startTime") else 0
-        minutes, seconds = divmod(elapsed_seconds, 60)
         paused = " (paused)" if status["isPaused"] else ""
         review_problem = status.get("source") == "review" and status.get("reviewProblemName")
         if review_problem:
+            # Reviews are a stopwatch, not a timer -- pause-aware elapsed
+            # time computed from startTime/violationLog rather than
+            # secondsRemaining, since there's no duration to count down to.
+            elapsed_seconds = tasks_store.worked_seconds(
+                status.get("startTime"), None, status.get("violationLog")
+            ) if status.get("startTime") else 0
+            minutes, seconds = divmod(elapsed_seconds, 60)
             # A review timer running underneath a linked task's session --
             # name the actual problem/subject being reviewed, same as the
             # Tasks tab's running card, instead of the generic elapsed text.
@@ -135,13 +135,16 @@ class FocusTab(QWidget):
                 f"Lock mode: {status['lockMode']}   Violations: {status['violationCount']}"
             )
             return
+        # Regular sessions have a fixed duration -- count down the
+        # pause-aware secondsRemaining instead of elapsed time.
+        minutes, seconds = divmod(status.get("secondsRemaining", 0), 60)
         source_note = ""
         if status.get("source") == "calendar-event" and status.get("eventTitle"):
             source_note = f"\nFrom calendar event: {status['eventTitle']}"
         elif status.get("source") == "task" and status.get("eventTitle"):
             source_note = f"\nTask: {status['eventTitle']}"
         self._status_label.setText(
-            f"Active session{paused} — {minutes}m {seconds}s elapsed\n"
+            f"Active session{paused} — {minutes}m {seconds}s remaining\n"
             f"Lock mode: {status['lockMode']}   Violations: {status['violationCount']}"
             f"{source_note}"
         )

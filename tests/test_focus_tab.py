@@ -17,7 +17,7 @@ def test_active_session_shows_status_details(qtbot, isolate_state):
     qtbot.addWidget(tab)
     text = tab._status_label.text()
     assert "hard" in text.lower()
-    assert "elapsed" in text.lower()
+    assert "remaining" in text.lower()
 
 
 def test_pause_resume_button_toggles_session_state(qtbot, isolate_state):

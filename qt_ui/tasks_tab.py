@@ -693,31 +693,34 @@ class _TaskCard(QFrame):
             paused = " (paused)" if status.get("isPaused") else ""
             violations = status.get("violationCount", 0)
             violation_text = f"  •  {violations} violation{'s' if violations != 1 else ''}" if violations else ""
-            # Elapsed, not remaining, for both burnout and fixed-duration
-            # sessions -- computed pause-aware from startTime/violationLog
-            # (same math as the day's logged-minutes tally) rather than from
-            # secondsRemaining against a duration this card would otherwise
-            # have to remember, which also makes it correct even for a card
-            # that's rebuilt mid-session (e.g. after the app restarts).
-            elapsed_seconds = tasks_store.worked_seconds(
-                status.get("startTime"), None, status.get("violationLog")
-            ) if status.get("startTime") else 0
-            el_minutes, el_seconds = divmod(elapsed_seconds, 60)
             review_problem = status.get("source") == "review" and status.get("reviewProblemName")
-            if review_problem:
-                # A review timer (started against this task's linked topic)
-                # is running underneath the task session -- name the actual
-                # problem being reviewed instead of the generic elapsed-time
-                # text, same as the Focus tab.
-                self._countdown_label.setText(
-                    f"{review_problem}, time elapsed {el_minutes}m {el_seconds}s{paused}{violation_text}"
-                )
-            elif self._active_is_burnout:
-                self._countdown_label.setText(
-                    f"UNTIL BURNOUT - elapsed {el_minutes}m {el_seconds}s{paused}{violation_text}"
-                )
+            if review_problem or self._active_is_burnout:
+                # Reviews and burnout sessions are a stopwatch, not a timer
+                # -- there's no fixed duration to count down to, so show
+                # elapsed time instead, computed pause-aware from
+                # startTime/violationLog (same math as the day's
+                # logged-minutes tally).
+                elapsed_seconds = tasks_store.worked_seconds(
+                    status.get("startTime"), None, status.get("violationLog")
+                ) if status.get("startTime") else 0
+                el_minutes, el_seconds = divmod(elapsed_seconds, 60)
+                if review_problem:
+                    # A review timer (started against this task's linked
+                    # topic) is running underneath the task session -- name
+                    # the actual problem being reviewed instead of the
+                    # generic elapsed-time text, same as the Focus tab.
+                    self._countdown_label.setText(
+                        f"{review_problem}, time elapsed {el_minutes}m {el_seconds}s{paused}{violation_text}"
+                    )
+                else:
+                    self._countdown_label.setText(
+                        f"UNTIL BURNOUT - elapsed {el_minutes}m {el_seconds}s{paused}{violation_text}"
+                    )
             else:
-                self._countdown_label.setText(f"{el_minutes}m {el_seconds}s elapsed{paused}{violation_text}")
+                # Fixed-duration sessions count down the pause-aware
+                # secondsRemaining from session_manager, not elapsed time.
+                rem_minutes, rem_seconds = divmod(status.get("secondsRemaining", 0), 60)
+                self._countdown_label.setText(f"{rem_minutes}m {rem_seconds}s remaining{paused}{violation_text}")
             self._pause_button.setText("Resume" if status.get("isPaused") else "Pause")
         else:
             self._running_panel.setVisible(False)
