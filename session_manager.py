@@ -62,6 +62,19 @@ _state = {
     # paused-then-PC-shutdown-then-resumed review still get recorded instead
     # of silently vanishing on Finish.
     "reviewProblemId": None,
+    # True for a "Until I burnout" task session (tasks_store.BURNOUT_MINUTES
+    # duration, see qt_ui/tasks_tab.py's _start_burnout) -- a first-class,
+    # persisted flag rather than something each UI surface has to guess at
+    # from duration_minutes or track in its own ephemeral widget state. The
+    # latter used to be exactly how the Tasks tab did it (a local
+    # self._active_is_burnout, set only by the widget instance that actually
+    # clicked Start), which meant any OTHER surface observing the same
+    # already-running burnout session -- the Focus tab, the tray tooltip, or
+    # even a freshly-rebuilt Tasks tab card after switching tabs away and
+    # back -- had no way to know it was a burnout session at all, and showed
+    # a countdown from the full 8-hour ceiling instead of "Until burnout"
+    # with elapsed time underneath.
+    "isBurnout": False,
 }
 
 # Index into violationLog of the most recent still-unresolved violation of
@@ -207,6 +220,7 @@ def start_session(
     review_problem_name=None,
     review_subject_name=None,
     review_problem_id=None,
+    is_burnout=False,
 ):
     # api_server.py's /session/start already validates this for the
     # network-facing path, but start_session() is also called in-process
@@ -263,6 +277,7 @@ def start_session(
         _state["reviewProblemName"] = review_problem_name
         _state["reviewSubjectName"] = review_subject_name
         _state["reviewProblemId"] = review_problem_id
+        _state["isBurnout"] = is_burnout
         _open_violation_index["process"] = None
         _open_violation_index["domain"] = None
         _save()
@@ -385,6 +400,7 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
     _state["reviewProblemName"] = None
     _state["reviewSubjectName"] = None
     _state["reviewProblemId"] = None
+    _state["isBurnout"] = False
     _open_violation_index["process"] = None
     _open_violation_index["domain"] = None
     _save()
@@ -448,6 +464,7 @@ def _get_status_locked():
         "reviewProblemName": _state["reviewProblemName"],
         "reviewSubjectName": _state["reviewSubjectName"],
         "reviewProblemId": _state["reviewProblemId"],
+        "isBurnout": _state["isBurnout"],
     }
 
 

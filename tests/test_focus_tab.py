@@ -20,6 +20,20 @@ def test_active_session_shows_status_details(qtbot, isolate_state):
     assert "remaining" in text.lower()
 
 
+def test_burnout_session_shows_until_burnout_not_a_countdown(qtbot, isolate_state):
+    """Regression test: a burnout session used to be indistinguishable from
+    a normal one on the Focus tab -- it showed a countdown from the full
+    8-hour internal ceiling instead of "Until burnout" with elapsed time,
+    since burnout-ness used to live only in the Tasks tab card's own
+    ephemeral widget state, invisible to every other UI surface."""
+    session_manager.start_session(25, "hard", ["a.exe"], [], is_burnout=True)
+    tab = focus_tab.FocusTab()
+    qtbot.addWidget(tab)
+    text = tab._status_label.text().lower()
+    assert "until burnout" in text
+    assert "remaining" not in text
+
+
 def test_pause_resume_button_toggles_session_state(qtbot, isolate_state):
     session_manager.start_session(25, "soft", [], [])
     tab = focus_tab.FocusTab()

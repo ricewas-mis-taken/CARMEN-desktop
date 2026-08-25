@@ -135,6 +135,19 @@ class FocusTab(QWidget):
                 f"Lock mode: {status['lockMode']}   Violations: {status['violationCount']}"
             )
             return
+        if status.get("isBurnout"):
+            # Same stopwatch treatment as a review, for the same reason --
+            # "Until I burnout" has no fixed duration to count down to
+            # either, just a distant ceiling session_manager needs internally.
+            elapsed_seconds = tasks_store.worked_seconds(
+                status.get("startTime"), None, status.get("violationLog")
+            ) if status.get("startTime") else 0
+            minutes, seconds = divmod(elapsed_seconds, 60)
+            self._status_label.setText(
+                f"Until burnout, time elapsed {minutes}m {seconds}s{paused}\n"
+                f"Lock mode: {status['lockMode']}   Violations: {status['violationCount']}"
+            )
+            return
         # Regular sessions have a fixed duration -- count down the
         # pause-aware secondsRemaining instead of elapsed time.
         minutes, seconds = divmod(status.get("secondsRemaining", 0), 60)

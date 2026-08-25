@@ -189,7 +189,6 @@ class _TaskCard(QFrame):
         self._task = task
         self._on_changed = on_changed
         self._armed = False
-        self._active_is_burnout = False
         self._duration_minutes_text = ""
         self._hovering = False
         self._cash_in_balance_int = 0
@@ -544,14 +543,12 @@ class _TaskCard(QFrame):
                 raise ValueError
         except ValueError:
             return
-        self._active_is_burnout = False
-        self._begin_session(duration_minutes)
+        self._begin_session(duration_minutes, is_burnout=False)
 
     def _start_burnout(self):
-        self._active_is_burnout = True
-        self._begin_session(tasks_store.BURNOUT_MINUTES)
+        self._begin_session(tasks_store.BURNOUT_MINUTES, is_burnout=True)
 
-    def _begin_session(self, duration_minutes):
+    def _begin_session(self, duration_minutes, is_burnout):
         session_manager.start_session(
             duration_minutes,
             self._task.get("lockMode", "soft"),
@@ -560,6 +557,7 @@ class _TaskCard(QFrame):
             source="task",
             event_id=self._task["id"],
             event_title=self._task["name"],
+            is_burnout=is_burnout,
         )
         self._disarm()
 
@@ -694,7 +692,7 @@ class _TaskCard(QFrame):
             violations = status.get("violationCount", 0)
             violation_text = f"  •  {violations} violation{'s' if violations != 1 else ''}" if violations else ""
             review_problem = status.get("source") == "review" and status.get("reviewProblemName")
-            if review_problem or self._active_is_burnout:
+            if review_problem or status.get("isBurnout"):
                 # Reviews and burnout sessions are a stopwatch, not a timer
                 # -- there's no fixed duration to count down to, so show
                 # elapsed time instead, computed pause-aware from
