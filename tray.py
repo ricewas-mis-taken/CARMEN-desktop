@@ -8,6 +8,7 @@ import picker_gui
 import qt_gui_thread
 import qt_ui.nuclear_dialog as nuclear_dialog
 import session_manager
+import tasks_store
 
 
 def _generate_icon_image():
@@ -26,6 +27,20 @@ def _format_status_text():
     status = session_manager.get_status()
     if not status["isActive"]:
         return "Carmen Focus — no active session"
+    if status.get("isBurnout"):
+        # "Until I burnout" has no fixed duration to count down to -- same
+        # stopwatch treatment as the Focus/Tasks tabs, pause-aware elapsed
+        # time instead of secondsRemaining counting down from the internal
+        # 8-hour ceiling.
+        elapsed_seconds = tasks_store.worked_seconds(
+            status.get("startTime"), None, status.get("violationLog")
+        ) if status.get("startTime") else 0
+        minutes, seconds = divmod(elapsed_seconds, 60)
+        return (
+            f"Carmen Focus — Until burnout, {minutes}m {seconds}s elapsed\n"
+            f"Lock mode: {status['lockMode']}\n"
+            f"Violations: {status['violationCount']}"
+        )
     minutes = status["secondsRemaining"] // 60
     seconds = status["secondsRemaining"] % 60
     return (

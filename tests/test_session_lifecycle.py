@@ -62,3 +62,23 @@ def test_review_problem_id_persists_through_pause_and_clears_on_end(isolate_stat
 
     session_manager.end_session()
     assert session_manager.get_status()["reviewProblemId"] is None
+
+
+def test_is_burnout_persists_through_pause_and_clears_on_end(isolate_state):
+    """isBurnout is a session-wide persisted flag, not per-widget state --
+    any UI surface calling get_status() must be able to tell a burnout
+    session apart from a normal one, not just whichever widget happened to
+    start it. See qt_ui/tasks_tab.py's _start_burnout."""
+    session_manager.start_session(25, "soft", [], [], is_burnout=True)
+    assert session_manager.get_status()["isBurnout"] is True
+
+    session_manager.pause_session()
+    assert session_manager.get_status()["isBurnout"] is True
+
+    session_manager.end_session()
+    assert session_manager.get_status()["isBurnout"] is False
+
+
+def test_is_burnout_defaults_to_false(isolate_state):
+    session_manager.start_session(25, "soft", [], [])
+    assert session_manager.get_status()["isBurnout"] is False
