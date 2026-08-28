@@ -16,12 +16,15 @@ Once a day's entry is written it is never overwritten — the first write is
 canonical, so calling flush_through_yesterday() repeatedly is safe and cheap.
 """
 import json
+import logging
 import os
 from datetime import date, datetime
 
 SUMMARY_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "private", "data", "daily_summaries.json"
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _load():
@@ -87,4 +90,8 @@ def flush_through_yesterday():
         if changed:
             _save(summaries)
     except Exception:
-        pass  # never crash the caller over a backup write
+        # Never crash the caller over a backup write, but a swallowed
+        # exception here used to leave no trace at all -- a malformed task
+        # or session dict would silently and permanently stop daily
+        # summaries from being written, with nothing anywhere to say why.
+        logger.exception("flush_through_yesterday failed")
