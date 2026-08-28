@@ -1,5 +1,6 @@
 """Soft/hard lock enforcement actions."""
 import ctypes
+import threading
 
 import psutil
 import win32con
@@ -44,13 +45,18 @@ _DWMWA_DISALLOW_PEEK = 11
 # once the session ended normally -- restore_window_for_process only ever
 # ran for an explicit Unblock click, never for a plain session end.
 _hidden_hwnds = set()
+# Guards _hidden_hwnds -- it's mutated from both window_tracker's polling
+# thread (sweep_minimize_blocked_windows, hard_lock_redirect) and the Qt main
+# thread (restore_window_for_process, on an "Unblock" click).
+_hidden_hwnds_lock = threading.Lock()
 
 
 def _hide_taskbar_preview(hwnd, hide):
-    if hide:
-        _hidden_hwnds.add(hwnd)
-    else:
-        _hidden_hwnds.discard(hwnd)
+    with _hidden_hwnds_lock:
+        if hide:
+            _hidden_hwnds.add(hwnd)
+        else:
+            _hidden_hwnds.discard(hwnd)
     for attribute in (_DWMWA_FORCE_ICONIC_REPRESENTATION, _DWMWA_DISALLOW_PEEK):
         try:
             value = ctypes.c_int(1 if hide else 0)
@@ -68,7 +74,9 @@ def restore_all_taskbar_previews():
     individually unblocked first. Safe to call with stale/closed hwnds
     still in _hidden_hwnds -- _hide_taskbar_preview's own try/except already
     swallows a DWM call against a hwnd that no longer exists."""
-    for hwnd in list(_hidden_hwnds):
+    with _hidden_hwnds_lock:
+        hwnds = list(_hidden_hwnds)
+    for hwnd in hwnds:
         _hide_taskbar_preview(hwnd, False)
 
 
@@ -198,7 +206,14 @@ def sweep_minimize_blocked_windows():
     def callback(hwnd, _):
         if not win32gui.IsWindowVisible(hwnd):
             return
-        if not win32gui.GetWindowText(hwnd):
+        # Not a title check -- a blocked app that clears its own window title
+        # (deliberately or just transiently, e.g. mid-navigation) used to be
+        # invisible to this sweep entirely, letting it sit open and usable in
+        # the background for the rest of the session. GW_OWNER == 0 is the
+        # standard "is this a real top-level window" test instead -- it still
+        # skips the small owned/tool windows (tooltips, dropdown popups) this
+        # check was originally guarding against, just not on title alone.
+        if win32gui.GetWindow(hwnd, win32con.GW_OWNER) != 0:
             return
         try:
             _, pid = win32process.GetWindowThreadProcessId(hwnd)
