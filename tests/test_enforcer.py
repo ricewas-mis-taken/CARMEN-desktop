@@ -73,15 +73,40 @@ def test_sweep_leaves_unblocked_app_alone_after_unblock(isolate_state, monkeypat
     assert len(minimize_calls) == 1
 
 
-def test_sweep_skips_already_minimized_window(isolate_state, monkeypatch):
+def test_sweep_skips_reminimizing_already_minimized_window(isolate_state, monkeypatch):
     session_manager.start_session(25, "hard", ["discord.exe"], [])
     minimize_calls = []
     _patch_single_window(monkeypatch, hwnd=555, pid=4242, process_name="discord.exe", iconic=True)
     monkeypatch.setattr(enforcer.win32gui, "ShowWindow", lambda h, cmd: minimize_calls.append((h, cmd)))
 
-    enforcer.sweep_minimize_blocked_windows()
+    swept = enforcer.sweep_minimize_blocked_windows()
 
     assert minimize_calls == []
+    # Not re-minimized (already iconic) and not reported as newly caught,
+    # but see the peek-hiding regression test below -- it must still get
+    # that applied.
+    assert swept == []
+
+
+def test_sweep_hides_peek_even_for_an_already_minimized_window(isolate_state, monkeypatch):
+    """Regression test: a window that arrives already minimized (started
+    minimized, or the user minimized it manually before the sweep ever saw
+    it visible) used to never get _hide_taskbar_preview at all -- the old
+    early-return bailed on any already-iconic window before reaching that
+    call. Only hard_lock_redirect's own independent call (which only fires
+    once the window genuinely becomes the foreground window) would ever
+    hide it, so hover/Alt+Tab preview stayed live until the user actually
+    switched into the window once."""
+    session_manager.start_session(25, "hard", ["discord.exe"], [])
+    peek_calls = []
+    _patch_single_window(monkeypatch, hwnd=555, pid=4242, process_name="discord.exe", iconic=True)
+    monkeypatch.setattr(
+        enforcer, "_hide_taskbar_preview", lambda hwnd, hide: peek_calls.append((hwnd, hide))
+    )
+
+    enforcer.sweep_minimize_blocked_windows()
+
+    assert peek_calls == [(555, True)]
 
 
 def test_sweep_skips_exempt_process(isolate_state, monkeypatch):

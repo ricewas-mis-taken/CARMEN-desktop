@@ -196,7 +196,7 @@ def sweep_minimize_blocked_windows():
     minimized = []
 
     def callback(hwnd, _):
-        if not win32gui.IsWindowVisible(hwnd) or win32gui.IsIconic(hwnd):
+        if not win32gui.IsWindowVisible(hwnd):
             return
         if not win32gui.GetWindowText(hwnd):
             return
@@ -207,13 +207,29 @@ def sweep_minimize_blocked_windows():
             return
         if session_manager.is_exempt(name, pid):
             return
-        if session_manager.is_blocked(name):
-            try:
+        if not session_manager.is_blocked(name):
+            return
+
+        # Not skipped just because it's already iconic -- a window that
+        # arrives here already minimized (started minimized, or the user
+        # minimized it manually before this sweep ever saw it visible)
+        # used to never get this call at all, since the old early-return
+        # above bailed on any already-iconic window before reaching it.
+        # hard_lock_redirect's own independent minimize+hide call only
+        # ever fires when the window is genuinely in the foreground, so a
+        # window that never became the foreground window would stay
+        # peek-visible on hover/Alt+Tab indefinitely -- "only blocked once
+        # you've actually switched into it" was exactly this gap.
+        # _hide_taskbar_preview is idempotent (safe to call again on an
+        # hwnd it's already hidden), so reapplying every tick is harmless.
+        was_iconic = win32gui.IsIconic(hwnd)
+        try:
+            if not was_iconic:
                 win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
-                _hide_taskbar_preview(hwnd, True)
                 minimized.append((name, hwnd))
-            except Exception:
-                pass
+            _hide_taskbar_preview(hwnd, True)
+        except Exception:
+            pass
 
     win32gui.EnumWindows(callback, None)
     return minimized
