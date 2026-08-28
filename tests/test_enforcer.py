@@ -26,9 +26,14 @@ class _FakeProcess:
         return self._name
 
 
-def _patch_single_window(monkeypatch, hwnd, pid, process_name, visible=True, iconic=False, title="Some Window"):
+def _patch_single_window(
+    monkeypatch, hwnd, pid, process_name, visible=True, iconic=False, title="Some Window", owner=0
+):
     """Makes enforcer.sweep_minimize_blocked_windows() see exactly one
-    visible window (hwnd/pid/process_name) via EnumWindows."""
+    visible window (hwnd/pid/process_name) via EnumWindows. owner=0 (the
+    default) means "no owner" -- a real top-level window, per GW_OWNER
+    semantics; pass a non-zero value to simulate an owned tool/popup window
+    the sweep should skip."""
     def fake_enum_windows(callback, extra):
         callback(hwnd, extra)
 
@@ -36,6 +41,7 @@ def _patch_single_window(monkeypatch, hwnd, pid, process_name, visible=True, ico
     monkeypatch.setattr(enforcer.win32gui, "IsWindowVisible", lambda h: visible)
     monkeypatch.setattr(enforcer.win32gui, "IsIconic", lambda h: iconic)
     monkeypatch.setattr(enforcer.win32gui, "GetWindowText", lambda h: title)
+    monkeypatch.setattr(enforcer.win32gui, "GetWindow", lambda h, flag: owner)
     monkeypatch.setattr(enforcer.win32process, "GetWindowThreadProcessId", lambda h: (0, pid))
     monkeypatch.setattr(enforcer.psutil, "Process", lambda p: _FakeProcess(process_name))
 
@@ -50,6 +56,37 @@ def test_sweep_minimizes_blocked_background_window(isolate_state, monkeypatch):
 
     assert minimize_calls == [(555, enforcer.win32con.SW_MINIMIZE)]
     assert swept == [("discord.exe", 555)]
+
+
+def test_sweep_still_catches_a_blocked_window_with_a_blank_title(isolate_state, monkeypatch):
+    """Regression test for a blocked window with no title text (blanked
+    deliberately or just transiently) being invisible to the sweep entirely
+    -- it must still be caught as long as it's a real top-level window
+    (GW_OWNER == 0), since the sweep no longer gates on title text."""
+    session_manager.start_session(25, "hard", ["discord.exe"], [])
+    minimize_calls = []
+    _patch_single_window(monkeypatch, hwnd=555, pid=4242, process_name="discord.exe", title="")
+    monkeypatch.setattr(enforcer.win32gui, "ShowWindow", lambda h, cmd: minimize_calls.append((h, cmd)))
+
+    swept = enforcer.sweep_minimize_blocked_windows()
+
+    assert minimize_calls == [(555, enforcer.win32con.SW_MINIMIZE)]
+    assert swept == [("discord.exe", 555)]
+
+
+def test_sweep_skips_an_owned_tool_window(isolate_state, monkeypatch):
+    """A window with an owner (tooltip, dropdown popup, etc.) is not a real
+    top-level app window and must still be skipped, same as the old title
+    check intended -- just via GW_OWNER instead of title text."""
+    session_manager.start_session(25, "hard", ["discord.exe"], [])
+    minimize_calls = []
+    _patch_single_window(monkeypatch, hwnd=555, pid=4242, process_name="discord.exe", owner=999)
+    monkeypatch.setattr(enforcer.win32gui, "ShowWindow", lambda h, cmd: minimize_calls.append((h, cmd)))
+
+    swept = enforcer.sweep_minimize_blocked_windows()
+
+    assert minimize_calls == []
+    assert swept == []
 
 
 def test_sweep_leaves_unblocked_app_alone_after_unblock(isolate_state, monkeypatch):
@@ -73,15 +110,40 @@ def test_sweep_leaves_unblocked_app_alone_after_unblock(isolate_state, monkeypat
     assert len(minimize_calls) == 1
 
 
-def test_sweep_skips_already_minimized_window(isolate_state, monkeypatch):
+def test_sweep_skips_reminimizing_already_minimized_window(isolate_state, monkeypatch):
     session_manager.start_session(25, "hard", ["discord.exe"], [])
     minimize_calls = []
     _patch_single_window(monkeypatch, hwnd=555, pid=4242, process_name="discord.exe", iconic=True)
     monkeypatch.setattr(enforcer.win32gui, "ShowWindow", lambda h, cmd: minimize_calls.append((h, cmd)))
 
-    enforcer.sweep_minimize_blocked_windows()
+    swept = enforcer.sweep_minimize_blocked_windows()
 
     assert minimize_calls == []
+    # Not re-minimized (already iconic) and not reported as newly caught,
+    # but see the peek-hiding regression test below -- it must still get
+    # that applied.
+    assert swept == []
+
+
+def test_sweep_hides_peek_even_for_an_already_minimized_window(isolate_state, monkeypatch):
+    """Regression test: a window that arrives already minimized (started
+    minimized, or the user minimized it manually before the sweep ever saw
+    it visible) used to never get _hide_taskbar_preview at all -- the old
+    early-return bailed on any already-iconic window before reaching that
+    call. Only hard_lock_redirect's own independent call (which only fires
+    once the window genuinely becomes the foreground window) would ever
+    hide it, so hover/Alt+Tab preview stayed live until the user actually
+    switched into the window once."""
+    session_manager.start_session(25, "hard", ["discord.exe"], [])
+    peek_calls = []
+    _patch_single_window(monkeypatch, hwnd=555, pid=4242, process_name="discord.exe", iconic=True)
+    monkeypatch.setattr(
+        enforcer, "_hide_taskbar_preview", lambda hwnd, hide: peek_calls.append((hwnd, hide))
+    )
+
+    enforcer.sweep_minimize_blocked_windows()
+
+    assert peek_calls == [(555, True)]
 
 
 def test_sweep_skips_exempt_process(isolate_state, monkeypatch):
