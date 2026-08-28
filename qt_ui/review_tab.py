@@ -922,6 +922,19 @@ class _ReviewBanner(QWidget):
         return self._is_paused
 
     def _tick(self):
+        if self._end_session_on_finish and not session_manager.get_status().get("isActive"):
+            # The linked task session was ended from somewhere else entirely
+            # -- the Tasks tab's "End Task", the Focus tab's Nuclear End, a
+            # natural timeout, or a direct API call -- none of which know or
+            # care that a review was riding along on top of it. This banner
+            # has no session left to keep ticking against. Treat it like the
+            # user clicking "End" themselves (abandon, don't fabricate a
+            # "Finish" with a duration measured against dead state) rather
+            # than leaving it stuck showing a live timer forever, which also
+            # permanently blocked can_start_review() from ever going True
+            # again until the app was restarted.
+            self._abandon_after_external_end()
+            return
         is_paused = self._currently_paused()
         self._pause_btn.setText("Resume" if is_paused else "Pause")
         # Updated unconditionally, even while paused -- _elapsed_seconds_now()
@@ -950,6 +963,22 @@ class _ReviewBanner(QWidget):
             self._pause_btn.setText("Resume")
             if self._end_session_on_finish:
                 session_manager.pause_session()
+
+    def _abandon_after_external_end(self):
+        """Same cleanup as _end_early(), minus the session_manager.end_session()
+        call -- the session is already gone by the time this runs, ended by
+        whatever external path _tick() just detected, so calling end_session()
+        again here would be a no-op at best and misattribute an "ended twice"
+        history entry at worst."""
+        self._tick_timer.stop()
+        token = self._session_token
+        self._session_token = None
+        self._end_session_on_finish = False
+        self._start_time = None
+        self._first_attempt_callback = None
+        self.hide()
+        review_store.abandon_review(token)
+        self._on_finished()
 
     def _end_early(self):
         self._tick_timer.stop()

@@ -353,6 +353,44 @@ def test_begin_review_starts_and_ends_linked_task_session(
     assert not session_manager.is_active(), "session should end when review finishes"
 
 
+def test_review_banner_recovers_when_linked_session_ends_externally(
+    qtbot, isolate_review_db, isolate_state, tmp_path, monkeypatch
+):
+    """Regression test: ending the linked task session from somewhere other
+    than the review banner itself (Tasks tab's "End Task", Focus tab's
+    Nuclear End, a natural timeout, or a direct API call) used to leave the
+    banner ticking forever against a dead session, and can_start_review()
+    permanently False -- no review could be started anywhere until the app
+    was restarted."""
+    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
+    task = tasks_store.create_task({"name": "Math Session", "lockMode": "soft"})
+
+    topic = review_store.create_topic("Math")
+    review_store.update_topic_link(topic["id"], task["id"])
+    subject = review_store.create_subject(topic["id"], "Quadratics", "#5B8DEF")
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve for x", stars=3,
+        description_type="text", description_text="factor",
+    )
+
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    view = tab._topic_views[topic["id"]]
+    view._set_due_only(False)
+    view._begin_review(view._problems[0])
+
+    assert not tab.can_start_review()
+
+    # Simulate ending the session from an entirely different surface, e.g.
+    # the Tasks tab's "End Task" button -- not the banner's own Finish/End.
+    session_manager.end_session(end_type="manual")
+
+    view._review_banner._tick()
+
+    assert not view._review_banner.isVisible()
+    assert tab.can_start_review(), "a stale banner must not lock out starting new reviews"
+
+
 def test_topic_view_resumes_banner_for_already_active_linked_session(
     qtbot, isolate_review_db, isolate_state, tmp_path, monkeypatch
 ):
