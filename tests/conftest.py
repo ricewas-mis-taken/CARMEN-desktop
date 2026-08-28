@@ -16,10 +16,19 @@ import session_manager
 
 
 @pytest.fixture
-def isolate_state(tmp_path, monkeypatch):
+def isolate_config(tmp_path, monkeypatch):
+    """config.json lives at a hardcoded path -- redirect it so a test that
+    touches config.py, directly or indirectly (e.g. api_server.py's
+    _require_token calling config.get_api_token()), never touches the real
+    file or generates a real apiToken into it."""
+    monkeypatch.setattr(config, "CONFIG_PATH", str(tmp_path / "config.json"))
+    yield
+
+
+@pytest.fixture
+def isolate_state(isolate_config, tmp_path, monkeypatch):
     monkeypatch.setattr(session_manager, "STATE_PATH", str(tmp_path / "session_state.json"))
     monkeypatch.setattr(session_history, "HISTORY_PATH", str(tmp_path / "session_history.json"))
-    monkeypatch.setattr(config, "CONFIG_PATH", str(tmp_path / "config.json"))
 
     # session_manager._state is a module-level dict mutated in place across
     # the whole process's life -- reset it to a clean default so one test's

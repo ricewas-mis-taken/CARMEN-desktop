@@ -3,6 +3,7 @@ last-used settings)."""
 import copy
 import json
 import os
+import secrets
 import threading
 from datetime import datetime, timezone
 
@@ -90,6 +91,27 @@ def update_config(mutator):
             cfg = replacement
         save_config(cfg)
         return cfg
+
+
+def get_api_token():
+    """The local shared secret api_server.py requires on every state-changing
+    request (see its _require_token decorator) -- generated once, on first
+    call, and persisted from then on, rather than living in DEFAULT_CONFIG
+    (a real secret can't be a static default shipped in source). The browser
+    extension is paired with this value once (tray menu -> Copy API Token,
+    pasted into the extension's popup), not fetched over the API itself --
+    an unauthenticated endpoint that hands out the auth token would defeat
+    the whole point of requiring one."""
+    cfg = load_config()
+    token = cfg.get("apiToken")
+    if token:
+        return token
+
+    def _mutate(c):
+        c["apiToken"] = secrets.token_hex(32)
+
+    cfg = update_config(_mutate)
+    return cfg["apiToken"]
 
 
 def _dedupe_domains(*domain_lists):
