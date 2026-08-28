@@ -486,6 +486,16 @@ def pause_session():
         end_time = datetime.fromisoformat(_state["endTime"])
         seconds_remaining = max(0, int((end_time - now).total_seconds()))
 
+        if seconds_remaining == 0:
+            # The timer already ran out -- this call raced the natural-expiry
+            # check in _get_status_locked() (only that path self-finalizes,
+            # and it's skipped entirely once isPaused is True). Finalizing
+            # here instead of pausing avoids leaving the session stuck
+            # forever as "active + paused + 0s remaining": nothing would ever
+            # un-stick it, since finalization never runs while paused.
+            _pending_natural_end["value"] = _finalize_to_history_locked(end_time, end_type="natural")
+            return _get_status_locked()
+
         _state["isPaused"] = True
         _state["pausedAt"] = now.isoformat()
         _state["frozenSecondsRemaining"] = seconds_remaining
