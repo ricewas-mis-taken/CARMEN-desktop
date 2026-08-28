@@ -66,6 +66,43 @@ def list_running_apps():
     return list(apps.values())
 
 
+def list_browser_profile_windows():
+    """Enumerates visible top-level windows belonging to a multi-profile
+    browser (session_manager.MULTI_PROFILE_BROWSER_PROCESSES) and returns
+    one entry per unique AUMI -- one per currently-open profile window --
+    for the app picker's "block just one browser profile" section. Only
+    profiles with a window open *right now* can be offered, since a
+    profile's AUMI isn't known until Windows actually reads it off a real
+    window (see enforcer.get_window_aumi)."""
+    seen = {}
+
+    def callback(hwnd, _):
+        if not win32gui.IsWindowVisible(hwnd):
+            return
+        title = win32gui.GetWindowText(hwnd)
+        if not title:
+            return
+        try:
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            process_name = psutil.Process(pid).name()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, Exception):
+            return
+        if process_name.lower() not in session_manager.MULTI_PROFILE_BROWSER_PROCESSES:
+            return
+        aumi = enforcer.get_window_aumi(hwnd)
+        if not aumi or aumi in seen:
+            return
+        seen[aumi] = {
+            "process_name": process_name,
+            "aumi": aumi,
+            "label": enforcer.describe_browser_profile_aumi(process_name, aumi),
+            "window_title": title,
+        }
+
+    win32gui.EnumWindows(callback, None)
+    return list(seen.values())
+
+
 def run_polling_loop(stop_event, on_session_end=None, tray_icon=None):
     """Runs until stop_event is set. Intended to be launched in its own thread.
 
@@ -123,7 +160,7 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None):
                     # flyouts) and our own tray/popup windows are never
                     # violations — don't touch dedupe state either way.
                     pass
-                elif process_name and session_manager.is_blocked(process_name):
+                elif process_name and enforcer.is_blocked_window(process_name, hwnd):
                     if process_name != last_flagged_process:
                         last_flagged_process = process_name
                         now = time.time()

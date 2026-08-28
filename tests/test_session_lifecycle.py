@@ -24,6 +24,20 @@ def test_start_and_natural_end_lifecycle(isolate_state):
     assert history[0]["lockMode"] == "soft"
 
 
+def test_blocked_browser_profiles_round_trip(isolate_state):
+    session_manager.start_session(
+        25, "hard", [], [], blocked_browser_profiles=["Chrome.UserData.Profile4"]
+    )
+    assert session_manager.is_blocked_browser_profile("Chrome.UserData.Profile4")
+    assert not session_manager.is_blocked_browser_profile("Chrome")
+    assert not session_manager.is_blocked_browser_profile(None)
+    assert session_manager.get_status()["blockedBrowserProfiles"] == ["Chrome.UserData.Profile4"]
+
+    session_manager.end_session(end_type="manual")
+    assert not session_manager.is_blocked_browser_profile("Chrome.UserData.Profile4")
+    assert session_manager.get_status()["blockedBrowserProfiles"] == []
+
+
 def test_nuclear_end_records_reason(isolate_state):
     session_manager.start_session(10, "hard", [], [])
     summary = session_manager.end_session(end_type="nuclear", reason="testing nuclear end")
