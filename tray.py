@@ -1,8 +1,10 @@
 """System tray icon setup and menu."""
 import pystray
 from PIL import Image, ImageDraw
+from PySide6.QtWidgets import QApplication
 
 import calendar_gui
+import config
 import history_gui
 import picker_gui
 import qt_gui_thread
@@ -116,6 +118,17 @@ def build_tray_icon(on_quit):
     def on_view_history(icon, item):
         history_gui.open_history_viewer()
 
+    def on_copy_api_token(icon, item):
+        # Every state-changing endpoint in api_server.py now requires this
+        # token (see _require_token) -- the browser extension needs it once,
+        # pasted into its popup's pairing field, to keep working. It's
+        # deliberately not fetchable over the API itself: an unauthenticated
+        # endpoint that hands out the auth token would defeat the point of
+        # requiring one.
+        token = config.get_api_token()
+        qt_gui_thread.run_on_gui_thread(lambda: QApplication.clipboard().setText(token))
+        icon.notify("API token copied -- paste it into the extension's popup.", title="Carmen Focus")
+
     def on_quit_clicked(icon, item):
         on_quit()
         icon.stop()
@@ -151,6 +164,7 @@ def build_tray_icon(on_quit):
         pystray.MenuItem("Open Carmen Focus", on_open_window, default=True),
         pystray.MenuItem("Status", on_status),
         pystray.MenuItem("Session History", on_view_history),
+        pystray.MenuItem("Copy API Token (for browser extension)", on_copy_api_token),
         pystray.MenuItem(_pause_resume_text, on_pause_resume, visible=_session_active),
         pystray.MenuItem("End Session (Nuclear)", on_end_session, visible=_session_active),
         pystray.MenuItem("Quit", on_quit_clicked),
