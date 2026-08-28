@@ -13,12 +13,19 @@ banked" -- no separate log of its own to keep in sync.
 import copy
 import json
 import os
+import threading
 import uuid
 from datetime import date, datetime, timedelta
 
 import device_id
 
 TASKS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "tasks.json")
+
+# Guards every read-modify-write sequence below (create/update/delete/cash_in)
+# against a lost-update race -- the Flask API thread and the Qt thread can
+# both call into this module. Reentrant because cash_in() needs to hold it
+# across its own balance check *and* the update_task() call it makes.
+_lock = threading.RLock()
 
 WEEKDAY_CODES = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
 
@@ -82,6 +89,15 @@ def _backfill_sync_fields(task):
     return changed
 
 
+class TasksLoadError(Exception):
+    """Raised when tasks.json exists but can't be read/parsed. Only raised
+    for include_deleted=True callers (the read-modify-write mutators below) --
+    a plain display read still returns [] so a transient glitch doesn't crash
+    the UI. A mutator must NOT treat a failed read as "no tasks yet": doing so
+    would let its own save_tasks() call overwrite every real task on disk
+    with just whatever it's adding/changing."""
+
+
 def load_tasks(include_deleted=False):
     """By default excludes soft-deleted tasks (see delete_task()), matching
     the pre-tombstone behavior every existing caller expects. Callers that
@@ -93,7 +109,9 @@ def load_tasks(include_deleted=False):
     try:
         with open(TASKS_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError) as exc:
+        if include_deleted:
+            raise TasksLoadError(f"failed to read {TASKS_PATH}: {exc}") from exc
         return []
     tasks = data.get("tasks", []) if isinstance(data, dict) else []
     tasks = [t for t in tasks if isinstance(t, dict)]
@@ -142,55 +160,79 @@ def _color_in_use(color, exclude_id=None):
     )
 
 
-def create_task(data):
-    color = data.get("color")
-    if color and _color_in_use(color):
-        raise DuplicateColorError("Another task is already using this color.")
+# Only used when create_task() gets no explicit color -- picks the first of
+# these not already in use instead of always handing out
+# DEFAULT_TASK["color"], which let two colorless tasks collide silently
+# (the uniqueness check only ever ran against an explicitly-supplied color).
+_FALLBACK_COLOR_PALETTE = [
+    "#5B8DEF", "#E53935", "#43A047", "#FB8C00", "#8E24AA",
+    "#00897B", "#3949AB", "#D81B60", "#6D4C41", "#546E7A",
+]
 
-    task = copy.deepcopy(DEFAULT_TASK)
-    task.update(data)
-    task["id"] = _new_id()
-    task["createdAt"] = datetime.now().isoformat()
-    task["updatedAt"] = task["createdAt"]
-    task["targetMinutesHistory"] = [
-        {"date": task["createdAt"][:10], "minutes": task.get("targetMinutes", 0)}
-    ]
-    tasks = load_tasks(include_deleted=True)
-    tasks.append(task)
-    save_tasks(tasks)
-    return task
+
+def _pick_available_color():
+    used = {(task.get("color") or "").lower() for task in load_tasks()}
+    for candidate in _FALLBACK_COLOR_PALETTE:
+        if candidate.lower() not in used:
+            return candidate
+    return DEFAULT_TASK["color"]
+
+
+def create_task(data):
+    with _lock:
+        color = data.get("color")
+        if color:
+            if _color_in_use(color):
+                raise DuplicateColorError("Another task is already using this color.")
+        else:
+            color = _pick_available_color()
+
+        task = copy.deepcopy(DEFAULT_TASK)
+        task.update(data)
+        task["color"] = color
+        task["id"] = _new_id()
+        task["createdAt"] = datetime.now().isoformat()
+        task["updatedAt"] = task["createdAt"]
+        task["targetMinutesHistory"] = [
+            {"date": task["createdAt"][:10], "minutes": task.get("targetMinutes", 0)}
+        ]
+        tasks = load_tasks(include_deleted=True)
+        tasks.append(task)
+        save_tasks(tasks)
+        return task
 
 
 def update_task(task_id, data):
-    new_color = data.get("color")
-    if new_color and _color_in_use(new_color, exclude_id=task_id):
-        raise DuplicateColorError("Another task is already using this color.")
+    with _lock:
+        new_color = data.get("color")
+        if new_color and _color_in_use(new_color, exclude_id=task_id):
+            raise DuplicateColorError("Another task is already using this color.")
 
-    tasks = load_tasks(include_deleted=True)
-    updated = None
-    for task in tasks:
-        if task["id"] == task_id:
-            new_target = data.get("targetMinutes")
-            if new_target is not None and new_target != task.get("targetMinutes"):
-                # Record when the target changed instead of overwriting it in
-                # place, so vacation_balance_minutes can look up whatever
-                # target was actually in effect on a given past day -- a
-                # goal-time change today must never retroactively change
-                # what counted as "surplus" on days before it.
-                history = list(task.get("targetMinutesHistory") or [])
-                today_key = date.today().isoformat()
-                if history and history[-1]["date"] == today_key:
-                    history[-1] = {"date": today_key, "minutes": new_target}
-                else:
-                    history.append({"date": today_key, "minutes": new_target})
-                task["targetMinutesHistory"] = history
-            task.update(data)
-            task["updatedAt"] = datetime.now().isoformat()
-            updated = task
-            break
-    if updated is not None:
-        save_tasks(tasks)
-    return updated
+        tasks = load_tasks(include_deleted=True)
+        updated = None
+        for task in tasks:
+            if task["id"] == task_id:
+                new_target = data.get("targetMinutes")
+                if new_target is not None and new_target != task.get("targetMinutes"):
+                    # Record when the target changed instead of overwriting it in
+                    # place, so vacation_balance_minutes can look up whatever
+                    # target was actually in effect on a given past day -- a
+                    # goal-time change today must never retroactively change
+                    # what counted as "surplus" on days before it.
+                    history = list(task.get("targetMinutesHistory") or [])
+                    today_key = date.today().isoformat()
+                    if history and history[-1]["date"] == today_key:
+                        history[-1] = {"date": today_key, "minutes": new_target}
+                    else:
+                        history.append({"date": today_key, "minutes": new_target})
+                    task["targetMinutesHistory"] = history
+                task.update(data)
+                task["updatedAt"] = datetime.now().isoformat()
+                updated = task
+                break
+        if updated is not None:
+            save_tasks(tasks)
+        return updated
 
 
 def delete_task(task_id):
@@ -199,17 +241,18 @@ def delete_task(task_id):
     deleted instead of the deletion silently never propagating. Permanent
     physical removal is deliberately not implemented yet -- a follow-up
     once sync_now() can confirm every known device has seen the tombstone."""
-    tasks = load_tasks(include_deleted=True)
-    found = False
-    for task in tasks:
-        if task["id"] == task_id and not task.get("isDeleted"):
-            task["isDeleted"] = True
-            task["updatedAt"] = datetime.now().isoformat()
-            task["deviceId"] = device_id.get_device_id()
-            found = True
-    if found:
-        save_tasks(tasks)
-    return found
+    with _lock:
+        tasks = load_tasks(include_deleted=True)
+        found = False
+        for task in tasks:
+            if task["id"] == task_id and not task.get("isDeleted"):
+                task["isDeleted"] = True
+                task["updatedAt"] = datetime.now().isoformat()
+                task["deviceId"] = device_id.get_device_id()
+                found = True
+        if found:
+            save_tasks(tasks)
+        return found
 
 
 # --- scheduling ---
@@ -362,19 +405,25 @@ def cash_in(task_id, target_date, minutes, sessions):
     positive. Returns the updated task."""
     if minutes <= 0:
         raise ValueError("minutes must be positive")
-    task = get_task(task_id)
-    if task is None:
-        raise ValueError("no such task")
-    balance = vacation_balance_minutes(task, sessions)
-    # Round rather than compare against the raw float -- the UI shows and
-    # accepts whole minutes rounded from the true balance (e.g. 0.97m reads
-    # as "1m banked"), so comparing a whole-minute request against the
-    # unrounded balance would reject exactly the amount the user was shown.
-    available = int(round(balance))
-    if minutes > available:
-        raise ValueError(f"only {available} vacation minute(s) available")
+    # Held across the balance check *and* the update_task() write below --
+    # otherwise two near-simultaneous cash_in() calls can both read the same
+    # balance, both pass the check, and both succeed, double-spending the
+    # same banked minutes. _lock is reentrant so update_task()'s own
+    # acquisition here doesn't deadlock.
+    with _lock:
+        task = get_task(task_id)
+        if task is None:
+            raise ValueError("no such task")
+        balance = vacation_balance_minutes(task, sessions)
+        # Round rather than compare against the raw float -- the UI shows and
+        # accepts whole minutes rounded from the true balance (e.g. 0.97m reads
+        # as "1m banked"), so comparing a whole-minute request against the
+        # unrounded balance would reject exactly the amount the user was shown.
+        available = int(round(balance))
+        if minutes > available:
+            raise ValueError(f"only {available} vacation minute(s) available")
 
-    cashed_in_dates = dict(task.get("cashedInDates") or {})
-    key = target_date.isoformat()
-    cashed_in_dates[key] = cashed_in_dates.get(key, 0) + minutes
-    return update_task(task_id, {"cashedInDates": cashed_in_dates})
+        cashed_in_dates = dict(task.get("cashedInDates") or {})
+        key = target_date.isoformat()
+        cashed_in_dates[key] = cashed_in_dates.get(key, 0) + minutes
+        return update_task(task_id, {"cashedInDates": cashed_in_dates})
