@@ -490,6 +490,13 @@ def create_problem(
 ):
     if description_type not in ("text", "photo", "link"):
         return None
+    # schedule_new_problem() indexes STAR_MULTIPLIERS[stars] directly -- an
+    # invalid stars value (0, 6, None, ...) raised an unhandled KeyError here
+    # instead of the same clean "reject the input" every other invalid field
+    # on this call gets, and it did so before the DB's own
+    # CHECK(stars BETWEEN 1 AND 5) ever got a chance to reject it.
+    if not isinstance(stars, int) or isinstance(stars, bool) or not (1 <= stars <= 5):
+        return None
     photo_path = None
     if description_type == "photo" and photo_bytes is not None:
         photo_path = save_photo_bytes(photo_bytes, photo_filename)
