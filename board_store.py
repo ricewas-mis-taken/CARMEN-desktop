@@ -22,6 +22,7 @@ list_upcoming_tasks() rather than list_finished_tasks() -- it's not really
 import copy
 import json
 import os
+import threading
 import uuid
 from datetime import date, datetime, timedelta
 
@@ -29,6 +30,10 @@ import device_id
 from tasks_store import WEEKDAY_CODES
 
 BOARD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "board.json")
+
+# Guards every read-modify-write sequence below against a lost-update race --
+# the Flask API thread and the Qt thread can both call into this module.
+_lock = threading.Lock()
 PHOTOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "data", "board_photos")
 
 RECURRENCE_PATTERNS = ("days", "weekly", "monthly", "yearly")
@@ -91,6 +96,15 @@ def _backfill_sync_fields(task):
     return changed
 
 
+class BoardLoadError(Exception):
+    """Raised when board.json exists but can't be read/parsed. Only raised
+    for include_deleted=True callers (the read-modify-write mutators below) --
+    a plain display read still returns [] so a transient glitch doesn't crash
+    the UI. A mutator must NOT treat a failed read as "no tasks yet": doing so
+    would let its own save_board() call overwrite every real task on disk
+    with just whatever it's adding/changing."""
+
+
 def load_board(include_deleted=False):
     """By default excludes soft-deleted tasks (see delete_task()), matching
     the pre-tombstone behavior every existing caller expects. Callers that
@@ -102,7 +116,9 @@ def load_board(include_deleted=False):
     try:
         with open(BOARD_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError) as exc:
+        if include_deleted:
+            raise BoardLoadError(f"failed to read {BOARD_PATH}: {exc}") from exc
         return []
     tasks = data.get("tasks", []) if isinstance(data, dict) else []
     tasks = [t for t in tasks if isinstance(t, dict)]
@@ -161,23 +177,24 @@ def create_task(
     description_text="", description_link="",
     photo_bytes=None, photo_filename=None, tags=None,
 ):
-    task = copy.deepcopy(DEFAULT_BOARD_TASK)
-    task["id"] = _new_id()
-    task["name"] = name
-    task["importance"] = max(1, min(10, int(importance)))
-    task["recurringDays"], task["recurrencePattern"] = _resolve_recurrence(recurring_days, recurrence_pattern)
-    task["tags"] = [t for t in (tags or []) if t in PRESET_TAGS_BY_ID]
-    task["descriptionText"] = description_text or ""
-    task["descriptionLink"] = description_link or ""
-    if photo_bytes is not None:
-        task["descriptionPhotoPath"] = save_photo_bytes(photo_bytes, photo_filename)
-    task["createdAt"] = datetime.now().isoformat()
-    task["updatedAt"] = task["createdAt"]
+    with _lock:
+        task = copy.deepcopy(DEFAULT_BOARD_TASK)
+        task["id"] = _new_id()
+        task["name"] = name
+        task["importance"] = max(1, min(10, int(importance)))
+        task["recurringDays"], task["recurrencePattern"] = _resolve_recurrence(recurring_days, recurrence_pattern)
+        task["tags"] = [t for t in (tags or []) if t in PRESET_TAGS_BY_ID]
+        task["descriptionText"] = description_text or ""
+        task["descriptionLink"] = description_link or ""
+        if photo_bytes is not None:
+            task["descriptionPhotoPath"] = save_photo_bytes(photo_bytes, photo_filename)
+        task["createdAt"] = datetime.now().isoformat()
+        task["updatedAt"] = task["createdAt"]
 
-    tasks = load_board(include_deleted=True)
-    tasks.append(task)
-    save_board(tasks)
-    return task
+        tasks = load_board(include_deleted=True)
+        tasks.append(task)
+        save_board(tasks)
+        return task
 
 
 def update_task(
@@ -188,23 +205,24 @@ def update_task(
     """Replaces a task's editable details (name, recurrence, info, tags) in
     place. Importance is intentionally not touched here -- it has its own
     dedicated editor on the board card's badge."""
-    tasks = load_board(include_deleted=True)
-    for task in tasks:
-        if task["id"] == task_id:
-            task["name"] = name
-            task["recurringDays"], task["recurrencePattern"] = _resolve_recurrence(
-                recurring_days, recurrence_pattern
-            )
-            task["tags"] = [t for t in (tags or []) if t in PRESET_TAGS_BY_ID]
-            task["descriptionText"] = description_text or ""
-            task["descriptionLink"] = description_link or ""
-            if remove_photo and not photo_bytes:
-                task["descriptionPhotoPath"] = None
-            if photo_bytes is not None:
-                task["descriptionPhotoPath"] = save_photo_bytes(photo_bytes, photo_filename)
-            task["updatedAt"] = datetime.now().isoformat()
-    save_board(tasks)
-    return get_task(task_id)
+    with _lock:
+        tasks = load_board(include_deleted=True)
+        for task in tasks:
+            if task["id"] == task_id:
+                task["name"] = name
+                task["recurringDays"], task["recurrencePattern"] = _resolve_recurrence(
+                    recurring_days, recurrence_pattern
+                )
+                task["tags"] = [t for t in (tags or []) if t in PRESET_TAGS_BY_ID]
+                task["descriptionText"] = description_text or ""
+                task["descriptionLink"] = description_link or ""
+                if remove_photo and not photo_bytes:
+                    task["descriptionPhotoPath"] = None
+                if photo_bytes is not None:
+                    task["descriptionPhotoPath"] = save_photo_bytes(photo_bytes, photo_filename)
+                task["updatedAt"] = datetime.now().isoformat()
+        save_board(tasks)
+        return get_task(task_id)
 
 
 def delete_task(task_id):
@@ -213,43 +231,46 @@ def delete_task(task_id):
     deleted instead of the deletion silently never propagating. Permanent
     physical removal is deliberately not implemented yet -- a follow-up
     once sync_now() can confirm every known device has seen the tombstone."""
-    tasks = load_board(include_deleted=True)
-    found = False
-    for task in tasks:
-        if task["id"] == task_id and not task.get("isDeleted"):
-            task["isDeleted"] = True
-            task["updatedAt"] = datetime.now().isoformat()
-            task["deviceId"] = device_id.get_device_id()
-            found = True
-    if found:
-        save_board(tasks)
-    return found
+    with _lock:
+        tasks = load_board(include_deleted=True)
+        found = False
+        for task in tasks:
+            if task["id"] == task_id and not task.get("isDeleted"):
+                task["isDeleted"] = True
+                task["updatedAt"] = datetime.now().isoformat()
+                task["deviceId"] = device_id.get_device_id()
+                found = True
+        if found:
+            save_board(tasks)
+        return found
 
 
 def update_importance(task_id, importance):
-    tasks = load_board(include_deleted=True)
-    for task in tasks:
-        if task["id"] == task_id:
-            task["importance"] = max(1, min(10, int(importance)))
-            task["updatedAt"] = datetime.now().isoformat()
-    save_board(tasks)
-    return get_task(task_id)
+    with _lock:
+        tasks = load_board(include_deleted=True)
+        for task in tasks:
+            if task["id"] == task_id:
+                task["importance"] = max(1, min(10, int(importance)))
+                task["updatedAt"] = datetime.now().isoformat()
+        save_board(tasks)
+        return get_task(task_id)
 
 
 def mark_opened(task_id):
     """Records the first time a task's detail popup is opened -- shown in
     place of a "first reviewed" date, since board tasks have no review
     concept. A no-op after the first call."""
-    tasks = load_board(include_deleted=True)
-    changed = False
-    for task in tasks:
-        if task["id"] == task_id and not task.get("firstOpenedAt"):
-            task["firstOpenedAt"] = datetime.now().isoformat()
-            task["updatedAt"] = task["firstOpenedAt"]
-            changed = True
-    if changed:
-        save_board(tasks)
-    return get_task(task_id)
+    with _lock:
+        tasks = load_board(include_deleted=True)
+        changed = False
+        for task in tasks:
+            if task["id"] == task_id and not task.get("firstOpenedAt"):
+                task["firstOpenedAt"] = datetime.now().isoformat()
+                task["updatedAt"] = task["firstOpenedAt"]
+                changed = True
+        if changed:
+            save_board(tasks)
+        return get_task(task_id)
 
 
 def _next_weekday_date(recurring_days, after):
@@ -288,46 +309,48 @@ def finish_task(task_id):
     """Marks a task finished. Recurring tasks get a next_due_date instead of
     staying finished forever -- reactivate_due_recurring() pulls them back
     into the active list once that date arrives."""
-    tasks = load_board(include_deleted=True)
-    today = date.today()
-    for task in tasks:
-        if task["id"] == task_id:
-            task["finished"] = True
-            task["finishedAt"] = datetime.now().isoformat()
-            task["updatedAt"] = task["finishedAt"]
-            pattern = task.get("recurrencePattern") or ("days" if task.get("recurringDays") else "none")
-            if pattern == "days" and task.get("recurringDays"):
-                task["nextDueDate"] = _next_weekday_date(task["recurringDays"], today).isoformat()
-            elif pattern == "weekly":
-                task["nextDueDate"] = _next_week_start(today).isoformat()
-            elif pattern == "monthly":
-                task["nextDueDate"] = _next_month_start(today).isoformat()
-            elif pattern == "yearly":
-                task["nextDueDate"] = _next_year_start(today).isoformat()
-            else:
-                task["nextDueDate"] = None
-    save_board(tasks)
-    return get_task(task_id)
+    with _lock:
+        tasks = load_board(include_deleted=True)
+        today = date.today()
+        for task in tasks:
+            if task["id"] == task_id:
+                task["finished"] = True
+                task["finishedAt"] = datetime.now().isoformat()
+                task["updatedAt"] = task["finishedAt"]
+                pattern = task.get("recurrencePattern") or ("days" if task.get("recurringDays") else "none")
+                if pattern == "days" and task.get("recurringDays"):
+                    task["nextDueDate"] = _next_weekday_date(task["recurringDays"], today).isoformat()
+                elif pattern == "weekly":
+                    task["nextDueDate"] = _next_week_start(today).isoformat()
+                elif pattern == "monthly":
+                    task["nextDueDate"] = _next_month_start(today).isoformat()
+                elif pattern == "yearly":
+                    task["nextDueDate"] = _next_year_start(today).isoformat()
+                else:
+                    task["nextDueDate"] = None
+        save_board(tasks)
+        return get_task(task_id)
 
 
 def reactivate_due_recurring():
     """Moves finished recurring tasks whose next_due_date has arrived back
     into the active list, resetting their "opened" stamp for the new
     occurrence. Call on every Board tab refresh."""
-    tasks = load_board(include_deleted=True)
-    today = date.today().isoformat()
-    changed = False
-    for task in tasks:
-        if task.get("finished") and _is_recurring(task) and task.get("nextDueDate"):
-            if task["nextDueDate"] <= today:
-                task["finished"] = False
-                task["finishedAt"] = None
-                task["nextDueDate"] = None
-                task["firstOpenedAt"] = None
-                task["updatedAt"] = datetime.now().isoformat()
-                changed = True
-    if changed:
-        save_board(tasks)
+    with _lock:
+        tasks = load_board(include_deleted=True)
+        today = date.today().isoformat()
+        changed = False
+        for task in tasks:
+            if task.get("finished") and _is_recurring(task) and task.get("nextDueDate"):
+                if task["nextDueDate"] <= today:
+                    task["finished"] = False
+                    task["finishedAt"] = None
+                    task["nextDueDate"] = None
+                    task["firstOpenedAt"] = None
+                    task["updatedAt"] = datetime.now().isoformat()
+                    changed = True
+        if changed:
+            save_board(tasks)
 
 
 def list_active_tasks():
