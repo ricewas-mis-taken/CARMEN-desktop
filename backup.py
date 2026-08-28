@@ -7,15 +7,31 @@ import os
 import shutil
 from datetime import datetime, timedelta
 
+import calendar_store
+
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private")
 BACKUP_ROOT = os.path.join(os.path.expanduser("~"), "CarmenBackups")
 KEEP_DAYS = 30
 
+# calendar.db is handled separately via calendar_store.export_db() -- it runs
+# in WAL mode, so a plain file copy can miss recently-committed rows still
+# sitting in calendar.db-wal, or copy a page mid-checkpoint. export_db() uses
+# SQLite's own online backup API instead, which is safe to call while the app
+# is running and always produces a complete, consistent snapshot.
 FILES = [
-    "calendar.db",
     "session_history.json",
     "tasks.json",
+    "board.json",
     "config.json",
+    os.path.join("data", "daily_summaries.json"),
+]
+
+# Copied recursively rather than file-by-file -- every photo a board/review
+# task links to lives under one of these, and a restore with a dangling
+# descriptionPhotoPath is as good as losing the attachment outright.
+DIRS = [
+    os.path.join("data", "board_photos"),
+    os.path.join("data", "review_photos"),
 ]
 
 
@@ -25,10 +41,24 @@ def run_backup():
     os.makedirs(dest, exist_ok=True)
 
     copied = []
+
+    calendar_src = os.path.join(DATA_DIR, "calendar.db")
+    if os.path.exists(calendar_src):
+        if calendar_store.export_db(os.path.join(dest, "calendar.db")):
+            copied.append("calendar.db")
+
     for name in FILES:
         src = os.path.join(DATA_DIR, name)
         if os.path.exists(src):
-            shutil.copy2(src, os.path.join(dest, name))
+            dest_path = os.path.join(dest, name)
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            shutil.copy2(src, dest_path)
+            copied.append(name)
+
+    for name in DIRS:
+        src = os.path.join(DATA_DIR, name)
+        if os.path.isdir(src):
+            shutil.copytree(src, os.path.join(dest, name), dirs_exist_ok=True)
             copied.append(name)
 
     # Prune snapshots older than KEEP_DAYS
