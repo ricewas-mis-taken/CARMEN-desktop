@@ -12,8 +12,10 @@ Endpoints:
     GET  /history
     GET  /apps/running
     GET  /apps/installed
+    GET  /browser-profiles/running
     POST /blocklist/apps
     POST /blocklist/apps/remove
+    POST /blocklist/browser-profiles
     GET  /whitelist/domains
     POST /whitelist/domains
     POST /whitelist/domains/add
@@ -200,6 +202,17 @@ def session_start():
     if not _is_string_list(domain_whitelist):
         return jsonify({"error": "domain_whitelist must be a list of non-empty domain/URL strings"}), 400
 
+    blocked_browser_profiles = body.get("blocked_browser_profiles")
+    if blocked_browser_profiles is None:
+        # Same "caller didn't send one, fall back to the saved default"
+        # treatment as process_blocklist above.
+        blocked_browser_profiles = config.load_config().get("browserProfileBlocklist", [])
+    elif not _is_string_list(blocked_browser_profiles):
+        return (
+            jsonify({"error": "blocked_browser_profiles must be a list of non-empty strings, null, or omitted"}),
+            400,
+        )
+
     result = session_manager.start_session(
         duration_minutes,
         lock_mode,
@@ -208,6 +221,7 @@ def session_start():
         source=source,
         event_id=event_id,
         event_title=event_title,
+        blocked_browser_profiles=blocked_browser_profiles,
     )
     return jsonify(result)
 
@@ -294,6 +308,15 @@ def apps_installed():
     return jsonify(installed_apps.list_installed_apps())
 
 
+@app.route("/browser-profiles/running", methods=["GET"])
+def browser_profiles_running():
+    """Every currently-open Chrome/Edge profile window, one entry per
+    unique AppUserModelID -- see window_tracker.list_browser_profile_windows().
+    Only profiles with a window open right now can be listed, since a
+    profile's AUMI isn't known until Windows reads it off a real window."""
+    return jsonify(window_tracker.list_browser_profile_windows())
+
+
 @app.route("/blocklist/apps", methods=["POST"])
 @_require_token
 def blocklist_apps():
@@ -308,6 +331,23 @@ def blocklist_apps():
 
     cfg = config.update_config(_mutate)
     return jsonify({"processBlocklist": cfg["processBlocklist"]})
+
+
+@app.route("/blocklist/browser-profiles", methods=["POST"])
+def blocklist_browser_profiles():
+    """Saves the default browserProfileBlocklist (AUMIs), the profile-level
+    counterpart to POST /blocklist/apps."""
+    body = request.get_json(force=True, silent=True) or {}
+    browser_profile_blocklist = body.get("browser_profile_blocklist")
+
+    if not _is_string_list(browser_profile_blocklist):
+        return jsonify({"error": "browser_profile_blocklist must be a list of non-empty AUMI strings"}), 400
+
+    def _mutate(cfg):
+        cfg["browserProfileBlocklist"] = list(browser_profile_blocklist)
+
+    cfg = config.update_config(_mutate)
+    return jsonify({"browserProfileBlocklist": cfg["browserProfileBlocklist"]})
 
 
 @app.route("/whitelist/domains", methods=["GET"])

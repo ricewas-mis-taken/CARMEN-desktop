@@ -12,6 +12,11 @@ CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private"
 DEFAULT_CONFIG = {
     "processBlocklist": [],
     "domainWhitelist": [],
+    # AppUserModelIDs of Chrome/Edge profile windows to block for just that
+    # one profile, saved as the default across sessions the same way
+    # processBlocklist is -- see session_manager.MULTI_PROFILE_BROWSER_PROCESSES
+    # for why this can't just be another processBlocklist entry.
+    "browserProfileBlocklist": [],
     "last_duration_minutes": 25,
     "last_lock_mode": "soft",
     # Bumped only by set_focus_rules() (the browser-extension cross-profile
