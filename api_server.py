@@ -17,6 +17,7 @@ Endpoints:
     GET  /whitelist/domains
     POST /whitelist/domains
     POST /whitelist/domains/add
+    POST /tasks/<task_id>/domain-whitelist
     GET  /api/focus/rules
     POST /api/focus/rules
 
@@ -46,6 +47,7 @@ import installed_apps
 import review_store
 import session_history
 import session_manager
+import tasks_store
 import window_tracker
 
 app = Flask(__name__)
@@ -398,6 +400,38 @@ def whitelist_domains_add():
     if addition is None:
         return jsonify({"error": "no active session"}), 409
     return jsonify({"domainWhitelist": domain_whitelist, "addition": addition})
+
+
+@app.route("/tasks/<task_id>/domain-whitelist", methods=["POST"])
+@_require_token
+def task_domain_whitelist_add(task_id):
+    """Merges `domains` into task_id's own saved domainWhitelist (tasks_store,
+    not session_manager's active-session list above) -- called by the browser
+    extension's post-session "save these sites to this task?" prompt, so a
+    site allowed on the fly (via /whitelist/domains/add) during one session
+    on this task is already allowed the next time this task starts one.
+    Case-insensitive dedupe against what's already saved; existing entries
+    and their original casing are left untouched."""
+    body = request.get_json(force=True, silent=True) or {}
+    domains = body.get("domains")
+
+    if not _is_string_list(domains):
+        return jsonify({"error": "domains must be a list of non-empty strings"}), 400
+
+    task = tasks_store.get_task(task_id)
+    if task is None:
+        return jsonify({"error": "task not found"}), 404
+
+    existing = list(task.get("domainWhitelist") or [])
+    existing_lower = {d.lower() for d in existing}
+    for domain in domains:
+        domain = domain.strip()
+        if domain.lower() not in existing_lower:
+            existing.append(domain)
+            existing_lower.add(domain.lower())
+
+    updated = tasks_store.update_task(task_id, {"domainWhitelist": existing})
+    return jsonify({"domainWhitelist": updated["domainWhitelist"]})
 
 
 @app.route("/api/focus/rules", methods=["GET"])
