@@ -4,13 +4,16 @@ POST /session/start accepting blocked_browser_profiles."""
 import pytest
 
 import api_server
+import config
 import session_manager
 
 
 @pytest.fixture
-def client():
+def client(isolate_config):
     api_server.app.config["TESTING"] = True
-    return api_server.app.test_client()
+    test_client = api_server.app.test_client()
+    test_client.environ_base["HTTP_X_CARMEN_TOKEN"] = config.get_api_token()
+    return test_client
 
 
 def test_browser_profiles_running_lists_open_profile_windows(client, monkeypatch):

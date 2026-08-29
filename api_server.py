@@ -334,6 +334,7 @@ def blocklist_apps():
 
 
 @app.route("/blocklist/browser-profiles", methods=["POST"])
+@_require_token
 def blocklist_browser_profiles():
     """Saves the default browserProfileBlocklist (AUMIs), the profile-level
     counterpart to POST /blocklist/apps."""
