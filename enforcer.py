@@ -1,5 +1,7 @@
 """Soft/hard lock enforcement actions."""
 import ctypes
+import json
+import os
 import threading
 from ctypes import wintypes
 
@@ -188,21 +190,71 @@ def get_window_aumi(hwnd):
         return None
 
 
+# Where each browser keeps its own Local State file -- the same JSON file
+# that backs the in-browser profile switcher, keyed by literal profile
+# folder name ("Default", "Profile 2", ...). Confirmed empirically that the
+# AUMI encodes that folder name with spaces stripped (folder "Profile 4" ->
+# AUMI suffix "Profile4"), so lookups below normalize both sides the same
+# way rather than assuming an exact match.
+_PROFILE_DATA_DIRS = {
+    "chrome.exe": os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "User Data"),
+    "msedge.exe": os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "Edge", "User Data"),
+}
+
+
+def _normalize_profile_key(text):
+    return text.replace(" ", "").lower()
+
+
+def _read_profile_display_names(process_name):
+    """{normalized profile folder name -> the name Chrome/Edge itself shows
+    for it} straight from Local State -- e.g. folder "Profile 4" might be
+    signed into an account also used by another profile, in which case
+    Chrome shows "Lucas (Person 1)" (its own disambiguated shortcut_name)
+    rather than the generic "name" field alone; shortcut_name is preferred
+    when both are present, since it's the more specific, recognizable one.
+    Returns {} on any failure (file missing, malformed, mid-write by the
+    browser itself) -- a friendlier label is a nice-to-have, never worth
+    crashing the picker over."""
+    data_dir = _PROFILE_DATA_DIRS.get((process_name or "").lower())
+    if not data_dir:
+        return {}
+    local_state_path = os.path.join(data_dir, "Local State")
+    try:
+        with open(local_state_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        info_cache = data.get("profile", {}).get("info_cache", {})
+        names = {}
+        for folder, info in info_cache.items():
+            display = (info.get("shortcut_name") or info.get("name") or "").strip()
+            if display:
+                names[_normalize_profile_key(folder)] = display
+        return names
+    except Exception:
+        return {}
+
+
 def describe_browser_profile_aumi(process_name, aumi):
     """A friendlier label for the picker UI than the raw AUMI -- Chrome/Edge
     encode the profile directory name after ".UserData." (e.g.
-    "Chrome.UserData.Profile 4"), which is the same folder name shown in
-    chrome://version, not necessarily the display name the user picked for
-    that profile (not exposed via AUMI). Falls back to the raw AUMI for a
-    shape this doesn't recognize -- still usable, just less pretty."""
+    "Chrome.UserData.Profile4"), which is just the folder name (also shown
+    in chrome://version), not the display name the user actually sees in
+    the profile switcher. Looks that real name up from the browser's own
+    Local State file (_read_profile_display_names) and falls back to the
+    raw folder name / "Default" / the bare AUMI, in that order, if the
+    lookup can't find or read it."""
     if not aumi:
         return process_name
     marker = ".UserData."
     if marker in aumi:
-        return f"{process_name} — {aumi.split(marker, 1)[1]}"
-    if aumi.lower() in ("chrome", "msedge"):
-        return f"{process_name} — Default"
-    return f"{process_name} — {aumi}"
+        folder_suffix = aumi.split(marker, 1)[1]
+    elif aumi.lower() in ("chrome", "msedge"):
+        folder_suffix = "Default"
+    else:
+        return f"{process_name} — {aumi}"
+
+    display = _read_profile_display_names(process_name).get(_normalize_profile_key(folder_suffix))
+    return f"{process_name} — {display or folder_suffix}"
 
 
 def is_blocked_window(process_name, hwnd):
