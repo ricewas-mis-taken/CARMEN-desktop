@@ -1,6 +1,7 @@
 """Soft/hard lock enforcement actions."""
 import ctypes
 import threading
+from ctypes import wintypes
 
 import psutil
 import win32con
@@ -80,6 +81,147 @@ def restore_all_taskbar_previews():
         _hide_taskbar_preview(hwnd, False)
 
 
+# --- Per-window AppUserModelID (for blocking one Chrome/Edge profile) ---
+#
+# Chrome/Edge run every open profile as ONE OS process (a second
+# `chrome.exe --profile-directory=X` launch hands off to the existing
+# process over an IPC pipe and exits immediately) -- confirmed empirically
+# on this machine: two profile windows, same PID. That means
+# session_manager.is_blocked()'s plain process-name check can never tell one
+# profile's windows apart from another's. What Windows itself uses to let
+# the user pin separate taskbar icons per profile is each top-level browser
+# window's own AppUserModelID (AUMI), set individually via IPropertyStore --
+# NOT the process-wide SetCurrentProcessExplicitAppUserModelID, which
+# couldn't differ per window on a shared process anyway. This section reads
+# that per-window AUMI via SHGetPropertyStoreForWindow, the same mechanism
+# Explorer itself uses for taskbar grouping.
+_ole32 = ctypes.windll.ole32
+_shell32 = ctypes.windll.shell32
+
+
+class _GUID(ctypes.Structure):
+    _fields_ = [
+        ("Data1", ctypes.c_uint32),
+        ("Data2", ctypes.c_uint16),
+        ("Data3", ctypes.c_uint16),
+        ("Data4", ctypes.c_uint8 * 8),
+    ]
+
+
+def _guid(text):
+    guid = _GUID()
+    ctypes.windll.ole32.CLSIDFromString(ctypes.c_wchar_p(text), ctypes.byref(guid))
+    return guid
+
+
+class _PROPERTYKEY(ctypes.Structure):
+    _fields_ = [("fmtid", _GUID), ("pid", ctypes.c_uint32)]
+
+
+class _PROPVARIANT(ctypes.Structure):
+    # Only ever read as VT_LPWSTR here -- 16 bytes of generic union storage
+    # is plenty for that one pointer-sized arm, without modeling every real
+    # PROPVARIANT arm (CY, FILETIME, CLIPDATA, ...) this code never touches.
+    _fields_ = [
+        ("vt", ctypes.c_uint16),
+        ("wReserved1", ctypes.c_uint16),
+        ("wReserved2", ctypes.c_uint16),
+        ("wReserved3", ctypes.c_uint16),
+        ("data", ctypes.c_uint64 * 2),
+    ]
+
+
+_PKEY_AppUserModel_ID = _PROPERTYKEY(_guid("{9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}"), 5)
+_IID_IPropertyStore = _guid("{886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99}")
+_VT_LPWSTR = 31
+
+_shell32.SHGetPropertyStoreForWindow.argtypes = [
+    wintypes.HWND, ctypes.POINTER(_GUID), ctypes.POINTER(ctypes.c_void_p)
+]
+_shell32.SHGetPropertyStoreForWindow.restype = wintypes.LONG
+_ole32.PropVariantClear.argtypes = [ctypes.c_void_p]
+_ole32.PropVariantClear.restype = wintypes.LONG
+
+_GetValueProto = ctypes.WINFUNCTYPE(
+    wintypes.LONG, ctypes.c_void_p, ctypes.POINTER(_PROPERTYKEY), ctypes.POINTER(_PROPVARIANT)
+)
+_ReleaseProto = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)
+
+
+def get_window_aumi(hwnd):
+    """The AppUserModelID hwnd's owner set on this specific window, or None
+    if it doesn't have one / the lookup fails for any reason. This is raw
+    COM vtable interop (SHGetPropertyStoreForWindow -> IPropertyStore ->
+    GetValue(PKEY_AppUserModel_ID)) -- more failure-prone than anything else
+    in this file, so every step is guarded and a failure here must never be
+    allowed to propagate into the enforcement loop that calls it every
+    tick."""
+    pps = ctypes.c_void_p()
+    try:
+        # SHGetPropertyStoreForWindow silently fails (a COM "not
+        # initialized" HRESULT, not a raised exception -- caught below as
+        # hr != 0 either way) unless COM is initialized on the calling
+        # thread. This is called from window_tracker's polling thread, Qt's
+        # main thread, and Flask worker threads, none of which are
+        # guaranteed to have done that themselves. CoInitialize is a no-op
+        # (returns S_FALSE, not an error) if this thread already has COM
+        # initialized, so it's safe to call unconditionally on every lookup.
+        _ole32.CoInitialize(None)
+        hr = _shell32.SHGetPropertyStoreForWindow(hwnd, ctypes.byref(_IID_IPropertyStore), ctypes.byref(pps))
+        if hr != 0 or not pps.value:
+            return None
+        vtable_ptr = ctypes.cast(pps, ctypes.POINTER(ctypes.c_void_p)).contents.value
+        vtable = ctypes.cast(vtable_ptr, ctypes.POINTER(ctypes.c_void_p * 8)).contents
+        release = _ReleaseProto(vtable[2])
+        try:
+            get_value = _GetValueProto(vtable[5])
+            pv = _PROPVARIANT()
+            hr = get_value(pps, ctypes.byref(_PKEY_AppUserModel_ID), ctypes.byref(pv))
+            result = None
+            if hr == 0 and pv.vt == _VT_LPWSTR and pv.data[0]:
+                result = ctypes.wstring_at(pv.data[0])
+            _ole32.PropVariantClear(ctypes.byref(pv))
+            return result
+        finally:
+            release(pps)
+    except Exception:
+        return None
+
+
+def describe_browser_profile_aumi(process_name, aumi):
+    """A friendlier label for the picker UI than the raw AUMI -- Chrome/Edge
+    encode the profile directory name after ".UserData." (e.g.
+    "Chrome.UserData.Profile 4"), which is the same folder name shown in
+    chrome://version, not necessarily the display name the user picked for
+    that profile (not exposed via AUMI). Falls back to the raw AUMI for a
+    shape this doesn't recognize -- still usable, just less pretty."""
+    if not aumi:
+        return process_name
+    marker = ".UserData."
+    if marker in aumi:
+        return f"{process_name} — {aumi.split(marker, 1)[1]}"
+    if aumi.lower() in ("chrome", "msedge"):
+        return f"{process_name} — Default"
+    return f"{process_name} — {aumi}"
+
+
+def is_blocked_window(process_name, hwnd):
+    """Whether hwnd should be treated as blocked: session_manager.is_blocked()'s
+    ordinary process-name check, OR -- for a browser where every profile
+    shares one process (session_manager.MULTI_PROFILE_BROWSER_PROCESSES) --
+    this specific window belonging to a blocked profile. Lets a session
+    block just one Chrome/Edge profile without blocking the browser (and
+    every other open profile) outright, and without needing the browser
+    extension installed in every profile."""
+    if session_manager.is_blocked(process_name):
+        return True
+    if process_name and process_name.lower() in session_manager.MULTI_PROFILE_BROWSER_PROCESSES:
+        aumi = get_window_aumi(hwnd)
+        if aumi and session_manager.is_blocked_browser_profile(aumi):
+            return True
+    return False
+
+
 def soft_lock_warning(offending_process_name=None, hwnd=None):
     status = session_manager.get_status()
     if status.get("source") == "review":
@@ -137,7 +279,7 @@ def hard_lock_redirect(offending_process_name=None):
         hwnd
         and not session_manager.is_exempt(hwnd_process, hwnd_pid)
         and hwnd_process
-        and session_manager.is_blocked(hwnd_process)
+        and is_blocked_window(hwnd_process, hwnd)
     ):
         try:
             win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
@@ -222,7 +364,7 @@ def sweep_minimize_blocked_windows():
             return
         if session_manager.is_exempt(name, pid):
             return
-        if not session_manager.is_blocked(name):
+        if not is_blocked_window(name, hwnd):
             return
 
         # Not skipped just because it's already iconic -- a window that

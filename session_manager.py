@@ -75,7 +75,21 @@ _state = {
     # a countdown from the full 8-hour ceiling instead of "Until burnout"
     # with elapsed time underneath.
     "isBurnout": False,
+    # AppUserModelIDs (see enforcer.get_window_aumi) of Chrome/Edge profile
+    # windows to block for just that one profile -- unlike processBlocklist,
+    # which blocks chrome.exe/msedge.exe outright (every profile equally).
+    # Needed because every profile of the same browser runs as ONE OS
+    # process (a second `chrome.exe --profile-directory=X` launch hands off
+    # to the existing process over IPC and exits), so plain process-name
+    # blocking can't tell one profile's windows apart from another's -- see
+    # is_blocked_browser_profile() and enforcer.is_blocked_window().
+    "blockedBrowserProfiles": [],
 }
+
+# Chromium-based browsers where every open profile shares one OS process --
+# is_blocked_browser_profile() applies to windows from these, keyed by the
+# window's own AppUserModelID rather than its process name/pid.
+MULTI_PROFILE_BROWSER_PROCESSES = {"chrome.exe", "msedge.exe"}
 
 # Index into violationLog of the most recent still-unresolved violation of
 # each kind ("process" / "domain"), so record_acceptable()/
@@ -221,6 +235,7 @@ def start_session(
     review_subject_name=None,
     review_problem_id=None,
     is_burnout=False,
+    blocked_browser_profiles=None,
 ):
     # api_server.py's /session/start already validates this for the
     # network-facing path, but start_session() is also called in-process
@@ -278,6 +293,7 @@ def start_session(
         _state["reviewSubjectName"] = review_subject_name
         _state["reviewProblemId"] = review_problem_id
         _state["isBurnout"] = is_burnout
+        _state["blockedBrowserProfiles"] = list(blocked_browser_profiles or [])
         _open_violation_index["process"] = None
         _open_violation_index["domain"] = None
         _save()
@@ -401,6 +417,7 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
     _state["reviewSubjectName"] = None
     _state["reviewProblemId"] = None
     _state["isBurnout"] = False
+    _state["blockedBrowserProfiles"] = []
     _open_violation_index["process"] = None
     _open_violation_index["domain"] = None
     _save()
@@ -465,6 +482,7 @@ def _get_status_locked():
         "reviewSubjectName": _state["reviewSubjectName"],
         "reviewProblemId": _state["reviewProblemId"],
         "isBurnout": _state["isBurnout"],
+        "blockedBrowserProfiles": list(_state["blockedBrowserProfiles"]),
     }
 
 
@@ -550,6 +568,19 @@ def is_blocked(process_name):
     with _lock:
         blocklist_lower = [p.lower() for p in _state["processBlocklist"]]
         return process_name.lower() in blocklist_lower
+
+
+def is_blocked_browser_profile(aumi):
+    """Checks a Chrome/Edge window's AppUserModelID (see
+    enforcer.get_window_aumi) against blockedBrowserProfiles -- the
+    per-profile counterpart to is_blocked()'s per-process-name check. Exact
+    match, not case-folded: AUMIs are opaque identifiers Chrome assigns
+    itself, not user-typed process names, so there's no reason to expect
+    (or paper over) a casing mismatch here."""
+    if not aumi:
+        return False
+    with _lock:
+        return aumi in _state["blockedBrowserProfiles"]
 
 
 def _resolve_open_violation_locked(kind, now):

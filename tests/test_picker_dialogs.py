@@ -61,6 +61,56 @@ def test_blocklist_picker_not_active_saves_to_config(qtbot, isolate_state):
     assert "manualapp.exe" in saved["processBlocklist"]
 
 
+def test_blocklist_picker_shows_and_saves_browser_profile_rows(qtbot, isolate_state, monkeypatch):
+    """A currently-open Chrome/Edge profile window should be offered as its
+    own checkbox, separate from the process-name rows, and checking it must
+    save to browserProfileBlocklist (by AUMI) rather than processBlocklist
+    (which would block the whole browser, every profile equally)."""
+    import config
+
+    monkeypatch.setattr(
+        picker_dialogs.window_tracker,
+        "list_browser_profile_windows",
+        lambda: [
+            {"process_name": "chrome.exe", "aumi": "Chrome", "label": "chrome.exe — Default", "window_title": "x"},
+            {
+                "process_name": "chrome.exe", "aumi": "Chrome.UserData.Profile4",
+                "label": "chrome.exe — Profile4", "window_title": "y",
+            },
+        ],
+    )
+
+    win = picker_dialogs._BlocklistPicker()
+    qtbot.addWidget(win)
+
+    assert win._checklist.has_key("Chrome.UserData.Profile4")
+    assert win._profile_aumi_keys == {"Chrome", "Chrome.UserData.Profile4"}
+
+    win._checklist._checkboxes_by_key["chrome.userdata.profile4"][0].setChecked(True)
+    win._save()
+
+    saved = config.load_config()
+    assert saved["browserProfileBlocklist"] == ["Chrome.UserData.Profile4"]
+    assert "Chrome.UserData.Profile4" not in saved["processBlocklist"]
+
+
+def test_timer_dialog_passes_saved_browser_profile_blocklist(qtbot, isolate_state, monkeypatch):
+    import config
+
+    config.update_config(lambda cfg: cfg.update({"browserProfileBlocklist": ["Chrome.UserData.Profile4"]}))
+
+    spy = MagicMock(wraps=session_manager.start_session)
+    monkeypatch.setattr(session_manager, "start_session", spy)
+
+    win = picker_dialogs._TimerDialog()
+    qtbot.addWidget(win)
+    win._duration_edit.setText("10")
+    win._start()
+
+    assert spy.call_args.kwargs["blocked_browser_profiles"] == ["Chrome.UserData.Profile4"]
+    assert session_manager.get_status()["blockedBrowserProfiles"] == ["Chrome.UserData.Profile4"]
+
+
 def test_manual_entry_requires_exe_suffix(qtbot, isolate_state):
     win = picker_dialogs._BlocklistPicker()
     qtbot.addWidget(win)
