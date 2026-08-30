@@ -9,13 +9,30 @@ import session_manager
 import window_tracker
 
 
-def test_describe_browser_profile_aumi_default():
+def test_describe_browser_profile_aumi_uses_the_real_profile_name(monkeypatch):
+    """The label should be the name Chrome itself shows in its profile
+    switcher (from Local State), not the raw folder name the AUMI encodes --
+    "Profile4" on its own tells the user nothing about which profile that
+    actually is."""
+    monkeypatch.setattr(
+        enforcer, "_read_profile_display_names",
+        lambda process_name: {"default": "Rice", "profile4": "Lucas (Person 1)"},
+    )
+    assert enforcer.describe_browser_profile_aumi("chrome.exe", "Chrome") == "chrome.exe — Rice"
+    assert (
+        enforcer.describe_browser_profile_aumi("chrome.exe", "Chrome.UserData.Profile4")
+        == "chrome.exe — Lucas (Person 1)"
+    )
+
+
+def test_describe_browser_profile_aumi_falls_back_when_name_lookup_fails(monkeypatch):
+    """Local State might not exist, be unreadable, or simply not have an
+    entry for this folder (e.g. read mid-write by the browser itself) --
+    the raw folder name/"Default" is still a usable label, just less
+    friendly, and must never be replaced with nothing."""
+    monkeypatch.setattr(enforcer, "_read_profile_display_names", lambda process_name: {})
     assert enforcer.describe_browser_profile_aumi("chrome.exe", "Chrome") == "chrome.exe — Default"
-
-
-def test_describe_browser_profile_aumi_named_profile():
-    label = enforcer.describe_browser_profile_aumi("chrome.exe", "Chrome.UserData.Profile4")
-    assert label == "chrome.exe — Profile4"
+    assert enforcer.describe_browser_profile_aumi("chrome.exe", "Chrome.UserData.Profile4") == "chrome.exe — Profile4"
 
 
 def test_describe_browser_profile_aumi_falls_back_for_unrecognized_shape():
@@ -24,6 +41,36 @@ def test_describe_browser_profile_aumi_falls_back_for_unrecognized_shape():
 
 def test_describe_browser_profile_aumi_no_aumi_returns_process_name():
     assert enforcer.describe_browser_profile_aumi("chrome.exe", None) == "chrome.exe"
+
+
+def test_read_profile_display_names_parses_local_state(monkeypatch, tmp_path):
+    """End-to-end through the real file-reading/JSON-parsing/normalizing
+    path, using a Local State shaped like Chrome's actual file (folder names
+    with spaces, shortcut_name preferred over the more generic name)."""
+    data_dir = tmp_path / "Chrome User Data"
+    data_dir.mkdir()
+    (data_dir / "Local State").write_text(
+        '{"profile": {"info_cache": {'
+        '"Default": {"name": "Person 1", "shortcut_name": "Rice"}, '
+        '"Profile 2": {"name": "Lucas"}, '
+        '"Profile 4": {"name": "Person 1", "shortcut_name": "Lucas (Person 1)"}'
+        "}}}",
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(enforcer._PROFILE_DATA_DIRS, "chrome.exe", str(data_dir))
+
+    names = enforcer._read_profile_display_names("chrome.exe")
+
+    assert names == {"default": "Rice", "profile2": "Lucas", "profile4": "Lucas (Person 1)"}
+
+
+def test_read_profile_display_names_returns_empty_for_missing_file(monkeypatch, tmp_path):
+    monkeypatch.setitem(enforcer._PROFILE_DATA_DIRS, "chrome.exe", str(tmp_path / "does-not-exist"))
+    assert enforcer._read_profile_display_names("chrome.exe") == {}
+
+
+def test_read_profile_display_names_returns_empty_for_unknown_process():
+    assert enforcer._read_profile_display_names("notepad.exe") == {}
 
 
 def test_is_blocked_window_true_for_plain_process_blocklist(isolate_state):
