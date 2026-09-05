@@ -38,10 +38,10 @@ class FocusTab(QWidget):
         button_row = QHBoxLayout()
         button_row.setSpacing(8)
 
-        start_button = QPushButton("Start Focus Session")
-        start_button.setProperty("class", "AccentButton")
-        start_button.clicked.connect(picker_gui.open_timer_dialog)
-        button_row.addWidget(start_button)
+        self._start_button = QPushButton("Start Focus Session")
+        self._start_button.setProperty("class", "AccentButton")
+        self._start_button.clicked.connect(picker_gui.open_timer_dialog)
+        button_row.addWidget(self._start_button)
 
         blocklist_button = QPushButton("Pick Apps to Blocklist")
         blocklist_button.setProperty("class", "SecondaryButton")
@@ -112,6 +112,16 @@ class FocusTab(QWidget):
         self._was_active = active
         self._pause_button.setVisible(active)
         self._nuclear_button.setVisible(active)
+        # A session is already running -- starting another from here would
+        # silently supersede it (session_manager.start_session()'s "new
+        # session wins" behavior, meant for calendar/task/review sources
+        # firing mid-session, not for an accidental double-click here).
+        # End the current one first instead of stacking dialogs that would
+        # each try to start their own.
+        self._start_button.setDisabled(active)
+        self._start_button.setToolTip(
+            "End the current session first." if active else ""
+        )
         if not active:
             self._status_label.setText("No active focus session.")
             return
