@@ -183,21 +183,24 @@ class _BlocklistPicker(QWidget):
         """Lets a session block just one Chrome/Edge profile instead of the
         whole browser (blocking chrome.exe via processBlocklist above blocks
         every profile equally) -- and without needing the browser extension
-        installed in that profile at all. Only profiles with a window open
-        *right now* can be offered, since a profile's identifying
-        AppUserModelID isn't known until Windows reads it off a real window
-        (see enforcer.get_window_aumi/window_tracker.list_browser_profile_windows)."""
-        profile_windows = window_tracker.list_browser_profile_windows()
-        if not profile_windows:
+        installed in that profile at all. Lists every profile Chrome/Edge
+        know about (window_tracker.list_known_browser_profiles(), read from
+        each browser's Local State file), not just ones with a window open
+        right now -- picking a profile to block is usually a precaution
+        against it being opened at all, so a closed profile must still be
+        offered rather than silently disappearing from the list."""
+        known_profiles = window_tracker.list_known_browser_profiles()
+        if not known_profiles:
             return
         saved_profiles = {
             aumi for aumi in config.load_config().get("browserProfileBlocklist", [])
         }
         self._checklist.add_separator_label("Browser profiles (blocks just that profile, not the whole browser):")
-        for profile in profile_windows:
+        for profile in known_profiles:
             self._profile_aumi_keys.add(profile["aumi"])
+            label = profile["label"] if profile["is_running"] else f"{profile['label']} (not open right now)"
             self._checklist.add_row(
-                profile["aumi"], profile["label"], checked=profile["aumi"] in saved_profiles
+                profile["aumi"], label, checked=profile["aumi"] in saved_profiles
             )
 
     def _add_manual_entry(self, process_name):

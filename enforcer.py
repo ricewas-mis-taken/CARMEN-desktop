@@ -234,6 +234,37 @@ def _read_profile_display_names(process_name):
         return {}
 
 
+_DEFAULT_PROFILE_AUMI = {
+    "chrome.exe": "Chrome",
+    "msedge.exe": "MSEdge",
+}
+
+
+def list_known_profile_aumis(process_name):
+    """Every AUMI a profile of this browser could have, whether or not it
+    currently has a window open -- read straight from Local State's
+    info_cache (same file _read_profile_display_names uses), rather than
+    needing a live window to read one off of (see get_window_aumi). Lets the
+    picker offer a profile to block as a precaution before it's ever opened,
+    not just react to one already running. Returns [] on any failure, for
+    the same reasons as _read_profile_display_names."""
+    data_dir = _PROFILE_DATA_DIRS.get((process_name or "").lower())
+    default_aumi = _DEFAULT_PROFILE_AUMI.get((process_name or "").lower())
+    if not data_dir or not default_aumi:
+        return []
+    local_state_path = os.path.join(data_dir, "Local State")
+    try:
+        with open(local_state_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        info_cache = data.get("profile", {}).get("info_cache", {})
+        return [
+            default_aumi if folder == "Default" else f"{default_aumi}.UserData.{folder.replace(' ', '')}"
+            for folder in info_cache
+        ]
+    except Exception:
+        return []
+
+
 def describe_browser_profile_aumi(process_name, aumi):
     """A friendlier label for the picker UI than the raw AUMI -- Chrome/Edge
     encode the profile directory name after ".UserData." (e.g.

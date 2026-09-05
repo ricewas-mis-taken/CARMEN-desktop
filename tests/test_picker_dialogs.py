@@ -70,12 +70,15 @@ def test_blocklist_picker_shows_and_saves_browser_profile_rows(qtbot, isolate_st
 
     monkeypatch.setattr(
         picker_dialogs.window_tracker,
-        "list_browser_profile_windows",
+        "list_known_browser_profiles",
         lambda: [
-            {"process_name": "chrome.exe", "aumi": "Chrome", "label": "chrome.exe — Default", "window_title": "x"},
+            {
+                "process_name": "chrome.exe", "aumi": "Chrome", "label": "chrome.exe — Default",
+                "is_running": True,
+            },
             {
                 "process_name": "chrome.exe", "aumi": "Chrome.UserData.Profile4",
-                "label": "chrome.exe — Profile4", "window_title": "y",
+                "label": "chrome.exe — Profile4", "is_running": False,
             },
         ],
     )
