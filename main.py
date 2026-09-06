@@ -16,6 +16,7 @@ import calendar_scheduler
 import calendar_toast
 import config
 import dev_watcher
+import enforcer
 import qt_gui_thread
 import singleinstance
 import tray
@@ -129,6 +130,16 @@ def main():
         daemon=True,
     )
     polling_thread.start()
+
+    # Instant re-minimize on click (hard lock only) -- a WinEvent hook, not
+    # part of window_tracker's poll loop, so it needs a real Windows message
+    # pump on its own thread; see enforcer.run_instant_reminimize_watcher.
+    reminimize_thread = threading.Thread(
+        target=enforcer.run_instant_reminimize_watcher,
+        args=(stop_event,),
+        daemon=True,
+    )
+    reminimize_thread.start()
 
     # pystray runs detached on its own background thread instead of
     # blocking this one — confirmed via a throwaway spike that pystray's
