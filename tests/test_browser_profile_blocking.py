@@ -4,6 +4,8 @@ browser via processBlocklist -- needed because every profile of the same
 browser shares one OS process (confirmed empirically: two profile windows
 launched on the same machine came back with the same PID), so a plain
 process-name check can't tell them apart."""
+import json
+
 import enforcer
 import session_manager
 import window_tracker
@@ -169,3 +171,55 @@ def test_list_browser_profile_windows_returns_one_entry_per_unique_aumi(monkeypa
 
     assert {r["aumi"] for r in result} == {"Chrome", "Chrome.UserData.Profile4"}
     assert all(r["process_name"] == "chrome.exe" for r in result)
+
+
+def test_list_known_profile_aumis_reads_info_cache(tmp_path, monkeypatch):
+    """The Default profile's AUMI is the bare prefix; every other profile
+    extends it with .UserData.<dir> (spaces stripped, matching the real
+    format Chrome/Edge assign to a window's AppUserModelID -- see
+    enforcer._PROFILE_DATA_DIRS's docstring)."""
+    user_data = tmp_path / "Google" / "Chrome" / "User Data"
+    user_data.mkdir(parents=True)
+    (user_data / "Local State").write_text(json.dumps({
+        "profile": {"info_cache": {
+            "Default": {"name": "Lucas"},
+            "Profile 1": {"name": "Work"},
+        }}
+    }))
+    monkeypatch.setitem(enforcer._PROFILE_DATA_DIRS, "chrome.exe", str(user_data))
+
+    assert set(enforcer.list_known_profile_aumis("chrome.exe")) == {"Chrome", "Chrome.UserData.Profile1"}
+
+
+def test_list_known_profile_aumis_missing_file_returns_empty(tmp_path, monkeypatch):
+    """Browser not installed / Local State missing/unreadable/malformed must
+    never raise -- this is a best-effort precaution list, not a hard dep."""
+    monkeypatch.setitem(enforcer._PROFILE_DATA_DIRS, "chrome.exe", str(tmp_path / "nonexistent"))
+    assert enforcer.list_known_profile_aumis("chrome.exe") == []
+
+
+def test_list_known_browser_profiles_merges_disk_and_running(monkeypatch):
+    """A profile known only from disk is still listed (is_running=False),
+    and one with an open window is marked is_running=True using the live
+    window's own process_name/aumi as ground truth."""
+    monkeypatch.setattr(
+        window_tracker, "list_browser_profile_windows",
+        lambda: [{"process_name": "chrome.exe", "aumi": "Chrome", "label": "chrome.exe — Default", "window_title": "x"}],
+    )
+    monkeypatch.setattr(
+        session_manager, "MULTI_PROFILE_BROWSER_PROCESSES", {"chrome.exe"}
+    )
+    monkeypatch.setattr(
+        enforcer, "list_known_profile_aumis",
+        lambda process_name: ["Chrome", "Chrome.UserData.Profile1"],
+    )
+    monkeypatch.setattr(
+        enforcer, "describe_browser_profile_aumi",
+        lambda process_name, aumi: f"{process_name} — {aumi}",
+    )
+
+    result = window_tracker.list_known_browser_profiles()
+
+    by_aumi = {p["aumi"]: p for p in result}
+    assert by_aumi["Chrome"]["is_running"] is True
+    assert by_aumi["Chrome.UserData.Profile1"]["is_running"] is False

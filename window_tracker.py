@@ -103,6 +103,34 @@ def list_browser_profile_windows():
     return list(seen.values())
 
 
+def list_known_browser_profiles():
+    """The full "block just one browser profile" candidate list for the app
+    picker: every profile Chrome/Edge know about (enforcer.list_known_profile_aumis,
+    read from each browser's Local State), merged with which of those
+    currently have a window open (list_browser_profile_windows()) -- listed
+    as a precaution even when not running right now, since the point of
+    picking a profile to block is usually to stop it being opened in the
+    first place, not just to react to it already being open."""
+    running_by_aumi = {p["aumi"]: p for p in list_browser_profile_windows()}
+
+    merged = {}
+    for process_name in session_manager.MULTI_PROFILE_BROWSER_PROCESSES:
+        for aumi in enforcer.list_known_profile_aumis(process_name):
+            merged[aumi] = {
+                "process_name": process_name,
+                "aumi": aumi,
+                "label": enforcer.describe_browser_profile_aumi(process_name, aumi),
+                "is_running": False,
+            }
+
+    for aumi, running_profile in running_by_aumi.items():
+        # A window is ground truth for process_name/aumi/window_title -- the
+        # disk-derived entry only ever fills in when there's no live window.
+        merged[aumi] = {**merged.get(aumi, {}), **running_profile, "is_running": True}
+
+    return sorted(merged.values(), key=lambda p: (not p["is_running"], p["label"]))
+
+
 def run_polling_loop(stop_event, on_session_end=None, tray_icon=None):
     """Runs until stop_event is set. Intended to be launched in its own thread.
 
