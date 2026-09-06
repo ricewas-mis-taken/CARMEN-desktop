@@ -365,8 +365,18 @@ def hard_lock_redirect(offending_process_name=None):
         and is_blocked_window(hwnd_process, hwnd)
     ):
         try:
-            win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+            # Order matters: DWMWA_FORCE_ICONIC_REPRESENTATION must be set
+            # *before* the minimize starts, not after. Setting it while the
+            # genie/minimize animation is already in flight makes DWM expect
+            # a custom iconic bitmap for the frame it's mid-way through
+            # compositing, get nothing (the app never supplies one), and
+            # render that frame solid black instead -- sized to the window's
+            # own screen bounds, which is the whole screen for a maximized
+            # window. This is the "whole screen flashes black on minimize"
+            # bug; setting the attribute first means DWM already knows not
+            # to expect live content before the transition ever starts.
             _hide_taskbar_preview(hwnd, True)
+            win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
         except Exception:
             pass
 
@@ -464,10 +474,14 @@ def sweep_minimize_blocked_windows():
         # hwnd it's already hidden), so reapplying every tick is harmless.
         was_iconic = win32gui.IsIconic(hwnd)
         try:
+            # Same ordering fix as hard_lock_redirect -- set the DWM
+            # attribute before minimizing, not after, so DWM never tries to
+            # composite the in-flight minimize animation against a custom
+            # iconic bitmap that's never supplied (see the comment there).
+            _hide_taskbar_preview(hwnd, True)
             if not was_iconic:
                 win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
                 minimized.append((name, hwnd))
-            _hide_taskbar_preview(hwnd, True)
         except Exception:
             pass
 
