@@ -41,5 +41,14 @@ def schedule_after_review(schedule_stage: int, stars: int, shakiness: int = 3) -
 
 
 def schedule_checked_answer(schedule_stage: int, stars: int) -> dict:
-    """Keeps the schedule stage but schedules a near-term revisit (1 day)."""
-    return {"schedule_stage": schedule_stage, "next_review_date": today() + timedelta(days=1)}
+    """Full reset to stage 0, regardless of the stage this problem had
+    climbed to -- checking the answer means it wasn't actually recalled, so
+    a stage the schedule had "earned" (e.g. a 21-day interval reached after
+    solving it three times running) no longer reflects what's actually
+    remembered. The whole interval ladder re-climbs from scratch (1, 4, 10,
+    21, 45, 90 days, scaled by star/shakiness) instead of resuming from
+    wherever it left off. next_review_date is stage 0's own interval --
+    always 1 day, since round(1 * a multiplier <= 1.0) can't exceed 1 --
+    rather than a hardcoded "tomorrow" that happened to coincidentally
+    match it."""
+    return {"schedule_stage": 0, "next_review_date": today() + timedelta(days=compute_next_interval(0, stars))}
