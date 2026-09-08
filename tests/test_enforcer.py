@@ -1,10 +1,19 @@
 """Tests for enforcer.py's sweep_minimize_blocked_windows() -- the
 hard-lock pass that minimizes every visible blocklisted window each poll
 tick, independent of which window happens to be in the foreground."""
+import sys
+
 import pytest
 
 import enforcer
 import session_manager
+
+# This file monkeypatches enforcer.win32gui/win32process and enforcer's
+# Windows-only _hidden_hwnds directly -- none of that exists in enforcer.py's
+# darwin branch (see enforcer_mac.py + mac-os/tests/test_enforcer_mac.py for
+# the macOS equivalents of this coverage). Per PORT_SPEC.md's Testing
+# section, mark it to skip on macOS rather than deleting/weakening it.
+pytestmark = pytest.mark.skipif(sys.platform == "darwin", reason="monkeypatches Windows-only enforcer internals")
 
 
 @pytest.fixture(autouse=True)

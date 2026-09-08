@@ -3,11 +3,12 @@ detached tray thread as background threads, then runs Qt's event loop on
 the main thread (Qt requirement: only the thread that constructs
 QApplication may create/touch widgets — see qt_gui_thread.py)."""
 import os
+import subprocess
 import sys
 import threading
 import time
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 import api_server
 import auto_updater
@@ -37,6 +38,49 @@ def _load_stylesheet(app):
         pass  # missing/unreadable stylesheet must never block the app from starting
 
 
+def _check_accessibility_trust():
+    """macOS-only: every hard/soft lock mechanism in mac_os/enforcer_mac.py
+    needs Accessibility permission (System Settings -> Privacy & Security ->
+    Accessibility) -- there's no way around this, Apple gates all
+    cross-application window control behind it. Per PORT_SPEC.md's Subsystem
+    2, this must be an explicit, visible onboarding step re-checked on every
+    launch (the user can revoke it later in System Settings), not a silent
+    background check -- a session that *thinks* it's enforcing but silently
+    can't touch any window would be worse than not having the feature.
+
+    This shows a persistent warning rather than blocking session-start
+    outright (the stricter of the two options PORT_SPEC.md allows) -- fully
+    gating "Start Focus Session" on trust status is real, separate follow-up
+    work (touching qt_ui/focus_tab.py's start button, not just main.py's
+    startup path) that hasn't been done yet; flagged in PORT_SPEC.md."""
+    if sys.platform != "darwin":
+        return
+    # AXIsProcessTrustedWithOptions's prompt option makes macOS pop its own
+    # system permission dialog the first time this runs if not already
+    # granted -- see enforcer_mac.is_accessibility_trusted's docstring.
+    if enforcer.is_accessibility_trusted(prompt=True):
+        return
+    box = QMessageBox()
+    box.setIcon(QMessageBox.Warning)
+    box.setWindowTitle("Carmen Focus needs Accessibility access")
+    box.setText(
+        "Carmen Focus can't enforce focus sessions on macOS without "
+        "Accessibility permission. Until it's granted, hard/soft lock will "
+        "silently do nothing."
+    )
+    open_settings_button = box.addButton("Open System Settings", QMessageBox.ActionRole)
+    box.addButton("Later", QMessageBox.RejectRole)
+    box.exec()
+    if box.clickedButton() is open_settings_button:
+        try:
+            subprocess.run(
+                ["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"],
+                check=False,
+            )
+        except Exception:
+            pass
+
+
 def main():
     singleinstance.acquire()
     config.load_config()
@@ -54,6 +98,7 @@ def main():
     # process on its own — only "Quit" from the tray menu should.
     app.setQuitOnLastWindowClosed(False)
     _load_stylesheet(app)
+    _check_accessibility_trust()
 
     qt_gui_thread.start()
 
@@ -134,12 +179,16 @@ def main():
     # Instant re-minimize on click (hard lock only) -- a WinEvent hook, not
     # part of window_tracker's poll loop, so it needs a real Windows message
     # pump on its own thread; see enforcer.run_instant_reminimize_watcher.
-    reminimize_thread = threading.Thread(
-        target=enforcer.run_instant_reminimize_watcher,
-        args=(stop_event,),
-        daemon=True,
-    )
-    reminimize_thread.start()
+    # macOS has no message-pump equivalent of this mechanism -- its hard-lock
+    # path (mac_os/enforcer_mac.py) relies on the Accessibility API's own
+    # per-window minimize instead, so this thread is Windows-only.
+    if sys.platform != "darwin":
+        reminimize_thread = threading.Thread(
+            target=enforcer.run_instant_reminimize_watcher,
+            args=(stop_event,),
+            daemon=True,
+        )
+        reminimize_thread.start()
 
     # pystray runs detached on its own background thread instead of
     # blocking this one — confirmed via a throwaway spike that pystray's

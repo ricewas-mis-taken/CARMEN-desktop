@@ -3,9 +3,15 @@ Finished) + QStackedWidget content, replacing calendar_gui.py's Tk
 `.tkraise()` frame switching and Stage 1's placeholder stand-in.
 """
 import ctypes
-import ctypes.wintypes
+import sys
 
-import win32gui
+if sys.platform != "darwin":
+    # ctypes.wintypes crashes at import time on non-Windows platforms
+    # (VARIANT_BOOL's `_type_ = "v"` isn't a registered ctypes type code
+    # off-Windows -- ValueError: _type_ 'v' not supported), so it's guarded
+    # here alongside win32gui, not just the code that uses it below.
+    import ctypes.wintypes
+    import win32gui
 
 from PySide6.QtCore import Qt
 from PySide6.QtCore import QEvent
@@ -259,7 +265,11 @@ class _MainWindow(QWidget):
         super().resizeEvent(event)
 
     def nativeEvent(self, eventType, message):
-        if eventType == "windows_generic_MSG":
+        # No macOS equivalent needed here -- this guards a Windows-specific
+        # drag-stretch bug (see the WM_MOVING comment above); macOS's own
+        # window manager doesn't have this problem, so there's nothing to
+        # replace it with, just skip it on darwin.
+        if sys.platform != "darwin" and eventType == "windows_generic_MSG":
             msg = ctypes.wintypes.MSG.from_address(int(message))
             if msg.message == WM_ENTERSIZEMOVE:
                 try:
