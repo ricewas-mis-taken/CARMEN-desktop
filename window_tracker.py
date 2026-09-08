@@ -2,6 +2,17 @@
 import sys
 import time
 
+# Both platform-agnostic -- enforcer.py dispatches internally, and
+# session_manager.py has no Windows-only imports of its own -- and both are
+# needed by run_polling_loop() below, which is defined once, unconditionally,
+# after the platform-specific if/else. They must be imported here, above that
+# if/else, not inside the Windows-only branch: run_polling_loop is still
+# reached on macOS, and a name only bound inside the (never-taken) Windows
+# branch would raise NameError on its first tick -- silently, since the loop's
+# own try/except swallows it, spinning forever while doing nothing.
+import enforcer
+import session_manager
+
 if sys.platform == "darwin":
     import os as _os
     _mac_os_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "mac-os")
@@ -20,9 +31,6 @@ else:
     import psutil
     import win32gui
     import win32process
-
-    import enforcer
-    import session_manager
 
     POLL_INTERVAL_SECONDS = 1.5
 

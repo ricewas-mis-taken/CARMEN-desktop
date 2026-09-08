@@ -3,10 +3,14 @@ Finished) + QStackedWidget content, replacing calendar_gui.py's Tk
 `.tkraise()` frame switching and Stage 1's placeholder stand-in.
 """
 import ctypes
-import ctypes.wintypes
 import sys
 
 if sys.platform != "darwin":
+    # ctypes.wintypes crashes at import time on non-Windows platforms
+    # (VARIANT_BOOL's `_type_ = "v"` isn't a registered ctypes type code
+    # off-Windows -- ValueError: _type_ 'v' not supported), so it's guarded
+    # here alongside win32gui, not just the code that uses it below.
+    import ctypes.wintypes
     import win32gui
 
 from PySide6.QtCore import Qt

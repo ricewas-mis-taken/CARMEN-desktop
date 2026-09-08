@@ -5,10 +5,20 @@ browser shares one OS process (confirmed empirically: two profile windows
 launched on the same machine came back with the same PID), so a plain
 process-name check can't tell them apart."""
 import json
+import sys
+
+import pytest
 
 import enforcer
 import session_manager
 import window_tracker
+
+# Per-Chrome/Edge-profile blocking (AUMI) is Windows-only for now -- the
+# macOS Subsystem 3 research spike hasn't been run (see mac-os/PORT_SPEC.md's
+# implementation-status section), and this file directly monkeypatches
+# window_tracker.win32gui/win32process, which don't exist in the darwin
+# branch. Skip rather than delete/weaken per PORT_SPEC.md's Testing section.
+pytestmark = pytest.mark.skipif(sys.platform == "darwin", reason="Chrome/Edge per-profile blocking is Windows-only")
 
 
 def test_describe_browser_profile_aumi_uses_the_real_profile_name(monkeypatch):
