@@ -744,6 +744,17 @@ against real PyPI on macOS.
   Whoever picks this up should decide whether to add a macOS-specific
   addition to that set (gated on `sys.platform`, since it's a shared,
   platform-agnostic module).
+- **`singleinstance.py`'s lock file lands somewhere non-idiomatic on macOS.**
+  `LOCK_DIR` is `$LOCALAPPDATA/CARMEN`, which doesn't exist on macOS -- it
+  falls back to `~/CARMEN` (the `os.environ.get(..., os.path.expanduser("~"))`
+  default), which works fine functionally but isn't where a macOS app is
+  expected to keep this kind of file (`~/Library/Application Support/CARMEN`
+  would be the idiomatic location). Read in full and confirmed otherwise
+  completely platform-agnostic (`os`/`psutil`/`urllib` only, no win32
+  dependency) -- this is a deliberate "leave as-is" call, not an oversight,
+  since fixing it is cosmetic and not required for correctness. Flagged here
+  so it's a documented decision, not something the next person has to
+  rediscover.
 
 ### Full punch list for whoever has a real Mac next
 
