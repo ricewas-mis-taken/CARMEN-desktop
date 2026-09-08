@@ -11,6 +11,7 @@ All three windows are non-modal (.show(), not .exec()) -- same as the
 original Tk versions, which never used grab_set().
 """
 import os
+import sys
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 import config
+import enforcer
 import installed_apps
 import session_history
 import session_manager
@@ -394,6 +396,42 @@ class _TimerDialog(QWidget):
                 raise ValueError
         except ValueError:
             self._status_label.setText("Enter a valid duration.")
+            return
+
+        # macOS-only: hard/soft lock can't do anything at all without
+        # Accessibility permission (see mac_os/enforcer_mac.py's module
+        # docstring) -- gating the interactive "Start Session" button is the
+        # stricter of the two options PORT_SPEC.md's Subsystem 2 allows (the
+        # weaker one, a persistent warning at app launch, is already handled
+        # by main.py._check_accessibility_trust()). Automatic session starts
+        # (calendar-triggered, review-triggered) are deliberately NOT gated
+        # here -- refusing one of those silently, with no dialog to show an
+        # error in, would be worse than letting it start with enforcement
+        # degraded, so this only covers the one flow with a UI to refuse in.
+        if sys.platform == "darwin" and not enforcer.is_accessibility_trusted():
+            self._status_label.setText(
+                "Carmen Focus needs Accessibility permission to enforce a session on macOS."
+            )
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle("Accessibility permission needed")
+            box.setText(
+                "Carmen Focus can't enforce hard/soft lock on macOS without "
+                "Accessibility permission. Grant it in System Settings, then "
+                "try starting the session again."
+            )
+            open_settings_button = box.addButton("Open System Settings", QMessageBox.ActionRole)
+            box.addButton("Cancel", QMessageBox.RejectRole)
+            box.exec()
+            if box.clickedButton() is open_settings_button:
+                import subprocess
+                try:
+                    subprocess.run(
+                        ["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"],
+                        check=False,
+                    )
+                except Exception:
+                    pass
             return
 
         lock_mode = "hard" if self._hard_radio.isChecked() else "soft"
