@@ -591,3 +591,152 @@ shared base file needed for a project this size) — note this explicitly in
 Stop and report back after each phase, same convention as the rest of this repo's
 phased feature work — don't silently barrel through all seven and present it as one
 giant diff.
+
+---
+
+## Implementation status (as of the `mac-os-port` branch)
+
+No physical Mac was available while implementing any of this — every finding
+below marked "needs a real Mac" is genuinely unverified, not just untested for
+form's sake.
+
+### Done
+
+- **Architecture: platform dispatch.** Implemented, but with one deviation from
+  this doc's original shim snippet -- see `mac-os/README.md`'s "Deviation from
+  the spec's dispatch-shim pattern" section for why the naive top-level
+  `if/else` doesn't work (module-level Windows-only imports/ctypes setup crash
+  at import time on macOS) and what was done instead (the whole Windows body
+  guarded and reindented under one `if sys.platform == "darwin": ... else:`,
+  keeping every function physically defined in the same module object so
+  existing tests that monkeypatch module globals keep working unchanged).
+  Package layout: option A (`mac-os/mac_os/`) was chosen; see the README.
+- **Subsystem 1 (window enumeration)**: `mac-os/mac_os/window_tracker_mac.py`.
+  `get_active_window`/`list_running_apps` implemented against
+  `NSWorkspace`/`CGWindowListCopyWindowInfo`. Window identity: there's no
+  macOS "hwnd" -- every function that threads one through (is_blocked_window,
+  sweep_minimize, the hard-redirect cooldown dict) now uses a **pid** instead,
+  since none of the current call sites need true per-window identity (the one
+  that would -- Chrome/Edge per-profile AUMI matching -- is the Subsystem 3
+  gap below, deferred). `run_polling_loop` itself was NOT duplicated; it stays
+  defined once in `window_tracker.py`, unconditionally, per this doc's own
+  note that its loop body is already platform-agnostic.
+- **Subsystem 2 (enforcement)**: `mac-os/mac_os/enforcer_mac.py`. Hard lock
+  (`AXUIElementSetAttributeValue(..., kAXMinimizedAttribute, True)` on every
+  window of the frontmost blocked app + `NSRunningApplication.hide()`),
+  sweep-minimize (same primitives, applied across every on-screen window's
+  owning pid), restore/unhide, and `is_accessibility_trusted()` (wraps
+  `AXIsProcessTrustedWithOptions`) are all implemented. Wired into
+  `main.py._check_accessibility_trust()`, called once at startup on darwin: it
+  requests Accessibility trust (prompting the system dialog if not yet
+  granted) and, if still not trusted, shows a `QMessageBox` explaining why and
+  offering to open System Settings directly. **Gap versus the spec's stated
+  bar**: this shows a persistent warning, it does not block session-start
+  outright (the stricter of the two options this doc allows in the Subsystem 2
+  section) -- actually gating the "Start Focus Session" button on trust status
+  would mean touching `qt_ui/focus_tab.py`, which wasn't done. Also:
+  `soft_lock_warning`'s blackout-rect (covering just the offending window in
+  black) isn't implemented on macOS -- only the message overlay shows; that
+  needs a per-window frame lookup this pass didn't add.
+- **Subsystem 4 (notifications)**: `mac-os/mac_os/calendar_toast_mac.py`, via
+  `UNUserNotificationCenter`. Interactive snooze buttons implemented via a
+  lazily-built `NSObject` delegate subclass (real subclassing, as this doc
+  warned would be needed) that demultiplexes callbacks by notification-request
+  identifier, since `UNUserNotificationCenter` supports only one delegate for
+  the whole process. See the module's own docstring for two documented
+  tradeoffs found during implementation (the single shared delegate, and
+  `setNotificationCategories_` replacing the entire category set on every
+  buttoned call rather than adding one).
+- **Subsystem 5 (autostart)**: `mac-os/mac_os/autostart_mac.py`, a per-user
+  LaunchAgent plist (`RunAtLoad=True`, `KeepAlive=False`, matching the Windows
+  Run-key's actual launch-once-don't-respawn behavior). `ProgramArguments`
+  currently points at `[sys.executable, .../main.py]` as a stand-in until
+  Subsystem 8 packaging exists, per this doc's own note that it should
+  eventually point at the bundled `.app`'s binary.
+- **Subsystem 6 (installed-app enumeration)**: `mac-os/mac_os/installed_apps_mac.py`,
+  scanning `/Applications` + `~/Applications` for `.app` bundles and reading
+  `Contents/Info.plist`. Matches `installed_apps.list_installed_apps()`'s
+  exact return shape. Known gap: only scans one level deep (matching this
+  doc's own snippet) -- a nested bundle (e.g. `/Applications/Utilities/*.app`)
+  would be missed; not fixed, flagged here for a decision.
+- **Subsystem 7 (tray/menu-bar)**: confirmed by reading `tray.py` that it only
+  uses `pystray`'s public, platform-abstracted API (`default=True`,
+  `visible=<callable>`) -- both are documented cross-platform pystray
+  features, so no shim or patch was made. **Not verified on a real Mac** that
+  pystray's Cocoa backend actually renders these the same way its win32
+  backend does -- this doc's own Subsystem 7 section asked for that
+  confirmation explicitly, and it still needs to happen on real hardware.
+- Every `mac-os/mac_os/*_mac.py` module has a matching test file under
+  `mac-os/tests/`, exercised on this Windows machine against **stubbed**
+  `AppKit`/`Quartz`/`ApplicationServices`/`UserNotifications`/`objc` modules
+  (see `mac-os/tests/conftest.py`'s `mac_world` fixture). This catches import
+  errors, wrong symbol names, and wrong control flow -- it cannot confirm the
+  real frameworks behave as documented. The full existing Windows suite (269
+  tests) plus the new mac-os suite (35 tests) both pass together
+  unchanged/passing on this branch.
+
+### Subsystem 3 (Chrome/Edge per-profile blocking) -- spike NOT run
+
+The research spike this doc calls for (does macOS Chrome/Edge share one
+process across profiles or spawn one per profile; if shared, what per-window
+signal identifies the profile) requires a real Mac with Chrome/Edge installed
+and multiple profiles open, to inspect via `ps`/Activity Monitor/AppleScript.
+**None of that was possible from this Windows dev machine** -- the spike has
+not been run at all, not even partially.
+
+Per this doc's own documented fallback for exactly this situation,
+per-Chrome/Edge-profile blocking stays a **Windows-only feature for now**:
+
+- `window_tracker_mac.list_browser_profile_windows()` and
+  `list_known_browser_profiles()` both always return `[]` (the app picker's
+  "block just one browser profile" section will simply show no candidates on
+  macOS, which is honest rather than broken).
+- `enforcer_mac.get_window_aumi()` always returns `None`,
+  `list_known_profile_aumis()` always returns `[]`, and
+  `describe_browser_profile_aumi()` falls back to the bare process name.
+- `enforcer_mac.is_blocked_window()` collapses to the plain
+  `session_manager.is_blocked(process_name)` check -- the base case ("block
+  the whole browser") already works identically on both platforms with zero
+  changes needed, exactly as this doc predicted.
+
+Whoever picks this up next with access to a real Mac should run the two
+verification steps in this doc's Subsystem 3 section, record the findings
+directly in this file (replacing this section), and only then implement
+`mac-os/mac_os/browser_profiles_mac.py` for real.
+
+### Subsystem 8 (packaging) -- not started
+
+No PyInstaller build has been attempted. Everything downstream of packaging
+that this doc calls out as needing a real bundled `.app` to test --
+`UNUserNotificationCenter` actually delivering a notification (Subsystem 4),
+Gatekeeper's first-launch "unidentified developer" prompt, whether an
+Accessibility grant survives a rebuild/move of the `.app` -- is entirely
+unverified. `mac-os/requirements-mac.txt` exists and lists the expected
+dependency set (`requirements.txt` minus `pywin32`/`winsdk`, plus the five
+`pyobjc-*` packages) but has never actually been installed or resolved
+against real PyPI on macOS.
+
+### Full punch list for whoever has a real Mac next
+
+1. Run the Subsystem 3 spike for real; implement per-profile blocking or
+   confirm the Windows-only fallback stays permanent.
+2. Install `mac-os/requirements-mac.txt` on a real Mac and confirm it
+   resolves (pyobjc version pins may need adjusting).
+3. Run `mac-os/tests/` against the *real* pyobjc frameworks, not the stubs in
+   this branch -- expect real API-shape mismatches; the stubs only prove the
+   Python-side control flow, not the actual ObjC method names/signatures.
+4. Grant Accessibility permission and confirm `hard_lock_redirect`/
+   `sweep_minimize_blocked_windows` actually minimize + hide windows as
+   intended, including the "hide() is stronger than Windows' peek-disallow"
+   claim (verify Mission Control/Cmd+Tab really show no preview).
+5. Build the PyInstaller `.app`, verify Gatekeeper's first-launch flow, and
+   re-verify Subsystem 4's notifications only work once bundled (per this
+   doc's own warning).
+6. Rebuild/move the `.app` once and confirm whether the Accessibility grant
+   survives or needs re-granting (document the answer in this file, per the
+   Packaging section's own ask).
+7. Decide whether to close the two known gaps called out above: gating
+   session-start on Accessibility trust (not just a warning), and soft
+   lock's blackout-rect on macOS.
+8. Confirm pystray's Cocoa backend renders `default=True`/`visible=<callable>`
+   the same way the win32 backend does (Subsystem 7).
