@@ -80,11 +80,41 @@ def isolate_state(isolate_config, tmp_path, monkeypatch):
 class FakeAXRef:
     """Stands in for an AXUIElementRef -- either an application-level ref
     (created via AXUIElementCreateApplication) or a single window ref (one
-    entry in kAXWindowsAttribute's returned list)."""
+    entry in kAXWindowsAttribute's returned list).
 
-    def __init__(self, pid=None, minimized=False):
+    rect, when set on a window-level ref, is a plain (left, top, width,
+    height) tuple -- the fake kAXPositionAttribute/kAXSizeAttribute lookups
+    read it back out as fake AXValueRefs (see FakeAXValue/ax_value_get_value
+    below), standing in for enforcer_mac._window_rect's real
+    AXValueGetValue decode."""
+
+    def __init__(self, pid=None, minimized=False, rect=None):
         self.pid = pid
         self.minimized = minimized
+        self.rect = rect
+
+
+class FakePoint:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+
+class FakeSize:
+    def __init__(self, width, height):
+        self.width = width
+        self.height = height
+
+
+class FakeAXValue:
+    """Stands in for the opaque AXValueRef kAXPositionAttribute/
+    kAXSizeAttribute return -- real code only ever reaches its contents via
+    AXValueGetValue, decoded here by matching `kind` against the requested
+    kAXValueCGPointType/kAXValueCGSizeType."""
+
+    def __init__(self, kind, data):
+        self.kind = kind  # "point" or "size"
+        self.data = data
 
 
 class FakeRunningApp:
@@ -130,10 +160,13 @@ class MacWorld:
         self.frontmost_pid = None
         self.ax_trusted = True
 
-    def add_app(self, pid, minimized_windows=None):
+    def add_app(self, pid, minimized_windows=None, focused_window_rect=None):
         app = FakeRunningApp(pid)
         self.apps[pid] = app
-        self.windows[pid] = [FakeAXRef(pid, m) for m in (minimized_windows or [False])]
+        windows = [FakeAXRef(pid, m) for m in (minimized_windows or [False])]
+        if windows and focused_window_rect is not None:
+            windows[0].rect = focused_window_rect
+        self.windows[pid] = windows
         return app
 
 
@@ -154,6 +187,21 @@ def mac_world(monkeypatch):
             return (0, list(windows))
         if attribute == "kAXMinimizedAttribute":
             return (0, bool(ref.minimized))
+        if attribute == "kAXFocusedWindowAttribute":
+            windows = world.windows.get(ref.pid, [])
+            if not windows:
+                return (1, None)
+            return (0, windows[0])
+        if attribute == "kAXPositionAttribute":
+            if getattr(ref, "rect", None) is None:
+                return (1, None)
+            left, top, _width, _height = ref.rect
+            return (0, FakeAXValue("point", (left, top)))
+        if attribute == "kAXSizeAttribute":
+            if getattr(ref, "rect", None) is None:
+                return (1, None)
+            _left, _top, width, height = ref.rect
+            return (0, FakeAXValue("size", (width, height)))
         return (1, None)
 
     def ax_ui_element_set_attribute_value(ref, attribute, value):
@@ -161,13 +209,30 @@ def mac_world(monkeypatch):
             ref.minimized = bool(value)
         return 0
 
+    def ax_value_get_value(value, value_type, _placeholder):
+        if value is None:
+            return (False, None)
+        if value.kind == "point" and value_type == "kAXValueCGPointType":
+            x, y = value.data
+            return (True, FakePoint(x, y))
+        if value.kind == "size" and value_type == "kAXValueCGSizeType":
+            width, height = value.data
+            return (True, FakeSize(width, height))
+        return (False, None)
+
     application_services = types.ModuleType("ApplicationServices")
     application_services.AXIsProcessTrustedWithOptions = ax_is_process_trusted_with_options
     application_services.AXUIElementCreateApplication = ax_ui_element_create_application
     application_services.AXUIElementCopyAttributeValue = ax_ui_element_copy_attribute_value
     application_services.AXUIElementSetAttributeValue = ax_ui_element_set_attribute_value
+    application_services.AXValueGetValue = ax_value_get_value
     application_services.kAXWindowsAttribute = "kAXWindowsAttribute"
     application_services.kAXMinimizedAttribute = "kAXMinimizedAttribute"
+    application_services.kAXFocusedWindowAttribute = "kAXFocusedWindowAttribute"
+    application_services.kAXPositionAttribute = "kAXPositionAttribute"
+    application_services.kAXSizeAttribute = "kAXSizeAttribute"
+    application_services.kAXValueCGPointType = "kAXValueCGPointType"
+    application_services.kAXValueCGSizeType = "kAXValueCGSizeType"
 
     # --- AppKit ---
     class FakeNSRunningApplication:

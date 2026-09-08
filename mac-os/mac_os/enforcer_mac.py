@@ -2,11 +2,14 @@
 of enforcer.py's win32/DWM implementation.
 
 Every mechanism here requires Accessibility permission (System Settings ->
-Privacy & Security -> Accessibility). is_accessibility_trusted() is exposed
-for the onboarding flow PORT_SPEC.md's Subsystem 2 calls for (checking on
-every launch, blocking session-start or showing a persistent warning until
-granted) -- that UI itself is not built yet; wiring it into main.py's
-startup and qt_ui is still open work.
+Privacy & Security -> Accessibility). is_accessibility_trusted() backs
+main.py's _check_accessibility_trust(), called once at startup: it re-checks
+trust on every launch (the user can revoke it later in System Settings) and
+shows a persistent QMessageBox warning (with a button straight to System
+Settings) if not granted. That's the weaker of the two options PORT_SPEC.md
+allows -- it does not block session-start outright, which would mean also
+gating qt_ui/focus_tab.py's "Start Focus Session" button; still open work,
+tracked in PORT_SPEC.md.
 
 Window identity: there is no macOS "hwnd". Every function below that takes
 or returns a window handle actually takes/returns a pid -- see
@@ -22,7 +25,13 @@ from ApplicationServices import (
     AXUIElementCopyAttributeValue,
     AXUIElementCreateApplication,
     AXUIElementSetAttributeValue,
+    AXValueGetValue,
+    kAXFocusedWindowAttribute,
     kAXMinimizedAttribute,
+    kAXPositionAttribute,
+    kAXSizeAttribute,
+    kAXValueCGPointType,
+    kAXValueCGSizeType,
     kAXWindowsAttribute,
 )
 from Quartz import (
@@ -98,6 +107,53 @@ def _all_windows_minimized(pid):
         return True
     except Exception:
         return False
+
+
+def _window_rect(pid):
+    """(left, top, width, height) for pid's currently focused window, or
+    None if it can't be determined -- macOS equivalent of enforcer.py's
+    Windows _window_rect (win32gui.GetWindowRect), used only by
+    soft_lock_warning's blackout-rect cover.
+
+    Reads kAXFocusedWindowAttribute (rather than iterating every window off
+    kAXWindowsAttribute, like _minimize_all_windows/_all_windows_minimized
+    do) since soft_lock_warning is only ever called with the window that was
+    just detected as the active/foreground one -- the app's own idea of
+    "focused window" is the right one to cover, not an arbitrary window of
+    that pid. Position/size come back as opaque AXValueRefs that need
+    AXValueGetValue to decode into a CGPoint/CGSize -- unverified against
+    real pyobjc (no Mac available while writing this), but every symbol
+    here is a documented, stable part of the Accessibility API.
+
+    Never raises; any failure (no Accessibility permission, no focused
+    window, unexpected return shape) means no cover at all, same as
+    enforcer.py's own Windows version deliberately doesn't fall back to a
+    full-screen cover when it can't get a rect (see hard_lock_redirect's
+    "no blackout at all" case)."""
+    try:
+        app_ref = AXUIElementCreateApplication(pid)
+        err, window = AXUIElementCopyAttributeValue(app_ref, kAXFocusedWindowAttribute, None)
+        if err or window is None:
+            return None
+
+        err_pos, pos_value = AXUIElementCopyAttributeValue(window, kAXPositionAttribute, None)
+        if err_pos or pos_value is None:
+            return None
+        err_size, size_value = AXUIElementCopyAttributeValue(window, kAXSizeAttribute, None)
+        if err_size or size_value is None:
+            return None
+
+        ok_pos, point = AXValueGetValue(pos_value, kAXValueCGPointType, None)
+        ok_size, size = AXValueGetValue(size_value, kAXValueCGSizeType, None)
+        if not ok_pos or not ok_size or point is None or size is None:
+            return None
+
+        left, top, width, height = int(point.x), int(point.y), int(size.width), int(size.height)
+        if width <= 0 or height <= 0:
+            return None
+        return (left, top, width, height)
+    except Exception:
+        return None
 
 
 def _hide_app(pid, hide):
@@ -216,22 +272,26 @@ def _frontmost_app():
 
 
 def soft_lock_warning(offending_process_name=None, hwnd=None):
-    """hwnd (a pid, per this module's convention) is accepted only for
-    call-site compatibility with enforcer.soft_lock_warning's signature --
-    it's unused here. Windows' soft lock additionally covers the offending
-    window's own on-screen rectangle in black for the warning's duration;
-    that needs a per-window frame lookup this port doesn't implement yet, so
-    only the message overlay itself shows on macOS for now (a real
-    functional gap versus Windows soft lock, not just cosmetic -- worth
-    closing in a follow-up once AXUIElement window-frame lookup is wired
-    up)."""
+    """hwnd is a pid, per this module's convention (see module docstring).
+    Covers just the offending window's own on-screen rectangle in black for
+    the warning's duration, via _window_rect's Accessibility-API lookup --
+    same intent as enforcer.py's Windows soft lock (win32gui.GetWindowRect),
+    just a different mechanism. No hwnd (or a lookup that fails for any
+    reason) means no cover at all, same as enforcer.py's own "no full-screen
+    fallback" behavior."""
     status = session_manager.get_status()
     if status.get("source") == "review":
         message = f"Finish {status.get('reviewProblemName') or 'this review'} first"
     else:
         last_ok = status["lastAcceptableProcess"] or "your focus app"
         message = f"You're off track — back to {last_ok}?"
-    _show_lock_overlay(message, duration_ms=5000, offending_process_name=offending_process_name)
+    blackout_rect = _window_rect(hwnd) if hwnd else None
+    _show_lock_overlay(
+        message,
+        duration_ms=5000,
+        offending_process_name=offending_process_name,
+        blackout_rect=blackout_rect,
+    )
 
 
 def hard_lock_redirect(offending_process_name=None):
@@ -342,15 +402,14 @@ def restore_window_for_process(process_name):
     _hide_app(pid, False)
 
 
-def _show_lock_overlay(message, duration_ms, offending_process_name=None):
+def _show_lock_overlay(message, duration_ms, offending_process_name=None, blackout_rect=None):
     """Same Qt overlay mechanism as enforcer.py's Windows _show_lock_overlay --
     qt_ui/enforcer_overlay.py has no win32 dependency of its own, so this is
     a thin, deliberately duplicated wrapper rather than a shared import from
     enforcer.py (which is guarded behind a platform check that would make
-    importing anything from it on macOS fragile). blackout_rect is always
-    None here -- see soft_lock_warning's docstring for why."""
+    importing anything from it on macOS fragile)."""
     qt_gui_thread.run_on_gui_thread(
         lambda: enforcer_overlay.build_overlay(
-            message, duration_ms, offending_process_name, blackout_rect=None
+            message, duration_ms, offending_process_name, blackout_rect=blackout_rect
         )
     )
