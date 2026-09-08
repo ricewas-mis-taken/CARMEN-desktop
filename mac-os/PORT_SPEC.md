@@ -716,27 +716,60 @@ dependency set (`requirements.txt` minus `pywin32`/`winsdk`, plus the five
 `pyobjc-*` packages) but has never actually been installed or resolved
 against real PyPI on macOS.
 
+### Two more gaps found on review (unverified, no Mac to check them on)
+
+- **The `process_name` contract between the picker and enforcement is
+  unverified, and it's the one that decides whether blocking works at all.**
+  `installed_apps_mac.list_installed_apps()` sources `process_name` from
+  `Info.plist`'s `CFBundleExecutable`; that string is what ends up in
+  `processBlocklist`. Enforcement then matches it against
+  `psutil.Process(pid).name()` read live off the process table. On Windows
+  these are the same string by construction (both are the `.exe` basename).
+  On macOS they come from two independent sources and are only *probably*
+  equal -- an app whose bundle executable name differs from its actual
+  running process name (some Electron apps do this) would be silently
+  unblockable: the picker shows it, the user selects it, and nothing ever
+  fires, with no error anywhere to notice by. This needs verifying on a real
+  Mac before anything else in the list below: pick a few installed apps
+  (including at least one Electron app) and confirm
+  `list_installed_apps()`'s `process_name` for each actually equals
+  `psutil.Process(<that running app's pid>).name()`.
+- **`session_manager.ALWAYS_ALLOWED_PROCESSES` only lists `.exe` names.** No
+  macOS system process (Finder, Dock, WindowServer, SystemUIServer, ...) is
+  exempt. This isn't a crash -- `is_exempt()` still protects Carmen Focus's
+  own process via the `pid == os.getpid()` check, and nothing is touched
+  unless it's explicitly on the blocklist -- but it's a real parity gap
+  versus Windows, where that list exists specifically to guarantee core
+  shell/system processes stay usable no matter what a session blocks.
+  Whoever picks this up should decide whether to add a macOS-specific
+  addition to that set (gated on `sys.platform`, since it's a shared,
+  platform-agnostic module).
+
 ### Full punch list for whoever has a real Mac next
 
-1. Run the Subsystem 3 spike for real; implement per-profile blocking or
+1. Verify the `process_name` contract above -- do this first, since every
+   other enforcement test downstream assumes it holds.
+2. Run the Subsystem 3 spike for real; implement per-profile blocking or
    confirm the Windows-only fallback stays permanent.
-2. Install `mac-os/requirements-mac.txt` on a real Mac and confirm it
+3. Install `mac-os/requirements-mac.txt` on a real Mac and confirm it
    resolves (pyobjc version pins may need adjusting).
-3. Run `mac-os/tests/` against the *real* pyobjc frameworks, not the stubs in
+4. Run `mac-os/tests/` against the *real* pyobjc frameworks, not the stubs in
    this branch -- expect real API-shape mismatches; the stubs only prove the
    Python-side control flow, not the actual ObjC method names/signatures.
-4. Grant Accessibility permission and confirm `hard_lock_redirect`/
+5. Grant Accessibility permission and confirm `hard_lock_redirect`/
    `sweep_minimize_blocked_windows` actually minimize + hide windows as
    intended, including the "hide() is stronger than Windows' peek-disallow"
    claim (verify Mission Control/Cmd+Tab really show no preview).
-5. Build the PyInstaller `.app`, verify Gatekeeper's first-launch flow, and
+6. Build the PyInstaller `.app`, verify Gatekeeper's first-launch flow, and
    re-verify Subsystem 4's notifications only work once bundled (per this
    doc's own warning).
-6. Rebuild/move the `.app` once and confirm whether the Accessibility grant
+7. Rebuild/move the `.app` once and confirm whether the Accessibility grant
    survives or needs re-granting (document the answer in this file, per the
    Packaging section's own ask).
-7. Decide whether to close the two known gaps called out above: gating
+8. Decide whether to close the two known gaps called out above: gating
    session-start on Accessibility trust (not just a warning), and soft
    lock's blackout-rect on macOS.
-8. Confirm pystray's Cocoa backend renders `default=True`/`visible=<callable>`
+9. Confirm pystray's Cocoa backend renders `default=True`/`visible=<callable>`
    the same way the win32 backend does (Subsystem 7).
+10. Decide whether to add macOS system processes to
+    `session_manager.ALWAYS_ALLOWED_PROCESSES` (see the gap noted above).
