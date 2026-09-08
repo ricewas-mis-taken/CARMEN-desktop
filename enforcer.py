@@ -8,6 +8,7 @@ if sys.platform == "darwin":
         sys.path.insert(0, _mac_os_dir)
     from mac_os import enforcer_mac as _mac
 
+    is_accessibility_trusted = _mac.is_accessibility_trusted
     is_blocked_window = _mac.is_blocked_window
     soft_lock_warning = _mac.soft_lock_warning
     hard_lock_redirect = _mac.hard_lock_redirect
