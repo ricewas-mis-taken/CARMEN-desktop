@@ -134,12 +134,16 @@ def main():
     # Instant re-minimize on click (hard lock only) -- a WinEvent hook, not
     # part of window_tracker's poll loop, so it needs a real Windows message
     # pump on its own thread; see enforcer.run_instant_reminimize_watcher.
-    reminimize_thread = threading.Thread(
-        target=enforcer.run_instant_reminimize_watcher,
-        args=(stop_event,),
-        daemon=True,
-    )
-    reminimize_thread.start()
+    # macOS has no message-pump equivalent of this mechanism -- its hard-lock
+    # path (mac_os/enforcer_mac.py) relies on the Accessibility API's own
+    # per-window minimize instead, so this thread is Windows-only.
+    if sys.platform != "darwin":
+        reminimize_thread = threading.Thread(
+            target=enforcer.run_instant_reminimize_watcher,
+            args=(stop_event,),
+            daemon=True,
+        )
+        reminimize_thread.start()
 
     # pystray runs detached on its own background thread instead of
     # blocking this one — confirmed via a throwaway spike that pystray's
