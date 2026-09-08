@@ -8,9 +8,6 @@ if sys.platform == "darwin":
         sys.path.insert(0, _mac_os_dir)
     from mac_os import enforcer_mac as _mac
 
-    _hidden_hwnds = _mac._hidden_windows
-    _hidden_hwnds_lock = _mac._hidden_windows_lock
-
     is_blocked_window = _mac.is_blocked_window
     soft_lock_warning = _mac.soft_lock_warning
     hard_lock_redirect = _mac.hard_lock_redirect
@@ -21,7 +18,9 @@ if sys.platform == "darwin":
     get_window_aumi = _mac.get_window_aumi
     list_known_profile_aumis = _mac.list_known_profile_aumis
     describe_browser_profile_aumi = _mac.describe_browser_profile_aumi
-    run_instant_reminimize_watcher = _mac.run_instant_reminimize_watcher
+    # run_instant_reminimize_watcher is intentionally not bound here -- it's
+    # a Windows-only WinEvent-hook mechanism (see below); main.py never
+    # starts that thread on darwin, so there's no macOS equivalent to wire up.
 else:
     import ctypes
     import json
