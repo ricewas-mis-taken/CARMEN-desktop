@@ -30,7 +30,13 @@ import types
 import pytest
 
 
-_DISPATCH_MODULES = ["enforcer", "window_tracker", "autostart", "installed_apps", "calendar_toast"]
+_DISPATCH_MODULES = [
+    "enforcer", "window_tracker", "autostart", "installed_apps", "calendar_toast",
+    # Not a dispatch shim (imports no mac_os module), but it does branch on
+    # sys.platform at import time (ALWAYS_ALLOWED_PROCESSES's macOS union --
+    # see session_manager.py), so it needs the same reload-back treatment.
+    "session_manager",
+]
 
 
 @pytest.fixture
@@ -85,6 +91,26 @@ def test_window_tracker_darwin_branch_resolves_names_run_polling_loop_needs(
         assert set(window.keys()) == {"title", "process_name", "pid", "hwnd"}
     finally:
         _reload("window_tracker")
+
+
+def test_session_manager_exempts_macos_shell_processes_under_darwin(as_darwin):
+    session_manager = _reload("session_manager")
+    try:
+        assert session_manager.is_exempt("Finder")
+        assert session_manager.is_exempt("Dock")
+        assert session_manager.is_exempt("WindowServer")
+        assert not session_manager.is_exempt("discord")
+    finally:
+        _reload("session_manager")
+
+
+def test_session_manager_macos_set_does_not_leak_into_windows_branch():
+    """Regression guard: the macOS-only exemptions must not be visible when
+    sys.platform is the real (Windows) value -- they're unioned in only
+    inside the `if sys.platform == "darwin":` branch."""
+    session_manager = _reload("session_manager")
+    assert not session_manager.is_exempt("Finder")
+    assert not session_manager.is_exempt("Dock")
 
 
 def test_enforcer_darwin_branch_resolves_public_api(as_darwin, mac_world):
