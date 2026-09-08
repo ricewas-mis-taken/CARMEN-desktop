@@ -8,6 +8,10 @@ just winreg (stdlib), and HKCU means no admin elevation is required.
 import sys
 
 if sys.platform == "darwin":
+    import os as _os
+    _mac_os_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "mac-os")
+    if _mac_os_dir not in sys.path:
+        sys.path.insert(0, _mac_os_dir)
     from mac_os import autostart_mac as _mac
 
     ensure_autostart_registered = _mac.ensure_autostart_registered

@@ -3,6 +3,10 @@ import sys
 import time
 
 if sys.platform == "darwin":
+    import os as _os
+    _mac_os_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "mac-os")
+    if _mac_os_dir not in sys.path:
+        sys.path.insert(0, _mac_os_dir)
     from mac_os import window_tracker_mac as _mac
 
     get_active_window = _mac.get_active_window

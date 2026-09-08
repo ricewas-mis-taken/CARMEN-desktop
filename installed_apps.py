@@ -12,6 +12,10 @@ blocklist it."""
 import sys
 
 if sys.platform == "darwin":
+    import os as _os
+    _mac_os_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "mac-os")
+    if _mac_os_dir not in sys.path:
+        sys.path.insert(0, _mac_os_dir)
     from mac_os import installed_apps_mac as _mac
 
     list_installed_apps = _mac.list_installed_apps
