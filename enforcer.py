@@ -3,6 +3,7 @@ import ctypes
 import json
 import os
 import threading
+import time
 from ctypes import wintypes
 
 import psutil
@@ -365,8 +366,18 @@ def hard_lock_redirect(offending_process_name=None):
         and is_blocked_window(hwnd_process, hwnd)
     ):
         try:
-            win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+            # Order matters: DWMWA_FORCE_ICONIC_REPRESENTATION must be set
+            # *before* the minimize starts, not after. Setting it while the
+            # genie/minimize animation is already in flight makes DWM expect
+            # a custom iconic bitmap for the frame it's mid-way through
+            # compositing, get nothing (the app never supplies one), and
+            # render that frame solid black instead -- sized to the window's
+            # own screen bounds, which is the whole screen for a maximized
+            # window. This is the "whole screen flashes black on minimize"
+            # bug; setting the attribute first means DWM already knows not
+            # to expect live content before the transition ever starts.
             _hide_taskbar_preview(hwnd, True)
+            win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
         except Exception:
             pass
 
@@ -464,10 +475,14 @@ def sweep_minimize_blocked_windows():
         # hwnd it's already hidden), so reapplying every tick is harmless.
         was_iconic = win32gui.IsIconic(hwnd)
         try:
+            # Same ordering fix as hard_lock_redirect -- set the DWM
+            # attribute before minimizing, not after, so DWM never tries to
+            # composite the in-flight minimize animation against a custom
+            # iconic bitmap that's never supplied (see the comment there).
+            _hide_taskbar_preview(hwnd, True)
             if not was_iconic:
                 win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
                 minimized.append((name, hwnd))
-            _hide_taskbar_preview(hwnd, True)
         except Exception:
             pass
 
@@ -589,3 +604,102 @@ def _show_lock_overlay(message, duration_ms, offending_process_name=None, blacko
             message, duration_ms, offending_process_name, blackout_rect=blackout_rect
         )
     )
+
+
+# --- Instant re-minimize on click (hard lock only) ---
+#
+# window_tracker's poll loop already catches a blocked app the moment it
+# becomes the foreground window and re-minimizes it -- but only on its next
+# ~1.5s tick, long enough for the user to see the window pop open before it
+# gets yanked away. There's no way to actually veto another process's own
+# window from ever showing at all (that would need a hook running inside
+# that process), but a WinEvent hook on EVENT_SYSTEM_FOREGROUND fires the
+# instant Windows itself reports the foreground change, which is fast enough
+# that clicking the taskbar icon reads as "does nothing" -- the window is
+# still there, still listed, but immediately snaps back down.
+_EVENT_SYSTEM_FOREGROUND = 0x0003
+_WINEVENT_OUTOFCONTEXT = 0x0000
+_WINEVENT_SKIPOWNPROCESS = 0x0002
+_OBJID_WINDOW = 0
+_PM_REMOVE = 0x0001
+
+_user32 = ctypes.windll.user32
+
+_WinEventProcType = ctypes.WINFUNCTYPE(
+    None, wintypes.HANDLE, wintypes.DWORD, wintypes.HWND,
+    ctypes.c_long, ctypes.c_long, wintypes.DWORD, wintypes.DWORD,
+)
+_user32.SetWinEventHook.restype = wintypes.HANDLE
+_user32.SetWinEventHook.argtypes = [
+    wintypes.DWORD, wintypes.DWORD, wintypes.HMODULE, _WinEventProcType,
+    wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+]
+_user32.UnhookWinEvent.argtypes = [wintypes.HANDLE]
+
+# hwnd -> time.time() of the last time this callback logged a violation for
+# it -- independent of window_tracker's own cooldowns (VIOLATION_COOLDOWN_SECONDS,
+# HARD_REDIRECT_COOLDOWN_SECONDS), since once this callback minimizes a
+# window it's no longer foreground and is already iconic, so the poll loop's
+# foreground check and sweep_minimize_blocked_windows() naturally never see
+# it as a fresh violation on the next tick -- this is the only place that
+# would ever record one for a window caught here.
+_INSTANT_REMINIMIZE_COOLDOWN_SECONDS = 2.0
+_last_instant_violation = {}
+
+
+def _on_foreground_changed(hwineventhook, event, hwnd, id_object, id_child, id_event_thread, dwms_event_time):
+    try:
+        if id_object != _OBJID_WINDOW or not hwnd:
+            return
+        if session_manager.get_lock_mode() != "hard":
+            return
+        status = session_manager.get_status()
+        if not status["isActive"] or status["isPaused"]:
+            return
+
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        process_name = psutil.Process(pid).name()
+        if session_manager.is_exempt(process_name, pid):
+            return
+        if not is_blocked_window(process_name, hwnd):
+            return
+
+        _hide_taskbar_preview(hwnd, True)
+        win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+
+        now = time.time()
+        if now - _last_instant_violation.get(hwnd, 0) >= _INSTANT_REMINIMIZE_COOLDOWN_SECONDS:
+            _last_instant_violation[hwnd] = now
+            session_manager.record_violation(process_name)
+            show_blocked_notice(process_name)
+    except Exception:
+        pass
+
+
+_win_event_callback = _WinEventProcType(_on_foreground_changed)
+
+
+def run_instant_reminimize_watcher(stop_event):
+    """Runs a Windows message loop on the calling thread until stop_event is
+    set -- intended to be launched on its own dedicated daemon thread (see
+    main.py), never window_tracker's polling thread (a plain sleep loop, no
+    message pump) or Qt's main thread (must stay free for Qt's own event
+    loop). WINEVENT_OUTOFCONTEXT callbacks are only ever delivered through
+    the hooking thread's own message queue, so without a real message loop
+    here the hook would silently never fire."""
+    hook = _user32.SetWinEventHook(
+        _EVENT_SYSTEM_FOREGROUND, _EVENT_SYSTEM_FOREGROUND, None,
+        _win_event_callback, 0, 0, _WINEVENT_OUTOFCONTEXT | _WINEVENT_SKIPOWNPROCESS,
+    )
+    if not hook:
+        return
+    try:
+        msg = wintypes.MSG()
+        while not stop_event.is_set():
+            if _user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, _PM_REMOVE):
+                _user32.TranslateMessage(ctypes.byref(msg))
+                _user32.DispatchMessageW(ctypes.byref(msg))
+            else:
+                stop_event.wait(0.05)
+    finally:
+        _user32.UnhookWinEvent(hook)
