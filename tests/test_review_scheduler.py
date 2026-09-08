@@ -31,3 +31,18 @@ def test_schedule_new_problem_sets_stage_zero_and_next_review_date():
 def test_schedule_after_review_advances_stage_by_one():
     result = sched.schedule_after_review(schedule_stage=2, stars=3)
     assert result["schedule_stage"] == 3
+
+
+def test_schedule_checked_answer_resets_stage_to_zero_regardless_of_prior_stage():
+    """Checking the answer means it wasn't actually recalled -- a stage the
+    schedule had "earned" through past solves must not survive that, or a
+    problem that climbed to a 21+ day interval would jump right back into
+    it after one clean re-solve, as if the lapse never happened."""
+    result = sched.schedule_checked_answer(schedule_stage=3, stars=3)
+    assert result["schedule_stage"] == 0
+
+
+def test_schedule_checked_answer_next_review_is_stage_zeros_own_interval():
+    for stars in (1, 2, 3, 4, 5):
+        result = sched.schedule_checked_answer(schedule_stage=4, stars=stars)
+        assert result["next_review_date"] == sched.today() + timedelta(days=1)
