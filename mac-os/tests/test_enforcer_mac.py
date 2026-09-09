@@ -68,6 +68,44 @@ def test_no_aumi_or_profile_concept_on_macos(mac_world, monkeypatch):
     assert enforcer_mac.describe_browser_profile_aumi("chrome.exe", "anything") == "chrome.exe"
 
 
+def test_soft_lock_warning_covers_the_focused_windows_rect(mac_world, monkeypatch, isolate_state):
+    enforcer_mac, overlay_calls = _import_fresh(monkeypatch)
+    session_manager.start_session(25, "soft", ["discord.exe"], [])
+    session_manager.record_acceptable("code.exe")
+    mac_world.add_app(111, focused_window_rect=(10, 20, 300, 400))
+
+    enforcer_mac.soft_lock_warning("discord.exe", 111)
+
+    assert len(overlay_calls) == 1
+    message, duration_ms, offending_process_name, blackout_rect = overlay_calls[0]
+    assert offending_process_name == "discord.exe"
+    assert blackout_rect == (10, 20, 300, 400)
+
+
+def test_soft_lock_warning_has_no_cover_without_a_hwnd(mac_world, monkeypatch, isolate_state):
+    """No hwnd (pid) means no window to look up a rect for -- must not fall
+    back to a full-screen cover, matching hard_lock_redirect's own "no
+    blackout at all" behavior."""
+    enforcer_mac, overlay_calls = _import_fresh(monkeypatch)
+    session_manager.start_session(25, "soft", ["discord.exe"], [])
+
+    enforcer_mac.soft_lock_warning("discord.exe", None)
+
+    assert overlay_calls[0][3] is None
+
+
+def test_soft_lock_warning_has_no_cover_when_rect_lookup_fails(mac_world, monkeypatch, isolate_state):
+    """A pid with no focused-window rect available (permission denied, app
+    already gone, etc.) must degrade to no cover, not raise."""
+    enforcer_mac, overlay_calls = _import_fresh(monkeypatch)
+    session_manager.start_session(25, "soft", ["discord.exe"], [])
+    mac_world.add_app(222)  # no focused_window_rect given
+
+    enforcer_mac.soft_lock_warning("discord.exe", 222)
+
+    assert overlay_calls[0][3] is None
+
+
 def test_hard_lock_redirect_minimizes_and_hides_blocked_frontmost_app(
     mac_world, monkeypatch, isolate_state
 ):

@@ -6,6 +6,7 @@ mutation so an in-progress session survives a crash/restart.
 import json
 import math
 import os
+import sys
 import threading
 from datetime import datetime, timedelta
 
@@ -177,6 +178,35 @@ ALWAYS_ALLOWED_PROCESSES = {
     "pad.console.host.exe",
     "microsoft.flow.rpa.desktop.exe",
 }
+
+# Core macOS shell/system processes -- the darwin equivalent of the Windows
+# set above. Without this, mac_os/enforcer_mac.py's hard/soft lock could
+# fight Finder, Dock, or the menu bar/system UI process the moment any of
+# them is on the blocklist by process-name coincidence (unlikely, but the
+# Windows set exists for exactly this belt-and-suspenders reason -- a
+# blocklisted process name should never accidentally catch the shell
+# itself). Matched the same way as the Windows set: process_name.lower() in
+# this set, via is_exempt() below -- kept as a separate constant (unioned
+# into ALWAYS_ALLOWED_PROCESSES only on darwin) rather than merged into the
+# Windows set outright, since these names would never collide with a real
+# Windows process anyway, but keeping them apart documents which set
+# protects which platform's shell.
+_ALWAYS_ALLOWED_PROCESSES_MACOS = {
+    "finder",
+    "dock",
+    "systemuiserver",
+    "windowserver",
+    "controlcenter",
+    "notificationcenter",
+    "spotlight",
+    "coreservicesuiagent",
+    "loginwindow",
+    "universalcontrol",
+    "screensaverengine",
+}
+
+if sys.platform == "darwin":
+    ALWAYS_ALLOWED_PROCESSES = ALWAYS_ALLOWED_PROCESSES | _ALWAYS_ALLOWED_PROCESSES_MACOS
 
 
 def is_exempt(process_name, pid=None):
