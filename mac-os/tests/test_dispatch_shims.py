@@ -26,16 +26,32 @@ runs after it in the same process.
 import importlib
 import sys
 import types
+import urllib.request  # noqa: F401 -- see note below, must be imported before any test fakes sys.platform
 
 import pytest
+
+# CPython's own urllib/request.py does a module-level `if sys.platform ==
+# "darwin": from _scproxy import ...` on its *first* import (a real macOS-only
+# C extension) -- if that first-ever import happens while a test has faked
+# sys.platform to "darwin" (as_darwin below), it crashes with
+# ModuleNotFoundError, regardless of anything in this repo's own code.
+# singleinstance.py imports urllib.request, so reloading it under a faked
+# darwin platform can trigger this. Forcing the import here, at collection
+# time, under the real platform, guarantees urllib.request is already fully
+# initialized (and cached in sys.modules) before any as_darwin test runs --
+# this bit only when this test file ran in isolation; running the full suite
+# happened to import urllib.request some other way first, which is exactly
+# the kind of order-dependent fragility this import exists to remove.
 
 
 _DISPATCH_MODULES = [
     "enforcer", "window_tracker", "autostart", "installed_apps", "calendar_toast",
-    # Not a dispatch shim (imports no mac_os module), but it does branch on
-    # sys.platform at import time (ALWAYS_ALLOWED_PROCESSES's macOS union --
-    # see session_manager.py), so it needs the same reload-back treatment.
+    # Not dispatch shims (import no mac_os module), but both branch on
+    # sys.platform at import time (ALWAYS_ALLOWED_PROCESSES's macOS union in
+    # session_manager.py, LOCK_DIR's macOS path in singleinstance.py), so
+    # both need the same reload-back treatment.
     "session_manager",
+    "singleinstance",
 ]
 
 
@@ -111,6 +127,16 @@ def test_session_manager_macos_set_does_not_leak_into_windows_branch():
     session_manager = _reload("session_manager")
     assert not session_manager.is_exempt("Finder")
     assert not session_manager.is_exempt("Dock")
+
+
+def test_singleinstance_lock_dir_is_idiomatic_on_macos(as_darwin):
+    singleinstance = _reload("singleinstance")
+    try:
+        assert "Library" in singleinstance.LOCK_DIR
+        assert "Application Support" in singleinstance.LOCK_DIR
+        assert "CARMEN" in singleinstance.LOCK_DIR
+    finally:
+        _reload("singleinstance")
 
 
 def test_enforcer_darwin_branch_resolves_public_api(as_darwin, mac_world):
