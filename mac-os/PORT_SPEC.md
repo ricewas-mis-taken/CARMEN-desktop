@@ -783,15 +783,23 @@ functionality* -- they're implemented and covered by stub-based tests.
    `enforcer_mac._window_rect`'s `AXValueGetValue`/`kAXValueCGPointType`/
    `kAXValueCGSizeType` usage is the least-tested-by-analogy part of this
    port and deserves particular attention.
-5. Grant Accessibility permission and confirm `hard_lock_redirect`/
+5. Verify `_window_rect`'s coordinate space actually matches what
+   `qt_ui/enforcer_overlay.py`'s blackout overlay expects, on a multi-monitor
+   setup and on a Retina (non-1.0 backing scale factor) display -- AX's
+   global display space and Qt's own coordinate space are not guaranteed to
+   agree in either case (see `_window_rect`'s own docstring). The symptom if
+   this is wrong is a misplaced or mis-sized blackout rectangle during soft
+   lock, not a crash, so it won't show up as an error anywhere -- it has to
+   be checked visually.
+6. Grant Accessibility permission and confirm `hard_lock_redirect`/
    `sweep_minimize_blocked_windows` actually minimize + hide windows as
    intended, including the "hide() is stronger than Windows' peek-disallow"
    claim (verify Mission Control/Cmd+Tab really show no preview).
-6. Build the PyInstaller `.app`, verify Gatekeeper's first-launch flow, and
+7. Build the PyInstaller `.app`, verify Gatekeeper's first-launch flow, and
    re-verify Subsystem 4's notifications only work once bundled (per this
    doc's own warning).
-7. Rebuild/move the `.app` once and confirm whether the Accessibility grant
+8. Rebuild/move the `.app` once and confirm whether the Accessibility grant
    survives or needs re-granting (document the answer in this file, per the
    Packaging section's own ask).
-8. Confirm pystray's Cocoa backend renders `default=True`/`visible=<callable>`
+9. Confirm pystray's Cocoa backend renders `default=True`/`visible=<callable>`
    the same way the win32 backend does (Subsystem 7).

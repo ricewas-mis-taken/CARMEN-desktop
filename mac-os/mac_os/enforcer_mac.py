@@ -129,7 +129,20 @@ def _window_rect(pid):
     window, unexpected return shape) means no cover at all, same as
     enforcer.py's own Windows version deliberately doesn't fall back to a
     full-screen cover when it can't get a rect (see hard_lock_redirect's
-    "no blackout at all" case)."""
+    "no blackout at all" case).
+
+    UNVERIFIED coordinate-space caveat (no Mac available to check this):
+    kAXPositionAttribute reports top-left-origin points in the global
+    display coordinate space, and the caller (qt_ui/enforcer_overlay.py's
+    _BlackoutOverlay, via a plain Qt setGeometry-style call) is assumed to
+    interpret (left, top, width, height) the same way. That should hold on
+    a single-display, 1.0-scale-factor Mac, but AX's global space and Qt's
+    own coordinate space are NOT guaranteed to agree across multiple
+    displays (AX's origin follows the *primary* display, which may not be
+    display (0,0) in a multi-monitor arrangement) or Retina backing-scale
+    factors (points vs. pixels). If this is ever wrong on a real Mac, the
+    symptom will be a blackout rectangle that's offset or the wrong size,
+    not a crash -- see PORT_SPEC.md's punch list."""
     try:
         app_ref = AXUIElementCreateApplication(pid)
         err, window = AXUIElementCopyAttributeValue(app_ref, kAXFocusedWindowAttribute, None)

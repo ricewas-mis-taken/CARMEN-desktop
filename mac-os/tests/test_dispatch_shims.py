@@ -212,6 +212,45 @@ def test_installed_apps_darwin_branch_resolves_and_runs(tmp_path, as_darwin, mon
         _reload("installed_apps")
 
 
+def _write_fake_bundle(base, name, executable, bundle_name):
+    import plistlib
+    app_dir = base / name
+    contents = app_dir / "Contents"
+    contents.mkdir(parents=True)
+    with open(contents / "Info.plist", "wb") as f:
+        plistlib.dump({"CFBundleExecutable": executable, "CFBundleName": bundle_name}, f)
+
+
+def test_installed_apps_exempts_macos_shell_processes_end_to_end(tmp_path, as_darwin, monkeypatch):
+    """session_manager.ALWAYS_ALLOWED_PROCESSES's macOS union (see
+    session_manager.py) is only applied at *import* time -- installed_apps_mac's
+    _is_exempt() does `import session_manager` inside the function body,
+    which just binds whatever module object is already in sys.modules, it
+    does not re-trigger session_manager's own platform branch. So
+    session_manager must be reloaded under darwin *before* installed_apps is
+    used, or this whole path silently falls back to the Windows-only
+    exemption set -- reload order matters here, unlike the other
+    darwin-branch tests in this file."""
+    _reload("session_manager")
+    try:
+        installed_apps = _reload("installed_apps")
+
+        import mac_os.installed_apps_mac as installed_apps_mac
+        apps_dir = tmp_path / "Applications"
+        apps_dir.mkdir()
+        _write_fake_bundle(apps_dir, "Finder.app", "Finder", "Finder")
+        _write_fake_bundle(apps_dir, "Discord.app", "Discord", "Discord")
+        monkeypatch.setattr(installed_apps_mac, "APP_DIRS", [str(apps_dir)])
+
+        names = {a["process_name"] for a in installed_apps.list_installed_apps()}
+
+        assert "Discord" in names
+        assert "Finder" not in names
+    finally:
+        _reload("installed_apps")
+        _reload("session_manager")
+
+
 def test_calendar_toast_darwin_branch_resolves_and_runs(as_darwin, monkeypatch):
     """Minimal UserNotifications/objc stubs -- just enough that the darwin
     branch imports and set_app_id() can run one full call without raising.

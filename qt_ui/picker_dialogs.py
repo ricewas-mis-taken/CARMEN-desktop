@@ -11,6 +11,7 @@ All three windows are non-modal (.show(), not .exec()) -- same as the
 original Tk versions, which never used grab_set().
 """
 import os
+import subprocess
 import sys
 
 from PySide6.QtCore import Qt
@@ -424,7 +425,6 @@ class _TimerDialog(QWidget):
             box.addButton("Cancel", QMessageBox.RejectRole)
             box.exec()
             if box.clickedButton() is open_settings_button:
-                import subprocess
                 try:
                     subprocess.run(
                         ["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"],
