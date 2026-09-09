@@ -630,14 +630,22 @@ form's sake.
   `main.py._check_accessibility_trust()`, called once at startup on darwin: it
   requests Accessibility trust (prompting the system dialog if not yet
   granted) and, if still not trusted, shows a `QMessageBox` explaining why and
-  offering to open System Settings directly. **Gap versus the spec's stated
-  bar**: this shows a persistent warning, it does not block session-start
-  outright (the stricter of the two options this doc allows in the Subsystem 2
-  section) -- actually gating the "Start Focus Session" button on trust status
-  would mean touching `qt_ui/focus_tab.py`, which wasn't done. Also:
-  `soft_lock_warning`'s blackout-rect (covering just the offending window in
-  black) isn't implemented on macOS -- only the message overlay shows; that
-  needs a per-window frame lookup this pass didn't add.
+  offering to open System Settings directly. **Session-start is also now
+  gated on trust status**: `qt_ui/picker_dialogs.py`'s `_TimerDialog._start()`
+  (the interactive "Start Session" button) refuses to call
+  `session_manager.start_session()` on darwin when
+  `enforcer.is_accessibility_trusted()` is false, shows an explanatory dialog
+  with an "Open System Settings" button, and returns without starting --
+  closing the gap this doc's Subsystem 2 section called the stricter of its
+  two allowed options. Deliberately NOT applied to automatic session starts
+  (calendar-triggered, review-triggered) -- those have no dialog to show an
+  error in, and refusing one silently would be worse than starting with
+  enforcement degraded. `soft_lock_warning`'s blackout-rect (covering just the
+  offending window in black) is also now implemented, via
+  `kAXFocusedWindowAttribute` + `kAXPositionAttribute`/`kAXSizeAttribute`
+  decoded through `AXValueGetValue` -- unverified against real pyobjc (see
+  "What's NOT verified" below), but no longer a known functional gap in the
+  code itself.
 - **Subsystem 4 (notifications)**: `mac-os/mac_os/calendar_toast_mac.py`, via
   `UNUserNotificationCenter`. Interactive snooze buttons implemented via a
   lazily-built `NSObject` delegate subclass (real subclassing, as this doc
@@ -716,7 +724,32 @@ dependency set (`requirements.txt` minus `pywin32`/`winsdk`, plus the five
 `pyobjc-*` packages) but has never actually been installed or resolved
 against real PyPI on macOS.
 
-### Two more gaps found on review (unverified, no Mac to check them on)
+### Gaps found on review -- now fixed in code (still unverified on real hardware)
+
+These were flagged as open gaps in an earlier pass of this doc and have
+since been closed at the code level. Each still needs real-Mac verification
+(nothing here has run outside stubbed pyobjc), but they're no longer *missing
+functionality* -- they're implemented and covered by stub-based tests.
+
+- **`session_manager.ALWAYS_ALLOWED_PROCESSES` now includes core macOS shell
+  processes.** A separate `_ALWAYS_ALLOWED_PROCESSES_MACOS` set (Finder,
+  Dock, SystemUIServer, WindowServer, ControlCenter, NotificationCenter,
+  Spotlight, CoreServicesUIAgent, loginwindow, UniversalControl,
+  ScreenSaverEngine) is unioned into `ALWAYS_ALLOWED_PROCESSES` only when
+  `sys.platform == "darwin"`, so it's a no-op on Windows. Covered by
+  `mac-os/tests/test_dispatch_shims.py`.
+- **`singleinstance.py`'s lock file now uses an idiomatic macOS path.**
+  `LOCK_DIR` is `~/Library/Application Support/CARMEN` on darwin instead of
+  falling back to bare `~/CARMEN`. Covered by
+  `mac-os/tests/test_dispatch_shims.py`.
+- **Session-start is now gated on Accessibility trust, not just a warning.**
+  See the Subsystem 2 entry above -- `qt_ui/picker_dialogs.py`'s interactive
+  "Start Session" button refuses to start (with an explanatory dialog) when
+  untrusted on darwin. Covered by `tests/test_picker_dialogs.py`.
+- **Soft lock's blackout-rect is now implemented on macOS.** See the
+  Subsystem 2 entry above. Covered by `mac-os/tests/test_enforcer_mac.py`.
+
+### Remaining gaps that genuinely need a real Mac (nothing further to do without one)
 
 - **The `process_name` contract between the picker and enforcement is
   unverified, and it's the one that decides whether blocking works at all.**
@@ -729,32 +762,12 @@ against real PyPI on macOS.
   equal -- an app whose bundle executable name differs from its actual
   running process name (some Electron apps do this) would be silently
   unblockable: the picker shows it, the user selects it, and nothing ever
-  fires, with no error anywhere to notice by. This needs verifying on a real
-  Mac before anything else in the list below: pick a few installed apps
-  (including at least one Electron app) and confirm
-  `list_installed_apps()`'s `process_name` for each actually equals
-  `psutil.Process(<that running app's pid>).name()`.
-- **`session_manager.ALWAYS_ALLOWED_PROCESSES` only lists `.exe` names.** No
-  macOS system process (Finder, Dock, WindowServer, SystemUIServer, ...) is
-  exempt. This isn't a crash -- `is_exempt()` still protects Carmen Focus's
-  own process via the `pid == os.getpid()` check, and nothing is touched
-  unless it's explicitly on the blocklist -- but it's a real parity gap
-  versus Windows, where that list exists specifically to guarantee core
-  shell/system processes stay usable no matter what a session blocks.
-  Whoever picks this up should decide whether to add a macOS-specific
-  addition to that set (gated on `sys.platform`, since it's a shared,
-  platform-agnostic module).
-- **`singleinstance.py`'s lock file lands somewhere non-idiomatic on macOS.**
-  `LOCK_DIR` is `$LOCALAPPDATA/CARMEN`, which doesn't exist on macOS -- it
-  falls back to `~/CARMEN` (the `os.environ.get(..., os.path.expanduser("~"))`
-  default), which works fine functionally but isn't where a macOS app is
-  expected to keep this kind of file (`~/Library/Application Support/CARMEN`
-  would be the idiomatic location). Read in full and confirmed otherwise
-  completely platform-agnostic (`os`/`psutil`/`urllib` only, no win32
-  dependency) -- this is a deliberate "leave as-is" call, not an oversight,
-  since fixing it is cosmetic and not required for correctness. Flagged here
-  so it's a documented decision, not something the next person has to
-  rediscover.
+  fires, with no error anywhere to notice by. This is a pure data-matching
+  question about real app bundles, not something a code change or a stub can
+  resolve -- it needs verifying on a real Mac before anything else in the
+  punch list below: pick a few installed apps (including at least one
+  Electron app) and confirm `list_installed_apps()`'s `process_name` for each
+  actually equals `psutil.Process(<that running app's pid>).name()`.
 
 ### Full punch list for whoever has a real Mac next
 
@@ -767,6 +780,9 @@ against real PyPI on macOS.
 4. Run `mac-os/tests/` against the *real* pyobjc frameworks, not the stubs in
    this branch -- expect real API-shape mismatches; the stubs only prove the
    Python-side control flow, not the actual ObjC method names/signatures.
+   `enforcer_mac._window_rect`'s `AXValueGetValue`/`kAXValueCGPointType`/
+   `kAXValueCGSizeType` usage is the least-tested-by-analogy part of this
+   port and deserves particular attention.
 5. Grant Accessibility permission and confirm `hard_lock_redirect`/
    `sweep_minimize_blocked_windows` actually minimize + hide windows as
    intended, including the "hide() is stronger than Windows' peek-disallow"
@@ -777,10 +793,5 @@ against real PyPI on macOS.
 7. Rebuild/move the `.app` once and confirm whether the Accessibility grant
    survives or needs re-granting (document the answer in this file, per the
    Packaging section's own ask).
-8. Decide whether to close the two known gaps called out above: gating
-   session-start on Accessibility trust (not just a warning), and soft
-   lock's blackout-rect on macOS.
-9. Confirm pystray's Cocoa backend renders `default=True`/`visible=<callable>`
+8. Confirm pystray's Cocoa backend renders `default=True`/`visible=<callable>`
    the same way the win32 backend does (Subsystem 7).
-10. Decide whether to add macOS system processes to
-    `session_manager.ALWAYS_ALLOWED_PROCESSES` (see the gap noted above).
