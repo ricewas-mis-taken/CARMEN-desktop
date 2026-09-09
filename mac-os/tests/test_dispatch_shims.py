@@ -122,11 +122,22 @@ def test_session_manager_exempts_macos_shell_processes_under_darwin(as_darwin):
 
 def test_session_manager_macos_set_does_not_leak_into_windows_branch():
     """Regression guard: the macOS-only exemptions must not be visible when
-    sys.platform is the real (Windows) value -- they're unioned in only
-    inside the `if sys.platform == "darwin":` branch."""
-    session_manager = _reload("session_manager")
-    assert not session_manager.is_exempt("Finder")
-    assert not session_manager.is_exempt("Dock")
+    sys.platform is not darwin -- they're unioned in only inside the
+    `if sys.platform == "darwin":` branch.
+
+    Must fake a non-darwin platform explicitly rather than relying on the
+    ambient sys.platform being non-darwin -- that assumption held on the
+    Windows machine this port was originally developed on, but is false when
+    the suite runs on a real Mac, where sys.platform genuinely is "darwin"."""
+    real_platform = sys.platform
+    sys.platform = "win32"
+    try:
+        session_manager = _reload("session_manager")
+        assert not session_manager.is_exempt("Finder")
+        assert not session_manager.is_exempt("Dock")
+    finally:
+        sys.platform = real_platform
+        _reload("session_manager")
 
 
 def test_singleinstance_lock_dir_is_idiomatic_on_macos(as_darwin):

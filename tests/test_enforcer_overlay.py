@@ -113,8 +113,19 @@ def test_overlay_without_blackout_has_no_blackout_window(qtbot, isolate_state):
 
 
 def test_overlay_with_blackout_shows_black_window_covering_the_given_rect(qtbot, isolate_state):
+    # y=100 (not near 0) deliberately: on macOS, Qt clamps any top-level
+    # window -- even Qt.FramelessWindowHint | Qt.BypassWindowManagerHint --
+    # to below the menu bar's reserved strip (~24-37px depending on display,
+    # confirmed via a real Mac's QScreen.availableGeometry()), regardless of
+    # the geometry actually requested. A rect at y=20 gets silently pushed to
+    # y=33, failing this assertion for a reason that has nothing to do with
+    # this module's own logic. Real captured windows never have on-screen
+    # content above the menu bar anyway (macOS itself reserves it), so this
+    # is not a case build_overlay needs to handle -- just a test that must
+    # avoid the platform-owned region to exercise the actual rect-covering
+    # logic on every platform.
     win = enforcer_overlay.build_overlay(
-        "test message", duration_ms=200, blackout_rect=(10, 20, 200, 300),
+        "test message", duration_ms=200, blackout_rect=(10, 100, 200, 300),
     )
     qtbot.addWidget(win)
 
@@ -124,7 +135,7 @@ def test_overlay_with_blackout_shows_black_window_covering_the_given_rect(qtbot,
     # Covers exactly the given rect, not the whole screen -- soft lock's
     # warning must not black out more than the offending window itself.
     geo = win._blackout_win.geometry()
-    assert (geo.x(), geo.y(), geo.width(), geo.height()) == (10, 20, 200, 300)
+    assert (geo.x(), geo.y(), geo.width(), geo.height()) == (10, 100, 200, 300)
     win.close()
 
 

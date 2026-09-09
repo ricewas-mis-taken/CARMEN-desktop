@@ -597,8 +597,10 @@ giant diff.
 ## Implementation status (as of the `mac-os-port` branch)
 
 No physical Mac was available while implementing any of this — every finding
-below marked "needs a real Mac" is genuinely unverified, not just untested for
-form's sake.
+below marked "needs a real Mac" was genuinely unverified, not just untested for
+form's sake, until the real-Mac verification pass on 2026-09-08 (see the updated
+Subsystem 3, Subsystem 8, and punch-list sections below for what that pass
+confirmed, fixed, or left open).
 
 ### Done
 
@@ -685,17 +687,61 @@ form's sake.
   tests) plus the new mac-os suite (35 tests) both pass together
   unchanged/passing on this branch.
 
-### Subsystem 3 (Chrome/Edge per-profile blocking) -- spike NOT run
+### Subsystem 3 (Chrome/Edge per-profile blocking) -- spike run on a real Mac (2026-09-08)
 
-The research spike this doc calls for (does macOS Chrome/Edge share one
-process across profiles or spawn one per profile; if shared, what per-window
-signal identifies the profile) requires a real Mac with Chrome/Edge installed
-and multiple profiles open, to inspect via `ps`/Activity Monitor/AppleScript.
-**None of that was possible from this Windows dev machine** -- the spike has
-not been run at all, not even partially.
+Run against real Chrome (three real profiles: `Default`="Rice", `Profile 2`="Lucas",
+`Profile 3`="stu.powayusd.com", read from `Local State`'s `profile.info_cache`) on
+an already-running Chrome instance, by opening a second profile as a new window
+(`open -na "Google Chrome" --args --profile-directory="Profile 2"`) and inspecting
+the result with `ps`, `psutil`, `CGWindowListCopyWindowInfo`, and the Accessibility
+API (`AXUIElementCopyAttributeValue` on each of the app's `AXWindows`).
 
-Per this doc's own documented fallback for exactly this situation,
-per-Chrome/Edge-profile blocking stays a **Windows-only feature for now**:
+**Finding 1 -- process model: shared, not per-profile.** The `open -na` command
+spawns a short-lived launcher process with `--profile-directory=Profile 2` on its
+command line, which hands the new-window request to the *existing* single-instance
+Chrome process (Chrome's normal single-instance-per-install behavior, same as on
+Windows) and then exits. Seconds later only the original pid remains, now owning
+both profiles' windows. **macOS Chrome shares one process across profiles**,
+exactly like the "if shared" branch this doc's Subsystem 3 anticipated -- there is
+no per-profile pid to key off of.
+
+**Finding 2 -- the per-window signal: `AXTitle`.** `CGWindowListCopyWindowInfo`'s
+`kCGWindowName` is `None` for Chrome's windows on a modern macOS (privacy
+restriction without Screen Recording permission), and AppleScript's own `name of
+window` property carries no profile info either. But reading each window's
+`AXTitle` via the Accessibility API does:
+
+```
+AXTitle -> "Example Domain - Google Chrome - Lucas"                    (Profile 2)
+AXTitle -> "Problem - B - Codeforces - Google Chrome - Rice"            (Default)
+AXTitle -> "Calendar - Google Chrome - Lucas (stu.powayusd.com)"        (Profile 3)
+```
+
+The pattern is `"<page title> - Google Chrome - <profile display name>"`, and the
+profile display name is exactly the same string `Local State`'s
+`profile.info_cache.<dir>.name` reports for that profile directory (`"Rice"`,
+`"Lucas"`, `"Lucas (stu.powayusd.com)"` respectively) -- so matching a window's
+`AXTitle` suffix against the known profile-name list from `Local State` recovers
+the profile directory reliably, with no AUMI equivalent needed. (Not verified
+against Edge specifically -- not installed on this machine -- but Edge is the same
+Chromium engine and uses the identical `Local State`/`info_cache` shape and
+window-title convention, so the same approach should carry over; verify on an Edge
+install before trusting it blindly.)
+
+**Conclusion: per-profile blocking is now implementable**, via
+`AXUIElementCopyAttributeValue(window, "AXTitle")` + a `Local State` profile-name
+lookup, in place of Windows' AUMI. Not yet implemented in this branch --
+`mac-os/mac_os/browser_profiles_mac.py` still doesn't exist and
+`window_tracker_mac`/`enforcer_mac`'s profile functions still return the
+Windows-only-feature stubs described below. Whoever picks this up next should wire
+`AXTitle`-suffix matching into `get_window_aumi`/`list_known_profile_aumis`/
+`describe_browser_profile_aumi`/`list_browser_profile_windows` following this
+finding, backed by real tests (mock the AX calls the same way
+`mac-os/tests/test_enforcer_mac.py` already does), rather than re-running the
+spike.
+
+Until that implementation lands, the fallback below is still in effect and is
+**still correct as an honest interim state, not a bug**:
 
 - `window_tracker_mac.list_browser_profile_windows()` and
   `list_known_browser_profiles()` both always return `[]` (the app picker's
@@ -709,29 +755,59 @@ per-Chrome/Edge-profile blocking stays a **Windows-only feature for now**:
   the whole browser") already works identically on both platforms with zero
   changes needed, exactly as this doc predicted.
 
-Whoever picks this up next with access to a real Mac should run the two
-verification steps in this doc's Subsystem 3 section, record the findings
-directly in this file (replacing this section), and only then implement
-`mac-os/mac_os/browser_profiles_mac.py` for real.
+### Subsystem 8 (packaging) -- attempted on a real Mac (2026-09-08)
 
-### Subsystem 8 (packaging) -- not started
+A local `pyinstaller --windowed --name CarmenFocusTest main.py` build **crashed
+immediately on launch**: `ModuleNotFoundError: No module named 'mac_os'`.
+`installed_apps.py`'s dispatch shim adds `mac-os/` to `sys.path` at runtime via
+`os.path.dirname(os.path.abspath(__file__))`, which resolves correctly when
+running from source but not inside a frozen bundle -- PyInstaller's static
+analysis doesn't follow that runtime `sys.path.insert`, so the entire `mac_os`
+package was silently omitted from the build (no warning at build time; it only
+surfaces as this crash at launch). Rebuilding with the package told to PyInstaller
+explicitly --
 
-No PyInstaller build has been attempted. Everything downstream of packaging
-that this doc calls out as needing a real bundled `.app` to test --
-`UNUserNotificationCenter` actually delivering a notification (Subsystem 4),
-Gatekeeper's first-launch "unidentified developer" prompt, whether an
-Accessibility grant survives a rebuild/move of the `.app` -- is entirely
-unverified. `mac-os/requirements-mac.txt` exists and lists the expected
-dependency set (`requirements.txt` minus `pywin32`/`winsdk`, plus the five
-`pyobjc-*` packages) but has never actually been installed or resolved
-against real PyPI on macOS.
+```
+pyinstaller --windowed --name CarmenFocusTest \
+  --paths mac-os \
+  --hidden-import mac_os \
+  --hidden-import mac_os.installed_apps_mac \
+  --hidden-import mac_os.enforcer_mac \
+  --hidden-import mac_os.window_tracker_mac \
+  --hidden-import mac_os.autostart_mac \
+  --hidden-import mac_os.calendar_toast_mac \
+  main.py
+```
 
-### Gaps found on review -- now fixed in code (still unverified on real hardware)
+-- fixed it: the bundled `.app` launched, stayed running, and its Flask API
+server came up normally. **Whoever adds a real build script/spec file for this
+app must include this `--paths`/`--hidden-import` set** (or the equivalent
+`pathex=`/`hiddenimports=` in a `.spec`'s `Analysis(...)`), or every macOS build
+will crash on launch exactly this way.
 
-These were flagged as open gaps in an earlier pass of this doc and have
-since been closed at the code level. Each still needs real-Mac verification
-(nothing here has run outside stubbed pyobjc), but they're no longer *missing
-functionality* -- they're implemented and covered by stub-based tests.
+`Gatekeeper`/`spctl -a -vv` rejected the resulting `.app` (`Code signing identity:
+None` -- PyInstaller ad-hoc-signs by default, not with a real Developer ID). It
+still ran fine launched directly from this machine (no `com.apple.quarantine`
+attribute on a locally-built copy), but a real distributed build --
+downloaded, emailed, or copied over a network share, anything that gets a
+quarantine flag -- **will hit Gatekeeper's "cannot verify/malicious software"
+block** without a paid Apple Developer ID and notarization. That's a real
+prerequisite for Subsystem 8, not optional polish, and wasn't attempted here (no
+Developer ID account available). `UNUserNotificationCenter` delivery (Subsystem 4)
+and the "does an Accessibility grant survive a rebuild" question were not
+re-checked against this build -- notarization needs solving first, since a
+never-notarized ad-hoc build is not representative of what a real user would
+actually receive.
+
+`mac-os/requirements-mac.txt` **does resolve** against real PyPI on macOS (Python
+3.14, arm64) -- `pip install -r mac-os/requirements-mac.txt` succeeded cleanly in
+a fresh venv, no version pin conflicts.
+
+### Gaps found on review -- now fixed in code, and verified on real hardware (2026-09-08)
+
+These were flagged as open gaps in an earlier pass of this doc, closed at the code
+level, and have now actually been exercised on a real Mac (not just against
+stubbed pyobjc):
 
 - **`session_manager.ALWAYS_ALLOWED_PROCESSES` now includes core macOS shell
   processes.** A separate `_ALWAYS_ALLOWED_PROCESSES_MACOS` set (Finder,
@@ -739,7 +815,8 @@ functionality* -- they're implemented and covered by stub-based tests.
   Spotlight, CoreServicesUIAgent, loginwindow, UniversalControl,
   ScreenSaverEngine) is unioned into `ALWAYS_ALLOWED_PROCESSES` only when
   `sys.platform == "darwin"`, so it's a no-op on Windows. Covered by
-  `mac-os/tests/test_dispatch_shims.py`.
+  `mac-os/tests/test_dispatch_shims.py`, which now also passes against the real
+  darwin platform value (see the dispatch-shim fix below).
 - **`singleinstance.py`'s lock file now uses an idiomatic macOS path.**
   `LOCK_DIR` is `~/Library/Application Support/CARMEN` on darwin instead of
   falling back to bare `~/CARMEN`. Covered by
@@ -749,59 +826,108 @@ functionality* -- they're implemented and covered by stub-based tests.
   "Start Session" button refuses to start (with an explanatory dialog) when
   untrusted on darwin. Covered by `tests/test_picker_dialogs.py`.
 - **Soft lock's blackout-rect is now implemented on macOS.** See the
-  Subsystem 2 entry above. Covered by `mac-os/tests/test_enforcer_mac.py`.
+  Subsystem 2 entry above and the coordinate-space finding below. Covered by
+  `mac-os/tests/test_enforcer_mac.py`.
 
-### Remaining gaps that genuinely need a real Mac (nothing further to do without one)
+### Full punch list -- now run on a real Mac (2026-09-08)
 
-- **The `process_name` contract between the picker and enforcement is
-  unverified, and it's the one that decides whether blocking works at all.**
-  `installed_apps_mac.list_installed_apps()` sources `process_name` from
-  `Info.plist`'s `CFBundleExecutable`; that string is what ends up in
-  `processBlocklist`. Enforcement then matches it against
-  `psutil.Process(pid).name()` read live off the process table. On Windows
-  these are the same string by construction (both are the `.exe` basename).
-  On macOS they come from two independent sources and are only *probably*
-  equal -- an app whose bundle executable name differs from its actual
-  running process name (some Electron apps do this) would be silently
-  unblockable: the picker shows it, the user selects it, and nothing ever
-  fires, with no error anywhere to notice by. This is a pure data-matching
-  question about real app bundles, not something a code change or a stub can
-  resolve -- it needs verifying on a real Mac before anything else in the
-  punch list below: pick a few installed apps (including at least one
-  Electron app) and confirm `list_installed_apps()`'s `process_name` for each
-  actually equals `psutil.Process(<that running app's pid>).name()`.
+1. **Verified: the `process_name` contract holds.** Compared
+   `installed_apps_mac.list_installed_apps()`'s `process_name` (from each app's
+   `Info.plist` `CFBundleExecutable`) against `psutil.Process(pid).name()` for
+   every one of this machine's installed apps that was actually running,
+   including two Electron apps specifically (the doc's named risk case):
+   Discord (`process_name` "Discord" == psutil name "Discord") and VS Code
+   (`process_name`/psutil name both "Code"). Every match was exact; no
+   discrepancy found on this machine's app set. Not a proof for every Electron
+   app in existence, but the specific failure mode worried about here
+   (bundle-name vs. process-name divergence) did not reproduce on the apps
+   available to test.
+2. **Done -- see the Subsystem 3 write-up above.** Real answer recorded; only
+   the actual `browser_profiles_mac.py` implementation is still outstanding.
+3. **Verified: `mac-os/requirements-mac.txt` resolves cleanly** on real macOS
+   (Python 3.14, arm64) in a fresh venv.
+4. **Run against real pyobjc, not stubs.** `pytest tests/ mac-os/tests/` (281
+   tests, both the platform-agnostic suite and every `mac-os/tests/` file) run
+   against the real `AppKit`/`Quartz`/`ApplicationServices`/`UserNotifications`
+   frameworks (no stubbing) surfaced exactly two real-platform mismatches, both
+   now fixed:
+   - `_window_rect`'s `AXValueGetValue` usage (the part this doc called "least
+     tested by analogy") works correctly against real pyobjc -- see the
+     coordinate-space finding below. No API-shape mismatch found there.
+   - `tests/test_enforcer_overlay.py`'s blackout-rect test asserted an exact
+     `(x, y, w, h)` for a rect at `y=20`; real macOS Qt clamps any top-level
+     window (frameless, on-top, tool, even with `Qt.BypassWindowManagerHint`)
+     to below the display's menu-bar strip (`QScreen.availableGeometry()`'s
+     top, 33px on this display) regardless of the geometry requested. Confirmed
+     with a standalone PySide6 repro independent of this repo's code -- this is
+     Qt/macOS window-placement policy, not a bug in `enforcer_mac.py`'s
+     coordinate handling. Real captured windows never have on-screen content
+     above the menu bar anyway (macOS itself reserves that space), so this
+     can't happen with a genuine window rect -- only the test's arbitrary y=20
+     fixture value collided with it. Fixed by moving the test's rect to y=100,
+     comfortably clear of the reserved strip; the assertion's actual point
+     (covers exactly the given rect) is unaffected.
+   - `test_dispatch_shims.py`'s
+     `test_session_manager_macos_set_does_not_leak_into_windows_branch` assumed
+     the *ambient* `sys.platform` (with no `as_darwin` fixture applied) is
+     non-darwin -- true on the Windows machine this was developed on, false on
+     a real Mac, where it's genuinely `"darwin"`. Fixed to explicitly fake
+     `sys.platform = "win32"` for the guard it's checking, rather than relying
+     on whatever machine happens to run the suite.
 
-### Full punch list for whoever has a real Mac next
+   281 passed, 39 skipped (the skipped ones are the genuinely Windows-only
+   tests, correctly `skipif`'d on darwin) after both fixes.
+5. **Verified: coordinate spaces agree, on this (single-display, Retina)
+   Mac.** `enforcer_mac._window_rect(pid)` was compared directly against
+   `osascript -e 'tell application "System Events" to get {position, size} of
+   front window of process ...'` for a real foreground window (TextEdit) --
+   both reported the identical `(181, 102, 603, 505)`, in points, top-left
+   origin. Qt's `QScreen.geometry()` uses the same convention
+   (`devicePixelRatio` 2.0 handled transparently -- both AX and Qt speak in
+   points, never raw device pixels). **The multi-monitor case remains
+   genuinely unverified** -- this machine has only its one built-in display
+   (`Apple M5` / "Color LCD", no external monitor attached), so the doc's
+   specific worry about AX's global space following the *primary* display in
+   a multi-monitor arrangement that isn't display (0,0) was not, and could not
+   be, exercised here.
+6. **Verified: Accessibility-gated hard lock actually works.** With this
+   process already Accessibility-trusted (`is_accessibility_trusted()` ->
+   `True`), ran `enforcer_mac`'s real primitives against a disposable TextEdit
+   window: `_minimize_all_windows(pid)` minimized it and `_all_windows_minimized`
+   correctly flipped to `True` afterward; `_hide_app(pid, True)` dropped its
+   on-screen window count (via `CGWindowListCopyWindowInfo`) to 0 and
+   `_hide_app(pid, False)` restored it. Confirms both halves of the "hide() is
+   stronger than Windows' peek-disallow" claim functionally (window
+   genuinely absent from the on-screen list, not just marked not-to-preview).
+7. **Attempted -- see the Subsystem 8 write-up above.** Build succeeded once
+   the `mac_os` package was told to PyInstaller explicitly; Gatekeeper rejects
+   the resulting ad-hoc-signed `.app` as expected without a real Developer ID
+   and notarization, which is now a known, named prerequisite rather than an
+   open question.
+8. **Not run.** Requires a signed/notarized build to test meaningfully (an
+   ad-hoc build's Accessibility grant behavior on rebuild isn't representative
+   of what a notarized one would do) -- blocked on the Subsystem 8 signing
+   prerequisite above.
+9. **Verified: pystray's Cocoa backend matches the win32 backend's behavior.**
+   A standalone pystray script with the exact same `default=True`/
+   `visible=<callable>` pattern `tray.py` uses was run and inspected via
+   `System Events`' accessibility tree (`menu bar 2` -- the status-bar extras
+   menu bar): the status item appeared with its menu in the declared order,
+   the `visible=`-gated item was correctly absent while its condition was
+   false and correctly appeared after toggling it via a real click on the
+   "Toggle" item (also driven through `System Events`, not simulated), and
+   the default item and Quit both worked when clicked.
 
-1. Verify the `process_name` contract above -- do this first, since every
-   other enforcement test downstream assumes it holds.
-2. Run the Subsystem 3 spike for real; implement per-profile blocking or
-   confirm the Windows-only fallback stays permanent.
-3. Install `mac-os/requirements-mac.txt` on a real Mac and confirm it
-   resolves (pyobjc version pins may need adjusting).
-4. Run `mac-os/tests/` against the *real* pyobjc frameworks, not the stubs in
-   this branch -- expect real API-shape mismatches; the stubs only prove the
-   Python-side control flow, not the actual ObjC method names/signatures.
-   `enforcer_mac._window_rect`'s `AXValueGetValue`/`kAXValueCGPointType`/
-   `kAXValueCGSizeType` usage is the least-tested-by-analogy part of this
-   port and deserves particular attention.
-5. Verify `_window_rect`'s coordinate space actually matches what
-   `qt_ui/enforcer_overlay.py`'s blackout overlay expects, on a multi-monitor
-   setup and on a Retina (non-1.0 backing scale factor) display -- AX's
-   global display space and Qt's own coordinate space are not guaranteed to
-   agree in either case (see `_window_rect`'s own docstring). The symptom if
-   this is wrong is a misplaced or mis-sized blackout rectangle during soft
-   lock, not a crash, so it won't show up as an error anywhere -- it has to
-   be checked visually.
-6. Grant Accessibility permission and confirm `hard_lock_redirect`/
-   `sweep_minimize_blocked_windows` actually minimize + hide windows as
-   intended, including the "hide() is stronger than Windows' peek-disallow"
-   claim (verify Mission Control/Cmd+Tab really show no preview).
-7. Build the PyInstaller `.app`, verify Gatekeeper's first-launch flow, and
-   re-verify Subsystem 4's notifications only work once bundled (per this
-   doc's own warning).
-8. Rebuild/move the `.app` once and confirm whether the Accessibility grant
-   survives or needs re-granting (document the answer in this file, per the
-   Packaging section's own ask).
-9. Confirm pystray's Cocoa backend renders `default=True`/`visible=<callable>`
-   the same way the win32 backend does (Subsystem 7).
+### What's still open after this pass
+
+- Implement `mac-os/mac_os/browser_profiles_mac.py` for real, using the
+  `AXTitle`-suffix approach recorded under Subsystem 3 above.
+- Solve code signing + notarization (a paid Apple Developer ID) before
+  Subsystem 8 can be considered anything but blocked; re-run punch-list items
+  4 (Subsystem 4 notification delivery) and 8 (grant survival across
+  rebuild/move) only once a signed/notarized build exists.
+- Verify the Subsystem 3 `AXTitle` convention against a real Edge install
+  (reasoned to hold by analogy -- same Chromium engine, same `Local
+  State`/`info_cache` shape -- but not directly observed).
+- Verify `_window_rect`'s multi-monitor coordinate-space behavior on an
+  external-display setup; not possible on this single-display machine.
