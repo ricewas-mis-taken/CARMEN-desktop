@@ -36,6 +36,44 @@ def test_lists_apps_from_app_dirs_sorted_by_display_name(tmp_path, monkeypatch):
     ]
 
 
+def test_finds_bundles_nested_one_folder_deep(tmp_path, monkeypatch):
+    """Not every app is a direct child of /Applications -- vendor/utility
+    subfolders (e.g. /Applications/Utilities/*.app) are common on a real
+    Mac. A flat os.listdir(base) alone would miss these entirely."""
+    apps_dir = tmp_path / "Applications"
+    apps_dir.mkdir()
+    _make_bundle(apps_dir, "Top.app", executable="Top", bundle_name="Top App")
+    _make_bundle(apps_dir, "Utilities/Nested.app", executable="Nested", bundle_name="Nested App")
+
+    monkeypatch.setattr(installed_apps_mac, "APP_DIRS", [str(apps_dir)])
+    monkeypatch.setattr(installed_apps_mac, "_is_exempt", lambda name: False)
+
+    result = installed_apps_mac.list_installed_apps()
+
+    assert result == [
+        {"process_name": "Nested", "display_name": "Nested App"},
+        {"process_name": "Top", "display_name": "Top App"},
+    ]
+
+
+def test_does_not_descend_into_a_bundle_looking_for_more_bundles(tmp_path, monkeypatch):
+    """A .app bundle is a leaf to read, not a container to keep searching --
+    a bundle nested inside another bundle's own folder structure (e.g. a
+    helper .app inside Contents/) must not be picked up as a separate
+    top-level app."""
+    apps_dir = tmp_path / "Applications"
+    apps_dir.mkdir()
+    outer = _make_bundle(apps_dir, "Outer.app", executable="Outer", bundle_name="Outer App")
+    _make_bundle(outer, "Contents/Helper.app", executable="Helper", bundle_name="Helper App")
+
+    monkeypatch.setattr(installed_apps_mac, "APP_DIRS", [str(apps_dir)])
+    monkeypatch.setattr(installed_apps_mac, "_is_exempt", lambda name: False)
+
+    result = installed_apps_mac.list_installed_apps()
+
+    assert result == [{"process_name": "Outer", "display_name": "Outer App"}]
+
+
 def test_skips_bundle_missing_cfbundleexecutable(tmp_path, monkeypatch):
     apps_dir = tmp_path / "Applications"
     apps_dir.mkdir()

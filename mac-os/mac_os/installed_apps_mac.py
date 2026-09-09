@@ -27,8 +27,8 @@ def _is_exempt(process_name):
         return False
 
 
-def _read_bundle(base, entry):
-    info_plist = os.path.join(base, entry, "Contents", "Info.plist")
+def _read_bundle(app_path):
+    info_plist = os.path.join(app_path, "Contents", "Info.plist")
     try:
         with open(info_plist, "rb") as f:
             info = plistlib.load(f)
@@ -39,8 +39,33 @@ def _read_bundle(base, entry):
     if not executable:
         return None
 
+    entry = os.path.basename(app_path)
     display_name = info.get("CFBundleName") or entry[: -len(".app")]
     return {"process_name": executable, "display_name": display_name}
+
+
+def _iter_app_bundles(base, depth=2):
+    """Yields .app bundle paths under base, up to `depth` levels deep
+    (default 2: bundles directly in base, plus bundles one folder deeper --
+    e.g. /Applications/Utilities/*.app). Real installs don't always put an
+    app as a *direct* child of /Applications -- vendor/utility subfolders
+    are common -- so a flat os.listdir(base) alone (this module's original
+    approach) silently missed those.
+
+    Never descends into a .app bundle itself (it's a bundle to read, not a
+    container to search inside) and never follows symlinks (avoids a
+    directory-loop risk a bounded, non-recursive-into-bundles walk would
+    otherwise have no other guard against)."""
+    try:
+        entries = os.listdir(base)
+    except OSError:
+        return
+    for entry in entries:
+        path = os.path.join(base, entry)
+        if entry.endswith(".app"):
+            yield path
+        elif depth > 1 and not os.path.islink(path) and os.path.isdir(path):
+            yield from _iter_app_bundles(path, depth - 1)
 
 
 def list_installed_apps():
@@ -52,19 +77,12 @@ def list_installed_apps():
     never aborting the whole scan."""
     apps = {}
     for base in APP_DIRS:
-        try:
-            if not os.path.isdir(base):
-                continue
-            entries = os.listdir(base)
-        except OSError:
+        if not os.path.isdir(base):
             continue
 
-        for entry in entries:
+        for app_path in _iter_app_bundles(base):
             try:
-                if not entry.endswith(".app"):
-                    continue
-
-                bundle = _read_bundle(base, entry)
+                bundle = _read_bundle(app_path)
                 if bundle is None:
                     continue
 

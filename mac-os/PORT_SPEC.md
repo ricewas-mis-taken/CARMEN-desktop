@@ -664,9 +664,11 @@ form's sake.
 - **Subsystem 6 (installed-app enumeration)**: `mac-os/mac_os/installed_apps_mac.py`,
   scanning `/Applications` + `~/Applications` for `.app` bundles and reading
   `Contents/Info.plist`. Matches `installed_apps.list_installed_apps()`'s
-  exact return shape. Known gap: only scans one level deep (matching this
-  doc's own snippet) -- a nested bundle (e.g. `/Applications/Utilities/*.app`)
-  would be missed; not fixed, flagged here for a decision.
+  exact return shape. Scans one extra level deep beyond this doc's original
+  snippet (`_iter_app_bundles`, depth=2) so a bundle in a vendor/utility
+  subfolder (e.g. `/Applications/Utilities/*.app`) is found too, without
+  descending into a `.app` bundle's own internals looking for more bundles.
+  Covered by `mac-os/tests/test_installed_apps_mac.py`.
 - **Subsystem 7 (tray/menu-bar)**: confirmed by reading `tray.py` that it only
   uses `pystray`'s public, platform-abstracted API (`default=True`,
   `visible=<callable>`) -- both are documented cross-platform pystray
