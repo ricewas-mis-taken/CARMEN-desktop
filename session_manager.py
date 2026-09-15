@@ -384,6 +384,14 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
     time."""
     was_active = _state["isActive"] or _state["startTime"] is not None
 
+    # Close out any still-open violation before snapshotting violationLog --
+    # otherwise a session that ends while a process/domain violation is
+    # in-progress files a history entry whose last entry never gets
+    # resolvedAt/durationSeconds, since nothing else ever revisits history
+    # entries after this point.
+    _resolve_open_violation_locked("process", now)
+    _resolve_open_violation_locked("domain", now)
+
     summary_count = _state["violationCount"]
     summary_log = list(_state["violationLog"])
     lock_mode = _state["lockMode"]
