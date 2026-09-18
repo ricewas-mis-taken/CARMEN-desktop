@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+Hardened-runtime entitlements required for notarization (notarytool refuses
+to notarize a build without the hardened runtime enabled, and the hardened
+runtime refuses to run unless the specific things it locks down are
+explicitly re-opened here).
+
+- allow-unsigned-executable-memory / disable-library-validation: PyInstaller
+  bundles a Python interpreter plus a pile of compiled extension modules
+  (pyobjc's .so/.dylib files, etc.) that are not all signed by the same Team
+  ID as this app -- without disable-library-validation, the hardened runtime
+  refuses to load them at all and the app crashes on launch.
+- automation.apple-events: pyobjc's Accessibility (AXUIElement) and
+  Quartz/CGWindowList calls go through Apple Events/private frameworks under
+  the hood; without this the OS can silently deny calls that would otherwise
+  look identical to a permissions bug.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+</dict>
+</plist>

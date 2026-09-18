@@ -4,6 +4,7 @@ venv/
 build/
 dist/
 *.spec
+!mac-os/CarmenFocus.spec
 
 # All real user data (calendar.db, tasks.json, board.json, session state/
 # history, config.json, calendar_errors.log, .env, review/board photo
