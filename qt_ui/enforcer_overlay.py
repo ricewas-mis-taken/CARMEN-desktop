@@ -16,7 +16,7 @@ lift()/focus_force() loop.
 """
 import time
 
-from PySide6.QtCore import QRect, Qt, QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -48,8 +48,8 @@ _CASCADE_OFFSET_PX = 46
 _CASCADE_MAX_STEPS = 6
 
 
-def build_overlay(message, duration_ms, offending_process_name=None, blackout=False):
-    win = _LockOverlay(message, duration_ms, offending_process_name, blackout=blackout)
+def build_overlay(message, duration_ms, offending_process_name=None, blackout_rect=None):
+    win = _LockOverlay(message, duration_ms, offending_process_name, blackout_rect=blackout_rect)
     _open_windows.add(win)
     win.destroyed.connect(lambda: _open_windows.discard(win))
     win.show()
@@ -65,33 +65,29 @@ def build_unblock_reason_dialog(process_name):
 
 
 class _BlackoutOverlay(QWidget):
-    """A solid black, click-capturing window covering every monitor --
-    shown alongside _LockOverlay whenever the user is actually looking at
-    (or was just redirected away from) the blocked app, so its content is
-    genuinely inaccessible for the notification's duration instead of just
-    having a small popup floating on top of it. Mirrors the browser
-    extension's own press-and-hold black-box block on the extension side.
+    """A solid black, click-capturing window covering exactly one rectangle
+    (the offending window's own, not the whole screen) -- shown alongside
+    _LockOverlay for soft_lock_warning specifically, so the warning can't
+    just be read straight through the small popup for its duration. Mirrors
+    the browser extension's own press-and-hold black-box block on the
+    extension side.
 
-    Deliberately NOT used for every lock-overlay call site -- see
-    enforcer.py's show_blocked_notice(), which catches windows minimized in
-    the background while the user is on a different, allowed app; blacking
-    out the whole screen there would cover up work that was never the
-    violation in the first place."""
+    Deliberately not used for every lock-overlay call site -- see
+    enforcer.py's hard_lock_redirect() (already minimizes the window and
+    hides its taskbar preview -- a screen-covering overlay on top of a
+    plain redirect isn't needed) and show_blocked_notice() (catches windows
+    minimized in the background while the user is on a different, allowed
+    app; covering anything there would hide unrelated, legitimate work)."""
 
-    def __init__(self, duration_ms):
+    def __init__(self, duration_ms, rect):
         super().__init__(
             None,
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool,
         )
         self._closed = False
         self.setStyleSheet("background-color: black;")
-
-        # United, not just the primary screen's geometry -- a blocked
-        # window dragged to a second monitor must not stay visible there.
-        geometry = QRect()
-        for screen in QApplication.screens():
-            geometry = geometry.united(screen.geometry())
-        self.setGeometry(geometry)
+        left, top, width, height = rect
+        self.setGeometry(left, top, width, height)
 
         QTimer.singleShot(duration_ms + 1000, self.close)
 
@@ -103,7 +99,7 @@ class _BlackoutOverlay(QWidget):
 
 
 class _LockOverlay(QWidget):
-    def __init__(self, message, duration_ms, offending_process_name=None, blackout=False):
+    def __init__(self, message, duration_ms, offending_process_name=None, blackout_rect=None):
         super().__init__(
             None,
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool,
@@ -112,8 +108,8 @@ class _LockOverlay(QWidget):
         self._duration_ms = duration_ms
         self._start_time = time.time()
         self._blackout_win = None
-        if blackout:
-            self._blackout_win = _BlackoutOverlay(duration_ms)
+        if blackout_rect is not None:
+            self._blackout_win = _BlackoutOverlay(duration_ms, blackout_rect)
             _open_windows.add(self._blackout_win)
             self._blackout_win.destroyed.connect(lambda: _open_windows.discard(self._blackout_win))
             self._blackout_win.show()

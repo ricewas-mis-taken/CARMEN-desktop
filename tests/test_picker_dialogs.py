@@ -4,8 +4,10 @@ here: it protects the documented requirement that starting a session from
 this dialog calls the exact same session_manager.start_session() the
 Flask API's POST /session/start uses, so the desktop UI, tray, and browser
 extension always agree on session state."""
+import sys
 from unittest.mock import MagicMock
 
+import enforcer
 import qt_ui.picker_dialogs as picker_dialogs
 import session_manager
 
@@ -48,6 +50,51 @@ def test_timer_dialog_rejects_zero_duration(qtbot, isolate_state):
     assert not session_manager.is_active()
 
 
+def test_timer_dialog_refuses_to_start_without_accessibility_trust_on_macos(
+    qtbot, isolate_state, monkeypatch
+):
+    """macOS-only gate (see picker_dialogs._TimerDialog._start): hard/soft
+    lock can't enforce anything without Accessibility permission, so the
+    interactive Start Session button must refuse rather than start a session
+    that silently can't do anything. enforcer.is_accessibility_trusted is
+    only ever bound on the darwin branch (see enforcer.py's dispatch shim),
+    so it's monkeypatched directly with raising=False rather than relying on
+    a real darwin import here."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(enforcer, "is_accessibility_trusted", lambda: False, raising=False)
+    monkeypatch.setattr(picker_dialogs.QMessageBox, "exec", lambda self: None)
+    monkeypatch.setattr(picker_dialogs.QMessageBox, "clickedButton", lambda self: None)
+    spy = MagicMock(wraps=session_manager.start_session)
+    monkeypatch.setattr(session_manager, "start_session", spy)
+
+    win = picker_dialogs._TimerDialog()
+    qtbot.addWidget(win)
+    win._duration_edit.setText("25")
+
+    win._start()
+
+    spy.assert_not_called()
+    assert not session_manager.is_active()
+    assert "accessibility" in win._status_label.text().lower()
+
+
+def test_timer_dialog_starts_normally_when_accessibility_trusted_on_macos(
+    qtbot, isolate_state, monkeypatch
+):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(enforcer, "is_accessibility_trusted", lambda: True, raising=False)
+    spy = MagicMock(wraps=session_manager.start_session)
+    monkeypatch.setattr(session_manager, "start_session", spy)
+
+    win = picker_dialogs._TimerDialog()
+    qtbot.addWidget(win)
+    win._duration_edit.setText("25")
+
+    win._start()
+
+    spy.assert_called_once()
+
+
 def test_blocklist_picker_not_active_saves_to_config(qtbot, isolate_state):
     import config
 
@@ -59,6 +106,59 @@ def test_blocklist_picker_not_active_saves_to_config(qtbot, isolate_state):
 
     saved = config.load_config()
     assert "manualapp.exe" in saved["processBlocklist"]
+
+
+def test_blocklist_picker_shows_and_saves_browser_profile_rows(qtbot, isolate_state, monkeypatch):
+    """A currently-open Chrome/Edge profile window should be offered as its
+    own checkbox, separate from the process-name rows, and checking it must
+    save to browserProfileBlocklist (by AUMI) rather than processBlocklist
+    (which would block the whole browser, every profile equally)."""
+    import config
+
+    monkeypatch.setattr(
+        picker_dialogs.window_tracker,
+        "list_known_browser_profiles",
+        lambda: [
+            {
+                "process_name": "chrome.exe", "aumi": "Chrome", "label": "chrome.exe — Default",
+                "is_running": True,
+            },
+            {
+                "process_name": "chrome.exe", "aumi": "Chrome.UserData.Profile4",
+                "label": "chrome.exe — Profile4", "is_running": False,
+            },
+        ],
+    )
+
+    win = picker_dialogs._BlocklistPicker()
+    qtbot.addWidget(win)
+
+    assert win._checklist.has_key("Chrome.UserData.Profile4")
+    assert win._profile_aumi_keys == {"Chrome", "Chrome.UserData.Profile4"}
+
+    win._checklist._checkboxes_by_key["chrome.userdata.profile4"][0].setChecked(True)
+    win._save()
+
+    saved = config.load_config()
+    assert saved["browserProfileBlocklist"] == ["Chrome.UserData.Profile4"]
+    assert "Chrome.UserData.Profile4" not in saved["processBlocklist"]
+
+
+def test_timer_dialog_passes_saved_browser_profile_blocklist(qtbot, isolate_state, monkeypatch):
+    import config
+
+    config.update_config(lambda cfg: cfg.update({"browserProfileBlocklist": ["Chrome.UserData.Profile4"]}))
+
+    spy = MagicMock(wraps=session_manager.start_session)
+    monkeypatch.setattr(session_manager, "start_session", spy)
+
+    win = picker_dialogs._TimerDialog()
+    qtbot.addWidget(win)
+    win._duration_edit.setText("10")
+    win._start()
+
+    assert spy.call_args.kwargs["blocked_browser_profiles"] == ["Chrome.UserData.Profile4"]
+    assert session_manager.get_status()["blockedBrowserProfiles"] == ["Chrome.UserData.Profile4"]
 
 
 def test_manual_entry_requires_exe_suffix(qtbot, isolate_state):

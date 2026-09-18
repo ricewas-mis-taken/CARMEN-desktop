@@ -12,11 +12,14 @@ Endpoints:
     GET  /history
     GET  /apps/running
     GET  /apps/installed
+    GET  /browser-profiles/running
     POST /blocklist/apps
     POST /blocklist/apps/remove
+    POST /blocklist/browser-profiles
     GET  /whitelist/domains
     POST /whitelist/domains
     POST /whitelist/domains/add
+    POST /tasks/<task_id>/domain-whitelist
     GET  /api/focus/rules
     POST /api/focus/rules
 
@@ -32,6 +35,8 @@ page — /apps/installed and /blocklist/apps remain here as the same API
 surface for any other caller (e.g. Carmen) to drive the same picks
 programmatically.
 """
+import functools
+import hmac
 import math
 import re
 import threading
@@ -44,6 +49,7 @@ import installed_apps
 import review_store
 import session_history
 import session_manager
+import tasks_store
 import window_tracker
 
 app = Flask(__name__)
@@ -83,6 +89,25 @@ def register_quit_callback(fn):
     _quit_callback = fn
 
 
+def _require_token(fn):
+    """Guards every state-changing endpoint with a local shared secret (see
+    config.get_api_token()) -- this API used to have zero authentication at
+    all, so anything that could reach 127.0.0.1:5847 (any process running as
+    the same user, not just the browser extension) could end the session,
+    kill the app outright (/internal/quit), or unblock any app with a
+    one-word "reason". Read-only routes (GET /status, /health, etc.) are
+    deliberately left open -- they don't change anything, and the extension
+    polls several of them before it's ever paired with a token."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        expected = config.get_api_token()
+        provided = request.headers.get("X-Carmen-Token", "")
+        if not hmac.compare_digest(provided, expected):
+            return jsonify({"error": "missing or invalid X-Carmen-Token header"}), 401
+        return fn(*args, **kwargs)
+    return wrapper
+
+
 def _is_string_list(value):
     """True if value is a list where every element is a non-empty (after
     stripping whitespace) string. Used to reject process/domain lists whose
@@ -98,6 +123,7 @@ def _is_string_list(value):
 
 
 @app.route("/internal/quit", methods=["POST"])
+@_require_token
 def internal_quit():
     # Runs the real on_quit() on its own thread rather than inline in this
     # request handler -- on_quit() blocks on Qt/pystray teardown, which
@@ -119,6 +145,7 @@ def status():
 
 
 @app.route("/session/start", methods=["POST"])
+@_require_token
 def session_start():
     body = request.get_json(force=True, silent=True) or {}
 
@@ -175,6 +202,17 @@ def session_start():
     if not _is_string_list(domain_whitelist):
         return jsonify({"error": "domain_whitelist must be a list of non-empty domain/URL strings"}), 400
 
+    blocked_browser_profiles = body.get("blocked_browser_profiles")
+    if blocked_browser_profiles is None:
+        # Same "caller didn't send one, fall back to the saved default"
+        # treatment as process_blocklist above.
+        blocked_browser_profiles = config.load_config().get("browserProfileBlocklist", [])
+    elif not _is_string_list(blocked_browser_profiles):
+        return (
+            jsonify({"error": "blocked_browser_profiles must be a list of non-empty strings, null, or omitted"}),
+            400,
+        )
+
     result = session_manager.start_session(
         duration_minutes,
         lock_mode,
@@ -183,17 +221,20 @@ def session_start():
         source=source,
         event_id=event_id,
         event_title=event_title,
+        blocked_browser_profiles=blocked_browser_profiles,
     )
     return jsonify(result)
 
 
 @app.route("/session/end", methods=["POST"])
+@_require_token
 def session_end():
     result = session_manager.end_session()
     return jsonify(result)
 
 
 @app.route("/session/pause", methods=["POST"])
+@_require_token
 def session_pause():
     """Freezes the countdown only — the session stays active and lock
     enforcement (handled entirely by the extension/window_tracker, not this
@@ -203,6 +244,7 @@ def session_pause():
 
 
 @app.route("/session/resume", methods=["POST"])
+@_require_token
 def session_resume():
     """Resumes the countdown from exactly where it was frozen. Idempotent:
     no active session, or a session that isn't paused, just returns the
@@ -211,6 +253,7 @@ def session_resume():
 
 
 @app.route("/violation", methods=["POST"])
+@_require_token
 def violation():
     """Called by the browser extension whenever the active tab's domain
     isn't in domain_whitelist during an active session — increments the
@@ -227,6 +270,7 @@ def violation():
 
 
 @app.route("/violation/resolved", methods=["POST"])
+@_require_token
 def violation_resolved():
     """Called by the browser extension when the active tab is back on an
     allowed domain — closes out the open domain violation (if any) so its
@@ -264,7 +308,17 @@ def apps_installed():
     return jsonify(installed_apps.list_installed_apps())
 
 
+@app.route("/browser-profiles/running", methods=["GET"])
+def browser_profiles_running():
+    """Every currently-open Chrome/Edge profile window, one entry per
+    unique AppUserModelID -- see window_tracker.list_browser_profile_windows().
+    Only profiles with a window open right now can be listed, since a
+    profile's AUMI isn't known until Windows reads it off a real window."""
+    return jsonify(window_tracker.list_browser_profile_windows())
+
+
 @app.route("/blocklist/apps", methods=["POST"])
+@_require_token
 def blocklist_apps():
     body = request.get_json(force=True, silent=True) or {}
     process_blocklist = body.get("process_blocklist")
@@ -279,6 +333,24 @@ def blocklist_apps():
     return jsonify({"processBlocklist": cfg["processBlocklist"]})
 
 
+@app.route("/blocklist/browser-profiles", methods=["POST"])
+@_require_token
+def blocklist_browser_profiles():
+    """Saves the default browserProfileBlocklist (AUMIs), the profile-level
+    counterpart to POST /blocklist/apps."""
+    body = request.get_json(force=True, silent=True) or {}
+    browser_profile_blocklist = body.get("browser_profile_blocklist")
+
+    if not _is_string_list(browser_profile_blocklist):
+        return jsonify({"error": "browser_profile_blocklist must be a list of non-empty AUMI strings"}), 400
+
+    def _mutate(cfg):
+        cfg["browserProfileBlocklist"] = list(browser_profile_blocklist)
+
+    cfg = config.update_config(_mutate)
+    return jsonify({"browserProfileBlocklist": cfg["browserProfileBlocklist"]})
+
+
 @app.route("/whitelist/domains", methods=["GET"])
 def whitelist_domains_get():
     """Returns config.json's global domainWhitelist — the same "manual/
@@ -291,6 +363,7 @@ def whitelist_domains_get():
 
 
 @app.route("/whitelist/domains", methods=["POST"])
+@_require_token
 def whitelist_domains_set():
     """Overwrites config.json's global domainWhitelist — the domain
     counterpart to POST /blocklist/apps. Meant to be called by the browser
@@ -315,6 +388,7 @@ def whitelist_domains_set():
 
 
 @app.route("/blocklist/apps/remove", methods=["POST"])
+@_require_token
 def blocklist_apps_remove():
     """Removes a single process from the active session's processBlocklist,
     with a required reason logged for the audit trail (session_manager's
@@ -343,6 +417,7 @@ def blocklist_apps_remove():
 
 
 @app.route("/whitelist/domains/add", methods=["POST"])
+@_require_token
 def whitelist_domains_add():
     """Adds a single domain to the active session's domainWhitelist, with a
     required reason logged for the audit trail (session_manager's
@@ -368,6 +443,38 @@ def whitelist_domains_add():
     return jsonify({"domainWhitelist": domain_whitelist, "addition": addition})
 
 
+@app.route("/tasks/<task_id>/domain-whitelist", methods=["POST"])
+@_require_token
+def task_domain_whitelist_add(task_id):
+    """Merges `domains` into task_id's own saved domainWhitelist (tasks_store,
+    not session_manager's active-session list above) -- called by the browser
+    extension's post-session "save these sites to this task?" prompt, so a
+    site allowed on the fly (via /whitelist/domains/add) during one session
+    on this task is already allowed the next time this task starts one.
+    Case-insensitive dedupe against what's already saved; existing entries
+    and their original casing are left untouched."""
+    body = request.get_json(force=True, silent=True) or {}
+    domains = body.get("domains")
+
+    if not _is_string_list(domains):
+        return jsonify({"error": "domains must be a list of non-empty strings"}), 400
+
+    task = tasks_store.get_task(task_id)
+    if task is None:
+        return jsonify({"error": "task not found"}), 404
+
+    existing = list(task.get("domainWhitelist") or [])
+    existing_lower = {d.lower() for d in existing}
+    for domain in domains:
+        domain = domain.strip()
+        if domain.lower() not in existing_lower:
+            existing.append(domain)
+            existing_lower.add(domain.lower())
+
+    updated = tasks_store.update_task(task_id, {"domainWhitelist": existing})
+    return jsonify({"domainWhitelist": updated["domainWhitelist"]})
+
+
 @app.route("/api/focus/rules", methods=["GET"])
 def focus_rules_get():
     """Returns the synced domain-whitelist ruleset for the browser extension
@@ -386,6 +493,7 @@ def focus_rules_get():
 
 
 @app.route("/api/focus/rules", methods=["POST"])
+@_require_token
 def focus_rules_set():
     """Replaces the synced domain-whitelist ruleset and bumps its version, so
     every other browser instance's next poll picks up the change. Called by
@@ -427,6 +535,7 @@ def review_topics_list():
 
 
 @app.route("/review/topics", methods=["POST"])
+@_require_token
 def review_topics_create():
     body = request.get_json(force=True, silent=True) or {}
     name = body.get("name")
@@ -444,6 +553,7 @@ def review_subjects_list(topic_id):
 
 
 @app.route("/review/topics/<int:topic_id>/subjects", methods=["POST"])
+@_require_token
 def review_subjects_create(topic_id):
     body = request.get_json(force=True, silent=True) or {}
     name = body.get("name")
@@ -465,6 +575,7 @@ def review_problems_list(topic_id):
 
 
 @app.route("/review/topics/<int:topic_id>/problems", methods=["POST"])
+@_require_token
 def review_problems_create(topic_id):
     name = (request.form.get("name") or "").strip()
     subject_id = request.form.get("subject_id")
@@ -525,6 +636,7 @@ def review_problem_detail(problem_id):
 
 
 @app.route("/review/problems/<int:problem_id>/start", methods=["POST"])
+@_require_token
 def review_problem_start(problem_id):
     token = review_store.start_review(problem_id)
     if token is None:
@@ -533,6 +645,7 @@ def review_problem_start(problem_id):
 
 
 @app.route("/review/problems/<int:problem_id>/finish", methods=["POST"])
+@_require_token
 def review_problem_finish(problem_id):
     body = request.get_json(force=True, silent=True) or {}
     session_token = body.get("session_token")

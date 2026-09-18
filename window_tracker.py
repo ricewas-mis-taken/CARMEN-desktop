@@ -1,69 +1,158 @@
 """Active window detection and the polling loop that drives enforcement."""
+import sys
 import time
 
-import psutil
-import win32gui
-import win32process
-
+# Both platform-agnostic -- enforcer.py dispatches internally, and
+# session_manager.py has no Windows-only imports of its own -- and both are
+# needed by run_polling_loop() below, which is defined once, unconditionally,
+# after the platform-specific if/else. They must be imported here, above that
+# if/else, not inside the Windows-only branch: run_polling_loop is still
+# reached on macOS, and a name only bound inside the (never-taken) Windows
+# branch would raise NameError on its first tick -- silently, since the loop's
+# own try/except swallows it, spinning forever while doing nothing.
 import enforcer
 import session_manager
 
-POLL_INTERVAL_SECONDS = 1.5
+if sys.platform == "darwin":
+    import os as _os
+    _mac_os_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "mac-os")
+    if _mac_os_dir not in sys.path:
+        sys.path.insert(0, _mac_os_dir)
+    from mac_os import window_tracker_mac as _mac
 
-# Some apps (observed with Discord) don't actually leave the foreground when
-# hard_lock_redirect() minimizes them -- a stray popup/overlay window belonging
-# to the same process regrabs focus almost immediately, or the redirect's
-# SetForegroundWindow race loses to the app re-asserting itself. Since the
-# hard-lock branch below resets last_flagged_process to None right after
-# redirecting (so a genuine re-open by the user still counts as a fresh
-# violation), a process that never actually leaves foreground was retriggering
-# hard_lock_redirect() on *every* poll tick -- each call re-issuing
-# SW_MINIMIZE/SetForegroundWindow (visible as the app's window flashing) and
-# spawning another lock overlay (visible as several piling up on screen) every
-# 1.5s for as long as it stayed stuck. This cooldown limits how often the same
-# offending process can be redirected, without touching how often violations
-# are recorded.
-HARD_REDIRECT_COOLDOWN_SECONDS = POLL_INTERVAL_SECONDS * 3
-# Minimum gap between logging two violations for the same process -- prevents
-# rapid-fire entries when a background app briefly steals focus repeatedly.
-VIOLATION_COOLDOWN_SECONDS = 5
+    get_active_window = _mac.get_active_window
+    list_running_apps = _mac.list_running_apps
+    list_browser_profile_windows = _mac.list_browser_profile_windows
+    list_known_browser_profiles = _mac.list_known_browser_profiles
+    POLL_INTERVAL_SECONDS = _mac.POLL_INTERVAL_SECONDS
+    HARD_REDIRECT_COOLDOWN_SECONDS = _mac.HARD_REDIRECT_COOLDOWN_SECONDS
+    VIOLATION_COOLDOWN_SECONDS = _mac.VIOLATION_COOLDOWN_SECONDS
+else:
+    import psutil
+    import win32gui
+    import win32process
+
+    POLL_INTERVAL_SECONDS = 1.5
+
+    # Some apps (observed with Discord) don't actually leave the foreground when
+    # hard_lock_redirect() minimizes them -- a stray popup/overlay window belonging
+    # to the same process regrabs focus almost immediately, or the redirect's
+    # SetForegroundWindow race loses to the app re-asserting itself. Since the
+    # hard-lock branch below resets last_flagged_process to None right after
+    # redirecting (so a genuine re-open by the user still counts as a fresh
+    # violation), a process that never actually leaves foreground was retriggering
+    # hard_lock_redirect() on *every* poll tick -- each call re-issuing
+    # SW_MINIMIZE/SetForegroundWindow (visible as the app's window flashing) and
+    # spawning another lock overlay (visible as several piling up on screen) every
+    # 1.5s for as long as it stayed stuck. This cooldown limits how often the same
+    # offending process can be redirected, without touching how often violations
+    # are recorded.
+    HARD_REDIRECT_COOLDOWN_SECONDS = POLL_INTERVAL_SECONDS * 3
+    # Minimum gap between logging two violations for the same process -- prevents
+    # rapid-fire entries when a background app briefly steals focus repeatedly.
+    VIOLATION_COOLDOWN_SECONDS = 5
 
 
-def get_active_window():
-    hwnd = win32gui.GetForegroundWindow()
-    title = win32gui.GetWindowText(hwnd)
-    process_name = None
-    pid = None
-    try:
-        _, pid = win32process.GetWindowThreadProcessId(hwnd)
-        process_name = psutil.Process(pid).name()
-    except (psutil.NoSuchProcess, psutil.AccessDenied, Exception):
-        process_name = None
-    return {"title": title, "process_name": process_name, "pid": pid, "hwnd": hwnd}
-
-
-def list_running_apps():
-    """Enumerates visible top-level windows and returns one entry per unique
-    process name (first window title found for it), for the app picker."""
-    apps = {}
-
-    def callback(hwnd, _):
-        if not win32gui.IsWindowVisible(hwnd):
-            return
+    def get_active_window():
+        hwnd = win32gui.GetForegroundWindow()
         title = win32gui.GetWindowText(hwnd)
-        if not title:
-            return
+        process_name = None
+        pid = None
         try:
             _, pid = win32process.GetWindowThreadProcessId(hwnd)
             process_name = psutil.Process(pid).name()
         except (psutil.NoSuchProcess, psutil.AccessDenied, Exception):
-            return
-        key = process_name.lower()
-        if key not in apps:
-            apps[key] = {"process_name": process_name, "window_title": title}
+            process_name = None
+        return {"title": title, "process_name": process_name, "pid": pid, "hwnd": hwnd}
 
-    win32gui.EnumWindows(callback, None)
-    return list(apps.values())
+
+    def list_running_apps():
+        """Enumerates visible top-level windows and returns one entry per unique
+        process name (first window title found for it), for the app picker."""
+        apps = {}
+
+        def callback(hwnd, _):
+            if not win32gui.IsWindowVisible(hwnd):
+                return
+            title = win32gui.GetWindowText(hwnd)
+            if not title:
+                return
+            try:
+                _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                process_name = psutil.Process(pid).name()
+            except (psutil.NoSuchProcess, psutil.AccessDenied, Exception):
+                return
+            key = process_name.lower()
+            if key not in apps:
+                apps[key] = {"process_name": process_name, "window_title": title}
+
+        win32gui.EnumWindows(callback, None)
+        return list(apps.values())
+
+
+    def list_browser_profile_windows():
+        """Enumerates visible top-level windows belonging to a multi-profile
+        browser (session_manager.MULTI_PROFILE_BROWSER_PROCESSES) and returns
+        one entry per unique AUMI -- one per currently-open profile window --
+        for the app picker's "block just one browser profile" section. Only
+        profiles with a window open *right now* can be offered, since a
+        profile's AUMI isn't known until Windows actually reads it off a real
+        window (see enforcer.get_window_aumi)."""
+        seen = {}
+
+        def callback(hwnd, _):
+            if not win32gui.IsWindowVisible(hwnd):
+                return
+            title = win32gui.GetWindowText(hwnd)
+            if not title:
+                return
+            try:
+                _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                process_name = psutil.Process(pid).name()
+            except (psutil.NoSuchProcess, psutil.AccessDenied, Exception):
+                return
+            if process_name.lower() not in session_manager.MULTI_PROFILE_BROWSER_PROCESSES:
+                return
+            aumi = enforcer.get_window_aumi(hwnd)
+            if not aumi or aumi in seen:
+                return
+            seen[aumi] = {
+                "process_name": process_name,
+                "aumi": aumi,
+                "label": enforcer.describe_browser_profile_aumi(process_name, aumi),
+                "window_title": title,
+            }
+
+        win32gui.EnumWindows(callback, None)
+        return list(seen.values())
+
+
+    def list_known_browser_profiles():
+        """The full "block just one browser profile" candidate list for the app
+        picker: every profile Chrome/Edge know about (enforcer.list_known_profile_aumis,
+        read from each browser's Local State), merged with which of those
+        currently have a window open (list_browser_profile_windows()) -- listed
+        as a precaution even when not running right now, since the point of
+        picking a profile to block is usually to stop it being opened in the
+        first place, not just to react to it already being open."""
+        running_by_aumi = {p["aumi"]: p for p in list_browser_profile_windows()}
+
+        merged = {}
+        for process_name in session_manager.MULTI_PROFILE_BROWSER_PROCESSES:
+            for aumi in enforcer.list_known_profile_aumis(process_name):
+                merged[aumi] = {
+                    "process_name": process_name,
+                    "aumi": aumi,
+                    "label": enforcer.describe_browser_profile_aumi(process_name, aumi),
+                    "is_running": False,
+                }
+
+        for aumi, running_profile in running_by_aumi.items():
+            # A window is ground truth for process_name/aumi/window_title -- the
+            # disk-derived entry only ever fills in when there's no live window.
+            merged[aumi] = {**merged.get(aumi, {}), **running_profile, "is_running": True}
+
+        return sorted(merged.values(), key=lambda p: (not p["is_running"], p["label"]))
 
 
 def run_polling_loop(stop_event, on_session_end=None, tray_icon=None):
@@ -123,7 +212,7 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None):
                     # flyouts) and our own tray/popup windows are never
                     # violations — don't touch dedupe state either way.
                     pass
-                elif process_name and session_manager.is_blocked(process_name):
+                elif process_name and enforcer.is_blocked_window(process_name, hwnd):
                     if process_name != last_flagged_process:
                         last_flagged_process = process_name
                         now = time.time()
@@ -166,7 +255,7 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None):
                             # foreground app from spamming redirects/overlays.
                             last_flagged_process = None
                         else:
-                            enforcer.soft_lock_warning(process_name)
+                            enforcer.soft_lock_warning(process_name, hwnd)
                 elif process_name:
                     session_manager.record_acceptable(process_name)
                     last_flagged_process = None

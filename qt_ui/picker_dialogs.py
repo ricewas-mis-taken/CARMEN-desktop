@@ -11,6 +11,8 @@ All three windows are non-modal (.show(), not .exec()) -- same as the
 original Tk versions, which never used grab_set().
 """
 import os
+import subprocess
+import sys
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -28,9 +30,11 @@ from PySide6.QtWidgets import (
 )
 
 import config
+import enforcer
 import installed_apps
 import session_history
 import session_manager
+import window_tracker
 import qt_ui.checklist as checklist
 
 _open_windows = set()
@@ -83,6 +87,11 @@ class _BlocklistPicker(QWidget):
         self.setWindowTitle("Carmen Focus — Pick Apps to Blocklist")
         self.resize(440, 640)
 
+        # Populated below only in the not-session-active branch -- lets
+        # _save() tell a picked browser-profile AUMI apart from a picked
+        # process name, since both live as keys in the same checklist.
+        self._profile_aumi_keys = set()
+
         self._session_active = session_manager.is_active()
         if self._session_active:
             # Mid-session, this picker isn't for adding new restrictions --
@@ -130,6 +139,8 @@ class _BlocklistPicker(QWidget):
                     checked=app["process_name"].lower() in self._saved,
                 )
 
+            self._add_browser_profile_rows()
+
             manual_label = QLabel("Not listed? Add by name or file:")
             layout.addWidget(manual_label)
 
@@ -171,6 +182,30 @@ class _BlocklistPicker(QWidget):
             for process_name in prev_apps:
                 self._checklist.add_row(process_name, process_name, checked=False)
 
+    def _add_browser_profile_rows(self):
+        """Lets a session block just one Chrome/Edge profile instead of the
+        whole browser (blocking chrome.exe via processBlocklist above blocks
+        every profile equally) -- and without needing the browser extension
+        installed in that profile at all. Lists every profile Chrome/Edge
+        know about (window_tracker.list_known_browser_profiles(), read from
+        each browser's Local State file), not just ones with a window open
+        right now -- picking a profile to block is usually a precaution
+        against it being opened at all, so a closed profile must still be
+        offered rather than silently disappearing from the list."""
+        known_profiles = window_tracker.list_known_browser_profiles()
+        if not known_profiles:
+            return
+        saved_profiles = {
+            aumi for aumi in config.load_config().get("browserProfileBlocklist", [])
+        }
+        self._checklist.add_separator_label("Browser profiles (blocks just that profile, not the whole browser):")
+        for profile in known_profiles:
+            self._profile_aumi_keys.add(profile["aumi"])
+            label = profile["label"] if profile["is_running"] else f"{profile['label']} (not open right now)"
+            self._checklist.add_row(
+                profile["aumi"], label, checked=profile["aumi"] in saved_profiles
+            )
+
     def _add_manual_entry(self, process_name):
         # Reduce to just the basename even for a typed (not browsed) entry --
         # is_blocked() and enforcement everywhere else compare on
@@ -204,8 +239,21 @@ class _BlocklistPicker(QWidget):
             _track(_ReasonDialog(selected)).show()
             return
 
-        config.update_config(lambda cfg: cfg.update({"processBlocklist": selected}))
-        self._status_label.setText(f"Saved {len(selected)} app(s) to the blocklist.")
+        # The checklist mixes two kinds of keys (process names and browser-
+        # profile AUMIs) in one flat list -- split them back apart by the
+        # set collected while building the profile rows, since they save
+        # into two different config fields.
+        profile_keys = [key for key in selected if key in self._profile_aumi_keys]
+        process_keys = [key for key in selected if key not in self._profile_aumi_keys]
+
+        config.update_config(lambda cfg: cfg.update({
+            "processBlocklist": process_keys,
+            "browserProfileBlocklist": profile_keys,
+        }))
+        status = f"Saved {len(process_keys)} app(s)"
+        if self._profile_aumi_keys:
+            status += f" and {len(profile_keys)} browser profile(s)"
+        self._status_label.setText(status + " to the blocklist.")
 
 
 class _ReasonDialog(QWidget):
@@ -326,7 +374,11 @@ class _TimerDialog(QWidget):
         layout.addLayout(mode_row)
 
         process_count = len(cfg.get("processBlocklist", []))
-        count_label = QLabel(f"Using saved blocklist: {process_count} app(s)")
+        profile_count = len(cfg.get("browserProfileBlocklist", []))
+        count_text = f"Using saved blocklist: {process_count} app(s)"
+        if profile_count:
+            count_text += f", {profile_count} browser profile(s)"
+        count_label = QLabel(count_text)
         count_label.setStyleSheet("color: #888;")
         layout.addWidget(count_label)
 
@@ -347,14 +399,53 @@ class _TimerDialog(QWidget):
             self._status_label.setText("Enter a valid duration.")
             return
 
+        # macOS-only: hard/soft lock can't do anything at all without
+        # Accessibility permission (see mac_os/enforcer_mac.py's module
+        # docstring) -- gating the interactive "Start Session" button is the
+        # stricter of the two options PORT_SPEC.md's Subsystem 2 allows (the
+        # weaker one, a persistent warning at app launch, is already handled
+        # by main.py._check_accessibility_trust()). Automatic session starts
+        # (calendar-triggered, review-triggered) are deliberately NOT gated
+        # here -- refusing one of those silently, with no dialog to show an
+        # error in, would be worse than letting it start with enforcement
+        # degraded, so this only covers the one flow with a UI to refuse in.
+        if sys.platform == "darwin" and not enforcer.is_accessibility_trusted():
+            self._status_label.setText(
+                "Carmen Focus needs Accessibility permission to enforce a session on macOS."
+            )
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle("Accessibility permission needed")
+            box.setText(
+                "Carmen Focus can't enforce hard/soft lock on macOS without "
+                "Accessibility permission. Grant it in System Settings, then "
+                "try starting the session again."
+            )
+            open_settings_button = box.addButton("Open System Settings", QMessageBox.ActionRole)
+            box.addButton("Cancel", QMessageBox.RejectRole)
+            box.exec()
+            if box.clickedButton() is open_settings_button:
+                try:
+                    subprocess.run(
+                        ["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"],
+                        check=False,
+                    )
+                except Exception:
+                    pass
+            return
+
         lock_mode = "hard" if self._hard_radio.isChecked() else "soft"
         current_cfg = config.load_config()
         process_blocklist = current_cfg.get("processBlocklist", [])
         domain_whitelist = current_cfg.get("domainWhitelist", [])
+        blocked_browser_profiles = current_cfg.get("browserProfileBlocklist", [])
 
         # Calls the same function POST /session/start uses, so this session
         # is immediately visible to the browser extension via GET /status.
-        session_manager.start_session(duration_minutes, lock_mode, process_blocklist, domain_whitelist)
+        session_manager.start_session(
+            duration_minutes, lock_mode, process_blocklist, domain_whitelist,
+            blocked_browser_profiles=blocked_browser_profiles,
+        )
 
         # Mutates a freshly-loaded config inside update_config()'s lock
         # rather than saving the current_cfg read above wholesale -- that

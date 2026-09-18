@@ -6,6 +6,7 @@ mutation so an in-progress session survives a crash/restart.
 import json
 import math
 import os
+import sys
 import threading
 from datetime import datetime, timedelta
 
@@ -62,7 +63,34 @@ _state = {
     # paused-then-PC-shutdown-then-resumed review still get recorded instead
     # of silently vanishing on Finish.
     "reviewProblemId": None,
+    # True for a "Until I burnout" task session (tasks_store.BURNOUT_MINUTES
+    # duration, see qt_ui/tasks_tab.py's _start_burnout) -- a first-class,
+    # persisted flag rather than something each UI surface has to guess at
+    # from duration_minutes or track in its own ephemeral widget state. The
+    # latter used to be exactly how the Tasks tab did it (a local
+    # self._active_is_burnout, set only by the widget instance that actually
+    # clicked Start), which meant any OTHER surface observing the same
+    # already-running burnout session -- the Focus tab, the tray tooltip, or
+    # even a freshly-rebuilt Tasks tab card after switching tabs away and
+    # back -- had no way to know it was a burnout session at all, and showed
+    # a countdown from the full 8-hour ceiling instead of "Until burnout"
+    # with elapsed time underneath.
+    "isBurnout": False,
+    # AppUserModelIDs (see enforcer.get_window_aumi) of Chrome/Edge profile
+    # windows to block for just that one profile -- unlike processBlocklist,
+    # which blocks chrome.exe/msedge.exe outright (every profile equally).
+    # Needed because every profile of the same browser runs as ONE OS
+    # process (a second `chrome.exe --profile-directory=X` launch hands off
+    # to the existing process over IPC and exits), so plain process-name
+    # blocking can't tell one profile's windows apart from another's -- see
+    # is_blocked_browser_profile() and enforcer.is_blocked_window().
+    "blockedBrowserProfiles": [],
 }
+
+# Chromium-based browsers where every open profile shares one OS process --
+# is_blocked_browser_profile() applies to windows from these, keyed by the
+# window's own AppUserModelID rather than its process name/pid.
+MULTI_PROFILE_BROWSER_PROCESSES = {"chrome.exe", "msedge.exe"}
 
 # Index into violationLog of the most recent still-unresolved violation of
 # each kind ("process" / "domain"), so record_acceptable()/
@@ -151,6 +179,35 @@ ALWAYS_ALLOWED_PROCESSES = {
     "microsoft.flow.rpa.desktop.exe",
 }
 
+# Core macOS shell/system processes -- the darwin equivalent of the Windows
+# set above. Without this, mac_os/enforcer_mac.py's hard/soft lock could
+# fight Finder, Dock, or the menu bar/system UI process the moment any of
+# them is on the blocklist by process-name coincidence (unlikely, but the
+# Windows set exists for exactly this belt-and-suspenders reason -- a
+# blocklisted process name should never accidentally catch the shell
+# itself). Matched the same way as the Windows set: process_name.lower() in
+# this set, via is_exempt() below -- kept as a separate constant (unioned
+# into ALWAYS_ALLOWED_PROCESSES only on darwin) rather than merged into the
+# Windows set outright, since these names would never collide with a real
+# Windows process anyway, but keeping them apart documents which set
+# protects which platform's shell.
+_ALWAYS_ALLOWED_PROCESSES_MACOS = {
+    "finder",
+    "dock",
+    "systemuiserver",
+    "windowserver",
+    "controlcenter",
+    "notificationcenter",
+    "spotlight",
+    "coreservicesuiagent",
+    "loginwindow",
+    "universalcontrol",
+    "screensaverengine",
+}
+
+if sys.platform == "darwin":
+    ALWAYS_ALLOWED_PROCESSES = ALWAYS_ALLOWED_PROCESSES | _ALWAYS_ALLOWED_PROCESSES_MACOS
+
 
 def is_exempt(process_name, pid=None):
     """True for our own process (tray/popups) or core shell/system processes
@@ -207,6 +264,8 @@ def start_session(
     review_problem_name=None,
     review_subject_name=None,
     review_problem_id=None,
+    is_burnout=False,
+    blocked_browser_profiles=None,
 ):
     # api_server.py's /session/start already validates this for the
     # network-facing path, but start_session() is also called in-process
@@ -263,6 +322,8 @@ def start_session(
         _state["reviewProblemName"] = review_problem_name
         _state["reviewSubjectName"] = review_subject_name
         _state["reviewProblemId"] = review_problem_id
+        _state["isBurnout"] = is_burnout
+        _state["blockedBrowserProfiles"] = list(blocked_browser_profiles or [])
         _open_violation_index["process"] = None
         _open_violation_index["domain"] = None
         _save()
@@ -297,6 +358,15 @@ def end_session(end_type="manual", reason=None):
         result = _finalize_to_history_locked(datetime.now(), end_type=end_type, reason=reason)
     import daily_summary_store
     daily_summary_store.flush_through_yesterday()
+    # Local import, same reasoning as daily_summary_store above -- enforcer
+    # imports this module, so importing it back at module level here would
+    # be circular. Reverts every taskbar-hover-preview suppression hard lock
+    # applied this session (see enforcer._hide_taskbar_preview) -- without
+    # this, a window it hid from Alt+Tab/taskbar preview stayed hidden
+    # forever once the session ended, since that only otherwise got
+    # reverted by the mid-session "Unblock" flow (restore_window_for_process).
+    import enforcer
+    enforcer.restore_all_taskbar_previews()
     return result
 
 
@@ -313,6 +383,14 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
     redundant end call would file a phantom history entry with no start
     time."""
     was_active = _state["isActive"] or _state["startTime"] is not None
+
+    # Close out any still-open violation before snapshotting violationLog --
+    # otherwise a session that ends while a process/domain violation is
+    # in-progress files a history entry whose last entry never gets
+    # resolvedAt/durationSeconds, since nothing else ever revisits history
+    # entries after this point.
+    _resolve_open_violation_locked("process", now)
+    _resolve_open_violation_locked("domain", now)
 
     summary_count = _state["violationCount"]
     summary_log = list(_state["violationLog"])
@@ -376,6 +454,8 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
     _state["reviewProblemName"] = None
     _state["reviewSubjectName"] = None
     _state["reviewProblemId"] = None
+    _state["isBurnout"] = False
+    _state["blockedBrowserProfiles"] = []
     _open_violation_index["process"] = None
     _open_violation_index["domain"] = None
     _save()
@@ -439,6 +519,8 @@ def _get_status_locked():
         "reviewProblemName": _state["reviewProblemName"],
         "reviewSubjectName": _state["reviewSubjectName"],
         "reviewProblemId": _state["reviewProblemId"],
+        "isBurnout": _state["isBurnout"],
+        "blockedBrowserProfiles": list(_state["blockedBrowserProfiles"]),
     }
 
 
@@ -459,6 +541,16 @@ def pause_session():
         now = datetime.now()
         end_time = datetime.fromisoformat(_state["endTime"])
         seconds_remaining = max(0, int((end_time - now).total_seconds()))
+
+        if seconds_remaining == 0:
+            # The timer already ran out -- this call raced the natural-expiry
+            # check in _get_status_locked() (only that path self-finalizes,
+            # and it's skipped entirely once isPaused is True). Finalizing
+            # here instead of pausing avoids leaving the session stuck
+            # forever as "active + paused + 0s remaining": nothing would ever
+            # un-stick it, since finalization never runs while paused.
+            _pending_natural_end["value"] = _finalize_to_history_locked(end_time, end_type="natural")
+            return _get_status_locked()
 
         _state["isPaused"] = True
         _state["pausedAt"] = now.isoformat()
@@ -499,6 +591,8 @@ def pop_pending_natural_end():
     if summary is not None:
         import daily_summary_store
         daily_summary_store.flush_through_yesterday()
+        import enforcer
+        enforcer.restore_all_taskbar_previews()
     return summary
 
 
@@ -512,6 +606,19 @@ def is_blocked(process_name):
     with _lock:
         blocklist_lower = [p.lower() for p in _state["processBlocklist"]]
         return process_name.lower() in blocklist_lower
+
+
+def is_blocked_browser_profile(aumi):
+    """Checks a Chrome/Edge window's AppUserModelID (see
+    enforcer.get_window_aumi) against blockedBrowserProfiles -- the
+    per-profile counterpart to is_blocked()'s per-process-name check. Exact
+    match, not case-folded: AUMIs are opaque identifiers Chrome assigns
+    itself, not user-typed process names, so there's no reason to expect
+    (or paper over) a casing mismatch here."""
+    if not aumi:
+        return False
+    with _lock:
+        return aumi in _state["blockedBrowserProfiles"]
 
 
 def _resolve_open_violation_locked(kind, now):

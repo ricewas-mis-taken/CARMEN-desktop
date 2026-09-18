@@ -8,12 +8,18 @@ import io
 import pytest
 
 import api_server
+import config
 
 
 @pytest.fixture
-def client():
+def client(isolate_config):
     api_server.app.config["TESTING"] = True
-    return api_server.app.test_client()
+    test_client = api_server.app.test_client()
+    # Every mutating route now requires this header (see api_server.py's
+    # _require_token) -- attached once here so every existing test keeps
+    # exercising its actual behavior instead of hitting 401 first.
+    test_client.environ_base["HTTP_X_CARMEN_TOKEN"] = config.get_api_token()
+    return test_client
 
 
 def _create_topic(client, name="Math"):

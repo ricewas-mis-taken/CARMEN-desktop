@@ -44,6 +44,28 @@ def test_review_session_for_linked_task_shows_as_running(qtbot, isolate_tasks, i
     assert "elapsed" in text.lower()
 
 
+def test_burnout_session_shows_as_stopwatch_even_on_a_fresh_card(qtbot, isolate_tasks, isolate_state):
+    """Regression test: burnout-ness used to live only in the specific
+    _TaskCard widget instance that clicked "Until I burnout"
+    (self._active_is_burnout), so a DIFFERENT card observing the same
+    already-running burnout session -- e.g. after switching tabs away and
+    back rebuilds the card -- had no way to know it was a burnout session
+    and showed a countdown from the full 8-hour ceiling instead."""
+    task = _make_task()
+    starter_card = tasks_tab._TaskCard(task, on_changed=lambda: None)
+    qtbot.addWidget(starter_card)
+    starter_card._start_burnout()
+
+    fresh_card = tasks_tab._TaskCard(task, on_changed=lambda: None)
+    qtbot.addWidget(fresh_card)
+    fresh_card.update_dynamic(session_manager.get_status(), session_history.load_all())
+
+    text = fresh_card._countdown_label.text().lower()
+    assert "until burnout" in text
+    assert "elapsed" in text
+    assert "remaining" not in text
+
+
 def test_review_session_pause_button_works_for_linked_task(qtbot, isolate_tasks, isolate_state):
     task = _make_task()
     card = tasks_tab._TaskCard(task, on_changed=lambda: None)

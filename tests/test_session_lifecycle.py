@@ -24,6 +24,20 @@ def test_start_and_natural_end_lifecycle(isolate_state):
     assert history[0]["lockMode"] == "soft"
 
 
+def test_blocked_browser_profiles_round_trip(isolate_state):
+    session_manager.start_session(
+        25, "hard", [], [], blocked_browser_profiles=["Chrome.UserData.Profile4"]
+    )
+    assert session_manager.is_blocked_browser_profile("Chrome.UserData.Profile4")
+    assert not session_manager.is_blocked_browser_profile("Chrome")
+    assert not session_manager.is_blocked_browser_profile(None)
+    assert session_manager.get_status()["blockedBrowserProfiles"] == ["Chrome.UserData.Profile4"]
+
+    session_manager.end_session(end_type="manual")
+    assert not session_manager.is_blocked_browser_profile("Chrome.UserData.Profile4")
+    assert session_manager.get_status()["blockedBrowserProfiles"] == []
+
+
 def test_nuclear_end_records_reason(isolate_state):
     session_manager.start_session(10, "hard", [], [])
     summary = session_manager.end_session(end_type="nuclear", reason="testing nuclear end")
@@ -62,3 +76,23 @@ def test_review_problem_id_persists_through_pause_and_clears_on_end(isolate_stat
 
     session_manager.end_session()
     assert session_manager.get_status()["reviewProblemId"] is None
+
+
+def test_is_burnout_persists_through_pause_and_clears_on_end(isolate_state):
+    """isBurnout is a session-wide persisted flag, not per-widget state --
+    any UI surface calling get_status() must be able to tell a burnout
+    session apart from a normal one, not just whichever widget happened to
+    start it. See qt_ui/tasks_tab.py's _start_burnout."""
+    session_manager.start_session(25, "soft", [], [], is_burnout=True)
+    assert session_manager.get_status()["isBurnout"] is True
+
+    session_manager.pause_session()
+    assert session_manager.get_status()["isBurnout"] is True
+
+    session_manager.end_session()
+    assert session_manager.get_status()["isBurnout"] is False
+
+
+def test_is_burnout_defaults_to_false(isolate_state):
+    session_manager.start_session(25, "soft", [], [])
+    assert session_manager.get_status()["isBurnout"] is False

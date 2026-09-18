@@ -19,6 +19,7 @@ not the norm.
 """
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -28,7 +29,15 @@ import psutil
 import api_server
 from calendar_log import logger
 
-LOCK_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "CARMEN")
+if sys.platform == "darwin":
+    # No LOCALAPPDATA on macOS -- ~/Library/Application Support/CARMEN is
+    # the idiomatic per-user data location there, rather than falling back
+    # to a bare ~/CARMEN (which worked fine functionally, since this whole
+    # module is otherwise platform-agnostic, but isn't where a macOS app is
+    # expected to keep this kind of file).
+    LOCK_DIR = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "CARMEN")
+else:
+    LOCK_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "CARMEN")
 LOCK_PATH = os.path.join(LOCK_DIR, "carmen.lock")
 
 _QUIT_URL = f"http://127.0.0.1:{api_server.API_PORT}/internal/quit"
