@@ -20,6 +20,7 @@ import dev_watcher
 import enforcer
 import qt_gui_thread
 import singleinstance
+import sync_scheduler
 import tray
 import window_tracker
 from api_server import run_server
@@ -114,6 +115,7 @@ def main():
     api_thread.start()
 
     calendar_scheduler.start(stop_event)
+    sync_scheduler.start(stop_event)
 
     def on_quit():
         stop_event.set()

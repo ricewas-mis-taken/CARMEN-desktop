@@ -27,6 +27,7 @@ import uuid
 from datetime import date, datetime, timedelta
 
 import device_id
+import sync_trigger
 from tasks_store import WEEKDAY_CODES
 
 BOARD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "board.json")
@@ -194,6 +195,7 @@ def create_task(
         tasks = load_board(include_deleted=True)
         tasks.append(task)
         save_board(tasks)
+        sync_trigger.note_change()
         return task
 
 
@@ -222,6 +224,7 @@ def update_task(
                     task["descriptionPhotoPath"] = save_photo_bytes(photo_bytes, photo_filename)
                 task["updatedAt"] = datetime.now().isoformat()
         save_board(tasks)
+        sync_trigger.note_change()
         return get_task(task_id)
 
 
@@ -242,6 +245,7 @@ def delete_task(task_id):
                 found = True
         if found:
             save_board(tasks)
+            sync_trigger.note_change()
         return found
 
 
@@ -253,6 +257,7 @@ def update_importance(task_id, importance):
                 task["importance"] = max(1, min(10, int(importance)))
                 task["updatedAt"] = datetime.now().isoformat()
         save_board(tasks)
+        sync_trigger.note_change()
         return get_task(task_id)
 
 
@@ -270,6 +275,7 @@ def mark_opened(task_id):
                 changed = True
         if changed:
             save_board(tasks)
+            sync_trigger.note_change()
         return get_task(task_id)
 
 
@@ -329,6 +335,7 @@ def finish_task(task_id):
                 else:
                     task["nextDueDate"] = None
         save_board(tasks)
+        sync_trigger.note_change()
         return get_task(task_id)
 
 

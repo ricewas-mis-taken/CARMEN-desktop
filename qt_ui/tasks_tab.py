@@ -243,7 +243,7 @@ class _TaskCard(QFrame):
         row = QHBoxLayout()
         name_label = QLabel()
         name_label.setStyleSheet("font-size: 30px; font-weight: 700; color: #1F2328;")
-        full_name = self._task["name"]
+        full_name = self._task.get("name") or "(untitled task)"
         metrics = QFontMetrics(name_label.font())
         # Elided to one line (rather than word-wrapped) so every idle card
         # has the same header height -- long names no longer stretch a
@@ -556,7 +556,7 @@ class _TaskCard(QFrame):
             self._task.get("domainWhitelist", []),
             source="task",
             event_id=self._task["id"],
-            event_title=self._task["name"],
+            event_title=self._task.get("name") or "(untitled task)",
             is_burnout=is_burnout,
         )
         self._disarm()

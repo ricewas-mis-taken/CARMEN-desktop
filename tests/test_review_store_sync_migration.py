@@ -87,20 +87,21 @@ def test_sync_id_is_unique_per_row_and_indexed(isolate_review_db):
     assert "idx_review_topics_sync_id" in index_names
 
 
-def test_new_topics_have_no_sync_id_until_the_sync_module_assigns_one(isolate_review_db):
-    """By design (per the confirmed sync_id decision): nothing outside the
-    sync module -- not even review_store.create_topic() itself -- should
-    read or write sync_id. A row created after this migration but before
-    Phase 3's sync module exists (or before it's had a chance to see this
-    row yet) simply has no sync_id assigned yet; the unique index on
-    sync_id tolerates that since SQLite allows multiple NULLs in a UNIQUE
-    column. is_deleted still defaults correctly on a fresh row either way."""
+def test_new_topics_get_a_sync_id_immediately(isolate_review_db):
+    """As of Phase 4's sync client, create_topic() (and the other
+    review_store write paths) populate sync_id/updated_at/device_id
+    directly at write time, instead of leaving them for the sync module to
+    backfill lazily -- this is what lets a freshly-created row be pushed
+    without waiting for a later sync pass to notice it has no sync_id yet.
+    is_deleted still defaults correctly on a fresh row."""
     topic = review_store.create_topic("Physics")
     conn = calendar_store._get_conn()
     row = conn.execute(
-        "SELECT sync_id, updated_at, is_deleted FROM review_topics WHERE id = ?", (topic["id"],)
+        "SELECT sync_id, updated_at, device_id, is_deleted FROM review_topics WHERE id = ?", (topic["id"],)
     ).fetchone()
-    assert row["sync_id"] is None
+    assert row["sync_id"] is not None
+    assert row["updated_at"] is not None
+    assert row["device_id"] is not None
     assert row["is_deleted"] == 0
 
 

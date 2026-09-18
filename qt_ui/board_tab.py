@@ -311,7 +311,7 @@ class _BoardCard(QFrame):
         text_col.setSpacing(2)
         name_row = QHBoxLayout()
         name_row.setSpacing(8)
-        name_label = QLabel(task["name"])
+        name_label = QLabel(task.get("name") or "(untitled task)")
         name_label.setStyleSheet("font-size: 16px; font-weight: 600; color: #1F2328;")
         name_row.addWidget(name_label)
         tag_ids = task.get("tags") or []
@@ -927,7 +927,7 @@ class _EditTaskDialog(QWidget):
         layout = QVBoxLayout(self)
 
         layout.addWidget(_bold_label("Name"))
-        self._name_edit = QLineEdit(task["name"])
+        self._name_edit = QLineEdit(task.get("name") or "")
         layout.addWidget(self._name_edit)
 
         self._day_buttons, self._pattern_buttons = _build_recurrence_pickers(

@@ -19,7 +19,9 @@ import uuid
 from datetime import date, datetime, timedelta
 
 import calendar_store
+import device_id
 import review_scheduler
+import sync_trigger
 from calendar_log import logger
 
 PHOTOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "data", "review_photos")
@@ -201,13 +203,14 @@ def _add_sync_columns(conn, table, backfill_updated_at_from):
     device_id and is_deleted are left at NULL/0 for existing rows -- they
     were never written by any known device and were never deleted.
 
-    Schema-only: nothing here makes any *write path* (save_event-equivalent
-    functions elsewhere in this module) actually populate updated_at/
-    device_id or flip is_deleted going forward. That happens in the sync
-    module itself (Phase 3), which is what will actually know "which
-    device is this" and needs the soft-delete-instead-of-hard-delete
-    rewrite some of this module's own DELETE-then-reinsert write patterns
-    still need before tombstones can propagate correctly."""
+    Schema-only, for pre-existing rows: every create/update write path
+    elsewhere in this module (create_topic, create_subject, create_problem,
+    rename_topic, update_topic_link, update_subject_link, update_problem,
+    _apply_review_outcome) populates sync_id/updated_at/device_id itself
+    going forward. delete_topic still hard-deletes (DELETE, not a
+    tombstone) -- deletions on these four tables can't propagate through
+    sync yet, matching how focus_profiles' hard-delete-on-disable was left
+    out of scope in Phase 3."""
     cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
     if "sync_id" in cols:
         return
@@ -313,17 +316,19 @@ def create_topic(name):
                 "SELECT COALESCE(MAX(order_index), -1) AS m FROM review_topics"
             ).fetchone()["m"]
             cur = conn.execute(
-                "INSERT INTO review_topics (name, order_index) VALUES (?, ?)",
-                (name, max_order + 1),
+                "INSERT INTO review_topics (name, order_index, sync_id, updated_at, device_id) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (name, max_order + 1, uuid.uuid4().hex, datetime.now().isoformat(), device_id.get_device_id()),
             )
             conn.commit()
             row = conn.execute("SELECT * FROM review_topics WHERE id = ?", (cur.lastrowid,)).fetchone()
-            return _row_to_topic(row)
         except DuplicateNameError:
             raise
         except Exception:
             logger.exception("review_store.create_topic failed for %s", name)
             return None
+    sync_trigger.note_change()
+    return _row_to_topic(row)
 
 
 def get_topic(topic_id):
@@ -343,12 +348,14 @@ def update_topic_link(topic_id, task_id):
         try:
             conn = _get_conn()
             conn.execute(
-                "UPDATE review_topics SET linked_task_id = ? WHERE id = ?",
-                (task_id, topic_id),
+                "UPDATE review_topics SET linked_task_id = ?, updated_at = ?, device_id = ? WHERE id = ?",
+                (task_id, datetime.now().isoformat(), device_id.get_device_id(), topic_id),
             )
             conn.commit()
         except Exception:
             logger.exception("review_store.update_topic_link failed for topic %s", topic_id)
+            return
+    sync_trigger.note_change()
 
 
 def rename_topic(topic_id, name):
@@ -360,12 +367,17 @@ def rename_topic(topic_id, name):
                 (name, topic_id),
             ).fetchone():
                 raise DuplicateNameError(f'A topic named "{name}" already exists.')
-            conn.execute("UPDATE review_topics SET name = ? WHERE id = ?", (name, topic_id))
+            conn.execute(
+                "UPDATE review_topics SET name = ?, updated_at = ?, device_id = ? WHERE id = ?",
+                (name, datetime.now().isoformat(), device_id.get_device_id(), topic_id),
+            )
             conn.commit()
         except DuplicateNameError:
             raise
         except Exception:
             logger.exception("review_store.rename_topic failed for %s", topic_id)
+            return
+    sync_trigger.note_change()
 
 
 def delete_topic(topic_id):
@@ -384,6 +396,8 @@ def delete_topic(topic_id):
             conn.commit()
         except Exception:
             logger.exception("review_store.delete_topic failed for %s", topic_id)
+            return
+    sync_trigger.note_change()
 
 
 def list_subjects(topic_id):
@@ -413,17 +427,22 @@ def create_subject(topic_id, name, color, linked_task_id=None):
             ).fetchone():
                 raise DuplicateColorError("Another subject is already using this color.")
             cur = conn.execute(
-                "INSERT INTO review_subjects (topic_id, name, color, linked_task_id) VALUES (?, ?, ?, ?)",
-                (topic_id, name, color, linked_task_id),
+                "INSERT INTO review_subjects (topic_id, name, color, linked_task_id, sync_id, updated_at, device_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    topic_id, name, color, linked_task_id,
+                    uuid.uuid4().hex, datetime.now().isoformat(), device_id.get_device_id(),
+                ),
             )
             conn.commit()
             row = conn.execute("SELECT * FROM review_subjects WHERE id = ?", (cur.lastrowid,)).fetchone()
-            return _row_to_subject(row)
         except (DuplicateNameError, DuplicateColorError):
             raise
         except Exception:
             logger.exception("review_store.create_subject failed for topic %s", topic_id)
             return None
+    sync_trigger.note_change()
+    return _row_to_subject(row)
 
 
 def update_subject_link(subject_id, task_id):
@@ -432,12 +451,14 @@ def update_subject_link(subject_id, task_id):
         try:
             conn = _get_conn()
             conn.execute(
-                "UPDATE review_subjects SET linked_task_id = ? WHERE id = ?",
-                (task_id, subject_id),
+                "UPDATE review_subjects SET linked_task_id = ?, updated_at = ?, device_id = ? WHERE id = ?",
+                (task_id, datetime.now().isoformat(), device_id.get_device_id(), subject_id),
             )
             conn.commit()
         except Exception:
             logger.exception("review_store.update_subject_link failed for subject %s", subject_id)
+            return
+    sync_trigger.note_change()
 
 
 def list_problems(topic_id, due_only=True):
@@ -516,13 +537,14 @@ def create_problem(
                 INSERT INTO review_problems (
                     topic_id, subject_id, name, stars, description_type,
                     description_text, description_photo_path, description_link,
-                    schedule_stage, next_review_date
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    schedule_stage, next_review_date, sync_id, updated_at, device_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     topic_id, subject_id, name, stars, description_type,
                     description_text, photo_path, description_link,
                     schedule["schedule_stage"], schedule["next_review_date"].isoformat(),
+                    uuid.uuid4().hex, datetime.now().isoformat(), device_id.get_device_id(),
                 ),
             )
             conn.commit()
@@ -532,6 +554,7 @@ def create_problem(
         except Exception:
             logger.exception("review_store.create_problem failed for %s", name)
             return None
+    sync_trigger.note_change()
     return get_problem(problem_id)
 
 
@@ -580,12 +603,14 @@ def update_problem(
                 """
                 UPDATE review_problems SET
                     subject_id = ?, name = ?, stars = ?, description_type = ?,
-                    description_text = ?, description_photo_path = ?, description_link = ?
+                    description_text = ?, description_photo_path = ?, description_link = ?,
+                    updated_at = ?, device_id = ?
                 WHERE id = ?
                 """,
                 (
                     subject_id, name, stars, description_type,
                     description_text, photo_path, description_link,
+                    datetime.now().isoformat(), device_id.get_device_id(),
                     problem_id,
                 ),
             )
@@ -596,6 +621,7 @@ def update_problem(
             logger.exception("review_store.update_problem failed for %s", problem_id)
             return None
 
+    sync_trigger.note_change()
     return get_problem(problem_id)
 
 
@@ -643,12 +669,14 @@ def _apply_review_outcome(problem_id, duration_seconds, self_solved, shakiness, 
             conn.execute(
                 """
                 INSERT INTO review_sessions
-                    (problem_id, started_at, finished_at, duration_seconds, self_solved, shakiness)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (problem_id, started_at, finished_at, duration_seconds, self_solved, shakiness,
+                     sync_id, updated_at, device_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     problem_id, started_at.isoformat(), finished_at.isoformat(), duration_seconds,
                     int(self_solved), shakiness if self_solved else None,
+                    uuid.uuid4().hex, finished_at.isoformat(), device_id.get_device_id(),
                 ),
             )
 
@@ -700,13 +728,16 @@ def _apply_review_outcome(problem_id, duration_seconds, self_solved, shakiness, 
                     next_review_date = ?,
                     first_attempt_seconds = COALESCE(first_attempt_seconds, ?),
                     first_attempt_shakiness = COALESCE(first_attempt_shakiness, ?),
-                    first_attempt_self_solved = COALESCE(first_attempt_self_solved, ?)
+                    first_attempt_self_solved = COALESCE(first_attempt_self_solved, ?),
+                    updated_at = ?,
+                    device_id = ?
                 WHERE id = ?
                 """,
                 (
                     finished_at.isoformat(), fastest, fastest_is_solved,
                     schedule["schedule_stage"], schedule["next_review_date"].isoformat(),
                     first_attempt_seconds, first_attempt_shakiness, first_attempt_self_solved,
+                    finished_at.isoformat(), device_id.get_device_id(),
                     problem_id,
                 ),
             )
@@ -719,6 +750,7 @@ def _apply_review_outcome(problem_id, duration_seconds, self_solved, shakiness, 
                 pass
             return None
 
+    sync_trigger.note_change()
     return get_problem(problem_id)
 
 

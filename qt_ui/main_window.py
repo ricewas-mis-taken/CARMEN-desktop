@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from qt_ui.account_widget import AccountArea
 from qt_ui.board_tab import BoardTab
 from qt_ui.calendar_page import CalendarPage
 from qt_ui.finished_tab import FinishedTab
@@ -224,6 +225,10 @@ class _MainWindow(QWidget):
                 button.setChecked(True)
 
         layout.addStretch(1)
+
+        self._account_area = AccountArea()
+        layout.addWidget(self._account_area)
+
         return sidebar
 
     def _show_tab(self, key):

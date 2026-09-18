@@ -22,6 +22,7 @@ import uuid
 from datetime import datetime
 
 import device_id
+import sync_trigger
 from calendar_log import logger
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "calendar.db")
@@ -217,6 +218,7 @@ def save_event(event):
     Returns the saved event's id, or None on failure."""
     event_id = event.get("id") or uuid.uuid4().hex
     now = datetime.now().isoformat()
+    saved = False
 
     with _lock:
         try:
@@ -297,14 +299,21 @@ def save_event(event):
                 conn.execute("DELETE FROM focus_profiles WHERE event_id = ?", (event_id,))
 
             conn.commit()
-            return event_id
+            saved = True
         except Exception:
             logger.exception("save_event failed for %s", event.get("title"))
             try:
                 conn.rollback()
             except Exception:
                 pass
-            return None
+
+    if not saved:
+        return None
+    # Outside the lock -- note_change() can hit auth_manager.is_logged_in(),
+    # which may make a network call (token refresh) on its first call after
+    # startup; that must never block calendar.db's shared lock.
+    sync_trigger.note_change()
+    return event_id
 
 
 def soft_delete_event(event_id):
@@ -318,10 +327,11 @@ def soft_delete_event(event_id):
                 "UPDATE events SET deleted_at = ? WHERE id = ?", (datetime.now().isoformat(), event_id)
             )
             conn.commit()
-            return True
         except Exception:
             logger.exception("soft_delete_event failed for %s", event_id)
             return False
+    sync_trigger.note_change()
+    return True
 
 
 def undo_delete_event(event_id):
@@ -330,10 +340,11 @@ def undo_delete_event(event_id):
             conn = _get_conn()
             conn.execute("UPDATE events SET deleted_at = NULL WHERE id = ?", (event_id,))
             conn.commit()
-            return True
         except Exception:
             logger.exception("undo_delete_event failed for %s", event_id)
             return False
+    sync_trigger.note_change()
+    return True
 
 
 def purge_expired_soft_deletes():

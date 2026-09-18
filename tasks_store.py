@@ -18,6 +18,7 @@ import uuid
 from datetime import date, datetime, timedelta
 
 import device_id
+import sync_trigger
 
 TASKS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "tasks.json")
 
@@ -199,6 +200,7 @@ def create_task(data):
         tasks = load_tasks(include_deleted=True)
         tasks.append(task)
         save_tasks(tasks)
+        sync_trigger.note_change()
         return task
 
 
@@ -232,6 +234,7 @@ def update_task(task_id, data):
                 break
         if updated is not None:
             save_tasks(tasks)
+            sync_trigger.note_change()
         return updated
 
 
@@ -252,6 +255,7 @@ def delete_task(task_id):
                 found = True
         if found:
             save_tasks(tasks)
+            sync_trigger.note_change()
         return found
 
 
