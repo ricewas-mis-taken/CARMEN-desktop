@@ -206,11 +206,10 @@ def _add_sync_columns(conn, table, backfill_updated_at_from):
     Schema-only, for pre-existing rows: every create/update write path
     elsewhere in this module (create_topic, create_subject, create_problem,
     rename_topic, update_topic_link, update_subject_link, update_problem,
-    _apply_review_outcome) populates sync_id/updated_at/device_id itself
-    going forward. delete_topic still hard-deletes (DELETE, not a
-    tombstone) -- deletions on these four tables can't propagate through
-    sync yet, matching how focus_profiles' hard-delete-on-disable was left
-    out of scope in Phase 3."""
+    _apply_review_outcome, delete_topic) populates sync_id/updated_at/
+    device_id itself going forward. delete_topic soft-deletes (tombstones
+    is_deleted=1 on the topic and its subjects/problems/sessions) so the
+    deletion propagates through sync like every other table here."""
     cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
     if "sync_id" in cols:
         return
@@ -296,7 +295,7 @@ def list_topics():
         try:
             conn = _get_conn()
             rows = conn.execute(
-                "SELECT * FROM review_topics ORDER BY order_index, id"
+                "SELECT * FROM review_topics WHERE is_deleted = 0 ORDER BY order_index, id"
             ).fetchall()
             return [_row_to_topic(r) for r in rows]
         except Exception:
@@ -381,18 +380,36 @@ def rename_topic(topic_id, name):
 
 
 def delete_topic(topic_id):
-    """Deletes a topic and all its subjects and problems."""
+    """Soft-deletes a topic and all its subjects/problems/sessions (tombstone,
+    not a real DELETE) -- so sync_now() has an is_deleted=1 row to push and
+    other devices learn the topic was removed instead of the deletion
+    silently never propagating (see sync_client.py's _gather_review_*
+    functions, which gather is_deleted rows the same way tasks_store/
+    board_store already do). A real physical DELETE would leave nothing
+    for a still-offline device to pull -- it would just see the topic
+    hang around forever."""
     with _lock:
         try:
             conn = _get_conn()
+            now = datetime.now().isoformat()
+            dev = device_id.get_device_id()
             conn.execute(
-                "DELETE FROM review_sessions WHERE problem_id IN "
-                "(SELECT id FROM review_problems WHERE topic_id = ?)",
-                (topic_id,),
+                "UPDATE review_sessions SET is_deleted = 1, updated_at = ?, device_id = ? "
+                "WHERE problem_id IN (SELECT id FROM review_problems WHERE topic_id = ?)",
+                (now, dev, topic_id),
             )
-            conn.execute("DELETE FROM review_problems WHERE topic_id = ?", (topic_id,))
-            conn.execute("DELETE FROM review_subjects WHERE topic_id = ?", (topic_id,))
-            conn.execute("DELETE FROM review_topics WHERE id = ?", (topic_id,))
+            conn.execute(
+                "UPDATE review_problems SET is_deleted = 1, updated_at = ?, device_id = ? WHERE topic_id = ?",
+                (now, dev, topic_id),
+            )
+            conn.execute(
+                "UPDATE review_subjects SET is_deleted = 1, updated_at = ?, device_id = ? WHERE topic_id = ?",
+                (now, dev, topic_id),
+            )
+            conn.execute(
+                "UPDATE review_topics SET is_deleted = 1, updated_at = ?, device_id = ? WHERE id = ?",
+                (now, dev, topic_id),
+            )
             conn.commit()
         except Exception:
             logger.exception("review_store.delete_topic failed for %s", topic_id)
@@ -405,7 +422,7 @@ def list_subjects(topic_id):
         try:
             conn = _get_conn()
             rows = conn.execute(
-                "SELECT * FROM review_subjects WHERE topic_id = ? ORDER BY name", (topic_id,)
+                "SELECT * FROM review_subjects WHERE topic_id = ? AND is_deleted = 0 ORDER BY name", (topic_id,)
             ).fetchall()
             return [_row_to_subject(r) for r in rows]
         except Exception:
@@ -465,7 +482,7 @@ def list_problems(topic_id, due_only=True):
     with _lock:
         try:
             conn = _get_conn()
-            where = "WHERE p.topic_id = ?"
+            where = "WHERE p.topic_id = ? AND p.is_deleted = 0"
             params = [topic_id]
             if due_only:
                 where += " AND p.next_review_date <= ?"

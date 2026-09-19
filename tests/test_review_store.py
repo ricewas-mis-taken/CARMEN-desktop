@@ -38,6 +38,39 @@ def test_create_subject_rejects_color_used_by_subject_in_another_topic(isolate_r
         review_store.create_subject(other_topic["id"], "Physics", "#4A90D9")
 
 
+def test_delete_topic_soft_deletes_instead_of_removing_the_row(isolate_review_db):
+    """Regression coverage for the sync-propagation gap: delete_topic used
+    to hard-DELETE, so a still-offline device would never learn a topic was
+    removed. It must now leave a tombstoned row (is_deleted=1) behind --
+    invisible to list_topics(), but still present for sync_client.py's
+    gather functions to push."""
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Vertex form", stars=3,
+        description_type="text", description_text="complete the square",
+    )
+    review_store.finish_review_for_problem(problem["id"], duration_seconds=42)
+
+    review_store.delete_topic(topic["id"])
+    assert review_store.list_topics() == []
+    assert review_store.list_subjects(topic["id"]) == []
+    assert review_store.list_problems(topic["id"], due_only=False) == []
+
+    conn = review_store._get_conn()
+    assert conn.execute(
+        "SELECT is_deleted FROM review_topics WHERE id = ?", (topic["id"],)
+    ).fetchone()["is_deleted"] == 1
+    assert conn.execute(
+        "SELECT is_deleted FROM review_subjects WHERE id = ?", (subject["id"],)
+    ).fetchone()["is_deleted"] == 1
+    assert conn.execute(
+        "SELECT is_deleted FROM review_problems WHERE id = ?", (problem["id"],)
+    ).fetchone()["is_deleted"] == 1
+    assert conn.execute(
+        "SELECT is_deleted FROM review_sessions WHERE problem_id = ?", (problem["id"],)
+    ).fetchone()["is_deleted"] == 1
+
+
 def test_create_problem_sets_schedule_from_scheduler(isolate_review_db):
     topic, subject = _make_topic_and_subject()
     problem = review_store.create_problem(

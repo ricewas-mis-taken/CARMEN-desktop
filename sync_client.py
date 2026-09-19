@@ -40,13 +40,10 @@ _apply_review_sessions. Rows created before Phase 4's write-path wiring
 (review_store.py) can still have a NULL sync_id; _ensure_row_sync_meta()
 mints and saves one lazily the first time such a row is gathered.
 
-Known gaps, matching how Phase 3 scoped focus_profiles: delete_topic()
-still hard-deletes (no tombstone), so topic/subject/problem/session
-deletions don't propagate through sync yet. review_problems'
-descriptionPhotoPath is a local file path -- the path syncs, but the
-photo file itself does not (no blob storage in this phase), so a pulled
-problem with a photo will show a broken image on the receiving device
-until file sync is built.
+Known gap: review_problems' descriptionPhotoPath is a local file path --
+the path syncs, but the photo file itself does not (no blob storage in
+this phase), so a pulled problem with a photo will show a broken image on
+the receiving device until file sync is built.
 """
 import logging
 import os
@@ -333,7 +330,10 @@ def _ensure_row_sync_meta(conn, table, row):
 
 
 def _gather_review_topics(conn, cutoff_local):
-    rows = conn.execute("SELECT * FROM review_topics WHERE is_deleted = 0").fetchall()
+    # No is_deleted filter here -- a tombstoned row (is_deleted=1) must
+    # still be gathered so its deletion can be pushed; the _is_newer check
+    # below (against cutoff_local) is what actually limits what's sent.
+    rows = conn.execute("SELECT * FROM review_topics").fetchall()
     records = []
     for row in rows:
         needs_meta = not row["sync_id"] or not row["updated_at"] or not row["device_id"]
@@ -349,7 +349,7 @@ def _gather_review_topics(conn, cutoff_local):
 
 
 def _gather_review_subjects(conn, cutoff_local):
-    rows = conn.execute("SELECT * FROM review_subjects WHERE is_deleted = 0").fetchall()
+    rows = conn.execute("SELECT * FROM review_subjects").fetchall()
     records = []
     for row in rows:
         needs_meta = not row["sync_id"] or not row["updated_at"] or not row["device_id"]
@@ -372,7 +372,7 @@ def _gather_review_subjects(conn, cutoff_local):
 
 
 def _gather_review_problems(conn, cutoff_local):
-    rows = conn.execute("SELECT * FROM review_problems WHERE is_deleted = 0").fetchall()
+    rows = conn.execute("SELECT * FROM review_problems").fetchall()
     records = []
     for row in rows:
         needs_meta = not row["sync_id"] or not row["updated_at"] or not row["device_id"]
@@ -403,7 +403,7 @@ def _gather_review_problems(conn, cutoff_local):
 
 
 def _gather_review_sessions(conn, cutoff_local):
-    rows = conn.execute("SELECT * FROM review_sessions WHERE is_deleted = 0").fetchall()
+    rows = conn.execute("SELECT * FROM review_sessions").fetchall()
     records = []
     for row in rows:
         needs_meta = not row["sync_id"] or not row["updated_at"] or not row["device_id"]

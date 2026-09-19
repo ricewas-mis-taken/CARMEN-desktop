@@ -217,3 +217,34 @@ def test_last_write_wins_skips_older_incoming_task(isolate_device, fake_logged_i
     sync_client.sync_now()
     local = tasks_store.get_task(task["id"])
     assert local["name"] == "Renamed on B"
+
+
+def test_deleted_review_topic_propagates_to_other_devices(isolate_device, fake_logged_in, fake_server):
+    """Regression test for the gap noted in PR #90: delete_topic() used to
+    hard-DELETE the row, leaving nothing for _gather_review_topics to push
+    -- a still-syncing device would never learn the topic was removed and
+    it would come back to life on the next pull. It must now tombstone
+    (is_deleted=1) and that tombstone must actually reach device B."""
+    isolate_device("a")
+    topic = review_store.create_topic("Math")
+    subject = review_store.create_subject(topic["id"], "Algebra", "#ABCDEF")
+    problem = review_store.create_problem(topic["id"], subject["id"], "Solve for x", 3, "text",
+                                           description_text="x + 1 = 2")
+    sync_client.sync_now()
+
+    isolate_device("b")
+    sync_client.sync_now()
+    assert len(review_store.list_topics()) == 1
+
+    isolate_device("a")
+    review_store.delete_topic(topic["id"])
+    assert review_store.list_topics() == []
+    result = sync_client.sync_now()
+    assert result.pushed >= 3  # topic + subject + problem tombstones
+
+    isolate_device("b")
+    result_b = sync_client.sync_now()
+    assert result_b.success is True
+    assert review_store.list_topics() == []
+    assert review_store.list_subjects(topic["id"]) == []
+    assert review_store.list_problems(topic["id"], due_only=False) == []
