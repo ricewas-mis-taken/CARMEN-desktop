@@ -86,3 +86,45 @@ def test_review_session_pause_button_works_for_linked_task(qtbot, isolate_tasks,
 
     card._pause_resume()
     assert not session_manager.get_status()["isPaused"]
+
+
+def test_pomodoro_button_starts_a_pomodoro_session_for_this_task(qtbot, isolate_tasks, isolate_state, monkeypatch):
+    """Drives the "Pomodoro" button all the way through to
+    session_manager.start_pomodoro_session() -- catches an argument-order
+    slip that no session_manager-only test could, by asserting on the
+    actual resulting session state instead of a mocked call."""
+    task = _make_task(lockMode="hard", processBlocklist=["bad.exe"])
+    card = tasks_tab._TaskCard(task, on_changed=lambda: None)
+    qtbot.addWidget(card)
+    card.show()
+
+    monkeypatch.setattr(tasks_tab._PomodoroDialog, "get_settings", staticmethod(lambda parent=None: (25, 5, 4)))
+
+    card._start_pomodoro()
+
+    status = session_manager.get_status()
+    assert status["isActive"]
+    assert status["lockMode"] == "hard"
+    assert status["processBlocklist"] == ["bad.exe"]
+    assert status["eventId"] == task["id"]
+    assert status["source"] == "task"
+    assert status["pomodoro"] == {
+        "focusMinutes": 25, "breakMinutes": 5, "totalCycles": 4,
+        "currentCycle": 1, "phase": "focus",
+    }
+
+    card.update_dynamic(status, session_history.load_all())
+    assert card._running_panel.isVisible()
+    assert "Focus 1/4" in card._countdown_label.text()
+
+
+def test_pomodoro_button_does_nothing_when_dialog_is_cancelled(qtbot, isolate_tasks, isolate_state, monkeypatch):
+    task = _make_task()
+    card = tasks_tab._TaskCard(task, on_changed=lambda: None)
+    qtbot.addWidget(card)
+
+    monkeypatch.setattr(tasks_tab._PomodoroDialog, "get_settings", staticmethod(lambda parent=None: None))
+
+    card._start_pomodoro()
+
+    assert not session_manager.get_status()["isActive"]
