@@ -85,6 +85,20 @@ _state = {
     # blocking can't tell one profile's windows apart from another's -- see
     # is_blocked_browser_profile() and enforcer.is_blocked_window().
     "blockedBrowserProfiles": [],
+    # Non-None while a Pomodoro-style session (see start_pomodoro_session) is
+    # running: {"focusMinutes", "breakMinutes", "totalCycles", "currentCycle"
+    # (1-based, which focus block we're on), "phase" ("focus"/"break")}. None
+    # for a plain start_session() session -- enforcement/UI code branches on
+    # this being present, not on some separate "is this a pomodoro" flag.
+    "pomodoro": None,
+    # True only while a pomodoro session is in its "break" phase -- checked
+    # everywhere enforcement decides whether to act (window_tracker's poll
+    # loop, the browser extension's handleTabUrl) the same way isPaused
+    # already is, so a break is enforced exactly like "the task is off"
+    # without touching processBlocklist/domainWhitelist at all. Unlike
+    # isPaused, the countdown keeps running during a break (it's ticking down
+    # its own breakMinutes, not frozen), so this can't just reuse isPaused.
+    "isBreak": False,
 }
 
 # Chromium-based browsers where every open profile shares one OS process --
@@ -107,6 +121,14 @@ _open_violation_index = {"process": None, "domain": None}
 # "End Session", POST /session/end) notify their own caller directly and never
 # touch this.
 _pending_natural_end = {"value": None}
+
+# Set by _advance_pomodoro_locked() whenever a pomodoro session flips
+# focus<->break (but doesn't end outright) -- drained by the same
+# window-polling loop that drains _pending_natural_end, to fire a "break
+# time"/"back to focus" toast exactly once per transition. A pomodoro's
+# final transition (last break finishing) goes through _pending_natural_end
+# instead, same as any other session ending.
+_pending_phase_change = {"value": None}
 
 # Core Windows shell / system processes that are never treated as violations,
 # regardless of the session blocklist. Without this, enforcement fights the
@@ -324,10 +346,121 @@ def start_session(
         _state["reviewProblemId"] = review_problem_id
         _state["isBurnout"] = is_burnout
         _state["blockedBrowserProfiles"] = list(blocked_browser_profiles or [])
+        # A plain start_session() always means "not a pomodoro" -- explicitly
+        # cleared rather than left over from whatever the previous session
+        # was, same reasoning as the source/eventId resets above.
+        _state["pomodoro"] = None
+        _state["isBreak"] = False
         _open_violation_index["process"] = None
         _open_violation_index["domain"] = None
         _save()
     return get_status()
+
+
+def start_pomodoro_session(
+    focus_minutes,
+    break_minutes,
+    cycles,
+    lock_mode,
+    process_blocklist,
+    domain_whitelist,
+    source="manual",
+    event_id=None,
+    event_title=None,
+    blocked_browser_profiles=None,
+):
+    """Starts a Pomodoro-style session: `cycles` repetitions of a focus block
+    (fully enforced, same as a plain start_session()) followed by a break
+    block (isBreak=True, nothing enforced), auto-advancing between them as
+    each block's own timer runs out -- see _advance_pomodoro_locked(), called
+    from _get_status_locked()'s natural-expiry check. 5 cycles of 25+5 gives
+    125 minutes of enforced focus time and 25 minutes of break, ending after
+    the 5th break.
+
+    Reuses start_session() for the first focus block (validation, the
+    already-active-session supersede path, all the base fields) rather than
+    duplicating that logic, then layers the pomodoro bookkeeping on top."""
+    if not isinstance(cycles, int) or isinstance(cycles, bool) or cycles <= 0:
+        raise ValueError(f"cycles must be a positive int, got {cycles!r}")
+    if (
+        not isinstance(break_minutes, (int, float))
+        or isinstance(break_minutes, bool)
+        or not math.isfinite(break_minutes)
+        or break_minutes <= 0
+    ):
+        raise ValueError(f"break_minutes must be a finite positive number, got {break_minutes!r}")
+
+    start_session(
+        focus_minutes,
+        lock_mode,
+        process_blocklist,
+        domain_whitelist,
+        source=source,
+        event_id=event_id,
+        event_title=event_title,
+        blocked_browser_profiles=blocked_browser_profiles,
+    )
+    with _lock:
+        _state["pomodoro"] = {
+            "focusMinutes": focus_minutes,
+            "breakMinutes": break_minutes,
+            "totalCycles": cycles,
+            "currentCycle": 1,
+            "phase": "focus",
+        }
+        _save()
+    return get_status()
+
+
+def _advance_pomodoro_locked(now):
+    """Flips the current pomodoro phase when its block's timer hits zero.
+    Must be called with _lock held, only from _get_status_locked() (the one
+    place that already detects a timer running out). focus -> break always
+    just switches phase; break -> focus also advances currentCycle, or ends
+    the whole session (like a normal natural end) once the last cycle's
+    break is done."""
+    pomo = _state["pomodoro"]
+    if pomo["phase"] == "focus":
+        pomo["phase"] = "break"
+        _state["isBreak"] = True
+        _state["endTime"] = (now + timedelta(minutes=pomo["breakMinutes"])).isoformat()
+        # A break isn't worked time -- tasks_store.worked_seconds() (and the
+        # browser extension's identical computeActiveElapsedMs) both replay
+        # these exact pause/resume markers out of violationLog to exclude
+        # non-working spans from the tally, same mechanism a manual
+        # pause_session() uses. Without this, a 5x(25+5) pomodoro would
+        # credit 150 minutes of work instead of the 125 actually focused.
+        _state["violationLog"].append({"kind": "pause", "timestamp": now.isoformat()})
+        _pending_phase_change["value"] = {
+            "phase": "break",
+            "cycle": pomo["currentCycle"],
+            "totalCycles": pomo["totalCycles"],
+        }
+        _save()
+        return
+
+    if pomo["currentCycle"] >= pomo["totalCycles"]:
+        _pending_natural_end["value"] = _finalize_to_history_locked(now, end_type="natural")
+        return
+
+    pomo["currentCycle"] += 1
+    pomo["phase"] = "focus"
+    _state["isBreak"] = False
+    _state["endTime"] = (now + timedelta(minutes=pomo["focusMinutes"])).isoformat()
+    _state["violationLog"].append({"kind": "resume", "timestamp": now.isoformat()})
+    _pending_phase_change["value"] = {
+        "phase": "focus",
+        "cycle": pomo["currentCycle"],
+        "totalCycles": pomo["totalCycles"],
+    }
+    _save()
+
+
+def pop_pending_phase_change():
+    with _lock:
+        value = _pending_phase_change["value"]
+        _pending_phase_change["value"] = None
+        return value
 
 
 def update_blocklist(process_blocklist, domain_whitelist):
@@ -456,6 +589,8 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
     _state["reviewProblemId"] = None
     _state["isBurnout"] = False
     _state["blockedBrowserProfiles"] = []
+    _state["pomodoro"] = None
+    _state["isBreak"] = False
     _open_violation_index["process"] = None
     _open_violation_index["domain"] = None
     _save()
@@ -499,7 +634,13 @@ def _get_status_locked():
         end_time = datetime.fromisoformat(_state["endTime"])
         seconds_remaining = max(0, int((end_time - datetime.now()).total_seconds()))
         if seconds_remaining == 0:
-            _pending_natural_end["value"] = _finalize_to_history_locked(end_time, end_type="natural")
+            if _state["pomodoro"] is not None:
+                _advance_pomodoro_locked(end_time)
+                if _state["isActive"]:
+                    new_end_time = datetime.fromisoformat(_state["endTime"])
+                    seconds_remaining = max(0, int((new_end_time - datetime.now()).total_seconds()))
+            else:
+                _pending_natural_end["value"] = _finalize_to_history_locked(end_time, end_type="natural")
     return {
         "isActive": _state["isActive"],
         "isPaused": _state["isPaused"],
@@ -521,6 +662,8 @@ def _get_status_locked():
         "reviewProblemId": _state["reviewProblemId"],
         "isBurnout": _state["isBurnout"],
         "blockedBrowserProfiles": list(_state["blockedBrowserProfiles"]),
+        "isBreak": _state["isBreak"],
+        "pomodoro": dict(_state["pomodoro"]) if _state["pomodoro"] is not None else None,
     }
 
 
