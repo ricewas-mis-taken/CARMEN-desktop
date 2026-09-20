@@ -164,6 +164,21 @@ QPushButton#burnoutButton:hover {
     background: #FCEBEA;
 }
 
+/* "Pomodoro" button on a task's Start overlay -- same white-fill/black-text/
+   colored-border treatment as #burnoutButton right next to it (so a task
+   card of any color can't swallow either button), but a distinct purple
+   border so the two are never confused for the same action at a glance. */
+QPushButton#pomodoroButton {
+    background: #FFFFFF;
+    color: #1F2328;
+    border: 2px solid #6C3FA8;
+    font-weight: 600;
+}
+
+QPushButton#pomodoroButton:hover {
+    background: #F2EAFB;
+}
+
 /* Start Task button on a task's Start overlay -- black text on a green
    outline (not filled), since the shared .AccentButton fill made the white
    text unreadable against this card's own background. */

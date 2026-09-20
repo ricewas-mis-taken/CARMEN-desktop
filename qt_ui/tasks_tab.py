@@ -192,6 +192,14 @@ class _PomodoroDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # Every other popup in this app (picker_dialogs.py's _TimerDialog,
+        # this same file's _AddProblemDialog) sets this to escape Qt's
+        # default (dark-mode-following) QDialog styling via styles.qss's
+        # #PopupBg rules -- this dialog was the one popup that forgot to,
+        # which is exactly why its labels/values were unreadable (dark gray
+        # text on a near-black background) instead of the app's normal
+        # white-background/black-text popup look.
+        self.setObjectName("PopupBg")
         self.setWindowTitle("Start Pomodoro")
         layout = QVBoxLayout(self)
 
@@ -504,8 +512,11 @@ class _TaskCard(QFrame):
         layout.setSpacing(6)
 
         duration_row = QHBoxLayout()
+        duration_row.setSpacing(10)
+        duration_row.addStretch(1)
         self._duration_edit = QLineEdit()
         self._duration_edit.setPlaceholderText("minutes")
+        self._duration_edit.setFixedWidth(90)
         self._duration_edit.setStyleSheet(
             "font-size: 13px; color: #1F2328; background: #FFFFFF; "
             "border: 1px solid rgba(0,0,0,0.15); border-radius: 6px; padding: 4px 6px;"
@@ -521,6 +532,7 @@ class _TaskCard(QFrame):
         self._pomodoro_button.setStyleSheet("font-size: 13px;")
         self._pomodoro_button.clicked.connect(self._start_pomodoro)
         duration_row.addWidget(self._pomodoro_button)
+        duration_row.addStretch(1)
         layout.addLayout(duration_row)
 
         button_row = QHBoxLayout()
