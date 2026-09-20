@@ -33,6 +33,7 @@ from datetime import date
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
+    QDialog,
     QFrame,
     QGraphicsBlurEffect,
     QGridLayout,
@@ -181,6 +182,73 @@ class TasksTab(QWidget):
         sessions = session_history.load_all()
         for card in self._cards.values():
             card.update_dynamic(status, sessions)
+
+
+class _PomodoroDialog(QDialog):
+    """Modal focus/break/cycles picker for _TaskCard's "Pomodoro" button --
+    modal (unlike picker_dialogs.py's non-modal windows) since it's a quick,
+    single-purpose form opened from inside an already-open card, not a
+    standalone window meant to sit alongside the rest of the UI."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # Every other popup in this app (picker_dialogs.py's _TimerDialog,
+        # this same file's _AddProblemDialog) sets this to escape Qt's
+        # default (dark-mode-following) QDialog styling via styles.qss's
+        # #PopupBg rules -- this dialog was the one popup that forgot to,
+        # which is exactly why its labels/values were unreadable (dark gray
+        # text on a near-black background) instead of the app's normal
+        # white-background/black-text popup look.
+        self.setObjectName("PopupBg")
+        self.setWindowTitle("Start Pomodoro")
+        layout = QVBoxLayout(self)
+
+        def _field(label_text, default_value):
+            layout.addWidget(QLabel(label_text))
+            edit = QLineEdit(str(default_value))
+            edit.setAlignment(Qt.AlignCenter)
+            layout.addWidget(edit)
+            return edit
+
+        self._focus_edit = _field("Focus minutes", 25)
+        self._break_edit = _field("Break minutes", 5)
+        self._cycles_edit = _field("Cycles", 4)
+
+        self._status_label = QLabel()
+        self._status_label.setStyleSheet("color: #c62828;")
+        layout.addWidget(self._status_label)
+
+        button_row = QHBoxLayout()
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(self.reject)
+        button_row.addWidget(cancel_button)
+        start_button = QPushButton("Start")
+        start_button.clicked.connect(self._on_start)
+        button_row.addWidget(start_button)
+        layout.addLayout(button_row)
+
+        self._result = None
+
+    def _on_start(self):
+        try:
+            focus_minutes = float(self._focus_edit.text())
+            break_minutes = float(self._break_edit.text())
+            cycles = int(self._cycles_edit.text())
+            if focus_minutes <= 0 or break_minutes <= 0 or cycles <= 0:
+                raise ValueError
+        except ValueError:
+            self._status_label.setText("Enter valid positive numbers.")
+            return
+        self._result = (focus_minutes, break_minutes, cycles)
+        self.accept()
+
+    @staticmethod
+    def get_settings(parent=None):
+        """Returns (focus_minutes, break_minutes, cycles) or None if
+        cancelled."""
+        dialog = _PomodoroDialog(parent)
+        dialog.exec()
+        return dialog._result
 
 
 class _TaskCard(QFrame):
@@ -444,8 +512,11 @@ class _TaskCard(QFrame):
         layout.setSpacing(6)
 
         duration_row = QHBoxLayout()
+        duration_row.setSpacing(10)
+        duration_row.addStretch(1)
         self._duration_edit = QLineEdit()
         self._duration_edit.setPlaceholderText("minutes")
+        self._duration_edit.setFixedWidth(90)
         self._duration_edit.setStyleSheet(
             "font-size: 13px; color: #1F2328; background: #FFFFFF; "
             "border: 1px solid rgba(0,0,0,0.15); border-radius: 6px; padding: 4px 6px;"
@@ -456,6 +527,12 @@ class _TaskCard(QFrame):
         self._burnout_button.setStyleSheet("font-size: 13px;")
         self._burnout_button.clicked.connect(self._start_burnout)
         duration_row.addWidget(self._burnout_button)
+        self._pomodoro_button = QPushButton("Pomodoro")
+        self._pomodoro_button.setObjectName("pomodoroButton")
+        self._pomodoro_button.setStyleSheet("font-size: 13px;")
+        self._pomodoro_button.clicked.connect(self._start_pomodoro)
+        duration_row.addWidget(self._pomodoro_button)
+        duration_row.addStretch(1)
         layout.addLayout(duration_row)
 
         button_row = QHBoxLayout()
@@ -547,6 +624,24 @@ class _TaskCard(QFrame):
 
     def _start_burnout(self):
         self._begin_session(tasks_store.BURNOUT_MINUTES, is_burnout=True)
+
+    def _start_pomodoro(self):
+        settings = _PomodoroDialog.get_settings(self)
+        if settings is None:
+            return
+        focus_minutes, break_minutes, cycles = settings
+        session_manager.start_pomodoro_session(
+            focus_minutes,
+            break_minutes,
+            cycles,
+            self._task.get("lockMode", "soft"),
+            self._task.get("processBlocklist", []),
+            self._task.get("domainWhitelist", []),
+            source="task",
+            event_id=self._task["id"],
+            event_title=self._task["name"],
+        )
+        self._disarm()
 
     def _begin_session(self, duration_minutes, is_burnout):
         session_manager.start_session(
@@ -718,7 +813,14 @@ class _TaskCard(QFrame):
                 # Fixed-duration sessions count down the pause-aware
                 # secondsRemaining from session_manager, not elapsed time.
                 rem_minutes, rem_seconds = divmod(status.get("secondsRemaining", 0), 60)
-                self._countdown_label.setText(f"{rem_minutes}m {rem_seconds}s remaining{paused}{violation_text}")
+                pomo = status.get("pomodoro")
+                phase_text = ""
+                if pomo:
+                    phase_label = "Break" if status.get("isBreak") else "Focus"
+                    phase_text = f"  •  {phase_label} {pomo['currentCycle']}/{pomo['totalCycles']}"
+                self._countdown_label.setText(
+                    f"{rem_minutes}m {rem_seconds}s remaining{phase_text}{paused}{violation_text}"
+                )
             self._pause_button.setText("Resume" if status.get("isPaused") else "Pause")
         else:
             self._running_panel.setVisible(False)

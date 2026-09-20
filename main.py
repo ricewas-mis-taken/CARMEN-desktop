@@ -19,6 +19,7 @@ import config
 import dev_watcher
 import enforcer
 import qt_gui_thread
+import screentime_store
 import singleinstance
 import sync_scheduler
 import tray
@@ -119,6 +120,10 @@ def main():
 
     def on_quit():
         stop_event.set()
+        # The periodic debounce inside screentime_store.add_app_seconds()
+        # only flushes to disk every ~10s -- without an explicit flush here,
+        # up to that much of the day's tally could be lost on a clean quit.
+        screentime_store.flush()
         # Must go through qt_gui_thread's queued marshal, not a direct
         # QApplication.instance().quit() — on_quit() itself runs on
         # pystray's callback thread (see on_quit_clicked in tray.py), and a
@@ -170,10 +175,24 @@ def main():
         # why natural session ends were going unnoticed.
         calendar_toast.show_toast("Focus session complete", tray.format_end_summary(summary))
 
+    def on_phase_change(info):
+        # Fired for every pomodoro focus<->break flip that isn't the final
+        # one (that goes through on_session_end instead, same toast as any
+        # other session end) -- see window_tracker.run_polling_loop's
+        # on_phase_change docstring.
+        if info["phase"] == "break":
+            calendar_toast.show_toast(
+                "Break time", f"Cycle {info['cycle']} of {info['totalCycles']} done — take a break."
+            )
+        else:
+            calendar_toast.show_toast(
+                "Back to focus", f"Starting cycle {info['cycle']} of {info['totalCycles']}."
+            )
+
     polling_thread = threading.Thread(
         target=window_tracker.run_polling_loop,
         args=(stop_event, on_session_end),
-        kwargs={"tray_icon": icon},
+        kwargs={"tray_icon": icon, "on_phase_change": on_phase_change},
         daemon=True,
     )
     polling_thread.start()

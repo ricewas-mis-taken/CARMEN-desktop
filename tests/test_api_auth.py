@@ -9,7 +9,12 @@ import config
 
 
 @pytest.fixture
-def client(isolate_config):
+def client(isolate_state):
+    # isolate_state (not just isolate_config) -- test_mutating_endpoint_
+    # accepts_correct_token below calls the real /session/pause, which
+    # mutates session_manager's live in-memory state and writes
+    # session_state.json. Without isolating that too, this test could pause
+    # a real running session and write over the real state file.
     api_server.app.config["TESTING"] = True
     return api_server.app.test_client()
 

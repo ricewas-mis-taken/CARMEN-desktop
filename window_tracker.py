@@ -11,6 +11,7 @@ import time
 # branch would raise NameError on its first tick -- silently, since the loop's
 # own try/except swallows it, spinning forever while doing nothing.
 import enforcer
+import screentime_store
 import session_manager
 
 if sys.platform == "darwin":
@@ -155,7 +156,7 @@ else:
         return sorted(merged.values(), key=lambda p: (not p["is_running"], p["label"]))
 
 
-def run_polling_loop(stop_event, on_session_end=None, tray_icon=None):
+def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_change=None):
     """Runs until stop_event is set. Intended to be launched in its own thread.
 
     on_session_end(summary), if given, is called once whenever a session's
@@ -165,6 +166,13 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None):
     happens here even if nothing else (browser extension, lock overlay) is
     polling /status — otherwise a session could expire with no notification
     ever firing.
+
+    on_phase_change(info), if given, is called once whenever a pomodoro
+    session flips focus<->break without ending outright (see
+    session_manager._advance_pomodoro_locked) -- info is
+    {"phase", "cycle", "totalCycles"}. The pomodoro's final transition (its
+    last break finishing) goes through on_session_end instead, same as any
+    other session ending.
 
     tray_icon, if given, gets update_menu() called whenever isActive/isPaused
     changes — pystray's win32 backend only rebuilds its popup menu (and so
@@ -201,12 +209,37 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None):
                 except Exception:
                     pass
 
-            if status["isActive"] and not status["isPaused"]:
-                window = get_active_window()
-                process_name = window["process_name"]
-                pid = window["pid"]
-                hwnd = window["hwnd"]
+            pending_phase = session_manager.pop_pending_phase_change()
+            if pending_phase is not None:
+                if pending_phase["phase"] == "break":
+                    # A break must actually mean "the task is off" --
+                    # without this, a window hard-lock hid from Alt+Tab/
+                    # taskbar preview (enforcer._hide_taskbar_preview) stays
+                    # hidden for the whole break, same reason end_session()
+                    # calls this on every real session end.
+                    try:
+                        enforcer.restore_all_taskbar_previews()
+                    except Exception:
+                        pass
+                if on_phase_change is not None:
+                    try:
+                        on_phase_change(pending_phase)
+                    except Exception:
+                        pass
 
+            # Screen time is tracked unconditionally -- unlike everything
+            # below this, it has nothing to do with whether a focus session
+            # is running. Core shell/system processes and our own process
+            # (session_manager.is_exempt) are skipped so the tally isn't
+            # dominated by explorer.exe/Carmen Focus itself.
+            window = get_active_window()
+            process_name = window["process_name"]
+            pid = window["pid"]
+            hwnd = window["hwnd"]
+            if process_name and not session_manager.is_exempt(process_name, pid):
+                screentime_store.add_app_seconds(process_name, POLL_INTERVAL_SECONDS)
+
+            if status["isActive"] and not status["isPaused"] and not status["isBreak"]:
                 if session_manager.is_exempt(process_name, pid):
                     # Core shell/system processes (taskbar, alt-tab, wifi/time
                     # flyouts) and our own tray/popup windows are never

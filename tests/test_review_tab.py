@@ -34,6 +34,30 @@ def test_topics_render_as_tabs_with_trailing_plus(qtbot, isolate_review_db):
     assert [tab._tabs.tabText(i) for i in range(3)] == ["Math", "Physics", "+"]
 
 
+def test_ending_a_first_attempt_early_still_reopens_add_problem_dialog(qtbot, isolate_review_db, isolate_state):
+    """Regression test: clicking "End" mid first-attempt used to just clear
+    the banner's state and vanish -- review_store.abandon_review(token=None)
+    is a no-op in first-attempt mode, and nothing ever called
+    add_problem_dialog.show() again, so the in-progress problem was silently
+    lost with no way back to fill in details and save it (the reported bug:
+    "submit the stuff, doesn't give the option to add details and save")."""
+    topic, _subject = _make_topic_and_subject()
+    view = review_tab._TopicView(topic["id"])
+    qtbot.addWidget(view)
+
+    dialog = review_tab._AddProblemDialog(
+        topic["id"], on_added=lambda _p: None, on_start_first_attempt=view._start_first_attempt,
+    )
+    qtbot.addWidget(dialog)
+
+    view._start_first_attempt(dialog)
+    assert not dialog.isVisible()
+
+    view._review_banner._end_early()
+
+    assert dialog.isVisible()
+
+
 def test_topic_view_lists_due_problems_by_default(qtbot, isolate_review_db):
     topic, subject = _make_topic_and_subject()
     review_store.create_problem(

@@ -678,7 +678,7 @@ else:
             if session_manager.get_lock_mode() != "hard":
                 return
             status = session_manager.get_status()
-            if not status["isActive"] or status["isPaused"]:
+            if not status["isActive"] or status["isPaused"] or status["isBreak"]:
                 return
 
             _, pid = win32process.GetWindowThreadProcessId(hwnd)
