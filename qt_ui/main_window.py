@@ -30,6 +30,7 @@ from qt_ui.calendar_page import CalendarPage
 from qt_ui.finished_tab import FinishedTab
 from qt_ui.focus_tab import FocusTab
 from qt_ui.review_tab import ReviewTab
+from qt_ui.screentime_tab import ScreenTimeTab
 from qt_ui.tasks_tab import TasksTab
 
 # Dragging the title bar could snap the window into a taller rectangle.
@@ -183,6 +184,7 @@ class _MainWindow(QWidget):
         self._add_page("tasks", TasksTab())
         self._add_page("board", BoardTab())
         self._add_page("review", ReviewTab())
+        self._add_page("screentime", ScreenTimeTab())
         self._add_page("finished", FinishedTab())
 
         self._show_tab("calendar")
@@ -211,6 +213,7 @@ class _MainWindow(QWidget):
             ("tasks", "🎯  Tasks"),
             ("board", "🗂  The Board"),
             ("review", "🔁  Review"),
+            ("screentime", "⏱  Screen Time"),
             ("finished", "✅  Finished"),
         ]
         for key, label in nav_items:
