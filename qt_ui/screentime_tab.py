@@ -177,6 +177,20 @@ class ScreenTimeTab(QWidget):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        # A bare QScrollArea's viewport autofills with the OS palette's
+        # Window color (dark on a dark-mode Windows install) rather than
+        # inheriting the light #F7F7F8 ContentArea background it sits in --
+        # the "QScrollArea > QWidget > QWidget" chain (QScrollArea -> its
+        # internal viewport -> the widget passed to setWidget()) is the
+        # actual widget path QSS needs to target to fix this, plain
+        # "QScrollArea { background: ... }" alone doesn't reach the
+        # viewport. Without this, every dark-colored label/row drawn here
+        # (all of them assume a light background, matching every other
+        # popup/tab in the app) is invisible against that dark fill.
+        scroll.setStyleSheet(
+            "QScrollArea { background: #F7F7F8; border: none; }"
+            "QScrollArea > QWidget > QWidget { background: #F7F7F8; }"
+        )
         self._sections_container = QWidget()
         self._sections_layout = QVBoxLayout(self._sections_container)
         self._sections_layout.setContentsMargins(0, 0, 0, 0)
