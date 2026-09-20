@@ -774,10 +774,18 @@ class _TopicView(QWidget):
             add_problem_dialog.apply_first_attempt(elapsed_seconds, self_solved, shakiness)
             add_problem_dialog.show()
 
+        def _on_first_attempt_cancelled():
+            # "End" (or the underlying session getting ended some other
+            # way) mid first-attempt -- no time/outcome to apply, but the
+            # dialog must still come back so the problem itself isn't lost
+            # with no way to fill in details and save it.
+            add_problem_dialog.show()
+
         self._review_banner.start(
             {"name": "your new problem"}, token=None,
             end_session_on_finish=end_session_on_finish,
             first_attempt_callback=_on_first_attempt_done,
+            first_attempt_cancelled_callback=_on_first_attempt_cancelled,
         )
 
 
@@ -792,6 +800,7 @@ class _ReviewBanner(QWidget):
         self._accumulated_seconds = 0
         self._is_paused = False
         self._first_attempt_callback = None
+        self._first_attempt_cancelled_callback = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -884,11 +893,15 @@ class _ReviewBanner(QWidget):
             return self._accumulated_seconds
         return self._accumulated_seconds + int((datetime.now() - self._start_time).total_seconds())
 
-    def start(self, problem, token, end_session_on_finish=False, first_attempt_callback=None):
+    def start(
+        self, problem, token, end_session_on_finish=False,
+        first_attempt_callback=None, first_attempt_cancelled_callback=None,
+    ):
         self._problem = problem
         self._session_token = token
         self._end_session_on_finish = end_session_on_finish
         self._first_attempt_callback = first_attempt_callback
+        self._first_attempt_cancelled_callback = first_attempt_cancelled_callback
         self._start_time = datetime.now()
         self._accumulated_seconds = 0
         self._is_paused = False
@@ -972,28 +985,43 @@ class _ReviewBanner(QWidget):
         history entry at worst."""
         self._tick_timer.stop()
         token = self._session_token
+        first_attempt_cancelled_callback = self._first_attempt_cancelled_callback
         self._session_token = None
         self._end_session_on_finish = False
         self._start_time = None
         self._first_attempt_callback = None
+        self._first_attempt_cancelled_callback = None
         self.hide()
         review_store.abandon_review(token)
+        if first_attempt_cancelled_callback is not None:
+            first_attempt_cancelled_callback()
         self._on_finished()
 
     def _end_early(self):
         self._tick_timer.stop()
         token = self._session_token
         end_session = self._end_session_on_finish
+        first_attempt_cancelled_callback = self._first_attempt_cancelled_callback
         self._session_token = None
         self._end_session_on_finish = False
         self._start_time = None
         self._first_attempt_callback = None
+        self._first_attempt_cancelled_callback = None
         self.hide()
         # No-op when token is None (first-attempt mode -- there was never a
         # start_review() session to abandon).
         review_store.abandon_review(token)
         if end_session:
             session_manager.end_session()
+        if first_attempt_cancelled_callback is not None:
+            # Clicking "End" (or the session it rode on getting ended
+            # externally) mid first-attempt used to just vanish -- the Add
+            # Problem dialog stayed hidden with no way back to it, silently
+            # discarding the in-progress problem with no chance to still
+            # fill in details and save it. Reopen it blank instead (no
+            # first-attempt time to apply, since the attempt was abandoned,
+            # not finished).
+            first_attempt_cancelled_callback()
         self._on_finished()
 
     def _finish(self):
@@ -1012,6 +1040,7 @@ class _ReviewBanner(QWidget):
         self._end_session_on_finish = False
         self._start_time = None
         self._first_attempt_callback = None
+        self._first_attempt_cancelled_callback = None
         self.hide()
         _PostReviewDialog(
             problem_name=problem["name"],

@@ -11,6 +11,7 @@ import time
 import pytest
 
 import enforcer
+import screentime_store
 import session_manager
 import window_tracker
 
@@ -236,3 +237,57 @@ def test_sweep_notice_not_suppressed_by_a_just_logged_violation(isolate_state, f
         thread.join(timeout=2)
 
     assert notice_calls, "sweep must notify even though a violation was just logged moments ago"
+
+
+def test_screen_time_is_tracked_even_with_no_session_active(
+    isolate_state, fast_polling, monkeypatch, tmp_path,
+):
+    """Screen time is a general, always-on tally, not tied to enforcement --
+    it must keep accumulating for the foreground app even when there's no
+    active session at all (the enforcement branch below it is entirely
+    skipped in that case)."""
+    monkeypatch.setattr(screentime_store, "STATE_PATH", str(tmp_path / "screentime.json"))
+    monkeypatch.setattr(screentime_store, "_data", {})
+    monkeypatch.setattr(screentime_store, "_last_flush", 0.0)
+
+    monkeypatch.setattr(
+        window_tracker, "get_active_window",
+        lambda: {"title": "Code", "process_name": "code.exe", "pid": 111, "hwnd": 222},
+    )
+
+    assert not session_manager.is_active()
+
+    stop_event = threading.Event()
+    thread = threading.Thread(target=window_tracker.run_polling_loop, args=(stop_event,), daemon=True)
+    thread.start()
+    try:
+        time.sleep(0.2)
+    finally:
+        stop_event.set()
+        thread.join(timeout=2)
+
+    today = screentime_store._day_key()
+    assert screentime_store.get_day(today)["apps"].get("code.exe", 0) > 0
+
+
+def test_screen_time_skips_exempt_processes(isolate_state, fast_polling, monkeypatch, tmp_path):
+    monkeypatch.setattr(screentime_store, "STATE_PATH", str(tmp_path / "screentime.json"))
+    monkeypatch.setattr(screentime_store, "_data", {})
+    monkeypatch.setattr(screentime_store, "_last_flush", 0.0)
+
+    monkeypatch.setattr(
+        window_tracker, "get_active_window",
+        lambda: {"title": "Explorer", "process_name": "explorer.exe", "pid": 111, "hwnd": 222},
+    )
+
+    stop_event = threading.Event()
+    thread = threading.Thread(target=window_tracker.run_polling_loop, args=(stop_event,), daemon=True)
+    thread.start()
+    try:
+        time.sleep(0.2)
+    finally:
+        stop_event.set()
+        thread.join(timeout=2)
+
+    today = screentime_store._day_key()
+    assert screentime_store.get_day(today)["apps"] == {}

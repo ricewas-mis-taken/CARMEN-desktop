@@ -19,6 +19,7 @@ import config
 import dev_watcher
 import enforcer
 import qt_gui_thread
+import screentime_store
 import singleinstance
 import sync_scheduler
 import tray
@@ -119,6 +120,10 @@ def main():
 
     def on_quit():
         stop_event.set()
+        # The periodic debounce inside screentime_store.add_app_seconds()
+        # only flushes to disk every ~10s -- without an explicit flush here,
+        # up to that much of the day's tally could be lost on a clean quit.
+        screentime_store.flush()
         # Must go through qt_gui_thread's queued marshal, not a direct
         # QApplication.instance().quit() — on_quit() itself runs on
         # pystray's callback thread (see on_quit_clicked in tray.py), and a
