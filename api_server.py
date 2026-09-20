@@ -9,6 +9,7 @@ Endpoints:
     POST /session/resume
     POST /violation
     POST /violation/resolved
+    POST /screentime/domain
     GET  /history
     GET  /apps/running
     GET  /apps/installed
@@ -47,6 +48,8 @@ from flask_cors import CORS
 import config
 import installed_apps
 import review_store
+import screentime_categories
+import screentime_store
 import session_history
 import session_manager
 import tasks_store
@@ -287,6 +290,29 @@ def violation_resolved():
 
     session_manager.resolve_domain_violation()
     return jsonify(session_manager.get_status())
+
+
+@app.route("/screentime/domain", methods=["POST"])
+@_require_token
+def screentime_domain():
+    """Called periodically by the browser extension to report time spent on
+    a domain -- desktop has no visibility into browser tab domains on its
+    own (see screentime_store.py's module docstring), so this is the only
+    way desktop's Screen Time tab ever learns about domain time at all.
+    Independent of any focus session -- recorded regardless of
+    isActive/isPaused/isBreak, same as the app-side tracking in
+    window_tracker.py."""
+    body = request.get_json(force=True, silent=True) or {}
+    domain = body.get("domain")
+    seconds = body.get("seconds")
+
+    if not isinstance(domain, str) or not domain:
+        return jsonify({"error": "domain must be a non-empty string"}), 400
+    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool) or not math.isfinite(seconds) or seconds <= 0:
+        return jsonify({"error": "seconds must be a finite positive number"}), 400
+
+    screentime_store.add_domain_seconds(domain, seconds)
+    return jsonify({"ok": True})
 
 
 @app.route("/history", methods=["GET"])
