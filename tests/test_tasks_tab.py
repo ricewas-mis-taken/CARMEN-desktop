@@ -128,3 +128,24 @@ def test_pomodoro_button_does_nothing_when_dialog_is_cancelled(qtbot, isolate_ta
     card._start_pomodoro()
 
     assert not session_manager.get_status()["isActive"]
+
+
+def test_pomodoro_dialog_uses_the_light_popup_theme(qtbot):
+    """Regression test: this dialog was the one popup in the app that forgot
+    setObjectName("PopupBg"), so it fell back to Qt's default (dark-mode-
+    following) QDialog styling instead of styles.qss's white-background/
+    black-text popup look -- the user reported literally not being able to
+    read the labels or values."""
+    dialog = tasks_tab._PomodoroDialog()
+    qtbot.addWidget(dialog)
+    assert dialog.objectName() == "PopupBg"
+
+
+def test_pomodoro_and_burnout_buttons_are_distinctly_styled(qtbot, isolate_tasks, isolate_state):
+    task = _make_task()
+    card = tasks_tab._TaskCard(task, on_changed=lambda: None)
+    qtbot.addWidget(card)
+
+    assert card._burnout_button.objectName() == "burnoutButton"
+    assert card._pomodoro_button.objectName() == "pomodoroButton"
+    assert card._burnout_button.objectName() != card._pomodoro_button.objectName()

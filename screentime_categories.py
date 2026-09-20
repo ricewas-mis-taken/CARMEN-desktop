@@ -1,10 +1,12 @@
 """Category classification for screentime_tab.py's grouped view.
 
-Domains are looked up against the bundled seed list in
-screentime_domains.json (a hand-curated set of well-known sites -- see that
-file's own "_comment" for why it isn't the ~20k-domain dataset originally
-asked for). Apps are looked up against the small _APP_CATEGORIES map below.
-Anything not found in either falls back to "Other".
+Domains are looked up against the bundled list in screentime_domains.json --
+a hand-curated set of well-known sites merged with ~45k domains imported
+from the UT1 blacklists (github.com/olbat/ut1-blacklists, CC BY-SA); see
+that file's own "_comment" for the exact breakdown and why "Tools" stays
+mostly hand-curated. Apps are looked up against the small _APP_CATEGORIES
+map below -- there's no equivalent public dataset for executables. Anything
+not found in either falls back to "Other".
 """
 import json
 import os
