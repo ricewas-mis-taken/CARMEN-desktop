@@ -522,14 +522,40 @@ class _TaskCard(QFrame):
             "border: 1px solid rgba(0,0,0,0.15); border-radius: 6px; padding: 4px 6px;"
         )
         duration_row.addWidget(self._duration_edit)
+        # Inline (not just styles.qss's #burnoutButton/#pomodoroButton
+        # rules) because this card's own setStyleSheet() call above includes
+        # "QFrame.TaskCard QWidget { background: transparent; }" -- a
+        # widget-set ancestor stylesheet, which Qt gives priority over the
+        # app-wide styles.qss for any property it touches, "background"
+        # included. Without repeating it here directly on the button (a
+        # widget's own stylesheet always wins over an ancestor's), the
+        # button's background silently stayed transparent regardless of
+        # what styles.qss said -- on a card whose own color is close to the
+        # button's border color (e.g. a red task and burnoutButton's red
+        # border), the button became nearly invisible instead of standing
+        # out the way both buttons are meant to.
+        # Hover states are declared inline too (not left to styles.qss's
+        # #burnoutButton:hover/#pomodoroButton:hover), same reasoning as the
+        # comment above -- once a widget has its own stylesheet, don't rely
+        # on an outer one to merge in additional pseudo-states correctly.
         self._burnout_button = QPushButton("Until I burnout")
         self._burnout_button.setObjectName("burnoutButton")
-        self._burnout_button.setStyleSheet("font-size: 13px;")
+        self._burnout_button.setStyleSheet(
+            "QPushButton#burnoutButton { font-size: 13px; font-weight: 600; "
+            "background: #A93226; color: #FFFFFF; border: 2px solid #A93226; "
+            "border-radius: 8px; padding: 6px 14px; } "
+            "QPushButton#burnoutButton:hover { background: #8F2A20; }"
+        )
         self._burnout_button.clicked.connect(self._start_burnout)
         duration_row.addWidget(self._burnout_button)
         self._pomodoro_button = QPushButton("Pomodoro")
         self._pomodoro_button.setObjectName("pomodoroButton")
-        self._pomodoro_button.setStyleSheet("font-size: 13px;")
+        self._pomodoro_button.setStyleSheet(
+            "QPushButton#pomodoroButton { font-size: 13px; font-weight: 600; "
+            "background: #6C3FA8; color: #FFFFFF; border: 2px solid #6C3FA8; "
+            "border-radius: 8px; padding: 6px 14px; } "
+            "QPushButton#pomodoroButton:hover { background: #5A3389; }"
+        )
         self._pomodoro_button.clicked.connect(self._start_pomodoro)
         duration_row.addWidget(self._pomodoro_button)
         duration_row.addStretch(1)
@@ -543,7 +569,13 @@ class _TaskCard(QFrame):
         button_row.addWidget(cancel_button)
         start_button = QPushButton("Start Task")
         start_button.setObjectName("startTaskButton")
-        start_button.setStyleSheet("font-size: 13px;")
+        # Inline for the same reason as _burnout_button/_pomodoro_button
+        # above -- the card's own ancestor stylesheet otherwise silently
+        # wins over styles.qss's #startTaskButton background.
+        start_button.setStyleSheet(
+            "font-size: 13px; font-weight: 600; background: #FFFFFF; color: #1F2328; "
+            "border: 2px solid #2E8B57; border-radius: 8px; padding: 6px 13px;"
+        )
         start_button.clicked.connect(self._start_task)
         button_row.addWidget(start_button)
         layout.addLayout(button_row)
