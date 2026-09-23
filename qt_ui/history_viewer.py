@@ -85,6 +85,10 @@ def format_session_html(session):
     if source_label:
         parts.append(f'<span style="color:#3f8f86;">{_esc(source_label)}</span><br>')
 
+    pomodoro_label = _format_pomodoro_label(session)
+    if pomodoro_label:
+        parts.append(f'<span style="color:#6C3FA8;">{_esc(pomodoro_label)}</span><br>')
+
     parts.append(f'<span style="color:#888888;">{"─" * len(header)}</span><br>')
 
     reason = session.get("reason")
@@ -149,6 +153,25 @@ def _format_source_label(session):
     if source == "calendar-event":
         return f"Calendar event: {event_title}" if event_title else None
     return None
+
+
+def _format_pomodoro_label(session):
+    """Pomodoro sessions (session_manager.start_pomodoro_session) run
+    multiple focus/break cycles but only ever produce one history entry, at
+    the end -- without this, that entry looked exactly like a plain session
+    someone happened to pause and resume a few times (the pause/resume
+    violationLog markers _advance_pomodoro_locked adds to keep break time
+    out of the worked-time tally). completedCycles is the pomodoro dict's
+    currentCycle at the moment it finished/was cut short, which is the last
+    fully-started cycle, not necessarily the last fully-finished one."""
+    pomodoro = session.get("pomodoro")
+    if not pomodoro:
+        return None
+    focus = pomodoro.get("focusMinutes")
+    brk = pomodoro.get("breakMinutes")
+    completed = pomodoro.get("currentCycle")
+    total = pomodoro.get("totalCycles")
+    return f"Pomodoro: {focus}+{brk} min, cycle {completed}/{total}"
 
 
 def _format_violation(entry):
