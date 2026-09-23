@@ -534,19 +534,27 @@ class _TaskCard(QFrame):
         # button's border color (e.g. a red task and burnoutButton's red
         # border), the button became nearly invisible instead of standing
         # out the way both buttons are meant to.
+        # Hover states are declared inline too (not left to styles.qss's
+        # #burnoutButton:hover/#pomodoroButton:hover), same reasoning as the
+        # comment above -- once a widget has its own stylesheet, don't rely
+        # on an outer one to merge in additional pseudo-states correctly.
         self._burnout_button = QPushButton("Until I burnout")
         self._burnout_button.setObjectName("burnoutButton")
         self._burnout_button.setStyleSheet(
-            "font-size: 13px; font-weight: 600; background: #FFFFFF; color: #1F2328; "
-            "border: 2px solid #A93226; border-radius: 8px; padding: 6px 14px;"
+            "QPushButton#burnoutButton { font-size: 13px; font-weight: 600; "
+            "background: #A93226; color: #FFFFFF; border: 2px solid #A93226; "
+            "border-radius: 8px; padding: 6px 14px; } "
+            "QPushButton#burnoutButton:hover { background: #8F2A20; }"
         )
         self._burnout_button.clicked.connect(self._start_burnout)
         duration_row.addWidget(self._burnout_button)
         self._pomodoro_button = QPushButton("Pomodoro")
         self._pomodoro_button.setObjectName("pomodoroButton")
         self._pomodoro_button.setStyleSheet(
-            "font-size: 13px; font-weight: 600; background: #FFFFFF; color: #1F2328; "
-            "border: 2px solid #6C3FA8; border-radius: 8px; padding: 6px 14px;"
+            "QPushButton#pomodoroButton { font-size: 13px; font-weight: 600; "
+            "background: #6C3FA8; color: #FFFFFF; border: 2px solid #6C3FA8; "
+            "border-radius: 8px; padding: 6px 14px; } "
+            "QPushButton#pomodoroButton:hover { background: #5A3389; }"
         )
         self._pomodoro_button.clicked.connect(self._start_pomodoro)
         duration_row.addWidget(self._pomodoro_button)
