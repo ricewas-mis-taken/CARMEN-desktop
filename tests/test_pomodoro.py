@@ -5,6 +5,7 @@ passed. Expiry is simulated by rewinding session_manager's own internal
 endTime rather than sleeping real minutes."""
 from datetime import datetime, timedelta
 
+import session_history
 import session_manager
 import tasks_store
 
@@ -81,6 +82,34 @@ def test_manual_end_mid_pomodoro_clears_pomodoro_state(isolate_state):
     status = session_manager.get_status()
     assert status["pomodoro"] is None
     assert not status["isBreak"]
+
+
+def test_history_entry_records_pomodoro_info(isolate_state):
+    """Without this, a Pomodoro's whole multi-cycle run collapses into one
+    history entry indistinguishable from a plain session that happened to
+    get paused/resumed a few times (see _advance_pomodoro_locked's
+    pause/resume violationLog markers)."""
+    session_manager.start_pomodoro_session(25, 5, 4, "soft", [], [])
+    session_manager.end_session(end_type="manual")
+
+    entries = session_history.load_all()
+    assert len(entries) == 1
+    assert entries[0]["pomodoro"] == {
+        "focusMinutes": 25,
+        "breakMinutes": 5,
+        "totalCycles": 4,
+        "currentCycle": 1,
+        "phase": "focus",
+    }
+
+
+def test_history_entry_has_no_pomodoro_for_plain_session(isolate_state):
+    session_manager.start_session(25, "soft", [], [])
+    session_manager.end_session(end_type="manual")
+
+    entries = session_history.load_all()
+    assert len(entries) == 1
+    assert entries[0]["pomodoro"] is None
 
 
 def test_worked_seconds_excludes_break_time(isolate_state):

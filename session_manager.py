@@ -538,6 +538,12 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
     event_title = _state["eventTitle"]
     review_problem_name = _state["reviewProblemName"]
     review_subject_name = _state["reviewSubjectName"]
+    # Snapshotted before the reset below clears _state["pomodoro"] to None --
+    # otherwise a Pomodoro's whole multi-cycle run (see start_pomodoro_session
+    # / _advance_pomodoro_locked) collapsed into one history entry
+    # indistinguishable from a plain session that happened to get paused and
+    # resumed a few times.
+    pomodoro = dict(_state["pomodoro"]) if _state["pomodoro"] is not None else None
 
     if was_active:
         session_history.append_entry(
@@ -563,6 +569,7 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
                 # way to tell which task/subject/problem it was.
                 "reviewProblemName": review_problem_name,
                 "reviewSubjectName": review_subject_name,
+                "pomodoro": pomodoro,
             }
         )
 
@@ -611,6 +618,7 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
         "source": source,
         "eventId": event_id,
         "eventTitle": event_title,
+        "pomodoro": pomodoro,
     }
 
 
