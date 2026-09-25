@@ -197,7 +197,7 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
     last_menu_state = None
     last_hard_redirect = {"process": None, "hwnd": None, "time": 0.0}
     last_violation_time = {}  # process_name -> time.time() of last logged violation
-    last_soft_warning_time = {}  # process_name -> time.time() of last soft-lock overlay shown
+    last_soft_warning = {}  # process_name -> {"hwnd": hwnd, "time": time.time()} of last soft-lock overlay shown
     last_sweep_notice = {}  # hwnd -> time.time() of last overlay shown for that window
 
     while not stop_event.is_set():
@@ -300,14 +300,25 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
                             # foreground app from spamming redirects/overlays.
                             last_flagged_process = None
                         else:
-                            last_soft_warning_time[process_name] = now
+                            last_soft_warning[process_name] = {"hwnd": hwnd, "time": now}
                             enforcer.soft_lock_warning(process_name, hwnd)
                     else:
                         lock_mode = session_manager.get_lock_mode()
                         if lock_mode != "hard":
                             now = time.time()
-                            if now - last_soft_warning_time.get(process_name, 0) >= SOFT_LOCK_REWARN_SECONDS:
-                                last_soft_warning_time[process_name] = now
+                            prev = last_soft_warning.get(process_name)
+                            # A different hwnd for the same process name means
+                            # the window was closed and reopened (or a second
+                            # window of the same app appeared) since the last
+                            # warning -- that's a fresh violation and deserves
+                            # an immediate warning, not a wait out
+                            # SOFT_LOCK_REWARN_SECONDS as if it were the same
+                            # window the user never left. Comparing process
+                            # name alone (the old behavior) couldn't tell
+                            # those two cases apart.
+                            is_new_window = prev is None or prev["hwnd"] != hwnd
+                            if is_new_window or (now - prev["time"]) >= SOFT_LOCK_REWARN_SECONDS:
+                                last_soft_warning[process_name] = {"hwnd": hwnd, "time": now}
                                 enforcer.soft_lock_warning(process_name, hwnd)
                 elif process_name:
                     session_manager.record_acceptable(process_name)

@@ -86,6 +86,42 @@ def test_soft_lock_rewarns_periodically_while_staying_on_the_same_app(isolate_st
     assert all(name == "discord.exe" for name in warning_calls)
 
 
+def test_soft_lock_rewarns_immediately_when_the_app_is_reopened(isolate_state, fast_polling, monkeypatch):
+    """Regression test: comparing only process_name couldn't tell "same
+    window, stayed foreground the whole time" apart from "closed and
+    reopened a new window of the same app" -- reopening within
+    SOFT_LOCK_REWARN_SECONDS of the last warning silently got no warning at
+    all until that cooldown ran out, even though it's a fresh violation. A
+    different hwnd for the same process name must warn immediately."""
+    monkeypatch.setattr(window_tracker, "SOFT_LOCK_REWARN_SECONDS", 1000)  # so only the hwnd change explains a 2nd call
+    session_manager.start_session(25, "soft", ["discord.exe"], [])
+
+    window_holder = {"hwnd": 111}
+    monkeypatch.setattr(
+        window_tracker, "get_active_window",
+        lambda: {"title": "Discord", "process_name": "discord.exe", "pid": 4242, "hwnd": window_holder["hwnd"]},
+    )
+
+    warning_calls = []
+    monkeypatch.setattr(enforcer, "soft_lock_warning", lambda name, hwnd: warning_calls.append((name, hwnd)))
+
+    stop_event = threading.Event()
+    thread = threading.Thread(target=window_tracker.run_polling_loop, args=(stop_event,), daemon=True)
+    thread.start()
+    try:
+        time.sleep(0.2)
+        assert len(warning_calls) == 1  # the first sighting, no rewarn cooldown elapsed yet
+
+        # Simulate closing and reopening the same app -- a brand new hwnd.
+        window_holder["hwnd"] = 222
+        time.sleep(0.2)
+    finally:
+        stop_event.set()
+        thread.join(timeout=2)
+
+    assert warning_calls == [("discord.exe", 111), ("discord.exe", 222)]
+
+
 def test_process_that_actually_leaves_still_gets_redirected_again(isolate_state, fast_polling, monkeypatch):
     """Sanity check the cooldown doesn't just permanently silence a process:
     once cooldown elapses, a still-offending (or newly-offending) process is
