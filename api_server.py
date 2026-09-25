@@ -7,6 +7,7 @@ Endpoints:
     POST /session/end
     POST /session/pause
     POST /session/resume
+    POST /session/update
     POST /violation
     POST /violation/resolved
     POST /screentime/domain
@@ -253,6 +254,37 @@ def session_resume():
     no active session, or a session that isn't paused, just returns the
     current status unchanged."""
     return jsonify(session_manager.resume_session())
+
+
+@app.route("/session/update", methods=["POST"])
+@_require_token
+def session_update():
+    """Edits the active session's process blocklist, domain whitelist, and/or
+    lock mode in place, without ending and restarting it -- session_start's
+    picks (and, previously, the lock mode) were otherwise fixed for the
+    session's whole duration; this is what qt_ui/focus_tab.py's "Edit rules"
+    button calls. Any field left out of the body keeps its current value, so
+    a caller that only wants to flip lock mode doesn't have to resend the
+    lists (and vice versa)."""
+    body = request.get_json(force=True, silent=True) or {}
+    status = session_manager.get_status()
+    if not status["isActive"]:
+        return jsonify({"error": "no active session"}), 400
+
+    process_blocklist = body.get("process_blocklist", status["processBlocklist"])
+    if not _is_string_list(process_blocklist):
+        return jsonify({"error": "process_blocklist must be a list of non-empty strings"}), 400
+
+    domain_whitelist = body.get("domain_whitelist", status["domainWhitelist"])
+    if not _is_string_list(domain_whitelist):
+        return jsonify({"error": "domain_whitelist must be a list of non-empty strings"}), 400
+
+    lock_mode = body.get("lock_mode")
+    if lock_mode is not None and lock_mode not in ("soft", "hard"):
+        return jsonify({"error": "lock_mode must be 'soft', 'hard', or omitted"}), 400
+
+    session_manager.update_blocklist(process_blocklist, domain_whitelist, lock_mode=lock_mode)
+    return jsonify(session_manager.get_status())
 
 
 @app.route("/violation", methods=["POST"])

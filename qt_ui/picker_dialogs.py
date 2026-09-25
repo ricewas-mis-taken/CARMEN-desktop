@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -52,6 +53,10 @@ def open_blocklist_picker():
 
 def open_timer_dialog():
     _track(_TimerDialog()).show()
+
+
+def open_edit_session_rules():
+    _track(_EditSessionRulesDialog()).show()
 
 
 class _Checklist:
@@ -460,3 +465,83 @@ class _TimerDialog(QWidget):
         }))
 
         self.close()
+
+
+class _EditSessionRulesDialog(QWidget):
+    """Lets an already-running session's process blocklist, domain
+    whitelist, and lock mode be edited in place, via
+    session_manager.update_blocklist() -- previously the only way to change
+    any of these was to end the session and start a new one, and lock mode
+    couldn't be changed mid-session at all, update_blocklist() itself having
+    no caller anywhere in the app. Reachable from FocusTab's "Edit Session
+    Rules" button, which only shows while a session is active."""
+
+    def __init__(self):
+        super().__init__(None, Qt.WindowStaysOnTopHint)
+        self.setObjectName("PopupBg")
+        self.setWindowTitle("Carmen Focus — Edit Session Rules")
+        self.resize(420, 460)
+
+        layout = QVBoxLayout(self)
+
+        status = session_manager.get_status()
+        if not status["isActive"]:
+            layout.addWidget(QLabel("No active session to edit."))
+            return
+
+        layout.addWidget(QLabel("Blocked apps (one per line or comma-separated)"))
+        self._process_edit = QTextEdit()
+        self._process_edit.setPlainText(", ".join(status["processBlocklist"]))
+        layout.addWidget(self._process_edit)
+
+        layout.addWidget(QLabel("Allowed domains (one per line or comma-separated)"))
+        self._domain_edit = QTextEdit()
+        self._domain_edit.setPlainText(", ".join(status["domainWhitelist"]))
+        layout.addWidget(self._domain_edit)
+
+        layout.addWidget(QLabel("Lock mode"))
+        mode_row = QHBoxLayout()
+        self._soft_radio = QRadioButton("Soft")
+        self._hard_radio = QRadioButton("Hard")
+        mode_group = QButtonGroup(self)
+        mode_group.addButton(self._soft_radio)
+        mode_group.addButton(self._hard_radio)
+        if status["lockMode"] == "hard":
+            self._hard_radio.setChecked(True)
+        else:
+            self._soft_radio.setChecked(True)
+        mode_row.addWidget(self._soft_radio)
+        mode_row.addWidget(self._hard_radio)
+        layout.addLayout(mode_row)
+
+        self._status_label = QLabel()
+        self._status_label.setStyleSheet("color: #c62828;")
+        layout.addWidget(self._status_label)
+
+        save_button = QPushButton("Save Changes")
+        save_button.clicked.connect(self._save)
+        layout.addWidget(save_button, alignment=Qt.AlignCenter)
+
+    @staticmethod
+    def _parse_list(text):
+        # Accepts either one entry per line or a comma-separated line (or a
+        # mix of both) -- splitting on commas first, then newlines within
+        # each piece, covers both without needing the user to pick one
+        # format.
+        entries = []
+        for line in text.replace(",", "\n").splitlines():
+            entry = line.strip()
+            if entry:
+                entries.append(entry)
+        return entries
+
+    def _save(self):
+        if not session_manager.get_status()["isActive"]:
+            self._status_label.setText("Session already ended — nothing to update.")
+            return
+        process_blocklist = self._parse_list(self._process_edit.toPlainText())
+        domain_whitelist = self._parse_list(self._domain_edit.toPlainText())
+        lock_mode = "hard" if self._hard_radio.isChecked() else "soft"
+        session_manager.update_blocklist(process_blocklist, domain_whitelist, lock_mode=lock_mode)
+        self._status_label.setStyleSheet("color: #2e7d32;")
+        self._status_label.setText("Session rules updated.")

@@ -463,14 +463,21 @@ def pop_pending_phase_change():
         return value
 
 
-def update_blocklist(process_blocklist, domain_whitelist):
-    """Replace the active session's block/allow lists in-place, effective
-    immediately."""
+def update_blocklist(process_blocklist, domain_whitelist, lock_mode=None):
+    """Replace the active session's block/allow lists (and, optionally, its
+    lock mode) in-place, effective immediately -- lets a running session's
+    rules be edited without ending and restarting it. lock_mode=None leaves
+    the current mode untouched, so callers that only want to change the
+    lists don't have to know/re-send it."""
+    if lock_mode is not None and lock_mode not in ("soft", "hard"):
+        raise ValueError(f"lock_mode must be 'soft', 'hard', or None, got {lock_mode!r}")
     with _lock:
         if not _state["isActive"]:
             return
         _state["processBlocklist"] = list(process_blocklist)
         _state["domainWhitelist"] = list(domain_whitelist)
+        if lock_mode is not None:
+            _state["lockMode"] = lock_mode
         _save()
 
 
