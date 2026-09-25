@@ -28,6 +28,19 @@ def clear_hidden_hwnds():
     enforcer._hidden_hwnds.clear()
 
 
+@pytest.fixture(autouse=True)
+def clear_last_violation_notice():
+    """enforcer._last_violation_notice is a module-level dict deduping
+    repeated violation-notice overlays by process name and real wall-clock
+    time (see _show_violation_notice) -- without resetting it, one test's
+    "discord.exe" notice can still be inside the other's cooldown window if
+    the whole suite runs fast enough, silently suppressing the very overlay
+    call the next test is asserting on."""
+    enforcer._last_violation_notice.clear()
+    yield
+    enforcer._last_violation_notice.clear()
+
+
 class _FakeProcess:
     def __init__(self, name):
         self._name = name
@@ -336,7 +349,77 @@ def test_show_blocked_notice_has_no_blackout(isolate_state, monkeypatch):
 
     enforcer.show_blocked_notice("discord.exe")
 
-    assert calls == [{"duration_ms": 5000, "offending_process_name": "discord.exe"}]
+    assert calls == [{"duration_ms": 3000, "offending_process_name": "discord.exe"}]
+
+
+def test_violation_notice_names_the_app_violation_number_and_a_motivation(isolate_state, monkeypatch):
+    session_manager.start_session(25, "hard", ["discord.exe"], [])
+    session_manager.record_violation("discord.exe")
+    session_manager.record_violation("discord.exe")
+    calls = []
+    monkeypatch.setattr(enforcer, "_show_lock_overlay", lambda message, **kw: calls.append(message))
+
+    enforcer.show_blocked_notice("discord.exe")
+
+    message = calls[0]
+    assert "discord.exe" in message
+    assert "violation #2" in message
+    # A motivational line follows the title on its own line -- not asserting
+    # which one (it's chosen at random from _VIOLATION_MOTIVATIONS), just
+    # that something non-empty is actually there.
+    assert len(message.splitlines()) >= 2
+    assert message.splitlines()[1].strip()
+
+
+def test_violation_notice_is_deduped_across_hard_redirect_and_sweep_notice(isolate_state, monkeypatch):
+    """Regression test: an app with several top-level windows (a floating
+    call overlay, a notification popup, an updater dialog) used to trigger
+    one overlay per window -- hard_lock_redirect's own notice for whichever
+    window was in the foreground, plus a separate show_blocked_notice for
+    every other window of the same process caught by the background sweep --
+    stacking multiple popups (cascaded to different corners, racing each
+    other's focus-stealing ticks) for what the user experienced as a single
+    violation."""
+    session_manager.start_session(25, "hard", ["discord.exe"], [])
+    calls = []
+    monkeypatch.setattr(enforcer, "_show_lock_overlay", lambda *a, **kw: calls.append(kw))
+    monkeypatch.setattr(enforcer.win32gui, "GetForegroundWindow", lambda: 555)
+    monkeypatch.setattr(enforcer.win32process, "GetWindowThreadProcessId", lambda h: (0, 4242))
+    monkeypatch.setattr(enforcer.psutil, "Process", lambda p: _FakeProcess("discord.exe"))
+    monkeypatch.setattr(enforcer.win32gui, "ShowWindow", lambda h, cmd: None)
+    monkeypatch.setattr(enforcer.win32gui, "SetForegroundWindow", lambda h: None)
+    monkeypatch.setattr(enforcer, "_find_window_by_process_name", lambda name: None)
+    monkeypatch.setattr(enforcer, "_hide_taskbar_preview", lambda hwnd, disallow: None)
+
+    enforcer.hard_lock_redirect(offending_process_name="discord.exe")
+    # Two more top-level windows of the same process, caught moments later by
+    # sweep_minimize_blocked_windows in the same or the very next poll tick.
+    enforcer.show_blocked_notice("discord.exe")
+    enforcer.show_blocked_notice("discord.exe")
+
+    assert len(calls) == 1
+
+    # A different process is never suppressed by another process's cooldown.
+    enforcer.show_blocked_notice("roblox.exe")
+    assert len(calls) == 2
+
+
+def test_violation_notice_fires_again_once_its_own_cooldown_elapses(isolate_state, monkeypatch):
+    calls = []
+    monkeypatch.setattr(enforcer, "_show_lock_overlay", lambda *a, **kw: calls.append(kw))
+    session_manager.start_session(25, "hard", ["discord.exe"], [])
+
+    fake_now = [1000.0]
+    monkeypatch.setattr(enforcer.time, "time", lambda: fake_now[0])
+
+    enforcer.show_blocked_notice("discord.exe")
+    fake_now[0] += 1
+    enforcer.show_blocked_notice("discord.exe")
+    assert len(calls) == 1, "still within the cooldown, must not stack a second popup"
+
+    fake_now[0] += enforcer._VIOLATION_NOTICE_COOLDOWN_SECONDS
+    enforcer.show_blocked_notice("discord.exe")
+    assert len(calls) == 2, "cooldown elapsed -- a genuinely new violation must still get its own notice"
 
 
 def test_window_rect_returns_left_top_width_height(monkeypatch):

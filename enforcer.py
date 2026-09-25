@@ -26,6 +26,7 @@ else:
     import ctypes
     import json
     import os
+    import random
     import threading
     import time
     from ctypes import wintypes
@@ -363,6 +364,60 @@ else:
         )
 
 
+    # Shown once per violation, whichever path caught it -- hard_lock_redirect
+    # (the window was in the foreground) or show_blocked_notice
+    # (sweep_minimize_blocked_windows caught it open in the background, or a
+    # second/third top-level window of the same already-notified process).
+    # Keyed on process name and shared across both call sites so a single
+    # switch to a blocked app never produces more than one popup: without
+    # this, an app with several top-level windows (a floating call overlay,
+    # a notification window, an updater dialog) triggered one overlay per
+    # window -- three separate popups for what the user experienced as one
+    # violation, each cascaded to a different corner and racing each other's
+    # raise_()/activateWindow() ticks, which is what read as "flashing".
+    _last_violation_notice = {}
+    _VIOLATION_NOTICE_COOLDOWN_SECONDS = 3
+
+    _VIOLATION_MOTIVATIONS = (
+        "Stay focused — you've got this.",
+        "Back on track. Keep going.",
+        "One distraction closer to done.",
+        "Eyes on the prize.",
+        "You know what you're here to do.",
+        "Small steps still count. Keep moving.",
+    )
+
+    def _show_violation_notice(process_name):
+        """The single notice shown for a blocklisted app getting minimized --
+        which app, which violation number this session, a quick motivational
+        line, and (via _LockOverlay's own ticking time label) the session's
+        remaining time. Always 3 seconds with the progress bar draining over
+        that span, and deduped per process so multiple windows/call sites for
+        the same violation never stack more than one popup."""
+        now = time.time()
+        key = process_name or "__unknown__"
+        if now - _last_violation_notice.get(key, 0) < _VIOLATION_NOTICE_COOLDOWN_SECONDS:
+            return
+        _last_violation_notice[key] = now
+
+        status = session_manager.get_status()
+        if status.get("source") == "review":
+            message = f"Finish {status.get('reviewProblemName') or 'this review'} first"
+        else:
+            label = process_name or "That app"
+            title = f"{label} blocked — violation #{status['violationCount']}"
+            message = f"{title}\n{random.choice(_VIOLATION_MOTIVATIONS)}"
+        _show_lock_overlay(
+            message,
+            duration_ms=3000,
+            offending_process_name=process_name,
+            # No blackout -- hard lock already minimizes the offending window
+            # and (via _hide_taskbar_preview) hides its taskbar hover preview;
+            # a screen-covering overlay on top of a plain redirect/minimize is
+            # the taskbar-hover-cheese's fix, not something this needs too.
+        )
+
+
     def hard_lock_redirect(offending_process_name=None):
         """Minimizes the offending foreground window (unless it's exempt/our own
         process), then brings the last acceptable (non-blocklisted) app's window
@@ -428,23 +483,7 @@ else:
             except Exception:
                 pass
 
-        label = offending_process_name or hwnd_process or "that app"
-        status = session_manager.get_status()
-        if status.get("source") == "review":
-            message = f"Finish {status.get('reviewProblemName') or 'this review'} first"
-        else:
-            back_to = last_acceptable or "your focus app"
-            message = f"Redirected from {label} — back to {back_to}."
-        _show_lock_overlay(
-            message,
-            duration_ms=3000,
-            offending_process_name=label if label != "that app" else None,
-            # No blackout -- hard lock already minimizes the offending window
-            # and (via _hide_taskbar_preview) hides its taskbar hover preview;
-            # a screen-covering overlay on top of a plain redirect is the
-            # taskbar-hover-cheese's fix, not something a normal click into the
-            # window needs too.
-        )
+        _show_violation_notice(offending_process_name or hwnd_process)
 
 
     def sweep_minimize_blocked_windows():
@@ -531,13 +570,10 @@ else:
         window and redirects focus away from it. A sweep-caught window usually
         isn't the foreground window (that's exactly why the foreground check
         missed it), so redirecting focus here would yank it away from whatever
-        the user is legitimately doing instead."""
-        status = session_manager.get_status()
-        if status.get("source") == "review":
-            message = f"Finish {status.get('reviewProblemName') or 'this review'} first"
-        else:
-            message = f"{process_name} is blocked and was minimized."
-        _show_lock_overlay(message, duration_ms=5000, offending_process_name=process_name)
+        the user is legitimately doing instead. Routed through the same
+        _show_violation_notice() as hard_lock_redirect -- see its dedup
+        comment for why this must never build its own separate overlay."""
+        _show_violation_notice(process_name)
 
 
     def restore_window_for_process(process_name):
