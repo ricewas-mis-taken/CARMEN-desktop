@@ -1,6 +1,7 @@
 """Tests for enforcer.py's sweep_minimize_blocked_windows() -- the
 hard-lock pass that minimizes every visible blocklisted window each poll
 tick, independent of which window happens to be in the foreground."""
+import ctypes
 import sys
 
 import pytest
@@ -246,6 +247,31 @@ def test_dwm_peek_attribute_constants_are_the_real_values():
     actually stop the taskbar hover-peek cheese."""
     assert enforcer._DWMWA_DISALLOW_PEEK == 11
     assert enforcer._DWMWA_FORCE_ICONIC_REPRESENTATION == 7
+
+
+def test_window_rect_uses_dwm_extended_frame_bounds(monkeypatch):
+    """Regression test: GetWindowRect includes several pixels of invisible
+    resize-border padding DWM adds around a window's real visible frame, so
+    a soft-lock blackout sized from it covers a rect larger than, and offset
+    from, what's actually on screen -- an edge or corner of the real window
+    peeks out from under it. DWMWA_EXTENDED_FRAME_BOUNDS gives the bounds DWM
+    actually composites, matching what's really drawn."""
+    def fake_dwm_get(hwnd, attribute, rect_ptr, size):
+        assert attribute == enforcer._DWMWA_EXTENDED_FRAME_BOUNDS
+        rect = ctypes.cast(rect_ptr, ctypes.POINTER(enforcer.wintypes.RECT)).contents
+        rect.left, rect.top, rect.right, rect.bottom = 50, 60, 250, 360
+        return 0
+
+    monkeypatch.setattr(enforcer.ctypes.windll.dwmapi, "DwmGetWindowAttribute", fake_dwm_get)
+    assert enforcer._window_rect(999) == (50, 60, 200, 300)
+
+
+def test_window_rect_falls_back_to_getwindowrect_when_dwm_fails(monkeypatch):
+    monkeypatch.setattr(
+        enforcer.ctypes.windll.dwmapi, "DwmGetWindowAttribute", lambda hwnd, attribute, rect_ptr, size: 0x80070057
+    )
+    monkeypatch.setattr(enforcer.win32gui, "GetWindowRect", lambda h: (10, 20, 210, 320))
+    assert enforcer._window_rect(999) == (10, 20, 200, 300)
 
 
 def test_soft_lock_warning_covers_just_the_offending_window(isolate_state, monkeypatch):

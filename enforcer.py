@@ -585,18 +585,43 @@ else:
         return found["hwnd"]
 
 
+    # DWM window attribute (dwmapi.h), same undocumented-in-win32con family as
+    # the taskbar-preview attributes above. GetWindowRect includes the several
+    # pixels of invisible resize-border padding DWM adds around a window's
+    # actual visible frame (a bigger gap than it sounds -- observed well over
+    # 10px on some apps) -- exactly what made soft lock's blackout overlay
+    # look "off": it covered a rect a bit larger than, and offset from, what's
+    # actually drawn on screen, so an edge or corner of the real window peeked
+    # out from under it. DWMWA_EXTENDED_FRAME_BOUNDS asks DWM for the bounds
+    # it actually composites on screen instead -- the same rect Alt+Tab/
+    # taskbar-peek thumbnails use -- so the blackout matches what the user
+    # actually sees, not the padded hit-test rect.
+    _DWMWA_EXTENDED_FRAME_BOUNDS = 9
+
     def _window_rect(hwnd):
         """(left, top, width, height) for hwnd, or None if it's gone/invalid by
         the time this runs -- soft_lock_warning's own hwnd->rect lookup, kept
         here (not in qt_ui/enforcer_overlay.py) since that module has no win32
         dependency of its own."""
+        rect = wintypes.RECT()
         try:
-            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
-            if right <= left or bottom <= top:
-                return None
-            return (left, top, right - left, bottom - top)
+            hresult = ctypes.windll.dwmapi.DwmGetWindowAttribute(
+                hwnd,
+                _DWMWA_EXTENDED_FRAME_BOUNDS,
+                ctypes.byref(rect),
+                ctypes.sizeof(rect),
+            )
+            if hresult != 0:
+                raise OSError(f"DwmGetWindowAttribute failed: {hresult:#x}")
+            left, top, right, bottom = rect.left, rect.top, rect.right, rect.bottom
         except Exception:
+            try:
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            except Exception:
+                return None
+        if right <= left or bottom <= top:
             return None
+        return (left, top, right - left, bottom - top)
 
 
     def _show_lock_overlay(
