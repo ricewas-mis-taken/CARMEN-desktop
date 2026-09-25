@@ -17,9 +17,11 @@ lift()/focus_force() loop.
 import time
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -28,6 +30,47 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+# _LockOverlay's own dark card styling -- deliberately not styles.qss (see
+# that file's #PopupBg comment: this overlay intentionally keeps its own look
+# regardless of the app's light theme, since it has to stay legible floating
+# over an arbitrary, unpredictable app underneath it). Frameless + translucent
+# background is what lets the QSS border-radius below actually round the
+# window's real corners instead of being clipped square by the OS.
+_OVERLAY_STYLESHEET = """
+    QWidget#LockOverlayCard {
+        background: #23262E;
+        border-radius: 14px;
+    }
+    QLabel#LockOverlayMessage {
+        color: #F2F3F5;
+        font-size: 14px;
+    }
+    QLabel#LockOverlayTime {
+        color: #9AA1AC;
+        font-size: 11px;
+    }
+    QProgressBar {
+        background: #33373F;
+        border: none;
+        border-radius: 3px;
+    }
+    QProgressBar::chunk {
+        background: #5B8DEF;
+        border-radius: 3px;
+    }
+    QPushButton {
+        background: #33373F;
+        color: #F2F3F5;
+        border: none;
+        border-radius: 8px;
+        padding: 6px 16px;
+        font-weight: 600;
+    }
+    QPushButton:hover {
+        background: #3F444D;
+    }
+"""
 
 import session_manager
 
@@ -174,6 +217,21 @@ class _LockOverlay(QWidget):
             None,
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool,
         )
+        # Lets the QSS border-radius below actually round the window's real
+        # corners (a plain top-level widget has an opaque rectangular
+        # backing surface regardless of QSS) rather than clipping them square.
+        # A plain QWidget (unlike QFrame) doesn't paint its own QSS
+        # background/border unless this is set -- without it the
+        # #LockOverlayCard rule below would be silently ignored and the
+        # window would render as whatever's behind it (just floating text).
+        # WA_TranslucentBackground (for true rounded corners on a top-level
+        # window) was tried and dropped -- confirmed via an isolated repro
+        # that it renders the whole window fully blank on this Qt/Windows
+        # combo, worse than the plain square corners this falls back to.
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setObjectName("LockOverlayCard")
+        self.setStyleSheet(_OVERLAY_STYLESHEET)
+
         self._closed = False
         self._duration_ms = duration_ms
         self._start_time = time.time()
@@ -190,15 +248,24 @@ class _LockOverlay(QWidget):
         self.resize(width, height)
         self._position_window(width, height)
 
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(32)
+        shadow.setOffset(0, 6)
+        shadow.setColor(QColor(0, 0, 0, 140))
+        self.setGraphicsEffect(shadow)
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 16)
+        layout.setContentsMargins(22, 20, 22, 18)
+        layout.setSpacing(10)
 
         message_label = QLabel(message)
+        message_label.setObjectName("LockOverlayMessage")
         message_label.setWordWrap(True)
         message_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(message_label)
 
         self._time_label = QLabel()
+        self._time_label.setObjectName("LockOverlayTime")
         self._time_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._time_label)
 
@@ -206,7 +273,7 @@ class _LockOverlay(QWidget):
         self._progress.setRange(0, 1000)
         self._progress.setValue(0)
         self._progress.setTextVisible(False)
-        self._progress.setFixedHeight(8)
+        self._progress.setFixedHeight(6)
         layout.addWidget(self._progress)
 
         if offending_process_name:
