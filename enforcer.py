@@ -346,11 +346,20 @@ else:
         # fallback -- see hard_lock_redirect for the "no blackout at all" case
         # this deliberately isn't.
         blackout_rect = _window_rect(hwnd) if hwnd else None
+        # A single GetWindowRect snapshot goes stale the moment the user
+        # drags or resizes the offending window during the overlay's 5s+
+        # lifetime -- the blackout then sits over wherever the window *was*,
+        # not where it actually is, looking like a small, misplaced black
+        # box instead of covering the app. Handing down a live re-query
+        # callback (instead of just the one-time rect) lets the overlay keep
+        # tracking the real window for as long as it's shown.
+        blackout_rect_provider = (lambda: _window_rect(hwnd)) if hwnd else None
         _show_lock_overlay(
             message,
             duration_ms=5000,
             offending_process_name=offending_process_name,
             blackout_rect=blackout_rect,
+            blackout_rect_provider=blackout_rect_provider,
         )
 
 
@@ -590,7 +599,9 @@ else:
             return None
 
 
-    def _show_lock_overlay(message, duration_ms, offending_process_name=None, blackout_rect=None):
+    def _show_lock_overlay(
+        message, duration_ms, offending_process_name=None, blackout_rect=None, blackout_rect_provider=None
+    ):
         """Shows a small always-on-top, borderless popup for duration_ms while a
         progress bar fills, then closes automatically. It repeatedly raises and
         refocuses itself so it's hard to ignore, but deliberately does not take
@@ -625,7 +636,11 @@ else:
         """
         qt_gui_thread.run_on_gui_thread(
             lambda: enforcer_overlay.build_overlay(
-                message, duration_ms, offending_process_name, blackout_rect=blackout_rect
+                message,
+                duration_ms,
+                offending_process_name,
+                blackout_rect=blackout_rect,
+                blackout_rect_provider=blackout_rect_provider,
             )
         )
 

@@ -151,6 +151,50 @@ def test_closing_overlay_also_closes_its_blackout_window(qtbot, isolate_state):
     assert blackout_win._closed is True
 
 
+def test_blackout_tracks_a_moved_window_via_rect_provider(qtbot, isolate_state):
+    """Regression test: the blackout used to be sized/positioned once from a
+    single GetWindowRect call and never touched again for the rest of its
+    5s+ lifetime -- dragging or resizing the real offending window during
+    that window left the blackout covering the window's old location
+    instead, looking like a small black box that doesn't cover the app."""
+    rect_holder = {"rect": (10, 100, 200, 300)}
+    win = enforcer_overlay.build_overlay(
+        "test message",
+        duration_ms=5000,
+        blackout_rect=rect_holder["rect"],
+        blackout_rect_provider=lambda: rect_holder["rect"],
+    )
+    qtbot.addWidget(win)
+
+    geo = win._blackout_win.geometry()
+    assert (geo.x(), geo.y(), geo.width(), geo.height()) == (10, 100, 200, 300)
+
+    # Simulate the window having been dragged elsewhere.
+    rect_holder["rect"] = (400, 250, 150, 150)
+    win._blackout_win._track()
+    geo = win._blackout_win.geometry()
+    assert (geo.x(), geo.y(), geo.width(), geo.height()) == (400, 250, 150, 150)
+
+    win.close()
+
+
+def test_blackout_closes_when_tracked_window_disappears(qtbot, isolate_state):
+    rect_holder = {"rect": (10, 100, 200, 300)}
+    win = enforcer_overlay.build_overlay(
+        "test message",
+        duration_ms=5000,
+        blackout_rect=rect_holder["rect"],
+        blackout_rect_provider=lambda: rect_holder["rect"],
+    )
+    qtbot.addWidget(win)
+
+    rect_holder["rect"] = None
+    win._blackout_win._track()
+    assert win._blackout_win._closed is True
+
+    win.close()
+
+
 def test_unblock_reason_dialog_requires_reason(qtbot, isolate_state):
     win = enforcer_overlay.build_unblock_reason_dialog("app.exe")
     qtbot.addWidget(win)

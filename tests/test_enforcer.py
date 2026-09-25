@@ -256,10 +256,16 @@ def test_soft_lock_warning_covers_just_the_offending_window(isolate_state, monke
 
     enforcer.soft_lock_warning(offending_process_name="discord.exe", hwnd=555)
 
-    assert calls == [{
+    assert len(calls) == 1
+    provider = calls[0].pop("blackout_rect_provider")
+    assert calls[0] == {
         "duration_ms": 5000, "offending_process_name": "discord.exe",
         "blackout_rect": (10, 20, 200, 300),
-    }]
+    }
+    # The provider re-queries GetWindowRect live rather than reusing the
+    # snapshot taken above -- confirms it's wired to the same hwnd, not just
+    # echoing the already-captured rect.
+    assert provider() == (10, 20, 200, 300)
 
 
 def test_soft_lock_warning_without_hwnd_has_no_blackout(isolate_state, monkeypatch):
@@ -270,6 +276,7 @@ def test_soft_lock_warning_without_hwnd_has_no_blackout(isolate_state, monkeypat
     enforcer.soft_lock_warning(offending_process_name="discord.exe")
 
     assert calls[0]["blackout_rect"] is None
+    assert calls[0]["blackout_rect_provider"] is None
 
 
 def test_hard_lock_redirect_has_no_blackout(isolate_state, monkeypatch):

@@ -48,8 +48,16 @@ _CASCADE_OFFSET_PX = 46
 _CASCADE_MAX_STEPS = 6
 
 
-def build_overlay(message, duration_ms, offending_process_name=None, blackout_rect=None):
-    win = _LockOverlay(message, duration_ms, offending_process_name, blackout_rect=blackout_rect)
+def build_overlay(
+    message, duration_ms, offending_process_name=None, blackout_rect=None, blackout_rect_provider=None
+):
+    win = _LockOverlay(
+        message,
+        duration_ms,
+        offending_process_name,
+        blackout_rect=blackout_rect,
+        blackout_rect_provider=blackout_rect_provider,
+    )
     _open_windows.add(win)
     win.destroyed.connect(lambda: _open_windows.discard(win))
     win.show()
@@ -79,27 +87,61 @@ class _BlackoutOverlay(QWidget):
     minimized in the background while the user is on a different, allowed
     app; covering anything there would hide unrelated, legitimate work)."""
 
-    def __init__(self, duration_ms, rect):
+    def __init__(self, duration_ms, rect, rect_provider=None):
         super().__init__(
             None,
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool,
         )
         self._closed = False
+        self._rect_provider = rect_provider
         self.setStyleSheet("background-color: black;")
         left, top, width, height = rect
         self.setGeometry(left, top, width, height)
 
         QTimer.singleShot(duration_ms + 1000, self.close)
 
+        if rect_provider is not None:
+            # Re-queries the offending window's live rect rather than trusting
+            # the one captured at construction time -- without this, dragging
+            # or resizing that window during the overlay's lifetime leaves the
+            # blackout sitting over the window's old position/size, looking
+            # like a small black box that doesn't cover the app at all.
+            self._track_timer = QTimer(self)
+            self._track_timer.timeout.connect(self._track)
+            self._track_timer.start(150)
+
+    def _track(self):
+        if self._closed:
+            return
+        rect = self._rect_provider()
+        if rect is None:
+            # The window closed/minimized mid-overlay -- nothing left to
+            # cover, so get out of the way instead of leaving a stray black
+            # box floating over whatever's now underneath it.
+            self.close()
+            return
+        left, top, width, height = rect
+        if (left, top, width, height) != (self.x(), self.y(), self.width(), self.height()):
+            self.setGeometry(left, top, width, height)
+
     def close(self):
         if self._closed:
             return True
         self._closed = True
+        if self._rect_provider is not None:
+            self._track_timer.stop()
         return super().close()
 
 
 class _LockOverlay(QWidget):
-    def __init__(self, message, duration_ms, offending_process_name=None, blackout_rect=None):
+    def __init__(
+        self,
+        message,
+        duration_ms,
+        offending_process_name=None,
+        blackout_rect=None,
+        blackout_rect_provider=None,
+    ):
         super().__init__(
             None,
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool,
@@ -109,7 +151,7 @@ class _LockOverlay(QWidget):
         self._start_time = time.time()
         self._blackout_win = None
         if blackout_rect is not None:
-            self._blackout_win = _BlackoutOverlay(duration_ms, blackout_rect)
+            self._blackout_win = _BlackoutOverlay(duration_ms, blackout_rect, rect_provider=blackout_rect_provider)
             _open_windows.add(self._blackout_win)
             self._blackout_win.destroyed.connect(lambda: _open_windows.discard(self._blackout_win))
             self._blackout_win.show()
