@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 import config
 import installed_apps
+import session_manager
 import tasks_store
 import qt_ui.checklist as checklist
 
@@ -266,6 +267,22 @@ class _TaskEditor(QWidget):
         except tasks_store.DuplicateColorError as e:
             self._status_label.setText(str(e))
             return
+
+        # Saving here always updates the task's own stored template (used
+        # for every future start of this task) -- but if this exact task is
+        # what's actively running right now (qt_ui/tasks_tab.py starts
+        # sessions with source="task" and event_id=<task id>), the change
+        # should also take effect immediately on that live session, not just
+        # the next time it's started. Mirrors qt_ui/picker_dialogs.py's
+        # "Edit Session Rules" dialog's own update_blocklist() call, except
+        # that one only ever touches the live session, never anything
+        # persistent -- this one does both at once.
+        if self._task:
+            status = session_manager.get_status()
+            if status["isActive"] and status.get("source") == "task" and status.get("eventId") == self._task["id"]:
+                session_manager.update_blocklist(
+                    data["processBlocklist"], data["domainWhitelist"], lock_mode=data["lockMode"],
+                )
 
         self.close()
         if self._on_saved is not None:

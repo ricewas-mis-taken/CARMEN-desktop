@@ -13,3 +13,7 @@ def open_blocklist_picker():
 
 def open_timer_dialog():
     qt_gui_thread.run_on_gui_thread(picker_dialogs.open_timer_dialog)
+
+
+def open_edit_session_rules():
+    qt_gui_thread.run_on_gui_thread(picker_dialogs.open_edit_session_rules)
