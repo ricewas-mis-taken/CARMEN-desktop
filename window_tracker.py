@@ -156,6 +156,16 @@ else:
         return sorted(merged.values(), key=lambda p: (not p["is_running"], p["label"]))
 
 
+# Soft lock's overlay used to only ever fire once per continuous stretch of
+# focus on a blocked app (gated by the same process_name != last_flagged_process
+# check that also dedupes violation logging) -- staying on the same blocked
+# app for the rest of the session after that one warning never nagged again.
+# This is a separate cooldown so the overlay periodically re-appears while
+# the user stays off-task, independent of how record_violation's own dedupe
+# behaves.
+SOFT_LOCK_REWARN_SECONDS = 20
+
+
 def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_change=None):
     """Runs until stop_event is set. Intended to be launched in its own thread.
 
@@ -187,6 +197,7 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
     last_menu_state = None
     last_hard_redirect = {"process": None, "hwnd": None, "time": 0.0}
     last_violation_time = {}  # process_name -> time.time() of last logged violation
+    last_soft_warning = {}  # process_name -> {"hwnd": hwnd, "time": time.time()} of last soft-lock overlay shown
     last_sweep_notice = {}  # hwnd -> time.time() of last overlay shown for that window
 
     while not stop_event.is_set():
@@ -246,48 +257,74 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
                     # violations — don't touch dedupe state either way.
                     pass
                 elif process_name and enforcer.is_blocked_window(process_name, hwnd):
-                    if process_name != last_flagged_process:
+                    is_new_flag = process_name != last_flagged_process
+                    if is_new_flag:
                         last_flagged_process = process_name
                         now = time.time()
                         if now - last_violation_time.get(process_name, 0) >= VIOLATION_COOLDOWN_SECONDS:
                             last_violation_time[process_name] = now
                             session_manager.record_violation(process_name)
-                        lock_mode = session_manager.get_lock_mode()
-                        if lock_mode == "hard":
-                            now = time.time()
-                            # Keyed on hwnd, not just process name -- a
-                            # process name match alone can't tell "this exact
-                            # window never actually left the foreground"
-                            # (the Discord-popup case this cooldown exists
-                            # for) apart from "the user closed it and
-                            # reopened a brand new window of the same app"
-                            # (a fresh violation that deserves an immediate
-                            # redirect, not a wait for the old window's
-                            # cooldown to expire).
-                            recently_redirected = (
-                                last_hard_redirect["process"] == process_name
-                                and last_hard_redirect["hwnd"] == hwnd
-                                and (now - last_hard_redirect["time"]) < HARD_REDIRECT_COOLDOWN_SECONDS
-                            )
-                            if not recently_redirected:
-                                enforcer.hard_lock_redirect(process_name)
-                                last_hard_redirect["process"] = process_name
-                                last_hard_redirect["hwnd"] = hwnd
-                                last_hard_redirect["time"] = now
-                            # hard_lock_redirect() forces focus back to the
-                            # last acceptable (non-blocklisted) app right
-                            # here, so the dedupe check above must not keep
-                            # treating this process as "already handled" — if
-                            # the user alt-tabs straight back to it before the
-                            # next tick observes an acceptable app (which is
-                            # what normally resets this via
-                            # record_acceptable), the reopened app would
-                            # otherwise compare equal and get skipped,
-                            # silently defeating hard lock. The cooldown above
-                            # (not this reset) is what stops a stuck-in-
-                            # foreground app from spamming redirects/overlays.
-                            last_flagged_process = None
-                        else:
+
+                    # lock_mode is re-read fresh on every tick, unconditionally
+                    # -- not just when is_new_flag is True -- so a mid-session
+                    # mode change (qt_ui/picker_dialogs.py's Edit Session
+                    # Rules) takes effect on the very next tick even while
+                    # continuously sitting on the same already-flagged window.
+                    # An earlier version only ever dispatched to
+                    # hard_lock_redirect/soft_lock_warning inside the
+                    # is_new_flag branch -- switching soft -> hard mid-
+                    # violation without ever leaving the blocked window meant
+                    # is_new_flag stayed False forever (nothing else was ever
+                    # seen as foreground to reset it), so hard lock's redirect
+                    # was simply never reached at all: the session's saved
+                    # lockMode said "hard" but enforcement kept behaving like
+                    # soft indefinitely.
+                    lock_mode = session_manager.get_lock_mode()
+                    now = time.time()
+                    if lock_mode == "hard":
+                        # Keyed on hwnd, not just process name -- a process
+                        # name match alone can't tell "this exact window never
+                        # actually left the foreground" (the Discord-popup
+                        # case this cooldown exists for) apart from "the user
+                        # closed it and reopened a brand new window of the
+                        # same app" (a fresh violation that deserves an
+                        # immediate redirect, not a wait for the old window's
+                        # cooldown to expire).
+                        recently_redirected = (
+                            last_hard_redirect["process"] == process_name
+                            and last_hard_redirect["hwnd"] == hwnd
+                            and (now - last_hard_redirect["time"]) < HARD_REDIRECT_COOLDOWN_SECONDS
+                        )
+                        if not recently_redirected:
+                            enforcer.hard_lock_redirect(process_name)
+                            last_hard_redirect["process"] = process_name
+                            last_hard_redirect["hwnd"] = hwnd
+                            last_hard_redirect["time"] = now
+                        # hard_lock_redirect() forces focus back to the last
+                        # acceptable (non-blocklisted) app right here, so the
+                        # dedupe check above must not keep treating this
+                        # process as "already handled" — if the user alt-tabs
+                        # straight back to it before the next tick observes an
+                        # acceptable app (which is what normally resets this
+                        # via record_acceptable), the reopened app would
+                        # otherwise compare equal and get skipped, silently
+                        # defeating hard lock. The cooldown above (not this
+                        # reset) is what stops a stuck-in-foreground app from
+                        # spamming redirects/overlays.
+                        last_flagged_process = None
+                    else:
+                        prev = last_soft_warning.get(process_name)
+                        # A different hwnd for the same process name means the
+                        # window was closed and reopened (or a second window
+                        # of the same app appeared) since the last warning --
+                        # that's a fresh violation and deserves an immediate
+                        # warning, not a wait out SOFT_LOCK_REWARN_SECONDS as
+                        # if it were the same window the user never left.
+                        # Comparing process name alone (the old behavior)
+                        # couldn't tell those two cases apart.
+                        is_new_window = prev is None or prev["hwnd"] != hwnd
+                        if is_new_window or (now - prev["time"]) >= SOFT_LOCK_REWARN_SECONDS:
+                            last_soft_warning[process_name] = {"hwnd": hwnd, "time": now}
                             enforcer.soft_lock_warning(process_name, hwnd)
                 elif process_name:
                     session_manager.record_acceptable(process_name)

@@ -48,6 +48,16 @@ class FocusTab(QWidget):
         blocklist_button.clicked.connect(picker_gui.open_blocklist_picker)
         button_row.addWidget(blocklist_button)
 
+        # Only useful once a session is actually running -- _refresh_status
+        # toggles its visibility the same way it does for pause/nuclear-end.
+        # Lets processBlocklist/domainWhitelist/lockMode be changed without
+        # ending and restarting the session (session_manager.update_blocklist,
+        # previously dead code with no caller anywhere in the app).
+        self._edit_rules_button = QPushButton("Edit Session Rules")
+        self._edit_rules_button.setProperty("class", "SecondaryButton")
+        self._edit_rules_button.clicked.connect(picker_gui.open_edit_session_rules)
+        button_row.addWidget(self._edit_rules_button)
+
         # Pause/Resume and Nuclear End only make sense while a session is
         # actually running -- same reasoning as tray.py's pystray menu items
         # (visible=_session_active there); _refresh_status re-evaluates this
@@ -112,6 +122,7 @@ class FocusTab(QWidget):
         self._was_active = active
         self._pause_button.setVisible(active)
         self._nuclear_button.setVisible(active)
+        self._edit_rules_button.setVisible(active)
         # A session is already running -- starting another from here would
         # silently supersede it (session_manager.start_session()'s "new
         # session wins" behavior, meant for calendar/task/review sources

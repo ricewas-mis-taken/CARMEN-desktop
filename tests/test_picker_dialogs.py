@@ -216,3 +216,36 @@ def test_reason_dialog_confirm_requires_all_reasons(qtbot, isolate_state, monkey
     assert "a.exe" not in status["processBlocklist"]
     assert "b.exe" not in status["processBlocklist"]
     assert sorted(restore_calls) == ["a.exe", "b.exe"]
+
+
+def test_edit_session_rules_dialog_prefills_current_session_state(qtbot, isolate_state):
+    session_manager.start_session(25, "soft", ["a.exe"], ["good.com"])
+    win = picker_dialogs._EditSessionRulesDialog()
+    qtbot.addWidget(win)
+
+    assert win._process_edit.toPlainText() == "a.exe"
+    assert win._domain_edit.toPlainText() == "good.com"
+    assert win._soft_radio.isChecked()
+
+
+def test_edit_session_rules_dialog_saves_changes_to_the_live_session(qtbot, isolate_state):
+    session_manager.start_session(25, "soft", ["a.exe"], ["good.com"])
+    win = picker_dialogs._EditSessionRulesDialog()
+    qtbot.addWidget(win)
+
+    win._process_edit.setPlainText("b.exe, c.exe\nd.exe")
+    win._domain_edit.setPlainText("other.com")
+    win._hard_radio.setChecked(True)
+    win._save()
+
+    status = session_manager.get_status()
+    assert status["processBlocklist"] == ["b.exe", "c.exe", "d.exe"]
+    assert status["domainWhitelist"] == ["other.com"]
+    assert status["lockMode"] == "hard"
+    assert "updated" in win._status_label.text().lower()
+
+
+def test_edit_session_rules_dialog_without_active_session_shows_message(qtbot, isolate_state):
+    win = picker_dialogs._EditSessionRulesDialog()
+    qtbot.addWidget(win)
+    assert not hasattr(win, "_process_edit")

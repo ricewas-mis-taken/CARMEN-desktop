@@ -48,8 +48,31 @@ _CASCADE_OFFSET_PX = 46
 _CASCADE_MAX_STEPS = 6
 
 
-def build_overlay(message, duration_ms, offending_process_name=None, blackout_rect=None):
-    win = _LockOverlay(message, duration_ms, offending_process_name, blackout_rect=blackout_rect)
+def _to_logical_rect(rect):
+    """Win32/DWM report window rects in physical pixels; Qt widget geometry
+    is in logical (device-independent) pixels. On any display scaled above
+    100% (e.g. Windows' common 125%/150% presets) that mismatch alone makes
+    the blackout land far off from the real window -- not a positioning bug,
+    a unit mismatch. Assumes a single scale factor (primary screen's), which
+    covers one monitor or several matched-DPI ones; a genuinely mixed-DPI
+    multi-monitor setup would need per-monitor DPI lookup instead."""
+    dpr = QApplication.primaryScreen().devicePixelRatio()
+    if dpr == 1:
+        return rect
+    left, top, width, height = rect
+    return (int(left / dpr), int(top / dpr), int(width / dpr), int(height / dpr))
+
+
+def build_overlay(
+    message, duration_ms, offending_process_name=None, blackout_rect=None, blackout_rect_provider=None
+):
+    win = _LockOverlay(
+        message,
+        duration_ms,
+        offending_process_name,
+        blackout_rect=blackout_rect,
+        blackout_rect_provider=blackout_rect_provider,
+    )
     _open_windows.add(win)
     win.destroyed.connect(lambda: _open_windows.discard(win))
     win.show()
@@ -79,27 +102,74 @@ class _BlackoutOverlay(QWidget):
     minimized in the background while the user is on a different, allowed
     app; covering anything there would hide unrelated, legitimate work)."""
 
-    def __init__(self, duration_ms, rect):
+    def __init__(self, duration_ms, rect, rect_provider=None):
         super().__init__(
             None,
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool,
         )
         self._closed = False
+        self._rect_provider = rect_provider
+        self._consecutive_misses = 0
         self.setStyleSheet("background-color: black;")
-        left, top, width, height = rect
+        left, top, width, height = _to_logical_rect(rect)
         self.setGeometry(left, top, width, height)
 
         QTimer.singleShot(duration_ms + 1000, self.close)
+
+        if rect_provider is not None:
+            # Re-queries the offending window's live rect rather than trusting
+            # the one captured at construction time -- without this, dragging
+            # or resizing that window during the overlay's lifetime leaves the
+            # blackout sitting over the window's old position/size, looking
+            # like a small black box that doesn't cover the app at all.
+            self._track_timer = QTimer(self)
+            self._track_timer.timeout.connect(self._track)
+            self._track_timer.start(150)
+
+    # A single missed rect lookup (rect_provider returning None) could just be
+    # a transient DWM/win32 hiccup, not the window actually closing -- closing
+    # the blackout on the very first miss risked it vanishing mid-overlay for
+    # a reason having nothing to do with the real window going away. Requiring
+    # a few consecutive misses (at 150ms/tick, ~450ms) before giving up still
+    # reacts promptly to a genuinely closed window without being trigger-happy
+    # about one flaky query.
+    _CONSECUTIVE_MISSES_BEFORE_CLOSE = 3
+
+    def _track(self):
+        if self._closed:
+            return
+        rect = self._rect_provider()
+        if rect is None:
+            self._consecutive_misses += 1
+            if self._consecutive_misses >= self._CONSECUTIVE_MISSES_BEFORE_CLOSE:
+                # The window closed/minimized mid-overlay -- nothing left to
+                # cover, so get out of the way instead of leaving a stray
+                # black box floating over whatever's now underneath it.
+                self.close()
+            return
+        self._consecutive_misses = 0
+        left, top, width, height = _to_logical_rect(rect)
+        if (left, top, width, height) != (self.x(), self.y(), self.width(), self.height()):
+            self.setGeometry(left, top, width, height)
 
     def close(self):
         if self._closed:
             return True
         self._closed = True
+        if self._rect_provider is not None:
+            self._track_timer.stop()
         return super().close()
 
 
 class _LockOverlay(QWidget):
-    def __init__(self, message, duration_ms, offending_process_name=None, blackout_rect=None):
+    def __init__(
+        self,
+        message,
+        duration_ms,
+        offending_process_name=None,
+        blackout_rect=None,
+        blackout_rect_provider=None,
+    ):
         super().__init__(
             None,
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool,
@@ -109,7 +179,7 @@ class _LockOverlay(QWidget):
         self._start_time = time.time()
         self._blackout_win = None
         if blackout_rect is not None:
-            self._blackout_win = _BlackoutOverlay(duration_ms, blackout_rect)
+            self._blackout_win = _BlackoutOverlay(duration_ms, blackout_rect, rect_provider=blackout_rect_provider)
             _open_windows.add(self._blackout_win)
             self._blackout_win.destroyed.connect(lambda: _open_windows.discard(self._blackout_win))
             self._blackout_win.show()

@@ -53,6 +53,7 @@ def test_pause_and_nuclear_buttons_hidden_without_active_session(qtbot, isolate_
     tab._refresh_status()
     assert not tab._pause_button.isVisible()
     assert not tab._nuclear_button.isVisible()
+    assert not tab._edit_rules_button.isVisible()
 
 
 def test_pause_and_nuclear_buttons_shown_with_active_session(qtbot, isolate_state):
@@ -63,3 +64,4 @@ def test_pause_and_nuclear_buttons_shown_with_active_session(qtbot, isolate_stat
     tab._refresh_status()
     assert tab._pause_button.isVisible()
     assert tab._nuclear_button.isVisible()
+    assert tab._edit_rules_button.isVisible()
