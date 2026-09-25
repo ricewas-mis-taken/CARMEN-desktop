@@ -189,8 +189,38 @@ def test_blackout_closes_when_tracked_window_disappears(qtbot, isolate_state):
     qtbot.addWidget(win)
 
     rect_holder["rect"] = None
-    win._blackout_win._track()
+    for _ in range(win._blackout_win._CONSECUTIVE_MISSES_BEFORE_CLOSE):
+        win._blackout_win._track()
     assert win._blackout_win._closed is True
+
+    win.close()
+
+
+def test_blackout_survives_a_single_transient_miss(qtbot, isolate_state):
+    """Regression test: closing the blackout on the very first missed rect
+    lookup meant one flaky DWM/win32 query could make it vanish mid-overlay
+    for a reason having nothing to do with the real window actually closing.
+    A single miss must not close it -- only enough consecutive ones to look
+    like the window is actually gone."""
+    rect_holder = {"rect": (10, 100, 200, 300)}
+    win = enforcer_overlay.build_overlay(
+        "test message",
+        duration_ms=5000,
+        blackout_rect=rect_holder["rect"],
+        blackout_rect_provider=lambda: rect_holder["rect"],
+    )
+    qtbot.addWidget(win)
+
+    rect_holder["rect"] = None
+    win._blackout_win._track()
+    assert win._blackout_win._closed is False
+
+    # Recovers and keeps tracking normally once the lookup succeeds again.
+    rect_holder["rect"] = (400, 250, 150, 150)
+    win._blackout_win._track()
+    assert win._blackout_win._closed is False
+    geo = win._blackout_win.geometry()
+    assert (geo.x(), geo.y(), geo.width(), geo.height()) == (400, 250, 150, 150)
 
     win.close()
 

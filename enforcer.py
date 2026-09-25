@@ -598,6 +598,21 @@ else:
     # actually sees, not the padded hit-test rect.
     _DWMWA_EXTENDED_FRAME_BOUNDS = 9
 
+    # Explicit argtypes/restype, rather than relying on ctypes' default
+    # marshaling -- without this, ctypes guesses each argument's C type from
+    # the Python value it's given, and on 64-bit Windows a plain Python int
+    # for hwnd isn't guaranteed to marshal as the pointer-sized HWND the real
+    # signature expects. Declaring the real signature up front is what every
+    # other raw-ctypes DWM call in this codebase (_hide_taskbar_preview's
+    # DwmSetWindowAttribute above) should arguably also do, but is especially
+    # worth pinning down here since a silently wrong/truncated hwnd would
+    # make this call fail (or worse, return a bogus rect) unpredictably
+    # depending on the handle's actual value, not obviously broken every time.
+    ctypes.windll.dwmapi.DwmGetWindowAttribute.argtypes = [
+        wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+    ]
+    ctypes.windll.dwmapi.DwmGetWindowAttribute.restype = ctypes.c_long
+
     def _window_rect(hwnd):
         """(left, top, width, height) for hwnd, or None if it's gone/invalid by
         the time this runs -- soft_lock_warning's own hwnd->rect lookup, kept

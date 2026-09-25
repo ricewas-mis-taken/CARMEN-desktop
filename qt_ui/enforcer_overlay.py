@@ -94,6 +94,7 @@ class _BlackoutOverlay(QWidget):
         )
         self._closed = False
         self._rect_provider = rect_provider
+        self._consecutive_misses = 0
         self.setStyleSheet("background-color: black;")
         left, top, width, height = rect
         self.setGeometry(left, top, width, height)
@@ -110,16 +111,28 @@ class _BlackoutOverlay(QWidget):
             self._track_timer.timeout.connect(self._track)
             self._track_timer.start(150)
 
+    # A single missed rect lookup (rect_provider returning None) could just be
+    # a transient DWM/win32 hiccup, not the window actually closing -- closing
+    # the blackout on the very first miss risked it vanishing mid-overlay for
+    # a reason having nothing to do with the real window going away. Requiring
+    # a few consecutive misses (at 150ms/tick, ~450ms) before giving up still
+    # reacts promptly to a genuinely closed window without being trigger-happy
+    # about one flaky query.
+    _CONSECUTIVE_MISSES_BEFORE_CLOSE = 3
+
     def _track(self):
         if self._closed:
             return
         rect = self._rect_provider()
         if rect is None:
-            # The window closed/minimized mid-overlay -- nothing left to
-            # cover, so get out of the way instead of leaving a stray black
-            # box floating over whatever's now underneath it.
-            self.close()
+            self._consecutive_misses += 1
+            if self._consecutive_misses >= self._CONSECUTIVE_MISSES_BEFORE_CLOSE:
+                # The window closed/minimized mid-overlay -- nothing left to
+                # cover, so get out of the way instead of leaving a stray
+                # black box floating over whatever's now underneath it.
+                self.close()
             return
+        self._consecutive_misses = 0
         left, top, width, height = rect
         if (left, top, width, height) != (self.x(), self.y(), self.width(), self.height()):
             self.setGeometry(left, top, width, height)
