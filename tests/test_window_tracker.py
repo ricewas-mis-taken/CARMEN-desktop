@@ -53,6 +53,39 @@ def test_stuck_foreground_process_does_not_spam_redirects(isolate_state, fast_po
     assert all(name == "discord.exe" for name in redirect_calls)
 
 
+def test_soft_lock_rewarns_periodically_while_staying_on_the_same_app(isolate_state, fast_polling, monkeypatch):
+    """Regression test: soft_lock_warning used to only ever fire once per
+    continuous stretch of focus on a blocked app (gated by the same
+    process_name != last_flagged_process check violation logging uses) --
+    staying on the same blocked app for the rest of the session after that
+    one warning never nagged again. SOFT_LOCK_REWARN_SECONDS should make it
+    recur while the user stays off-task."""
+    monkeypatch.setattr(window_tracker, "SOFT_LOCK_REWARN_SECONDS", 0.1)
+    session_manager.start_session(25, "soft", ["discord.exe"], [])
+
+    monkeypatch.setattr(
+        window_tracker, "get_active_window",
+        lambda: {"title": "Discord", "process_name": "discord.exe", "pid": 4242, "hwnd": 111},
+    )
+
+    warning_calls = []
+    monkeypatch.setattr(enforcer, "soft_lock_warning", lambda name, hwnd: warning_calls.append(name))
+
+    stop_event = threading.Event()
+    thread = threading.Thread(target=window_tracker.run_polling_loop, args=(stop_event,), daemon=True)
+    thread.start()
+    try:
+        time.sleep(0.5)
+    finally:
+        stop_event.set()
+        thread.join(timeout=2)
+
+    # At 0.1s rewarn cadence over ~0.5s of continuous focus, several warnings
+    # should have fired -- one alone would mean the old "once ever" bug.
+    assert len(warning_calls) >= 2
+    assert all(name == "discord.exe" for name in warning_calls)
+
+
 def test_process_that_actually_leaves_still_gets_redirected_again(isolate_state, fast_polling, monkeypatch):
     """Sanity check the cooldown doesn't just permanently silence a process:
     once cooldown elapses, a still-offending (or newly-offending) process is

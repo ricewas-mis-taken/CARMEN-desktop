@@ -156,6 +156,16 @@ else:
         return sorted(merged.values(), key=lambda p: (not p["is_running"], p["label"]))
 
 
+# Soft lock's overlay used to only ever fire once per continuous stretch of
+# focus on a blocked app (gated by the same process_name != last_flagged_process
+# check that also dedupes violation logging) -- staying on the same blocked
+# app for the rest of the session after that one warning never nagged again.
+# This is a separate cooldown so the overlay periodically re-appears while
+# the user stays off-task, independent of how record_violation's own dedupe
+# behaves.
+SOFT_LOCK_REWARN_SECONDS = 20
+
+
 def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_change=None):
     """Runs until stop_event is set. Intended to be launched in its own thread.
 
@@ -187,6 +197,7 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
     last_menu_state = None
     last_hard_redirect = {"process": None, "hwnd": None, "time": 0.0}
     last_violation_time = {}  # process_name -> time.time() of last logged violation
+    last_soft_warning_time = {}  # process_name -> time.time() of last soft-lock overlay shown
     last_sweep_notice = {}  # hwnd -> time.time() of last overlay shown for that window
 
     while not stop_event.is_set():
@@ -246,7 +257,8 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
                     # violations — don't touch dedupe state either way.
                     pass
                 elif process_name and enforcer.is_blocked_window(process_name, hwnd):
-                    if process_name != last_flagged_process:
+                    is_new_flag = process_name != last_flagged_process
+                    if is_new_flag:
                         last_flagged_process = process_name
                         now = time.time()
                         if now - last_violation_time.get(process_name, 0) >= VIOLATION_COOLDOWN_SECONDS:
@@ -288,7 +300,15 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
                             # foreground app from spamming redirects/overlays.
                             last_flagged_process = None
                         else:
+                            last_soft_warning_time[process_name] = now
                             enforcer.soft_lock_warning(process_name, hwnd)
+                    else:
+                        lock_mode = session_manager.get_lock_mode()
+                        if lock_mode != "hard":
+                            now = time.time()
+                            if now - last_soft_warning_time.get(process_name, 0) >= SOFT_LOCK_REWARN_SECONDS:
+                                last_soft_warning_time[process_name] = now
+                                enforcer.soft_lock_warning(process_name, hwnd)
                 elif process_name:
                     session_manager.record_acceptable(process_name)
                     last_flagged_process = None
