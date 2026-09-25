@@ -192,14 +192,37 @@ class _PomodoroDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        # Every other popup in this app (picker_dialogs.py's _TimerDialog,
-        # this same file's _AddProblemDialog) sets this to escape Qt's
-        # default (dark-mode-following) QDialog styling via styles.qss's
-        # #PopupBg rules -- this dialog was the one popup that forgot to,
-        # which is exactly why its labels/values were unreadable (dark gray
-        # text on a near-black background) instead of the app's normal
-        # white-background/black-text popup look.
+        # setObjectName("PopupBg") alone isn't enough here, unlike every
+        # other popup in the app (picker_dialogs.py's _TimerDialog, this
+        # file's _AddProblemDialog): those are parented to None or to a
+        # plain QWidget, but this one is parented to its _TaskCard (see
+        # get_settings() below), which sets its OWN instance-level
+        # stylesheet on itself (f"QFrame.TaskCard {{ ... }} QFrame.TaskCard
+        # QWidget {{ background: transparent; }}") to tint the card by the
+        # task's color. That "QFrame.TaskCard QWidget" selector matches ANY
+        # QWidget descendant in the parent chain -- including this dialog,
+        # since QDialog(parent=card) still makes the dialog a child of card
+        # for stylesheet-cascade purposes even though it renders as its own
+        # top-level window. A widget's own/ancestor's directly-set
+        # .setStyleSheet() always outranks the global QApplication
+        # stylesheet styles.qss's #PopupBg rule lives in (the exact same
+        # rule already root-caused for the burnout/pomodoro buttons on this
+        # same card), so the ancestor's "background: transparent" rule won
+        # over #PopupBg's light background -- rendering as black (whatever
+        # showed through the transparency) with the dark #1F2328 text still
+        # applied on top, i.e. black-on-black. Setting the full style
+        # inline, directly on this dialog, wins over the ancestor's rule the
+        # same way the buttons' own inline styles did.
         self.setObjectName("PopupBg")
+        self.setStyleSheet(
+            "QDialog#PopupBg { background: #F7F7F8; } "
+            "QDialog#PopupBg QLabel { color: #1F2328; font-size: 13px; } "
+            "QDialog#PopupBg QLineEdit { background: #FAFBFC; border: 1px solid #E3E5E9; "
+            "border-radius: 8px; padding: 4px 6px; color: #1F2328; } "
+            "QDialog#PopupBg QPushButton { background: #F1F3F6; color: #1F2328; border: none; "
+            "border-radius: 8px; padding: 6px 14px; } "
+            "QDialog#PopupBg QPushButton:hover { background: #E6E9EE; }"
+        )
         self.setWindowTitle("Start Pomodoro")
         layout = QVBoxLayout(self)
 

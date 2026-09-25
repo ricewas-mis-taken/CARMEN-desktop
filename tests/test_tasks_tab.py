@@ -141,6 +141,37 @@ def test_pomodoro_dialog_uses_the_light_popup_theme(qtbot):
     assert dialog.objectName() == "PopupBg"
 
 
+def test_pomodoro_dialog_is_readable_even_parented_to_a_colored_card(qtbot, isolate_tasks, isolate_state):
+    """Regression test: setObjectName("PopupBg") alone relies on the global
+    app stylesheet (styles.qss), but the real call site
+    (_TaskCard._start_pomodoro -> _PomodoroDialog.get_settings(self)) parents
+    this dialog to its _TaskCard -- which sets its OWN instance-level
+    stylesheet on itself, including "QFrame.TaskCard QWidget { background:
+    transparent; }". That ancestor stylesheet outranks the global one for any
+    QWidget descendant, including this dialog, so it rendered with a
+    transparent (effectively black) background and the dark #1F2328 label
+    text still on top of it -- black-on-black, unreadable, even though the
+    dialog-with-no-parent case above looked fine. The dialog needs its own
+    inline stylesheet to win back over the ancestor's."""
+    task = _make_task(color="#E5484D")
+    card = tasks_tab._TaskCard(task, on_changed=lambda: None)
+    qtbot.addWidget(card)
+    card.show()
+
+    dialog = tasks_tab._PomodoroDialog(parent=card)
+    qtbot.addWidget(dialog)
+    dialog.resize(260, 220)
+    dialog.show()
+
+    from PySide6.QtGui import QColor
+    corner_color = QColor(dialog.grab().toImage().pixel(2, 2))
+    # #F7F7F8 (the popup background) is light -- every channel above 200.
+    # Transparent-over-black (the bug) grabs as solid black, (0, 0, 0).
+    assert corner_color.red() > 200
+    assert corner_color.green() > 200
+    assert corner_color.blue() > 200
+
+
 def test_pomodoro_and_burnout_buttons_are_distinctly_styled(qtbot, isolate_tasks, isolate_state):
     task = _make_task()
     card = tasks_tab._TaskCard(task, on_changed=lambda: None)
