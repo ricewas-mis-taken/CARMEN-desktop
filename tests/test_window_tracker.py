@@ -122,6 +122,49 @@ def test_soft_lock_rewarns_immediately_when_the_app_is_reopened(isolate_state, f
     assert warning_calls == [("discord.exe", 111), ("discord.exe", 222)]
 
 
+def test_lock_mode_switched_to_hard_mid_violation_takes_effect_without_leaving(
+    isolate_state, fast_polling, monkeypatch
+):
+    """Regression test: hard_lock_redirect/soft_lock_warning used to only
+    ever be dispatched inside the `is_new_flag` branch (process_name !=
+    last_flagged_process) -- true only on the *first* tick a blocked app
+    becomes foreground. Staying continuously on the same blocked window
+    while switching lock mode soft -> hard via qt_ui/picker_dialogs.py's
+    Edit Session Rules dialog (session_manager.update_blocklist) never left
+    that window, so is_new_flag stayed False forever and hard_lock_redirect
+    was never reached at all -- the session's saved lockMode said "hard" but
+    enforcement kept warning like soft indefinitely."""
+    session_manager.start_session(25, "soft", ["discord.exe"], [])
+
+    monkeypatch.setattr(
+        window_tracker, "get_active_window",
+        lambda: {"title": "Discord", "process_name": "discord.exe", "pid": 4242, "hwnd": 111},
+    )
+
+    warning_calls = []
+    redirect_calls = []
+    monkeypatch.setattr(enforcer, "soft_lock_warning", lambda name, hwnd: warning_calls.append(name))
+    monkeypatch.setattr(enforcer, "hard_lock_redirect", lambda name: redirect_calls.append(name))
+    monkeypatch.setattr(enforcer, "sweep_minimize_blocked_windows", lambda: [])
+
+    stop_event = threading.Event()
+    thread = threading.Thread(target=window_tracker.run_polling_loop, args=(stop_event,), daemon=True)
+    thread.start()
+    try:
+        time.sleep(0.1)
+        assert warning_calls, "expected at least one soft warning before switching modes"
+        assert not redirect_calls
+
+        # Switch to hard mode without the foreground ever leaving discord.exe.
+        session_manager.update_blocklist(["discord.exe"], [], lock_mode="hard")
+        time.sleep(0.1)
+    finally:
+        stop_event.set()
+        thread.join(timeout=2)
+
+    assert redirect_calls, "hard lock must kick in on the next tick, without needing to leave and return"
+
+
 def test_process_that_actually_leaves_still_gets_redirected_again(isolate_state, fast_polling, monkeypatch):
     """Sanity check the cooldown doesn't just permanently silence a process:
     once cooldown elapses, a still-offending (or newly-offending) process is
