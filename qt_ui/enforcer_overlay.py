@@ -48,6 +48,21 @@ _CASCADE_OFFSET_PX = 46
 _CASCADE_MAX_STEPS = 6
 
 
+def _to_logical_rect(rect):
+    """Win32/DWM report window rects in physical pixels; Qt widget geometry
+    is in logical (device-independent) pixels. On any display scaled above
+    100% (e.g. Windows' common 125%/150% presets) that mismatch alone makes
+    the blackout land far off from the real window -- not a positioning bug,
+    a unit mismatch. Assumes a single scale factor (primary screen's), which
+    covers one monitor or several matched-DPI ones; a genuinely mixed-DPI
+    multi-monitor setup would need per-monitor DPI lookup instead."""
+    dpr = QApplication.primaryScreen().devicePixelRatio()
+    if dpr == 1:
+        return rect
+    left, top, width, height = rect
+    return (int(left / dpr), int(top / dpr), int(width / dpr), int(height / dpr))
+
+
 def build_overlay(
     message, duration_ms, offending_process_name=None, blackout_rect=None, blackout_rect_provider=None
 ):
@@ -96,7 +111,7 @@ class _BlackoutOverlay(QWidget):
         self._rect_provider = rect_provider
         self._consecutive_misses = 0
         self.setStyleSheet("background-color: black;")
-        left, top, width, height = rect
+        left, top, width, height = _to_logical_rect(rect)
         self.setGeometry(left, top, width, height)
 
         QTimer.singleShot(duration_ms + 1000, self.close)
@@ -133,7 +148,7 @@ class _BlackoutOverlay(QWidget):
                 self.close()
             return
         self._consecutive_misses = 0
-        left, top, width, height = rect
+        left, top, width, height = _to_logical_rect(rect)
         if (left, top, width, height) != (self.x(), self.y(), self.width(), self.height()):
             self.setGeometry(left, top, width, height)
 

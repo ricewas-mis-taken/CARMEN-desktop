@@ -5,8 +5,21 @@ the double-close guard, and the offending-process-name-gated Unblock
 button, without needing a real session or the real polling thread."""
 import pytest
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication
 
 import qt_ui.enforcer_overlay as enforcer_overlay
+
+
+def _logical(rect):
+    """Mirrors enforcer_overlay._to_logical_rect for asserting expected
+    geometry -- tests run against the real platform (not forced offscreen),
+    so devicePixelRatio reflects whatever this machine's actual display
+    scaling is, not always 1.0."""
+    dpr = QApplication.primaryScreen().devicePixelRatio()
+    if dpr == 1:
+        return rect
+    left, top, width, height = rect
+    return (int(left / dpr), int(top / dpr), int(width / dpr), int(height / dpr))
 
 
 @pytest.fixture(autouse=True)
@@ -135,7 +148,7 @@ def test_overlay_with_blackout_shows_black_window_covering_the_given_rect(qtbot,
     # Covers exactly the given rect, not the whole screen -- soft lock's
     # warning must not black out more than the offending window itself.
     geo = win._blackout_win.geometry()
-    assert (geo.x(), geo.y(), geo.width(), geo.height()) == (10, 100, 200, 300)
+    assert (geo.x(), geo.y(), geo.width(), geo.height()) == _logical((10, 100, 200, 300))
     win.close()
 
 
@@ -167,13 +180,13 @@ def test_blackout_tracks_a_moved_window_via_rect_provider(qtbot, isolate_state):
     qtbot.addWidget(win)
 
     geo = win._blackout_win.geometry()
-    assert (geo.x(), geo.y(), geo.width(), geo.height()) == (10, 100, 200, 300)
+    assert (geo.x(), geo.y(), geo.width(), geo.height()) == _logical((10, 100, 200, 300))
 
     # Simulate the window having been dragged elsewhere.
     rect_holder["rect"] = (400, 250, 150, 150)
     win._blackout_win._track()
     geo = win._blackout_win.geometry()
-    assert (geo.x(), geo.y(), geo.width(), geo.height()) == (400, 250, 150, 150)
+    assert (geo.x(), geo.y(), geo.width(), geo.height()) == _logical((400, 250, 150, 150))
 
     win.close()
 
@@ -220,9 +233,30 @@ def test_blackout_survives_a_single_transient_miss(qtbot, isolate_state):
     win._blackout_win._track()
     assert win._blackout_win._closed is False
     geo = win._blackout_win.geometry()
-    assert (geo.x(), geo.y(), geo.width(), geo.height()) == (400, 250, 150, 150)
+    assert (geo.x(), geo.y(), geo.width(), geo.height()) == _logical((400, 250, 150, 150))
 
     win.close()
+
+
+def test_to_logical_rect_divides_by_device_pixel_ratio(monkeypatch):
+    """Regression test: Win32/DWM report window rects in physical pixels;
+    Qt widget geometry is logical pixels. On a scaled display (Windows'
+    125%/150% presets are common) using the physical rect directly as Qt
+    geometry put the blackout far off from the real window -- looked like a
+    small, badly-positioned box, worse the higher the scale factor."""
+    screen = QApplication.primaryScreen()
+    monkeypatch.setattr(type(screen), "devicePixelRatio", lambda self: 1.25)
+    monkeypatch.setattr(QApplication, "primaryScreen", staticmethod(lambda: screen))
+
+    assert enforcer_overlay._to_logical_rect((400, 250, 150, 150)) == (320, 200, 120, 120)
+
+
+def test_to_logical_rect_is_a_no_op_at_100_percent_scaling(monkeypatch):
+    screen = QApplication.primaryScreen()
+    monkeypatch.setattr(type(screen), "devicePixelRatio", lambda self: 1.0)
+    monkeypatch.setattr(QApplication, "primaryScreen", staticmethod(lambda: screen))
+
+    assert enforcer_overlay._to_logical_rect((10, 100, 200, 300)) == (10, 100, 200, 300)
 
 
 def test_unblock_reason_dialog_requires_reason(qtbot, isolate_state):
