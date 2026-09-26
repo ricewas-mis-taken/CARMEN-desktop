@@ -785,6 +785,13 @@ else:
             now = time.time()
             if now - _last_instant_violation.get(hwnd, 0) >= _INSTANT_REMINIMIZE_COOLDOWN_SECONDS:
                 _last_instant_violation[hwnd] = now
+                # A stale hwnd (its cooldown already elapsed) is never read
+                # again -- without this, a long-running session that keeps
+                # reopening/closing a blocked app accumulates one entry per
+                # hwnd forever, since Windows never reuses an hwnd value.
+                for stale_hwnd, last_seen in list(_last_instant_violation.items()):
+                    if now - last_seen >= _INSTANT_REMINIMIZE_COOLDOWN_SECONDS:
+                        del _last_instant_violation[stale_hwnd]
                 session_manager.record_violation(process_name)
                 show_blocked_notice(process_name)
         except Exception:
