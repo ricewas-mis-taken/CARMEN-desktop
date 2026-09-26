@@ -16,12 +16,13 @@ lift()/focus_force() loop.
 """
 import time
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QEasingCurve, QPropertyAnimation, QTimer, QVariantAnimation
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QGraphicsDropShadowEffect,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -69,6 +70,16 @@ _OVERLAY_STYLESHEET = """
     }
     QPushButton:hover {
         background: #3F444D;
+    }
+    QLineEdit {
+        background: #2C2F37;
+        color: #F2F3F5;
+        border: 1px solid #3F444D;
+        border-radius: 8px;
+        padding: 6px 10px;
+    }
+    QLineEdit:focus {
+        border: 1px solid #5B8DEF;
     }
 """
 
@@ -367,28 +378,55 @@ class _UnblockReasonDialog(QWidget):
     removing it from processBlocklist (see
     session_manager.remove_process_from_blocklist) -- reachable straight
     from a violation's lock overlay, same destination as the "Pick Apps to
-    Blocklist" picker's own removal flow."""
+    Blocklist" picker's own removal flow.
+
+    Styled to match _LockOverlay's dark card (same _OVERLAY_STYLESHEET) --
+    it used to fall back to styles.qss's light #PopupBg theme, so clicking
+    "Unblock" on the dark overlay dropped straight into a plain white popup
+    that looked like a completely different, older app."""
 
     def __init__(self, process_name):
-        super().__init__(None, Qt.WindowStaysOnTopHint)
-        self.setObjectName("PopupBg")
-        self.setWindowTitle("Carmen Focus — Unblock App")
-        self.resize(360, 180)
+        super().__init__(
+            None,
+            Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool,
+        )
+        # Same reasoning as _LockOverlay's identical block: WA_StyledBackground
+        # is what makes the QSS border-radius below round the window's real
+        # corners instead of being ignored.
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setObjectName("LockOverlayCard")
+        self.setStyleSheet(_OVERLAY_STYLESHEET)
+        self.resize(360, 220)
         self._process_name = process_name
 
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(32)
+        shadow.setOffset(0, 6)
+        shadow.setColor(QColor(0, 0, 0, 140))
+        self.setGraphicsEffect(shadow)
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setContentsMargins(22, 18, 22, 18)
+        layout.setSpacing(10)
+
+        self._icon_label = QLabel("⛓️")
+        self._icon_label.setAlignment(Qt.AlignCenter)
+        self._icon_label.setStyleSheet("font-size: 34px; background: transparent; border: none;")
+        layout.addWidget(self._icon_label)
 
         prompt = QLabel(f"Unblock {process_name} for the rest of this session — why?")
+        prompt.setObjectName("LockOverlayMessage")
         prompt.setWordWrap(True)
         prompt.setAlignment(Qt.AlignCenter)
         layout.addWidget(prompt)
+        self._prompt_label = prompt
 
         self._reason_edit = QLineEdit()
         layout.addWidget(self._reason_edit)
 
         self._status_label = QLabel()
-        self._status_label.setStyleSheet("color: #c62828;")
+        self._status_label.setObjectName("LockOverlayTime")
+        self._status_label.setWordWrap(True)
         self._status_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._status_label)
 
@@ -409,6 +447,7 @@ class _UnblockReasonDialog(QWidget):
     def _confirm(self):
         reason = self._reason_edit.text().strip()
         if not reason:
+            self._status_label.setStyleSheet("color: #E06C75;")
             self._status_label.setText("Enter a reason before unblocking.")
             return
         _, exception_entry = session_manager.remove_process_from_blocklist(self._process_name, reason)
@@ -417,6 +456,7 @@ class _UnblockReasonDialog(QWidget):
             # popup opening and the user confirming — nothing to unblock
             # anymore, and applying it anyway would silently bleed into
             # whatever session starts next.
+            self._status_label.setStyleSheet("color: #E06C75;")
             self._status_label.setText("Session already ended — nothing to unblock.")
             return
         # Bring the app's own (already-minimized, from the violation that
@@ -431,7 +471,48 @@ class _UnblockReasonDialog(QWidget):
         # SetForegroundWindow calls (for any other still-open violation) can
         # bury a fresh QMessageBox behind other windows before the user
         # sees it, making a successful unblock look like it silently failed.
-        self._status_label.setStyleSheet("color: #2e7d32;")
+        self._status_label.setStyleSheet("color: #7FD88F;")
         self._status_label.setText(f"{self._process_name} unblocked for the rest of this session.")
         self._reason_edit.setEnabled(False)
-        QTimer.singleShot(1500, self.close)
+        self._play_unlock_animation()
+        QTimer.singleShot(2200, self.close)
+
+    def _play_unlock_animation(self):
+        # Chain fades out, swaps to an open padlock, then fades/pops back in
+        # with an overshoot easing curve for a little "snap open" feel --
+        # kept to opacity + font-size (both trivially animatable on a QLabel)
+        # rather than pulling in QGraphicsView for a real sprite animation.
+        effect = QGraphicsOpacityEffect(self._icon_label)
+        self._icon_label.setGraphicsEffect(effect)
+
+        fade_out = QPropertyAnimation(effect, b"opacity", self)
+        fade_out.setDuration(220)
+        fade_out.setStartValue(1.0)
+        fade_out.setEndValue(0.0)
+
+        def _swap_and_pop_in():
+            self._icon_label.setText("🔓")
+
+            fade_in = QPropertyAnimation(effect, b"opacity", self)
+            fade_in.setDuration(360)
+            fade_in.setStartValue(0.0)
+            fade_in.setEndValue(1.0)
+            fade_in.start()
+            self._unlock_fade_in = fade_in
+
+            pop = QVariantAnimation(self)
+            pop.setDuration(360)
+            pop.setStartValue(28)
+            pop.setEndValue(34)
+            pop.setEasingCurve(QEasingCurve.OutBack)
+            pop.valueChanged.connect(
+                lambda size: self._icon_label.setStyleSheet(
+                    f"font-size: {int(size)}px; background: transparent; border: none;"
+                )
+            )
+            pop.start()
+            self._unlock_pop = pop
+
+        fade_out.finished.connect(_swap_and_pop_in)
+        fade_out.start()
+        self._unlock_fade_out = fade_out

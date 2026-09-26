@@ -286,3 +286,30 @@ def test_unblock_reason_dialog_confirm_calls_remove_process_from_blocklist(qtbot
     assert "app.exe" not in status["processBlocklist"]
     assert restore_calls == ["app.exe"]
     assert "unblocked" in win._status_label.text().lower()
+
+
+def test_unblock_reason_dialog_uses_the_dark_overlay_card_styling(qtbot, isolate_state):
+    """Regression test: this dialog used to fall back to styles.qss's plain
+    light #PopupBg theme, so clicking "Unblock" on the dark _LockOverlay
+    card dropped into a visually unrelated, older-looking popup."""
+    win = enforcer_overlay.build_unblock_reason_dialog("app.exe")
+    qtbot.addWidget(win)
+
+    assert win.objectName() == "LockOverlayCard"
+    assert win.styleSheet() == enforcer_overlay._OVERLAY_STYLESHEET
+
+
+def test_unblock_reason_dialog_plays_the_unlock_animation_on_success(qtbot, isolate_state, monkeypatch):
+    import enforcer
+    import session_manager
+    monkeypatch.setattr(enforcer, "restore_window_for_process", lambda name: None)
+    session_manager.start_session(25, "soft", ["app.exe"], [])
+
+    win = enforcer_overlay.build_unblock_reason_dialog("app.exe")
+    qtbot.addWidget(win)
+    assert win._icon_label.text() == "⛓️"
+
+    win._reason_edit.setText("needed for research")
+    win._confirm()
+
+    qtbot.waitUntil(lambda: win._icon_label.text() == "🔓", timeout=2000)
