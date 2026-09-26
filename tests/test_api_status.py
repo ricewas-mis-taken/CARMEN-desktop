@@ -3,6 +3,7 @@ review-in-progress state (see review_store.get_active_review()'s
 docstring) -- a review started while a different session (e.g. a
 pomodoro) is already active used to be entirely invisible here."""
 import api_server
+import config
 import review_store
 import session_manager
 
@@ -70,3 +71,30 @@ def test_status_does_not_duplicate_a_review_that_is_itself_the_active_session(is
     data = resp.get_json()
     assert data["reviewProblemId"] == problem["id"]
     assert data["reviewInProgress"] is None
+
+
+def test_review_pause_requires_token(isolate_state, isolate_review_db):
+    resp = client().post("/review/pause")
+    assert resp.status_code == 401
+
+
+def test_review_resume_requires_token(isolate_state, isolate_review_db):
+    resp = client().post("/review/resume")
+    assert resp.status_code == 401
+
+
+def test_review_pause_and_resume_via_the_api(isolate_state, isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    review_store.start_review(problem["id"])
+    token = config.get_api_token()
+
+    resp = client().post("/review/pause", headers={"X-Carmen-Token": token})
+    assert resp.status_code == 200
+    assert client().get("/status").get_json()["reviewInProgress"]["isPaused"] is True
+
+    resp = client().post("/review/resume", headers={"X-Carmen-Token": token})
+    assert resp.status_code == 200
+    assert client().get("/status").get_json()["reviewInProgress"]["isPaused"] is False

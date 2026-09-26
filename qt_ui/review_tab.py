@@ -546,24 +546,44 @@ class _TopicView(QWidget):
         # hidden, showing no timer at all for a session that's very much
         # still active and still enforcing.
         status = session_manager.get_status()
-        if not status.get("isActive") or status.get("source") != "review":
+        if status.get("isActive") and status.get("source") == "review":
+            topic = review_store.get_topic(self._topic_id)
+            if topic and topic.get("linkedTaskId") and topic["linkedTaskId"] == status.get("eventId"):
+                problem_name = status.get("reviewProblemName") or "this review"
+                if self._review_tab:
+                    self._review_tab.on_review_started()
+                # token=None: review_store's own active-session tracking
+                # (_active_sessions) is in-memory only and didn't survive
+                # whatever took this session_manager session and this
+                # widget out of sync in the first place. Finish still logs
+                # a real review_sessions row though, via reviewProblemId
+                # (persisted in session_manager's own state, unlike
+                # _active_sessions) and _ReviewBanner's
+                # finish_review_for_problem fallback -- see _complete_finish.
+                self._review_banner.start(
+                    {"name": problem_name, "id": status.get("reviewProblemId")},
+                    token=None, end_session_on_finish=True,
+                )
+                return
+
+        # Independent review -- one that was (or still is) running
+        # alongside a completely different session, or with no session at
+        # all, so it never touched session_manager (see _begin_review's
+        # `not session_manager.is_active()` guard below). Unlike the case
+        # above, review_store.get_active_review() DOES persist this across
+        # a restart now (see review_store.py's ACTIVE_SESSION_PATH), so the
+        # real token and original start time are both recoverable here.
+        active = review_store.get_active_review()
+        if not active:
             return
-        topic = review_store.get_topic(self._topic_id)
-        if not topic or not topic.get("linkedTaskId") or topic["linkedTaskId"] != status.get("eventId"):
+        problem = review_store.get_problem(active["problemId"])
+        if not problem or problem["topicId"] != self._topic_id:
             return
-        problem_name = status.get("reviewProblemName") or "this review"
         if self._review_tab:
             self._review_tab.on_review_started()
-        # token=None: review_store's own active-session tracking
-        # (_active_sessions) is in-memory only and didn't survive whatever
-        # took this session_manager session and this widget out of sync in
-        # the first place. Finish still logs a real review_sessions row
-        # though, via reviewProblemId (persisted in session_manager's own
-        # state, unlike _active_sessions) and _ReviewBanner's
-        # finish_review_for_problem fallback -- see _complete_finish.
         self._review_banner.start(
-            {"name": problem_name, "id": status.get("reviewProblemId")},
-            token=None, end_session_on_finish=True,
+            problem, token=active["token"], end_session_on_finish=False,
+            resumed_started_at=datetime.fromisoformat(active["startedAt"]),
         )
 
     def _build_header(self):
@@ -878,6 +898,17 @@ class _ReviewBanner(QWidget):
 
         self.hide()
 
+    def _is_independent_review(self):
+        # A real review_store-tracked review (has a token) that ISN'T
+        # driving session_manager's own session -- the case that can be
+        # auto-paused for a pomodoro break (see review_store.py's
+        # auto_pause_for_break/auto_resume_from_break) and is visible to the
+        # extension via GET /status's reviewInProgress. Excludes the
+        # first-attempt flow (_start_first_attempt always passes token=None
+        # since the problem doesn't exist yet) -- that one keeps its own
+        # local-only pause bookkeeping below, unchanged.
+        return not self._end_session_on_finish and self._session_token is not None
+
     def _elapsed_seconds_now(self):
         if self._end_session_on_finish:
             # Pause-aware off the linked task session's own startTime/
@@ -889,6 +920,13 @@ class _ReviewBanner(QWidget):
             if not status.get("startTime"):
                 return 0
             return tasks_store.worked_seconds(status["startTime"], None, status.get("violationLog"))
+        if self._is_independent_review():
+            # review_store is the source of truth once a pomodoro's break
+            # can pause this from outside this widget entirely (see
+            # auto_pause_for_break()) -- local _start_time/_accumulated_seconds
+            # bookkeeping below would silently drift from that.
+            active = review_store.get_active_review()
+            return active["elapsedSeconds"] if active else 0
         if self._start_time is None:
             return self._accumulated_seconds
         return self._accumulated_seconds + int((datetime.now() - self._start_time).total_seconds())
@@ -896,13 +934,19 @@ class _ReviewBanner(QWidget):
     def start(
         self, problem, token, end_session_on_finish=False,
         first_attempt_callback=None, first_attempt_cancelled_callback=None,
+        resumed_started_at=None,
     ):
         self._problem = problem
         self._session_token = token
         self._end_session_on_finish = end_session_on_finish
         self._first_attempt_callback = first_attempt_callback
         self._first_attempt_cancelled_callback = first_attempt_cancelled_callback
-        self._start_time = datetime.now()
+        # resumed_started_at: an independent review (review_store's own
+        # _active_sessions, not a linked task session) recovered after an
+        # app restart -- see _resume_if_active() -- must keep its real
+        # original start time, not reset elapsed to zero just because this
+        # widget instance is new.
+        self._start_time = resumed_started_at or datetime.now()
         self._accumulated_seconds = 0
         self._is_paused = False
         label = "Timing first attempt" if first_attempt_callback is not None else f"Reviewing: {problem['name']}"
@@ -913,7 +957,7 @@ class _ReviewBanner(QWidget):
         # and a paused session's _tick() never gets a chance to correct a
         # wrong initial value (see _tick()'s own comment).
         self._timer_label.setText(_format_mmss(self._elapsed_seconds_now()))
-        self._pause_btn.setText("Resume" if self._currently_paused() else "Pause")
+        self._pause_btn.setText(self._pause_button_text(self._currently_paused()))
         # Always available -- pausing here freezes the review's own elapsed
         # timer (and _start_first_attempt.../ordinary reviews that aren't
         # tied to a linked task session still get to pause) rather than only
@@ -928,11 +972,25 @@ class _ReviewBanner(QWidget):
         # paused/resumed from the Tasks tab's own Pause button on the same
         # underlying session, and this banner needs to reflect that instead
         # of drifting out of sync with its own separate _is_paused flag.
-        # Otherwise (a standalone review with no linked session) there's
-        # nothing external to defer to, so _is_paused is authoritative.
+        # An independent review can likewise be paused from outside this
+        # widget entirely (a pomodoro break auto-pausing it, or the
+        # extension's own pause/resume call) -- review_store is that one's
+        # source of truth. Otherwise (the first-attempt flow, no linked
+        # session and no review_store token) there's nothing external to
+        # defer to, so _is_paused is authoritative.
         if self._end_session_on_finish:
             return session_manager.get_status().get("isPaused", False)
+        if self._is_independent_review():
+            active = review_store.get_active_review()
+            return bool(active and active.get("isPaused"))
         return self._is_paused
+
+    def _pause_button_text(self, is_paused):
+        if is_paused and self._is_independent_review():
+            active = review_store.get_active_review()
+            if active and active.get("autoPaused"):
+                return "Resume (on break)"
+        return "Resume" if is_paused else "Pause"
 
     def _tick(self):
         if self._end_session_on_finish and not session_manager.get_status().get("isActive"):
@@ -949,7 +1007,7 @@ class _ReviewBanner(QWidget):
             self._abandon_after_external_end()
             return
         is_paused = self._currently_paused()
-        self._pause_btn.setText("Resume" if is_paused else "Pause")
+        self._pause_btn.setText(self._pause_button_text(is_paused))
         # Updated unconditionally, even while paused -- _elapsed_seconds_now()
         # already freezes correctly at the pause point on its own (pause-aware
         # worked_seconds for a linked task, or the stored _accumulated_seconds
@@ -960,6 +1018,18 @@ class _ReviewBanner(QWidget):
         self._timer_label.setText(_format_mmss(self._elapsed_seconds_now()))
 
     def _pause_resume(self):
+        if self._is_independent_review():
+            # review_store is the source of truth here (see
+            # _currently_paused()) -- delegate the actual state change to it
+            # instead of a local flag, so a manual pause/resume from this
+            # button is indistinguishable from one made through the
+            # extension's own pause/resume call.
+            if self._currently_paused():
+                review_store.resume_active_review()
+            else:
+                review_store.pause_active_review()
+            self._pause_btn.setText(self._pause_button_text(self._currently_paused()))
+            return
         if self._currently_paused():
             self._is_paused = False
             self._start_time = datetime.now()

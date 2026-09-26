@@ -148,7 +148,144 @@ def test_get_active_review_reflects_a_started_review(isolate_review_db):
     assert active["problemId"] == problem["id"]
     assert active["problemName"] == "Solve it"
     assert active["subjectName"] == subject["name"]
+    assert active["subjectColor"] == subject["color"]
     assert active["startedAt"]
+    assert active["token"]
+    assert active["isPaused"] is False
+    assert active["autoPaused"] is False
+    assert active["elapsedSeconds"] >= 0
+
+
+def test_pause_active_review(isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    review_store.start_review(problem["id"])
+
+    assert review_store.pause_active_review() is True
+    active = review_store.get_active_review()
+    assert active["isPaused"] is True
+    assert active["autoPaused"] is False
+
+
+def test_pause_active_review_is_a_noop_with_nothing_active(isolate_review_db):
+    assert review_store.pause_active_review() is False
+
+
+def test_pause_active_review_is_a_noop_when_already_paused(isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    review_store.start_review(problem["id"])
+    review_store.pause_active_review()
+
+    assert review_store.pause_active_review() is False
+
+
+def test_resume_active_review(isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    review_store.start_review(problem["id"])
+    review_store.pause_active_review()
+
+    assert review_store.resume_active_review() is True
+    assert review_store.get_active_review()["isPaused"] is False
+
+
+def test_pause_does_not_lose_elapsed_time(isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    token = review_store.start_review(problem["id"])
+    # Backdate the current unpaused stretch's start by 30s instead of
+    # sleeping in the test -- same real-time math, deterministic.
+    review_store._active_sessions[token]["resumed_at"] = datetime.now() - timedelta(seconds=30)
+
+    review_store.pause_active_review()
+    active = review_store.get_active_review()
+    assert 29 <= active["elapsedSeconds"] <= 31
+
+    # Time passing while paused must not keep accumulating.
+    active_again = review_store.get_active_review()
+    assert active_again["elapsedSeconds"] == active["elapsedSeconds"]
+
+
+def test_auto_pause_for_break_pauses_a_running_review(isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    review_store.start_review(problem["id"])
+
+    review_store.auto_pause_for_break()
+
+    active = review_store.get_active_review()
+    assert active["isPaused"] is True
+    assert active["autoPaused"] is True
+
+
+def test_auto_pause_for_break_does_not_override_a_manual_pause(isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    review_store.start_review(problem["id"])
+    review_store.pause_active_review()
+
+    review_store.auto_pause_for_break()
+
+    assert review_store.get_active_review()["autoPaused"] is False
+
+
+def test_auto_resume_from_break_resumes_only_an_auto_paused_review(isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    review_store.start_review(problem["id"])
+    review_store.auto_pause_for_break()
+
+    review_store.auto_resume_from_break()
+
+    active = review_store.get_active_review()
+    assert active["isPaused"] is False
+    assert active["autoPaused"] is False
+
+
+def test_auto_resume_from_break_leaves_a_manual_pause_alone(isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    review_store.start_review(problem["id"])
+    review_store.pause_active_review()
+
+    review_store.auto_resume_from_break()
+
+    assert review_store.get_active_review()["isPaused"] is True
+
+
+def test_manual_resume_during_a_break_clears_auto_paused(isolate_review_db):
+    """The user can manually unpause during a break -- see
+    review_store.resume_active_review()'s docstring -- and the break ending
+    naturally afterward (auto_resume_from_break()) must not then re-pause
+    or otherwise disturb it."""
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    review_store.start_review(problem["id"])
+    review_store.auto_pause_for_break()
+
+    review_store.resume_active_review()
+    review_store.auto_resume_from_break()  # break ends naturally afterward
+
+    assert review_store.get_active_review()["isPaused"] is False
 
 
 def test_get_active_review_is_none_after_finish(isolate_review_db):
@@ -170,6 +307,56 @@ def test_get_active_review_is_none_after_abandon(isolate_review_db):
     token = review_store.start_review(problem["id"])
     review_store.abandon_review(token)
 
+    assert review_store.get_active_review() is None
+
+
+def _simulate_restart(monkeypatch):
+    """Mimics the process restarting: the in-memory dict is gone, but
+    whatever was last saved to ACTIVE_SESSION_PATH is still on disk -- the
+    exact scenario an app close/crash mid-review used to lose entirely."""
+    monkeypatch.setattr(review_store, "_active_sessions", {})
+    monkeypatch.setattr(review_store, "_active_sessions_loaded", False)
+
+
+def test_a_started_review_survives_a_simulated_restart(isolate_review_db, monkeypatch):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    token = review_store.start_review(problem["id"])
+
+    _simulate_restart(monkeypatch)
+
+    active = review_store.get_active_review()
+    assert active["problemId"] == problem["id"]
+    assert active["token"] == token
+
+
+def test_finish_review_still_works_on_a_review_recovered_after_a_simulated_restart(isolate_review_db, monkeypatch):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    token = review_store.start_review(problem["id"])
+
+    _simulate_restart(monkeypatch)
+
+    updated = review_store.finish_review(token)
+    assert updated["reviewCount"] == 1
+    assert review_store.get_active_review() is None
+
+
+def test_abandoning_a_review_after_a_simulated_restart_persists_the_removal(isolate_review_db, monkeypatch):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    token = review_store.start_review(problem["id"])
+
+    _simulate_restart(monkeypatch)
+    review_store.abandon_review(token)
+
+    _simulate_restart(monkeypatch)
     assert review_store.get_active_review() is None
 
 

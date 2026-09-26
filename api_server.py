@@ -25,6 +25,8 @@ Endpoints:
     POST /tasks/<task_id>/domain-whitelist
     GET  /api/focus/rules
     POST /api/focus/rules
+    POST /review/pause
+    POST /review/resume
 
 This is the shared source of truth for focus session state: both this
 desktop app and the separate browser extension read/write the same session
@@ -211,6 +213,20 @@ def status():
     else:
         status_data["reviewInProgress"] = None
     return jsonify(status_data)
+
+
+@app.route("/review/pause", methods=["POST"])
+@_require_token
+def review_pause():
+    review_store.pause_active_review()
+    return jsonify({"ok": True})
+
+
+@app.route("/review/resume", methods=["POST"])
+@_require_token
+def review_resume():
+    review_store.resume_active_review()
+    return jsonify({"ok": True})
 
 
 @app.route("/session/start", methods=["POST"])
