@@ -77,7 +77,13 @@ def _save_active_sessions():
     try:
         os.makedirs(os.path.dirname(ACTIVE_SESSION_PATH), exist_ok=True)
         serializable = {
-            token: {"problem_id": entry["problem_id"], "started_at": entry["started_at"].isoformat()}
+            token: {
+                "problem_id": entry["problem_id"],
+                "started_at": entry["started_at"].isoformat(),
+                "accumulated_seconds": entry.get("accumulated_seconds", 0),
+                "resumed_at": entry["resumed_at"].isoformat() if entry.get("resumed_at") else None,
+                "auto_paused": entry.get("auto_paused", False),
+            }
             for token, entry in _active_sessions.items()
         }
         tmp_path = ACTIVE_SESSION_PATH + ".tmp"
@@ -94,10 +100,21 @@ def _load_active_sessions():
     try:
         with open(ACTIVE_SESSION_PATH, "r", encoding="utf-8") as f:
             raw = json.load(f)
-        return {
-            token: {"problem_id": entry["problem_id"], "started_at": datetime.fromisoformat(entry["started_at"])}
-            for token, entry in raw.items()
-        }
+        result = {}
+        for token, entry in raw.items():
+            started_at = datetime.fromisoformat(entry["started_at"])
+            # .get() with defaults -- a file written before pause tracking
+            # was added only has problem_id/started_at; treat it as
+            # "running, never paused" rather than failing to load at all.
+            resumed_at = entry.get("resumed_at", entry["started_at"])
+            result[token] = {
+                "problem_id": entry["problem_id"],
+                "started_at": started_at,
+                "accumulated_seconds": entry.get("accumulated_seconds", 0),
+                "resumed_at": datetime.fromisoformat(resumed_at) if resumed_at else None,
+                "auto_paused": entry.get("auto_paused", False),
+            }
+        return result
     except (OSError, ValueError, KeyError):
         logger.exception("review_store._load_active_sessions failed")
         return {}
@@ -690,7 +707,20 @@ def start_review(problem_id):
     if get_problem(problem_id) is None:
         return None
     token = uuid.uuid4().hex
-    _active_sessions[token] = {"problem_id": problem_id, "started_at": datetime.now()}
+    now = datetime.now()
+    _active_sessions[token] = {
+        "problem_id": problem_id,
+        "started_at": now,
+        # accumulated_seconds + (now - resumed_at) is elapsed time -- the
+        # same running-total-plus-current-stretch shape as session_manager's
+        # own pause/resume math. resumed_at is None exactly while paused;
+        # auto_paused distinguishes "paused for a pomodoro break" (see
+        # auto_pause_for_break()) from a manual pause, so resuming when the
+        # break ends doesn't undo a pause the user made themselves.
+        "accumulated_seconds": 0,
+        "resumed_at": now,
+        "auto_paused": False,
+    }
     _save_active_sessions()
     return token
 
@@ -737,7 +767,87 @@ def get_active_review():
         "subjectName": problem["subjectName"],
         "subjectColor": problem["subjectColor"],
         "startedAt": entry["started_at"].isoformat(),
+        "elapsedSeconds": _elapsed_seconds_locked(entry),
+        "isPaused": entry.get("resumed_at") is None,
+        "autoPaused": entry.get("auto_paused", False),
     }
+
+
+def _elapsed_seconds_locked(entry):
+    accumulated = entry.get("accumulated_seconds", 0)
+    resumed_at = entry.get("resumed_at")
+    if resumed_at is None:
+        return accumulated
+    return accumulated + int((datetime.now() - resumed_at).total_seconds())
+
+
+def _only_active_entry():
+    """(token, entry) for the single review currently being timed, or
+    (None, None) if none is. Used by the pause/resume functions below,
+    which all act on "the" active review the same way get_active_review()
+    reads it."""
+    _ensure_active_sessions_loaded()
+    if not _active_sessions:
+        return None, None
+    return next(iter(_active_sessions.items()))
+
+
+def pause_active_review():
+    """Manually pauses the review currently being timed. No-op (returns
+    False) if none is active or it's already paused."""
+    token, entry = _only_active_entry()
+    if entry is None or entry.get("resumed_at") is None:
+        return False
+    entry["accumulated_seconds"] = _elapsed_seconds_locked(entry)
+    entry["resumed_at"] = None
+    entry["auto_paused"] = False
+    _save_active_sessions()
+    return True
+
+
+def resume_active_review():
+    """Manually resumes the review currently being timed, whether it was
+    auto-paused for a pomodoro break or paused for any other reason. No-op
+    (returns False) if none is active or it's already running."""
+    token, entry = _only_active_entry()
+    if entry is None or entry.get("resumed_at") is not None:
+        return False
+    entry["resumed_at"] = datetime.now()
+    entry["auto_paused"] = False
+    _save_active_sessions()
+    return True
+
+
+def auto_pause_for_break():
+    """Auto-pauses the review currently being timed when a pomodoro flips
+    into its break phase (see session_manager._advance_pomodoro_locked) --
+    break time isn't working time for the pomodoro's own session, and the
+    same default applies to an independent review running alongside it.
+    No-op if none is active or it's already paused for any reason (a
+    manual pause a moment earlier must not get silently relabeled as
+    break-caused, since that would make auto_resume_from_break() below
+    wrongly resume it once the break ends)."""
+    token, entry = _only_active_entry()
+    if entry is None or entry.get("resumed_at") is None:
+        return
+    entry["accumulated_seconds"] = _elapsed_seconds_locked(entry)
+    entry["resumed_at"] = None
+    entry["auto_paused"] = True
+    _save_active_sessions()
+
+
+def auto_resume_from_break():
+    """Resumes a review this module itself auto-paused for a pomodoro break,
+    once that break ends -- see auto_pause_for_break(). Only acts on a
+    review still marked auto_paused; a review the user already manually
+    resumed during the break (resume_active_review() clears that flag) or
+    one paused for an unrelated manual reason is left alone."""
+    token, entry = _only_active_entry()
+    if entry is None or not entry.get("auto_paused"):
+        return
+    entry["resumed_at"] = datetime.now()
+    entry["auto_paused"] = False
+    _save_active_sessions()
 
 
 def _apply_review_outcome(problem_id, duration_seconds, self_solved, shakiness, started_at=None):

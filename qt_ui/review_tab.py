@@ -898,6 +898,17 @@ class _ReviewBanner(QWidget):
 
         self.hide()
 
+    def _is_independent_review(self):
+        # A real review_store-tracked review (has a token) that ISN'T
+        # driving session_manager's own session -- the case that can be
+        # auto-paused for a pomodoro break (see review_store.py's
+        # auto_pause_for_break/auto_resume_from_break) and is visible to the
+        # extension via GET /status's reviewInProgress. Excludes the
+        # first-attempt flow (_start_first_attempt always passes token=None
+        # since the problem doesn't exist yet) -- that one keeps its own
+        # local-only pause bookkeeping below, unchanged.
+        return not self._end_session_on_finish and self._session_token is not None
+
     def _elapsed_seconds_now(self):
         if self._end_session_on_finish:
             # Pause-aware off the linked task session's own startTime/
@@ -909,6 +920,13 @@ class _ReviewBanner(QWidget):
             if not status.get("startTime"):
                 return 0
             return tasks_store.worked_seconds(status["startTime"], None, status.get("violationLog"))
+        if self._is_independent_review():
+            # review_store is the source of truth once a pomodoro's break
+            # can pause this from outside this widget entirely (see
+            # auto_pause_for_break()) -- local _start_time/_accumulated_seconds
+            # bookkeeping below would silently drift from that.
+            active = review_store.get_active_review()
+            return active["elapsedSeconds"] if active else 0
         if self._start_time is None:
             return self._accumulated_seconds
         return self._accumulated_seconds + int((datetime.now() - self._start_time).total_seconds())
@@ -939,7 +957,7 @@ class _ReviewBanner(QWidget):
         # and a paused session's _tick() never gets a chance to correct a
         # wrong initial value (see _tick()'s own comment).
         self._timer_label.setText(_format_mmss(self._elapsed_seconds_now()))
-        self._pause_btn.setText("Resume" if self._currently_paused() else "Pause")
+        self._pause_btn.setText(self._pause_button_text(self._currently_paused()))
         # Always available -- pausing here freezes the review's own elapsed
         # timer (and _start_first_attempt.../ordinary reviews that aren't
         # tied to a linked task session still get to pause) rather than only
@@ -954,11 +972,25 @@ class _ReviewBanner(QWidget):
         # paused/resumed from the Tasks tab's own Pause button on the same
         # underlying session, and this banner needs to reflect that instead
         # of drifting out of sync with its own separate _is_paused flag.
-        # Otherwise (a standalone review with no linked session) there's
-        # nothing external to defer to, so _is_paused is authoritative.
+        # An independent review can likewise be paused from outside this
+        # widget entirely (a pomodoro break auto-pausing it, or the
+        # extension's own pause/resume call) -- review_store is that one's
+        # source of truth. Otherwise (the first-attempt flow, no linked
+        # session and no review_store token) there's nothing external to
+        # defer to, so _is_paused is authoritative.
         if self._end_session_on_finish:
             return session_manager.get_status().get("isPaused", False)
+        if self._is_independent_review():
+            active = review_store.get_active_review()
+            return bool(active and active.get("isPaused"))
         return self._is_paused
+
+    def _pause_button_text(self, is_paused):
+        if is_paused and self._is_independent_review():
+            active = review_store.get_active_review()
+            if active and active.get("autoPaused"):
+                return "Resume (on break)"
+        return "Resume" if is_paused else "Pause"
 
     def _tick(self):
         if self._end_session_on_finish and not session_manager.get_status().get("isActive"):
@@ -975,7 +1007,7 @@ class _ReviewBanner(QWidget):
             self._abandon_after_external_end()
             return
         is_paused = self._currently_paused()
-        self._pause_btn.setText("Resume" if is_paused else "Pause")
+        self._pause_btn.setText(self._pause_button_text(is_paused))
         # Updated unconditionally, even while paused -- _elapsed_seconds_now()
         # already freezes correctly at the pause point on its own (pause-aware
         # worked_seconds for a linked task, or the stored _accumulated_seconds
@@ -986,6 +1018,18 @@ class _ReviewBanner(QWidget):
         self._timer_label.setText(_format_mmss(self._elapsed_seconds_now()))
 
     def _pause_resume(self):
+        if self._is_independent_review():
+            # review_store is the source of truth here (see
+            # _currently_paused()) -- delegate the actual state change to it
+            # instead of a local flag, so a manual pause/resume from this
+            # button is indistinguishable from one made through the
+            # extension's own pause/resume call.
+            if self._currently_paused():
+                review_store.resume_active_review()
+            else:
+                review_store.pause_active_review()
+            self._pause_btn.setText(self._pause_button_text(self._currently_paused()))
+            return
         if self._currently_paused():
             self._is_paused = False
             self._start_time = datetime.now()

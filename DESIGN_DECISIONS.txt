@@ -100,3 +100,25 @@ Scope: this only affects display. It does not change which
 lockMode/processBlocklist/domainWhitelist is actually enforced at any
 given moment -- that's still governed entirely by whichever single
 session session_manager reports active, per the entry above.
+
+[2026-09-25] An independent review's pause state lives in review_store, not the Qt widget
+Decision: review_store.py's _active_sessions entries now carry their own
+pause bookkeeping (accumulated_seconds/resumed_at/auto_paused), with
+pause_active_review()/resume_active_review()/auto_pause_for_break()/
+auto_resume_from_break() as the only ways to change it. qt_ui/review_tab.py's
+_ReviewBanner delegates to these for any review with a real review_store
+token (_is_independent_review()) instead of using its own local
+_is_paused/_accumulated_seconds fields, which it still uses unchanged for
+the one case that has no review_store token at all (the first-attempt flow,
+timing a problem that doesn't exist in the DB yet).
+Why: a pomodoro's break phase needed to auto-pause a review running
+alongside it (see session_manager._advance_pomodoro_locked), and the
+extension needed to both see that pause state and let the user manually
+undo it. Neither is reachable if pause state only lives on a QWidget
+instance that may not even be constructed at the time (the desktop UI
+doesn't have to be on the Review tab, or open at all) -- it has to live
+in the same place get_active_review() already reads from.
+Scope: this does NOT apply to a review driving session_manager's own
+session (end_session_on_finish=True) -- that one already deferred to
+session_manager.pause_session()/get_status()["isPaused"] as its source of
+truth, unchanged.
