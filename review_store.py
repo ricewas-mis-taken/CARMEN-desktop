@@ -12,6 +12,7 @@ The interval math itself lives in review_scheduler.py (kept import-free of
 sqlite/Flask/PySide6 so it's separately unit-testable); this module just
 calls it and persists the result.
 """
+import json
 import os
 import sqlite3
 import threading
@@ -25,6 +26,7 @@ import sync_trigger
 from calendar_log import logger
 
 PHOTOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "data", "review_photos")
+ACTIVE_SESSION_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "data", "active_review.json")
 
 
 # The same lock calendar_store.py serializes its own writes through, not a
@@ -37,13 +39,68 @@ PHOTOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private",
 _lock = calendar_store._lock
 _schema_ready = False
 
-# Review sessions in progress (Start clicked, Finish not yet) -- deliberately
-# not a table. A "started but never finished" row would otherwise need its
-# own cleanup story (crash, app closed mid-timer, user just never comes
-# back); keeping it in memory means an abandoned start simply vanishes with
-# the process, with nothing to reconcile later. review_sessions (the sqlite
-# table) only ever gets a row once a session actually completes.
+# Review sessions in progress (Start clicked, Finish not yet) -- not a sqlite
+# table (review_sessions only ever gets a row once a session actually
+# completes), but persisted to ACTIVE_SESSION_PATH (see
+# _save_active_sessions/_load_active_sessions) so it survives an app
+# restart. This used to be deliberately in-memory-only, on the reasoning
+# that an abandoned start should just vanish with the process rather than
+# need its own reconciliation story -- but that meant closing (or a crash
+# restarting) the desktop app while a review was running alongside a
+# completely unrelated session (the common case: review_tab.py's
+# `not session_manager.is_active()` guard means only a review with nothing
+# else running gets its own session_manager session, which DOES survive a
+# restart) silently discarded a real, sometimes long-running, in-progress
+# review with zero warning. Persisting just enough here (token, problem_id,
+# started_at) lets qt_ui/review_tab.py's _resume_if_active() rebuild the
+# banner across a restart the same way it already did for the
+# session-manager-backed case.
 _active_sessions = {}
+_active_sessions_loaded = False
+
+
+def _ensure_active_sessions_loaded():
+    # Lazy, not a bare module-level read at import time -- this module is
+    # imported by the test suite too, and an eager read at import would run
+    # before isolate_review_db's fixture ever gets a chance to redirect
+    # ACTIVE_SESSION_PATH, risking a real on-disk file being read during a
+    # test run (see device_id.py's get_device_id() for the same lazy-load
+    # pattern, for the same reason).
+    global _active_sessions_loaded
+    if _active_sessions_loaded:
+        return
+    _active_sessions_loaded = True
+    _active_sessions.update(_load_active_sessions())
+
+
+def _save_active_sessions():
+    try:
+        os.makedirs(os.path.dirname(ACTIVE_SESSION_PATH), exist_ok=True)
+        serializable = {
+            token: {"problem_id": entry["problem_id"], "started_at": entry["started_at"].isoformat()}
+            for token, entry in _active_sessions.items()
+        }
+        tmp_path = ACTIVE_SESSION_PATH + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(serializable, f)
+        os.replace(tmp_path, ACTIVE_SESSION_PATH)
+    except OSError:
+        logger.exception("review_store._save_active_sessions failed")
+
+
+def _load_active_sessions():
+    if not os.path.exists(ACTIVE_SESSION_PATH):
+        return {}
+    try:
+        with open(ACTIVE_SESSION_PATH, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return {
+            token: {"problem_id": entry["problem_id"], "started_at": datetime.fromisoformat(entry["started_at"])}
+            for token, entry in raw.items()
+        }
+    except (OSError, ValueError, KeyError):
+        logger.exception("review_store._load_active_sessions failed")
+        return {}
 
 
 class DuplicateNameError(Exception):
@@ -626,14 +683,15 @@ def update_problem(
 
 
 def start_review(problem_id):
-    """Logs a start timestamp for a review attempt in memory (not sqlite --
-    see _active_sessions above) and hands back an opaque token the caller
-    must pass to finish_review(). Returns None if the problem doesn't
-    exist."""
+    """Logs a start timestamp for a review attempt (persisted -- see
+    _active_sessions above) and hands back an opaque token the caller must
+    pass to finish_review(). Returns None if the problem doesn't exist."""
+    _ensure_active_sessions_loaded()
     if get_problem(problem_id) is None:
         return None
     token = uuid.uuid4().hex
     _active_sessions[token] = {"problem_id": problem_id, "started_at": datetime.now()}
+    _save_active_sessions()
     return token
 
 
@@ -641,7 +699,9 @@ def abandon_review(session_token):
     """Discards a started review without logging anything: no review_sessions
     row, no stat updates. The elapsed task session time still counts because
     session_manager tracks it independently."""
-    _active_sessions.pop(session_token, None)
+    _ensure_active_sessions_loaded()
+    if _active_sessions.pop(session_token, None) is not None:
+        _save_active_sessions()
 
 
 def get_active_review():
@@ -662,17 +722,20 @@ def get_active_review():
     _active_sessions into a plain dict first -- it's mutated from the Qt
     main thread with no lock, and this can now be called concurrently from
     an API request thread (api_server.py runs threaded)."""
+    _ensure_active_sessions_loaded()
     sessions = dict(_active_sessions)
     if not sessions:
         return None
-    _token, entry = next(iter(sessions.items()))
+    token, entry = next(iter(sessions.items()))
     problem = get_problem(entry["problem_id"])
     if problem is None:
         return None
     return {
+        "token": token,
         "problemId": problem["id"],
         "problemName": problem["name"],
         "subjectName": problem["subjectName"],
+        "subjectColor": problem["subjectColor"],
         "startedAt": entry["started_at"].isoformat(),
     }
 
@@ -803,9 +866,11 @@ def finish_review(session_token, self_solved=True, shakiness=3, duration_seconds
     silently count paused time (and any time the PC was off) as worked.
 
     Returns the updated problem dict, or None if the token is unknown/already used."""
+    _ensure_active_sessions_loaded()
     entry = _active_sessions.pop(session_token, None)
     if entry is None:
         return None
+    _save_active_sessions()
 
     started_at = entry["started_at"]
     if duration_seconds is None:

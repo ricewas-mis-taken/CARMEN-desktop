@@ -115,7 +115,9 @@ def test_get_active_review_reflects_a_started_review(isolate_review_db):
     assert active["problemId"] == problem["id"]
     assert active["problemName"] == "Solve it"
     assert active["subjectName"] == subject["name"]
+    assert active["subjectColor"] == subject["color"]
     assert active["startedAt"]
+    assert active["token"]
 
 
 def test_get_active_review_is_none_after_finish(isolate_review_db):
@@ -137,6 +139,56 @@ def test_get_active_review_is_none_after_abandon(isolate_review_db):
     token = review_store.start_review(problem["id"])
     review_store.abandon_review(token)
 
+    assert review_store.get_active_review() is None
+
+
+def _simulate_restart(monkeypatch):
+    """Mimics the process restarting: the in-memory dict is gone, but
+    whatever was last saved to ACTIVE_SESSION_PATH is still on disk -- the
+    exact scenario an app close/crash mid-review used to lose entirely."""
+    monkeypatch.setattr(review_store, "_active_sessions", {})
+    monkeypatch.setattr(review_store, "_active_sessions_loaded", False)
+
+
+def test_a_started_review_survives_a_simulated_restart(isolate_review_db, monkeypatch):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    token = review_store.start_review(problem["id"])
+
+    _simulate_restart(monkeypatch)
+
+    active = review_store.get_active_review()
+    assert active["problemId"] == problem["id"]
+    assert active["token"] == token
+
+
+def test_finish_review_still_works_on_a_review_recovered_after_a_simulated_restart(isolate_review_db, monkeypatch):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    token = review_store.start_review(problem["id"])
+
+    _simulate_restart(monkeypatch)
+
+    updated = review_store.finish_review(token)
+    assert updated["reviewCount"] == 1
+    assert review_store.get_active_review() is None
+
+
+def test_abandoning_a_review_after_a_simulated_restart_persists_the_removal(isolate_review_db, monkeypatch):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    token = review_store.start_review(problem["id"])
+
+    _simulate_restart(monkeypatch)
+    review_store.abandon_review(token)
+
+    _simulate_restart(monkeypatch)
     assert review_store.get_active_review() is None
 
 

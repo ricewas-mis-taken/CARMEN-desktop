@@ -521,6 +521,49 @@ def test_finish_after_restart_still_records_a_review_session(
     assert len(review_store.list_sessions(problem["id"])) == 1
 
 
+def test_topic_view_resumes_an_independent_review_after_a_restart(
+    qtbot, isolate_review_db, isolate_state, monkeypatch
+):
+    """Regression test: a review started while a DIFFERENT session (e.g. a
+    pomodoro) was already active never touches session_manager at all (see
+    _begin_review's `not session_manager.is_active()` guard), so closing or
+    restarting the app used to just discard it -- review_store's
+    _active_sessions was in-memory only. It's persisted now (see
+    review_store.py's ACTIVE_SESSION_PATH), so a fresh _TopicView must
+    recover it with the real elapsed time and the real token, not a blank
+    banner or one that can't be finished."""
+    topic = review_store.create_topic("Math")
+    subject = review_store.create_subject(topic["id"], "Quadratics", "#5B8DEF")
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve for x", stars=3,
+        description_type="text", description_text="factor",
+    )
+    token = review_store.start_review(problem["id"])
+
+    # Simulate the restart: in-memory state is gone, only the persisted
+    # file remains.
+    monkeypatch.setattr(review_store, "_active_sessions", {})
+    monkeypatch.setattr(review_store, "_active_sessions_loaded", False)
+
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    tab.show()
+    view = tab._topic_views[topic["id"]]
+
+    assert view._review_banner.isVisible()
+    assert "Solve for x" in view._review_banner._problem_label.text()
+    assert view._review_banner._session_token == token
+    assert not view._review_banner._end_session_on_finish
+
+    view._review_banner._finish()
+    dlg = next(p for p in review_tab._popup_refs if isinstance(p, review_tab._PostReviewDialog) and not p._submitted)
+    dlg._solved_btn.setChecked(True)
+    dlg._submit()
+
+    assert review_store.get_problem(problem["id"])["reviewCount"] == 1
+    assert review_store.get_active_review() is None
+
+
 def test_pause_button_visible_for_standalone_review(qtbot, isolate_review_db, isolate_state):
     """A review not linked to any task session (no underlying session_manager
     session to pause) must still show a working Pause button on its own

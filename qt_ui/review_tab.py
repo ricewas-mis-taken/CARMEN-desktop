@@ -546,24 +546,44 @@ class _TopicView(QWidget):
         # hidden, showing no timer at all for a session that's very much
         # still active and still enforcing.
         status = session_manager.get_status()
-        if not status.get("isActive") or status.get("source") != "review":
+        if status.get("isActive") and status.get("source") == "review":
+            topic = review_store.get_topic(self._topic_id)
+            if topic and topic.get("linkedTaskId") and topic["linkedTaskId"] == status.get("eventId"):
+                problem_name = status.get("reviewProblemName") or "this review"
+                if self._review_tab:
+                    self._review_tab.on_review_started()
+                # token=None: review_store's own active-session tracking
+                # (_active_sessions) is in-memory only and didn't survive
+                # whatever took this session_manager session and this
+                # widget out of sync in the first place. Finish still logs
+                # a real review_sessions row though, via reviewProblemId
+                # (persisted in session_manager's own state, unlike
+                # _active_sessions) and _ReviewBanner's
+                # finish_review_for_problem fallback -- see _complete_finish.
+                self._review_banner.start(
+                    {"name": problem_name, "id": status.get("reviewProblemId")},
+                    token=None, end_session_on_finish=True,
+                )
+                return
+
+        # Independent review -- one that was (or still is) running
+        # alongside a completely different session, or with no session at
+        # all, so it never touched session_manager (see _begin_review's
+        # `not session_manager.is_active()` guard below). Unlike the case
+        # above, review_store.get_active_review() DOES persist this across
+        # a restart now (see review_store.py's ACTIVE_SESSION_PATH), so the
+        # real token and original start time are both recoverable here.
+        active = review_store.get_active_review()
+        if not active:
             return
-        topic = review_store.get_topic(self._topic_id)
-        if not topic or not topic.get("linkedTaskId") or topic["linkedTaskId"] != status.get("eventId"):
+        problem = review_store.get_problem(active["problemId"])
+        if not problem or problem["topicId"] != self._topic_id:
             return
-        problem_name = status.get("reviewProblemName") or "this review"
         if self._review_tab:
             self._review_tab.on_review_started()
-        # token=None: review_store's own active-session tracking
-        # (_active_sessions) is in-memory only and didn't survive whatever
-        # took this session_manager session and this widget out of sync in
-        # the first place. Finish still logs a real review_sessions row
-        # though, via reviewProblemId (persisted in session_manager's own
-        # state, unlike _active_sessions) and _ReviewBanner's
-        # finish_review_for_problem fallback -- see _complete_finish.
         self._review_banner.start(
-            {"name": problem_name, "id": status.get("reviewProblemId")},
-            token=None, end_session_on_finish=True,
+            problem, token=active["token"], end_session_on_finish=False,
+            resumed_started_at=datetime.fromisoformat(active["startedAt"]),
         )
 
     def _build_header(self):
@@ -896,13 +916,19 @@ class _ReviewBanner(QWidget):
     def start(
         self, problem, token, end_session_on_finish=False,
         first_attempt_callback=None, first_attempt_cancelled_callback=None,
+        resumed_started_at=None,
     ):
         self._problem = problem
         self._session_token = token
         self._end_session_on_finish = end_session_on_finish
         self._first_attempt_callback = first_attempt_callback
         self._first_attempt_cancelled_callback = first_attempt_cancelled_callback
-        self._start_time = datetime.now()
+        # resumed_started_at: an independent review (review_store's own
+        # _active_sessions, not a linked task session) recovered after an
+        # app restart -- see _resume_if_active() -- must keep its real
+        # original start time, not reset elapsed to zero just because this
+        # widget instance is new.
+        self._start_time = resumed_started_at or datetime.now()
         self._accumulated_seconds = 0
         self._is_paused = False
         label = "Timing first attempt" if first_attempt_callback is not None else f"Reviewing: {problem['name']}"
