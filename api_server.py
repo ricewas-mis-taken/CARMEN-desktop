@@ -40,10 +40,14 @@ programmatically.
 """
 import functools
 import hmac
+import logging
 import math
+import os
 import platform
 import re
 import threading
+import time
+from logging.handlers import RotatingFileHandler
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -82,6 +86,41 @@ CORS(
 )
 
 API_PORT = 5847
+
+# Traces every request's start (and, if it ever finishes, its end) to a
+# rotating file -- added after this server was twice observed fully wedged
+# (confirmed live: a bare TCP connect + GET /health got zero bytes back
+# indefinitely) even after threaded=True was added to run_server() below,
+# meaning "one slow request blocks every other one" wasn't the whole story.
+# Without this there was no way to tell which request last started and
+# never returned short of attaching a debugger to the user's live running
+# process, which isn't something this app does. If it wedges again, the
+# tail of this log is the first thing to check: any START line with no
+# matching END is the culprit.
+_request_log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "api_requests.log")
+_request_logger = logging.getLogger("carmen_api_requests")
+_request_logger.setLevel(logging.INFO)
+if not _request_logger.handlers:
+    os.makedirs(os.path.dirname(_request_log_path), exist_ok=True)
+    _handler = RotatingFileHandler(_request_log_path, maxBytes=2_000_000, backupCount=1, encoding="utf-8")
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    _request_logger.addHandler(_handler)
+
+
+@app.before_request
+def _log_request_start():
+    request._carmen_start_time = time.time()
+    _request_logger.info("START %s %s [thread=%s]", request.method, request.path, threading.get_ident())
+
+
+@app.after_request
+def _log_request_end(response):
+    elapsed = time.time() - getattr(request, "_carmen_start_time", time.time())
+    _request_logger.info(
+        "END   %s %s -> %s (%.3fs) [thread=%s]",
+        request.method, request.path, response.status_code, elapsed, threading.get_ident(),
+    )
+    return response
 
 # Set by main.py once its on_quit closure exists (tray icon removal, Qt
 # event loop teardown, etc.) — lets singleinstance.py ask a still-running
