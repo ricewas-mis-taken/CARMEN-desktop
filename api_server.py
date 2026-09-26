@@ -731,4 +731,12 @@ def review_problem_finish(problem_id):
 
 
 def run_server():
-    app.run(host="127.0.0.1", port=API_PORT, debug=False, use_reloader=False)
+    # threaded=True matters here, not just for throughput -- without it this
+    # is Werkzeug's single-worker dev server, so one slow or wedged request
+    # (a subprocess call that stalls, a client that opens a connection and
+    # never sends/reads) blocks every OTHER request forever, including
+    # trivial ones like GET /health with no I/O of its own. Confirmed live:
+    # a bare TCP connect + GET /health got zero bytes back indefinitely while
+    # the process was still running -- the single worker was stuck serving
+    # something else and never got back around to it.
+    app.run(host="127.0.0.1", port=API_PORT, debug=False, use_reloader=False, threaded=True)
