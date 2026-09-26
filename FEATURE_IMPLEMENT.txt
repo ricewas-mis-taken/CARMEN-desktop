@@ -110,3 +110,8 @@ skip it silently.
    [ ] Branch hygiene: fetch origin main, check the branch you meant to use
        isn't already merged (gh pr list --state all) before pushing —
        branches here get merged and abandoned quickly across sessions.
+   [ ] If this feature involved a real design decision (a genuine fork
+       between two+ approaches, not just "how do I implement this") —
+       add a dated entry to DESIGN_DECISIONS.txt before calling it done.
+       Don't skip this because it feels obvious in the moment; that's
+       exactly the kind of reasoning that's expensive to re-derive later.
