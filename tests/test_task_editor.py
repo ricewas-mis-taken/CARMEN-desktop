@@ -3,6 +3,7 @@ specifically that editing a task's lock mode/blocklist/domains while that
 exact task's own session is actively running applies the change to the live
 session immediately, not just to the task's stored template for next time."""
 import pytest
+from PySide6.QtWidgets import QMessageBox
 
 import session_manager
 import tasks_store
@@ -66,3 +67,47 @@ def test_editing_task_with_no_active_session_only_updates_the_template(qtbot, is
     assert not session_manager.is_active()
     saved = next(t for t in tasks_store.load_tasks() if t["id"] == task["id"])
     assert saved["lockMode"] == "hard"
+
+
+def test_editing_a_review_sourced_session_for_this_task_updates_it_live(qtbot, isolate_tasks, isolate_state):
+    task = _make_task()
+    session_manager.start_session(
+        45, "soft", ["discord.exe"], [], source="review", event_id=task["id"], event_title=task["name"],
+    )
+
+    win = task_editor._TaskEditor(task, on_saved=None)
+    qtbot.addWidget(win)
+    win._hard_radio.setChecked(True)
+    win._save()
+
+    assert session_manager.get_status()["lockMode"] == "hard"
+
+
+def test_deleting_this_tasks_active_session_ends_it(qtbot, isolate_tasks, isolate_state, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
+    task = _make_task()
+    session_manager.start_session(
+        45, "soft", ["discord.exe"], [], source="task", event_id=task["id"], event_title=task["name"],
+    )
+
+    win = task_editor._TaskEditor(task, on_saved=None)
+    qtbot.addWidget(win)
+    win._delete()
+
+    assert not session_manager.is_active()
+    assert tasks_store.get_task(task["id"]) is None
+
+
+def test_deleting_a_different_tasks_session_does_not_touch_the_active_one(qtbot, isolate_tasks, isolate_state, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
+    running_task = _make_task(name="School")
+    other_task = _make_task(name="Chores", color="#e53935")
+    session_manager.start_session(
+        45, "soft", ["discord.exe"], [], source="task", event_id=running_task["id"], event_title="School",
+    )
+
+    win = task_editor._TaskEditor(other_task, on_saved=None)
+    qtbot.addWidget(win)
+    win._delete()
+
+    assert session_manager.is_active()
