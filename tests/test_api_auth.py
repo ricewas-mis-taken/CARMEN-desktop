@@ -50,3 +50,15 @@ def test_internal_quit_requires_token(client):
 def test_read_only_endpoints_stay_open(client, path):
     resp = client.get(path)
     assert resp.status_code != 401
+
+
+def test_device_info_requires_token(client):
+    resp = client.get("/device/info")
+    assert resp.status_code == 401
+
+
+def test_device_info_returns_computer_name_with_correct_token(client):
+    token = config.get_api_token()
+    resp = client.get("/device/info", headers={"X-Carmen-Token": token})
+    assert resp.status_code == 200
+    assert resp.get_json()["computerName"]
