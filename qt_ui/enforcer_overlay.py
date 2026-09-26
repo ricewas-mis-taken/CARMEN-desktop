@@ -99,7 +99,8 @@ def _to_logical_rect(rect):
     a unit mismatch. Assumes a single scale factor (primary screen's), which
     covers one monitor or several matched-DPI ones; a genuinely mixed-DPI
     multi-monitor setup would need per-monitor DPI lookup instead."""
-    dpr = QApplication.primaryScreen().devicePixelRatio()
+    screen = QApplication.primaryScreen()
+    dpr = screen.devicePixelRatio() if screen else 1
     if dpr == 1:
         return rect
     left, top, width, height = rect
