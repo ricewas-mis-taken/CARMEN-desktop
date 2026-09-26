@@ -1,0 +1,112 @@
+CARMEN FOCUS — NEW FEATURE CHECKLIST
+=====================================
+Read this before starting ANY new feature that touches session/task/rules
+state. Carmen Focus is two repos that must move together:
+  - carmen-desktop      (this repo)   — Windows app, source of truth, runs
+                                         the local API at 127.0.0.1:5847
+  - carmen-extension    (sibling repo, C:\Users\Lucas\carmen-extension)
+                                       — chrome/ and firefox/, synced FROM
+                                         the desktop app's API, never the
+                                         other way around
+
+A feature that only touches one of these three surfaces (desktop / chrome /
+firefox) is very likely incomplete. Go through every box below even if you
+think this one doesn't apply — say explicitly why it doesn't, don't just
+skip it silently.
+
+1. DESKTOP — core logic
+   [ ] Implement the actual behavior (session_manager.py, tasks_store.py,
+       enforcer.py, window_tracker.py, whatever owns this feature).
+   [ ] If it adds a new persisted field on an existing store/session dict,
+       give every existing caller/row a correct default — a NULL a new
+       display/logic branch will silently misread is a recurring bug class
+       here (see: fastest_time_is_solved backfill incident).
+   [ ] Add/adjust pytest tests using the existing isolation fixtures
+       (isolate_config / isolate_state / isolate_calendar_db /
+       isolate_review_db / a local isolate_tasks-style fixture) — never let
+       a new test touch the real on-disk files. Check tests/conftest.py for
+       the real attribute names before monkeypatching; a wrong attribute
+       name is a silent no-op that falls through to real data.
+
+2. DESKTOP — local API (api_server.py)
+   [ ] Expose any new field on GET /status (or the relevant route) with a
+       safe default so an OLD extension build (which won't know the field
+       exists) still works.
+   [ ] If it's a mutating action, gate it behind _require_token like every
+       other mutating route.
+   [ ] Confirm test_api_auth.py-style coverage doesn't accidentally mutate
+       real session_manager/tasks_store/calendar_store state — a Flask
+       client fixture must isolate every module a route body touches, not
+       just the one the test file imports at the top.
+
+3. DESKTOP — Qt UI (if the feature is user-facing there)
+   [ ] Surface it in the relevant tab/dialog (qt_ui/*.py).
+   [ ] If it's editable per-task/per-event AND a session can be running
+       against that exact task/event right now, decide (and implement)
+       whether an edit should apply live to the running session, not just
+       the stored template — check session_manager.get_status()'s
+       source/eventId against the thing being edited. Don't assume "edit
+       the template" is enough; that gap has caused real bugs before.
+
+4. EXTENSION — chrome/ (background.js)
+   [ ] Pull the new field from GET /status in getSession(), with a default
+       in BOTH defaultSession() and the browser-only-local-session branch
+       (not just the desktop-synced branch) — these are three separate
+       object literals that must all agree on shape.
+   [ ] If it changes enforcement (what counts as "active", "paused",
+       blocked, etc.), update handleTabUrl's checks accordingly.
+
+5. EXTENSION — chrome/ (popup / overlay, if user-facing)
+   [ ] popup.html: add the markup (reuse existing badge/info-box patterns —
+       see .lock-mode-badge / .review-info for the established style).
+   [ ] popup.js: read the new session field in renderActiveSession() and
+       wire it to the new element. A field that's fetched but never read
+       anywhere is a real, previously-shipped bug (pomodoro phase/cycle sat
+       unused in background.js for a full feature cycle before anyone
+       noticed the popup never showed it).
+   [ ] content/overlay.js: update if the in-page soft-lock overlay message
+       needs to reflect this too.
+
+6. EXTENSION — mirror into firefox/, EXACTLY
+   [ ] Copy every change above into firefox/background.js, firefox/popup/*,
+       firefox/content/overlay.js. The two trees are NOT shared at runtime
+       (an extension can't load files from outside its own root) — they are
+       manually kept in sync by duplicating files.
+   [ ] After editing, diff the chrome/ and firefox/ versions of every file
+       you touched. The ONLY acceptable differences are the mechanical
+       chrome.* -> browser.* API swaps (and callback-vs-promise style for
+       runtime.sendMessage) that already exist throughout both trees.
+       Anything else in the diff is drift — fix it before committing.
+   [ ] chrome/core/*.js and firefox/core/*.js (api-token.js, constants.js,
+       rules-cache.js, rules-client.js) must stay BYTE-IDENTICAL if you
+       touch shared logic there — diff them too.
+   [ ] Run `node --check` on every .js file you touched in both chrome/ and
+       firefox/ before committing (there is no JS test suite in this repo —
+       this is the only automated safety net).
+
+7. CROSS-DEVICE / CROSS-SESSION SYNC
+   [ ] If the feature adds a field to tasks_store.py or board_store.py (the
+       two stores with device-sync support), it needs: updatedAt bump,
+       deviceId stamp (device_id.get_device_id()), and — if the field is
+       new on existing rows — a backfill in _backfill_sync_fields so a
+       pre-existing row doesn't read as a misleading default.
+   [ ] Check tasks_store.py's/board_store.py's own sync_trigger.note_change()
+       call sites — a new mutation path needs to call it too, or the change
+       won't get pushed to other devices.
+   [ ] Session-level fields (session_manager.py's _state) are NOT synced
+       across devices — they're local-machine-only and exposed to the
+       extension purely via the local HTTP API. Don't assume a session
+       field needs device-sync treatment; only tasks/board/calendar data
+       does.
+   [ ] If unsure whether something needs sync, check how the nearest
+       existing similar field is handled rather than guessing.
+
+8. BEFORE CALLING IT DONE
+   [ ] Both repos' tests pass (desktop: pytest; extension: node --check on
+       every touched file, since there's no JS test runner).
+   [ ] chrome vs firefox diffed clean (see #6).
+   [ ] Any new persisted field has a backfill/default so it can't silently
+       misread on pre-existing data (see #1, #7).
+   [ ] Branch hygiene: fetch origin main, check the branch you meant to use
+       isn't already merged (gh pr list --state all) before pushing —
+       branches here get merged and abandoned quickly across sessions.
