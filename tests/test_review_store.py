@@ -100,6 +100,46 @@ def test_start_review_unknown_problem_returns_none(isolate_review_db):
     assert review_store.start_review(999999) is None
 
 
+def test_get_active_review_returns_none_when_nothing_is_in_progress(isolate_review_db):
+    assert review_store.get_active_review() is None
+
+
+def test_get_active_review_reflects_a_started_review(isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    review_store.start_review(problem["id"])
+
+    active = review_store.get_active_review()
+    assert active["problemId"] == problem["id"]
+    assert active["problemName"] == "Solve it"
+    assert active["subjectName"] == subject["name"]
+    assert active["startedAt"]
+
+
+def test_get_active_review_is_none_after_finish(isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    token = review_store.start_review(problem["id"])
+    review_store.finish_review(token)
+
+    assert review_store.get_active_review() is None
+
+
+def test_get_active_review_is_none_after_abandon(isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    token = review_store.start_review(problem["id"])
+    review_store.abandon_review(token)
+
+    assert review_store.get_active_review() is None
+
+
 def test_finish_review_updates_counters_and_reschedules(isolate_review_db):
     topic, subject = _make_topic_and_subject()
     problem = review_store.create_problem(

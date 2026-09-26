@@ -644,6 +644,39 @@ def abandon_review(session_token):
     _active_sessions.pop(session_token, None)
 
 
+def get_active_review():
+    """Info about the review problem currently being timed by the desktop
+    UI's review banner, or None if no review is in progress -- independent
+    of session_manager's own active session. A review started while a
+    completely different session (e.g. a pomodoro) is already active never
+    touches session_manager at all (see _begin_review's `not
+    session_manager.is_active()` guard in qt_ui/review_tab.py), so it used
+    to be entirely invisible to GET /status and, in turn, the browser
+    extension -- ending that unrelated session made the extension show
+    nothing at all, even though the review was still legitimately running
+    in the desktop app. Exposing it here independent of session_manager
+    lets callers (api_server.py's /status) surface it regardless.
+
+    Only one review is ever timed at once (the UI only ever shows one
+    banner), so this returns that single entry rather than a list. Copies
+    _active_sessions into a plain dict first -- it's mutated from the Qt
+    main thread with no lock, and this can now be called concurrently from
+    an API request thread (api_server.py runs threaded)."""
+    sessions = dict(_active_sessions)
+    if not sessions:
+        return None
+    _token, entry = next(iter(sessions.items()))
+    problem = get_problem(entry["problem_id"])
+    if problem is None:
+        return None
+    return {
+        "problemId": problem["id"],
+        "problemName": problem["name"],
+        "subjectName": problem["subjectName"],
+        "startedAt": entry["started_at"].isoformat(),
+    }
+
+
 def _apply_review_outcome(problem_id, duration_seconds, self_solved, shakiness, started_at=None):
     """Shared by finish_review() and record_first_attempt(): logs the
     session, bumps review_count/last_reviewed_at, updates fastest_time,

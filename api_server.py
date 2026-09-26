@@ -157,7 +157,21 @@ def device_info():
 
 @app.route("/status", methods=["GET"])
 def status():
-    return jsonify(session_manager.get_status())
+    status_data = session_manager.get_status()
+    # A review can be running independently of whatever session_manager
+    # reports as active (see review_store.get_active_review()'s docstring)
+    # -- surfaced here so it doesn't just vanish when a caller isn't the
+    # exact session that review happens to be riding on top of. Suppressed
+    # when it IS that same review (status_data["reviewProblemId"] already
+    # carries it) so a caller doesn't render the identical review twice.
+    active_review = review_store.get_active_review()
+    if active_review and not (
+        status_data["isActive"] and status_data.get("reviewProblemId") == active_review["problemId"]
+    ):
+        status_data["reviewInProgress"] = active_review
+    else:
+        status_data["reviewInProgress"] = None
+    return jsonify(status_data)
 
 
 @app.route("/session/start", methods=["POST"])
