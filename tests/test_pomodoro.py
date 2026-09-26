@@ -5,6 +5,7 @@ passed. Expiry is simulated by rewinding session_manager's own internal
 endTime rather than sleeping real minutes."""
 from datetime import datetime, timedelta
 
+import review_store
 import session_history
 import session_manager
 import tasks_store
@@ -14,7 +15,7 @@ def _expire_now():
     session_manager._state["endTime"] = (datetime.now() - timedelta(seconds=1)).isoformat()
 
 
-def test_start_pomodoro_session_begins_on_focus_phase(isolate_state):
+def test_start_pomodoro_session_begins_on_focus_phase(isolate_state, isolate_review_db):
     session_manager.start_pomodoro_session(25, 5, 4, "soft", ["bad.exe"], ["good.com"])
     status = session_manager.get_status()
     assert status["isActive"]
@@ -26,7 +27,7 @@ def test_start_pomodoro_session_begins_on_focus_phase(isolate_state):
     assert status["processBlocklist"] == ["bad.exe"]
 
 
-def test_focus_expiry_switches_to_break_without_ending_session(isolate_state):
+def test_focus_expiry_switches_to_break_without_ending_session(isolate_state, isolate_review_db):
     session_manager.start_pomodoro_session(25, 5, 4, "soft", ["bad.exe"], [])
     _expire_now()
 
@@ -42,7 +43,7 @@ def test_focus_expiry_switches_to_break_without_ending_session(isolate_state):
     assert session_manager.pop_pending_natural_end() is None
 
 
-def test_break_expiry_advances_cycle_and_resumes_focus(isolate_state):
+def test_break_expiry_advances_cycle_and_resumes_focus(isolate_state, isolate_review_db):
     session_manager.start_pomodoro_session(25, 5, 2, "soft", [], [])
     _expire_now()
     session_manager.get_status()  # focus -> break
@@ -59,7 +60,7 @@ def test_break_expiry_advances_cycle_and_resumes_focus(isolate_state):
     assert pending == {"phase": "focus", "cycle": 2, "totalCycles": 2}
 
 
-def test_last_break_expiry_ends_the_whole_session(isolate_state):
+def test_last_break_expiry_ends_the_whole_session(isolate_state, isolate_review_db):
     session_manager.start_pomodoro_session(25, 5, 1, "soft", [], [])
     _expire_now()
     session_manager.get_status()  # focus -> break (cycle 1 of 1)
@@ -76,7 +77,77 @@ def test_last_break_expiry_ends_the_whole_session(isolate_state):
     assert summary["endType"] == "natural"
 
 
-def test_manual_end_mid_pomodoro_clears_pomodoro_state(isolate_state):
+def _start_independent_review(isolate_review_db):
+    topic = review_store.create_topic("Math")
+    subject = review_store.create_subject(topic["id"], "Quadratics", "#5B8DEF")
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    review_store.start_review(problem["id"])
+
+
+def test_focus_expiry_auto_pauses_an_independent_review(isolate_state, isolate_review_db):
+    """A review running alongside a pomodoro (not driving it -- see
+    review_store.py's module docstring) isn't touched by this session's own
+    pause/resume, so it must be paused separately when break starts, or it'd
+    just keep counting straight through what's supposed to be a break."""
+    _start_independent_review(isolate_review_db)
+    session_manager.start_pomodoro_session(25, 5, 4, "soft", [], [])
+
+    _expire_now()
+    session_manager.get_status()  # focus -> break
+
+    active = review_store.get_active_review()
+    assert active["isPaused"] is True
+    assert active["autoPaused"] is True
+
+
+def test_break_expiry_auto_resumes_an_independent_review(isolate_state, isolate_review_db):
+    _start_independent_review(isolate_review_db)
+    session_manager.start_pomodoro_session(25, 5, 2, "soft", [], [])
+    _expire_now()
+    session_manager.get_status()  # focus -> break, auto-pauses the review
+    session_manager.pop_pending_phase_change()
+
+    _expire_now()
+    session_manager.get_status()  # break -> focus
+
+    active = review_store.get_active_review()
+    assert active["isPaused"] is False
+    assert active["autoPaused"] is False
+
+
+def test_last_break_expiry_also_auto_resumes_an_independent_review(isolate_state, isolate_review_db):
+    """The pomodoro ending entirely (last cycle's break finishing) must not
+    leave a review riding along stuck paused forever just because there's
+    no next focus phase to resume into."""
+    _start_independent_review(isolate_review_db)
+    session_manager.start_pomodoro_session(25, 5, 1, "soft", [], [])
+    _expire_now()
+    session_manager.get_status()  # focus -> break, auto-pauses the review
+    session_manager.pop_pending_phase_change()
+
+    _expire_now()
+    session_manager.get_status()  # break -> whole session ends
+
+    active = review_store.get_active_review()
+    assert active["isPaused"] is False
+
+
+def test_break_auto_pause_does_not_override_a_review_the_user_already_paused(isolate_state, isolate_review_db):
+    _start_independent_review(isolate_review_db)
+    review_store.pause_active_review()
+    session_manager.start_pomodoro_session(25, 5, 4, "soft", [], [])
+
+    _expire_now()
+    session_manager.get_status()  # focus -> break
+
+    # Still paused, but NOT relabeled as break-caused -- the resume when
+    # break ends must not touch a pause the user made themselves.
+    assert review_store.get_active_review()["autoPaused"] is False
+
+
+def test_manual_end_mid_pomodoro_clears_pomodoro_state(isolate_state, isolate_review_db):
     session_manager.start_pomodoro_session(25, 5, 4, "soft", [], [])
     session_manager.end_session(end_type="manual")
     status = session_manager.get_status()
@@ -84,7 +155,7 @@ def test_manual_end_mid_pomodoro_clears_pomodoro_state(isolate_state):
     assert not status["isBreak"]
 
 
-def test_history_entry_records_pomodoro_info(isolate_state):
+def test_history_entry_records_pomodoro_info(isolate_state, isolate_review_db):
     """Without this, a Pomodoro's whole multi-cycle run collapses into one
     history entry indistinguishable from a plain session that happened to
     get paused/resumed a few times (see _advance_pomodoro_locked's
@@ -103,7 +174,7 @@ def test_history_entry_records_pomodoro_info(isolate_state):
     }
 
 
-def test_history_entry_has_no_pomodoro_for_plain_session(isolate_state):
+def test_history_entry_has_no_pomodoro_for_plain_session(isolate_state, isolate_review_db):
     session_manager.start_session(25, "soft", [], [])
     session_manager.end_session(end_type="manual")
 
@@ -112,7 +183,7 @@ def test_history_entry_has_no_pomodoro_for_plain_session(isolate_state):
     assert entries[0]["pomodoro"] is None
 
 
-def test_worked_seconds_excludes_break_time(isolate_state):
+def test_worked_seconds_excludes_break_time(isolate_state, isolate_review_db):
     """A break isn't work -- _advance_pomodoro_locked must append the same
     pause/resume violationLog markers pause_session()/resume_session() do,
     so tasks_store.worked_seconds() (and the extension's identical replay)
@@ -131,7 +202,7 @@ def test_worked_seconds_excludes_break_time(isolate_state):
     assert 24 * 60 <= worked <= 25 * 60 + 5
 
 
-def test_plain_start_session_clears_any_leftover_pomodoro_state(isolate_state):
+def test_plain_start_session_clears_any_leftover_pomodoro_state(isolate_state, isolate_review_db):
     session_manager.start_pomodoro_session(25, 5, 4, "soft", [], [])
     _expire_now()
     session_manager.get_status()  # focus -> break

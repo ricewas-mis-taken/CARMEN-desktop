@@ -424,6 +424,18 @@ def _advance_pomodoro_locked(now):
         pomo["phase"] = "break"
         _state["isBreak"] = True
         _state["endTime"] = (now + timedelta(minutes=pomo["breakMinutes"])).isoformat()
+        # An independent review (running alongside this session rather than
+        # driving it -- see review_store.py's module docstring) isn't
+        # touched by this session's own pause/resume, so it would otherwise
+        # keep counting straight through a break meant to be a break. Local
+        # import: review_store doesn't import session_manager, so this
+        # isn't circular, but keeping it local here matches this module's
+        # existing convention (see end_session()'s daily_summary_store/
+        # enforcer imports) of not adding an unconditional module-level
+        # dependency from this fairly low-level module onto a specific
+        # feature one.
+        import review_store
+        review_store.auto_pause_for_break()
         # A break isn't worked time -- tasks_store.worked_seconds() (and the
         # browser extension's identical computeActiveElapsedMs) both replay
         # these exact pause/resume markers out of violationLog to exclude
@@ -439,13 +451,20 @@ def _advance_pomodoro_locked(now):
         _save()
         return
 
+    import review_store
+
     if pomo["currentCycle"] >= pomo["totalCycles"]:
         _pending_natural_end["value"] = _finalize_to_history_locked(now, end_type="natural")
+        # The whole pomodoro just ended (last cycle's break finishing) --
+        # an independent review riding along shouldn't be left stuck paused
+        # forever just because there's no more focus phase to resume into.
+        review_store.auto_resume_from_break()
         return
 
     pomo["currentCycle"] += 1
     pomo["phase"] = "focus"
     _state["isBreak"] = False
+    review_store.auto_resume_from_break()
     _state["endTime"] = (now + timedelta(minutes=pomo["focusMinutes"])).isoformat()
     _state["violationLog"].append({"kind": "resume", "timestamp": now.isoformat()})
     _pending_phase_change["value"] = {

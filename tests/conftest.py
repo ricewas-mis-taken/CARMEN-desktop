@@ -103,8 +103,13 @@ def isolate_review_db(isolate_calendar_db, tmp_path, monkeypatch):
     means resetting review_store's own module-level state: _schema_ready
     (or the fresh calendar.db from isolate_calendar_db would never get its
     review_* tables created) and _active_sessions (in-memory start/finish
-    tracking, which must not leak between tests)."""
+    tracking, which must not leak between tests). _active_sessions_loaded
+    is forced True so _ensure_active_sessions_loaded() never attempts a
+    real disk read even on the first test in a fresh process; redirecting
+    ACTIVE_SESSION_PATH too is defense in depth in case anything ever saves."""
     monkeypatch.setattr(review_store, "_schema_ready", False)
     monkeypatch.setattr(review_store, "_active_sessions", {})
+    monkeypatch.setattr(review_store, "_active_sessions_loaded", True)
+    monkeypatch.setattr(review_store, "ACTIVE_SESSION_PATH", str(tmp_path / "active_review.json"))
     monkeypatch.setattr(review_store, "PHOTOS_DIR", str(tmp_path / "review_photos"))
     yield
