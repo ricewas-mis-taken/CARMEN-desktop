@@ -220,6 +220,9 @@ class _TaskEditor(QWidget):
         )
         if confirm != QMessageBox.Yes:
             return
+        status = session_manager.get_status()
+        if status["isActive"] and status.get("source") in ("task", "review") and status.get("eventId") == self._task["id"]:
+            session_manager.end_session(end_type="manual", reason="task deleted")
         tasks_store.delete_task(self._task["id"])
         self.close()
         if self._on_saved is not None:
@@ -279,7 +282,7 @@ class _TaskEditor(QWidget):
         # persistent -- this one does both at once.
         if self._task:
             status = session_manager.get_status()
-            if status["isActive"] and status.get("source") == "task" and status.get("eventId") == self._task["id"]:
+            if status["isActive"] and status.get("source") in ("task", "review") and status.get("eventId") == self._task["id"]:
                 session_manager.update_blocklist(
                     data["processBlocklist"], data["domainWhitelist"], lock_mode=data["lockMode"],
                 )
