@@ -2,6 +2,7 @@
 
 Endpoints:
     GET  /health
+    GET  /device/info
     GET  /status
     POST /session/start
     POST /session/end
@@ -40,6 +41,7 @@ programmatically.
 import functools
 import hmac
 import math
+import platform
 import re
 import threading
 
@@ -141,6 +143,16 @@ def internal_quit():
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"ok": True})
+
+
+@app.route("/device/info", methods=["GET"])
+@_require_token
+def device_info():
+    # Token-gated (unlike /status/health) specifically so the extension can
+    # use a successful call here as proof its saved token is actually valid,
+    # not just present -- and show the computer's name once it is, rather
+    # than leaving a plain "token saved" with no confirmation it still works.
+    return jsonify({"computerName": platform.node()})
 
 
 @app.route("/status", methods=["GET"])
