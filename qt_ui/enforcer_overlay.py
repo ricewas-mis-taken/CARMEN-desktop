@@ -16,13 +16,12 @@ lift()/focus_force() loop.
 """
 import time
 
-from PySide6.QtCore import Qt, QEasingCurve, QPropertyAnimation, QTimer, QVariantAnimation
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QGraphicsDropShadowEffect,
-    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -409,17 +408,11 @@ class _UnblockReasonDialog(QWidget):
         layout.setContentsMargins(22, 18, 22, 18)
         layout.setSpacing(10)
 
-        self._icon_label = QLabel("⛓️")
-        self._icon_label.setAlignment(Qt.AlignCenter)
-        self._icon_label.setStyleSheet("font-size: 34px; background: transparent; border: none;")
-        layout.addWidget(self._icon_label)
-
         prompt = QLabel(f"Unblock {process_name} for the rest of this session — why?")
         prompt.setObjectName("LockOverlayMessage")
         prompt.setWordWrap(True)
         prompt.setAlignment(Qt.AlignCenter)
         layout.addWidget(prompt)
-        self._prompt_label = prompt
 
         self._reason_edit = QLineEdit()
         layout.addWidget(self._reason_edit)
@@ -474,45 +467,4 @@ class _UnblockReasonDialog(QWidget):
         self._status_label.setStyleSheet("color: #7FD88F;")
         self._status_label.setText(f"{self._process_name} unblocked for the rest of this session.")
         self._reason_edit.setEnabled(False)
-        self._play_unlock_animation()
-        QTimer.singleShot(2200, self.close)
-
-    def _play_unlock_animation(self):
-        # Chain fades out, swaps to an open padlock, then fades/pops back in
-        # with an overshoot easing curve for a little "snap open" feel --
-        # kept to opacity + font-size (both trivially animatable on a QLabel)
-        # rather than pulling in QGraphicsView for a real sprite animation.
-        effect = QGraphicsOpacityEffect(self._icon_label)
-        self._icon_label.setGraphicsEffect(effect)
-
-        fade_out = QPropertyAnimation(effect, b"opacity", self)
-        fade_out.setDuration(220)
-        fade_out.setStartValue(1.0)
-        fade_out.setEndValue(0.0)
-
-        def _swap_and_pop_in():
-            self._icon_label.setText("🔓")
-
-            fade_in = QPropertyAnimation(effect, b"opacity", self)
-            fade_in.setDuration(360)
-            fade_in.setStartValue(0.0)
-            fade_in.setEndValue(1.0)
-            fade_in.start()
-            self._unlock_fade_in = fade_in
-
-            pop = QVariantAnimation(self)
-            pop.setDuration(360)
-            pop.setStartValue(28)
-            pop.setEndValue(34)
-            pop.setEasingCurve(QEasingCurve.OutBack)
-            pop.valueChanged.connect(
-                lambda size: self._icon_label.setStyleSheet(
-                    f"font-size: {int(size)}px; background: transparent; border: none;"
-                )
-            )
-            pop.start()
-            self._unlock_pop = pop
-
-        fade_out.finished.connect(_swap_and_pop_in)
-        fade_out.start()
-        self._unlock_fade_out = fade_out
+        QTimer.singleShot(1500, self.close)
