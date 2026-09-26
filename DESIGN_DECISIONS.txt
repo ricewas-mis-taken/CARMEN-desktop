@@ -1,0 +1,102 @@
+CARMEN FOCUS — DESIGN DECISIONS LOG
+=====================================
+An append-only record of real architectural/design choices for this app --
+not bug fixes, not routine implementation detail. A "design decision" here
+means: there were at least two genuinely different ways to do something,
+one was picked deliberately, and future-you (or future-me) would otherwise
+have to re-derive the reasoning from scratch or accidentally re-litigate it.
+
+Add a new dated entry every time a decision like that gets made -- see
+FEATURE_IMPLEMENT.txt's own checklist, which has a step reminding to update
+this file for exactly that reason. Newest entries go at the bottom.
+
+Format per entry:
+  [YYYY-MM-DD] Short title
+  Decision: what was chosen.
+  Why: the reasoning / what alternative was rejected and why.
+  Scope: what this does and doesn't apply to, if not obvious.
+
+-------------------------------------------------------------------------
+
+[2026-09-25] Edit Task vs Edit Session Rules are two deliberately different tools
+Decision: Editing a Task's rules (qt_ui/task_editor.py) always updates the
+task's own stored template AND, if that exact task's own session is the one
+currently running (session_manager.get_status()'s source/eventId matches),
+applies the change live too. "Edit Session Rules" (qt_ui/picker_dialogs.py)
+only ever touches the live session, never persists to any template.
+Why: these solve different problems -- "I want this task's rules different
+from now on" vs "just for this one session, do something different" -- and
+collapsing them into one tool would force a false choice every time either
+is used.
+Scope: the live-apply check matches on source in ("task", "review") --
+a review timer linked to this task also carries its eventId (see the entry
+below), so editing/deleting the task must recognize that case too, not
+just plain source == "task".
+
+[2026-09-25] Deleting a task ends its own currently-running session
+Decision: qt_ui/task_editor.py's delete flow checks the same source/eventId
+match as the live-edit path above, and calls session_manager.end_session()
+first if this exact task is what's running.
+Why: leaving an enforcement session running against a task that no longer
+exists is a worse default than ending it -- there's nothing left to point
+the session's UI/history at.
+Scope: only the exact task whose own session is running gets ended;
+editing/deleting an unrelated task never touches a different task's live
+session.
+
+[2026-09-25] The local API server must run threaded
+Decision: api_server.py's app.run() uses threaded=True.
+Why: confirmed live -- without it, Werkzeug's single-worker dev server lets
+one wedged/slow request permanently block every other request forever,
+including trivial ones with no I/O of their own (GET /health). This isn't
+a performance tweak, it's a correctness requirement: this API has multiple
+concurrent pollers (the extension's background.js, the Qt UI, the popup)
+that must never be able to starve each other.
+
+[2026-09-25] apiFetch (extension) must always resolve in bounded time
+Decision: chrome/background.js and firefox/background.js's apiFetch()
+wraps its fetch() call in a 5-second AbortController timeout.
+Why: fetch() has no default timeout. Paired with the desktop-threading
+decision above, a wedged desktop app used to hang every single extension
+call forever instead of ever reaching the existing "desktop unreachable"
+fallback -- the fallback code was already correct, it just never got a
+chance to run.
+
+[2026-09-25] A review timer is independent of session_manager's one active session
+Decision: review_store.py's review-in-progress tracking (_active_sessions)
+stays completely separate from session_manager._state. Starting a review
+while a different session (e.g. a pomodoro/task session) is already active
+does NOT create a second session_manager session and does NOT touch the
+existing one in any way -- it just times independently in the desktop UI's
+own review banner. Ending either one never affects the other.
+Why: session_manager is a single-session model by design (one endTime, one
+lockMode, one blocklist at a time) -- making it support two truly
+overlapping sessions with independent enforcement rules would be a much
+larger, riskier rearchitecture for a need that's actually already served
+by keeping review timing as its own separate concept.
+Rejected alternative: a stack/queue of concurrent session_manager sessions
+with priority-based enforcement. Not implemented -- the enforcement rules
+in effect are still whichever single session_manager session is actually
+active, if any; a review never overrides or suspends it.
+
+[2026-09-25] "Review has priority" means display priority, not enforcement priority
+Decision: GET /status gains a reviewInProgress field, populated from
+review_store.get_active_review() independent of whatever session_manager
+reports as the active session (deduped only when it's literally the same
+review driving that session, to avoid showing it twice). The extension
+renders this as an always-visible banner above whichever main view (setup
+or active-session) the popup is otherwise showing, and keeps polling alive
+for it even when no other session is active.
+Why: this was the direct, minimal fix for a real bug -- a review started
+alongside an unrelated session (e.g. a pomodoro) was completely invisible
+to the extension, and cancelling that unrelated session made the popup
+show nothing at all even though the review was still legitimately running
+in the desktop app. "Review should have priority over the pomodoro" was
+interpreted as "the review must always be visible, prominently, regardless
+of what else is or isn't happening" -- not as "the review's rules should
+override the other session's lock mode/blocklist," which the previous
+entry's decision explicitly keeps separate.
+Scope: this only affects display. It does not change which
+lockMode/processBlocklist/domainWhitelist is actually enforced at any
+given moment -- that's still governed entirely by whichever single
+session session_manager reports active, per the entry above.
