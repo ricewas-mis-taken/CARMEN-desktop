@@ -718,12 +718,19 @@ class _TopicView(QWidget):
         _ReviewStartDialog(problem, on_start=self._begin_review)
 
     def _begin_review(self, problem):
-        token = review_store.start_review(problem["id"])
-        if token is None:
-            QMessageBox.warning(self, "Carmen Focus", "That problem no longer exists.")
-            self.refresh()
-            return
-
+        # Whether this review is about to drive its own session_manager
+        # session is decided FIRST, before ever touching review_store's own
+        # _active_sessions tracking -- start_review() must only be called
+        # for the case it's actually for (an independent review, timed on
+        # its own). Calling it unconditionally used to leave a permanent,
+        # never-synced duplicate elapsed-time tracker sitting in
+        # review_store for a task-linked review too: session_manager's own
+        # pause/resume (Tasks tab, the extension, Focus tab -- anything but
+        # this banner's own Pause button) never touches review_store, so
+        # that duplicate entry just kept counting real wall-clock time
+        # since the review started, pause or no pause, forever diverging
+        # from the correct pause-aware number this banner actually displays
+        # (see _elapsed_seconds_now()'s end_session_on_finish branch).
         end_session_on_finish = False
         topic = review_store.get_topic(self._topic_id)
         if topic and topic.get("linkedTaskId") and not session_manager.is_active():
@@ -742,6 +749,17 @@ class _TopicView(QWidget):
                     review_problem_id=problem["id"],
                 )
                 end_session_on_finish = True
+
+        # token=None when end_session_on_finish: same as _resume_if_active()
+        # rebuilding this same banner after a restart -- Finish still logs a
+        # real review_sessions row via reviewProblemId (persisted in
+        # session_manager's own state) and _ReviewBanner's
+        # finish_review_for_problem fallback, see _complete_finish.
+        token = None if end_session_on_finish else review_store.start_review(problem["id"])
+        if not end_session_on_finish and token is None:
+            QMessageBox.warning(self, "Carmen Focus", "That problem no longer exists.")
+            self.refresh()
+            return
 
         if self._review_tab:
             self._review_tab.on_review_started()
