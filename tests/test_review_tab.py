@@ -377,6 +377,57 @@ def test_begin_review_starts_and_ends_linked_task_session(
     assert not session_manager.is_active(), "session should end when review finishes"
 
 
+def test_begin_review_does_not_leave_a_duplicate_desynced_tracker(
+    qtbot, isolate_review_db, isolate_state, tmp_path, monkeypatch
+):
+    """Regression test: _begin_review() used to call review_store.start_review()
+    unconditionally, even for a review driving its own session_manager
+    session -- leaving a second, permanently-desynced elapsed-time tracker
+    in review_store._active_sessions that never learned about a pause
+    recorded through session_manager (Tasks tab, the extension, Focus tab),
+    since that duplicate entry belonged to no code path that ever paused it.
+    Pausing through session_manager directly (not this banner's own button)
+    must still freeze the banner's own displayed elapsed time."""
+    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
+    task = tasks_store.create_task({"name": "Math Session", "lockMode": "soft"})
+
+    topic = review_store.create_topic("Math")
+    review_store.update_topic_link(topic["id"], task["id"])
+    subject = review_store.create_subject(topic["id"], "Quadratics", "#5B8DEF")
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve for x", stars=3,
+        description_type="text", description_text="factor",
+    )
+
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    view = tab._topic_views[topic["id"]]
+    view._set_due_only(False)
+
+    view._begin_review(view._problems[0])
+
+    assert review_store.get_active_review() is None, (
+        "a task-linked review must not also create an independent "
+        "review_store tracking entry"
+    )
+    assert not view._review_banner._is_independent_review()
+
+    # Backdate startTime by 10 real minutes, then pause through
+    # session_manager directly -- exactly what the Tasks tab's own Pause
+    # button, the extension's pause button, and the Focus tab all do.
+    started_at = datetime.now() - timedelta(minutes=10)
+    session_manager._state["startTime"] = started_at.isoformat()
+    session_manager.pause_session()
+
+    elapsed_at_pause = view._review_banner._elapsed_seconds_now()
+    assert 590 <= elapsed_at_pause <= 610  # ~10 minutes, give or take test overhead
+
+    # Time passing while paused must not keep advancing the banner's number.
+    elapsed_later = view._review_banner._elapsed_seconds_now()
+    assert elapsed_later == elapsed_at_pause
+    assert view._review_banner._currently_paused()
+
+
 def test_review_banner_recovers_when_linked_session_ends_externally(
     qtbot, isolate_review_db, isolate_state, tmp_path, monkeypatch
 ):
