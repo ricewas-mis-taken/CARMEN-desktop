@@ -797,10 +797,34 @@ def start_review(problem_id):
     below, which evicts any active-session entry for a problem it deletes,
     and _ensure_active_sessions_loaded(), which does the same once for
     whatever ACTIVE_SESSION_PATH had on disk from before that cleanup
-    existed."""
+    existed.
+
+    If a pomodoro session is currently active and on its break phase, the
+    new entry starts already paused (auto_paused=True) instead of running.
+    session_manager._advance_pomodoro_locked() only calls
+    auto_pause_for_break() at the exact moment a pomodoro's phase flips
+    focus -> break (edge-triggered) -- it has no idea a *new* independent
+    review is about to start partway through a break that's already in
+    progress, so without this check a review started mid-break would tick
+    as "worked" for the rest of that break. Checked here, before _lock is
+    acquired below: session_manager has its own separate lock, and calling
+    into it while holding review_store's _lock would risk lock-ordering
+    trouble the other direction (_advance_pomodoro_locked calls this
+    module's auto_pause_for_break()/auto_resume_from_break() while holding
+    session_manager's lock, so review_store must never call back into
+    session_manager while holding its own)."""
     _ensure_active_sessions_loaded()
     if get_problem(problem_id) is None:
         return None
+
+    # Local import, not a module-level one: session_manager doesn't import
+    # review_store at module scope either (see its own local imports in
+    # _advance_pomodoro_locked()) -- keeping this local matches that
+    # existing convention and avoids turning this into a real circular
+    # import if that ever changes.
+    import session_manager
+    status = session_manager.get_status()
+    start_paused = bool(status["isActive"] and status["isBreak"])
 
     token = uuid.uuid4().hex
     now = datetime.now()
@@ -817,8 +841,8 @@ def start_review(problem_id):
             # auto_pause_for_break()) from a manual pause, so resuming when the
             # break ends doesn't undo a pause the user made themselves.
             "accumulated_seconds": 0,
-            "resumed_at": now,
-            "auto_paused": False,
+            "resumed_at": None if start_paused else now,
+            "auto_paused": start_paused,
         }
         _save_active_sessions()
     return token
