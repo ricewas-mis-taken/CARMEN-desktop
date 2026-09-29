@@ -66,14 +66,26 @@ def _ensure_active_sessions_loaded():
     # ACTIVE_SESSION_PATH, risking a real on-disk file being read during a
     # test run (see device_id.py's get_device_id() for the same lazy-load
     # pattern, for the same reason).
+    #
+    # Guarded by _lock like every other _active_sessions access below --
+    # two threads racing this check-then-set on first use could otherwise
+    # both pass the `if _active_sessions_loaded` check and one's
+    # _load_active_sessions() result would stomp the other's.
     global _active_sessions_loaded
-    if _active_sessions_loaded:
-        return
-    _active_sessions_loaded = True
-    _active_sessions.update(_load_active_sessions())
+    with _lock:
+        if _active_sessions_loaded:
+            return
+        _active_sessions_loaded = True
+        _active_sessions.update(_load_active_sessions())
 
 
 def _save_active_sessions():
+    """Must be called with _lock already held, matching
+    _elapsed_seconds_locked()'s naming convention below -- it iterates
+    _active_sessions.items() directly with no defensive copy, so a
+    concurrent mutation during that iteration (from another thread that
+    didn't take the lock) would risk a `RuntimeError: dictionary changed
+    size during iteration` or a torn read of an in-progress pause/resume."""
     try:
         os.makedirs(os.path.dirname(ACTIVE_SESSION_PATH), exist_ok=True)
         serializable = {
@@ -706,22 +718,24 @@ def start_review(problem_id):
     _ensure_active_sessions_loaded()
     if get_problem(problem_id) is None:
         return None
+
     token = uuid.uuid4().hex
     now = datetime.now()
-    _active_sessions[token] = {
-        "problem_id": problem_id,
-        "started_at": now,
-        # accumulated_seconds + (now - resumed_at) is elapsed time -- the
-        # same running-total-plus-current-stretch shape as session_manager's
-        # own pause/resume math. resumed_at is None exactly while paused;
-        # auto_paused distinguishes "paused for a pomodoro break" (see
-        # auto_pause_for_break()) from a manual pause, so resuming when the
-        # break ends doesn't undo a pause the user made themselves.
-        "accumulated_seconds": 0,
-        "resumed_at": now,
-        "auto_paused": False,
-    }
-    _save_active_sessions()
+    with _lock:
+        _active_sessions[token] = {
+            "problem_id": problem_id,
+            "started_at": now,
+            # accumulated_seconds + (now - resumed_at) is elapsed time -- the
+            # same running-total-plus-current-stretch shape as session_manager's
+            # own pause/resume math. resumed_at is None exactly while paused;
+            # auto_paused distinguishes "paused for a pomodoro break" (see
+            # auto_pause_for_break()) from a manual pause, so resuming when the
+            # break ends doesn't undo a pause the user made themselves.
+            "accumulated_seconds": 0,
+            "resumed_at": now,
+            "auto_paused": False,
+        }
+        _save_active_sessions()
     return token
 
 
@@ -730,8 +744,9 @@ def abandon_review(session_token):
     row, no stat updates. The elapsed task session time still counts because
     session_manager tracks it independently."""
     _ensure_active_sessions_loaded()
-    if _active_sessions.pop(session_token, None) is not None:
-        _save_active_sessions()
+    with _lock:
+        if _active_sessions.pop(session_token, None) is not None:
+            _save_active_sessions()
 
 
 def get_active_review():
@@ -748,15 +763,20 @@ def get_active_review():
     lets callers (api_server.py's /status) surface it regardless.
 
     Only one review is ever timed at once (the UI only ever shows one
-    banner), so this returns that single entry rather than a list. Copies
-    _active_sessions into a plain dict first -- it's mutated from the Qt
-    main thread with no lock, and this can now be called concurrently from
-    an API request thread (api_server.py runs threaded)."""
+    banner), so this returns that single entry rather than a list.
+    _active_sessions is mutated from the Qt main thread and can also be
+    hit concurrently from an API request thread (api_server.py runs
+    threaded), so both the dict lookup and the entry snapshot are taken
+    under _lock -- copying only the outer dict isn't enough, since
+    pause/resume mutate an entry's fields in place and a reader could
+    otherwise see a torn mix of old/new fields (e.g. accumulated_seconds
+    already bumped but resumed_at not yet cleared)."""
     _ensure_active_sessions_loaded()
-    sessions = dict(_active_sessions)
-    if not sessions:
-        return None
-    token, entry = next(iter(sessions.items()))
+    with _lock:
+        if not _active_sessions:
+            return None
+        token, entry = next(iter(_active_sessions.items()))
+        entry = dict(entry)
     problem = get_problem(entry["problem_id"])
     if problem is None:
         return None
@@ -781,12 +801,13 @@ def _elapsed_seconds_locked(entry):
     return accumulated + int((datetime.now() - resumed_at).total_seconds())
 
 
-def _only_active_entry():
+def _only_active_entry_locked():
     """(token, entry) for the single review currently being timed, or
-    (None, None) if none is. Used by the pause/resume functions below,
-    which all act on "the" active review the same way get_active_review()
-    reads it."""
-    _ensure_active_sessions_loaded()
+    (None, None) if none is. `entry` is the live dict, not a copy -- callers
+    (the pause/resume functions below) must already hold _lock and must
+    finish reading/mutating/saving it before releasing that lock, so the
+    check, the mutation, and _save_active_sessions() all happen as one
+    atomic step instead of racing another thread's start/pause/resume."""
     if not _active_sessions:
         return None, None
     return next(iter(_active_sessions.items()))
@@ -795,27 +816,29 @@ def _only_active_entry():
 def pause_active_review():
     """Manually pauses the review currently being timed. No-op (returns
     False) if none is active or it's already paused."""
-    token, entry = _only_active_entry()
-    if entry is None or entry.get("resumed_at") is None:
-        return False
-    entry["accumulated_seconds"] = _elapsed_seconds_locked(entry)
-    entry["resumed_at"] = None
-    entry["auto_paused"] = False
-    _save_active_sessions()
-    return True
+    with _lock:
+        token, entry = _only_active_entry_locked()
+        if entry is None or entry.get("resumed_at") is None:
+            return False
+        entry["accumulated_seconds"] = _elapsed_seconds_locked(entry)
+        entry["resumed_at"] = None
+        entry["auto_paused"] = False
+        _save_active_sessions()
+        return True
 
 
 def resume_active_review():
     """Manually resumes the review currently being timed, whether it was
     auto-paused for a pomodoro break or paused for any other reason. No-op
     (returns False) if none is active or it's already running."""
-    token, entry = _only_active_entry()
-    if entry is None or entry.get("resumed_at") is not None:
-        return False
-    entry["resumed_at"] = datetime.now()
-    entry["auto_paused"] = False
-    _save_active_sessions()
-    return True
+    with _lock:
+        token, entry = _only_active_entry_locked()
+        if entry is None or entry.get("resumed_at") is not None:
+            return False
+        entry["resumed_at"] = datetime.now()
+        entry["auto_paused"] = False
+        _save_active_sessions()
+        return True
 
 
 def auto_pause_for_break():
@@ -827,13 +850,14 @@ def auto_pause_for_break():
     manual pause a moment earlier must not get silently relabeled as
     break-caused, since that would make auto_resume_from_break() below
     wrongly resume it once the break ends)."""
-    token, entry = _only_active_entry()
-    if entry is None or entry.get("resumed_at") is None:
-        return
-    entry["accumulated_seconds"] = _elapsed_seconds_locked(entry)
-    entry["resumed_at"] = None
-    entry["auto_paused"] = True
-    _save_active_sessions()
+    with _lock:
+        token, entry = _only_active_entry_locked()
+        if entry is None or entry.get("resumed_at") is None:
+            return
+        entry["accumulated_seconds"] = _elapsed_seconds_locked(entry)
+        entry["resumed_at"] = None
+        entry["auto_paused"] = True
+        _save_active_sessions()
 
 
 def auto_resume_from_break():
@@ -842,12 +866,13 @@ def auto_resume_from_break():
     review still marked auto_paused; a review the user already manually
     resumed during the break (resume_active_review() clears that flag) or
     one paused for an unrelated manual reason is left alone."""
-    token, entry = _only_active_entry()
-    if entry is None or not entry.get("auto_paused"):
-        return
-    entry["resumed_at"] = datetime.now()
-    entry["auto_paused"] = False
-    _save_active_sessions()
+    with _lock:
+        token, entry = _only_active_entry_locked()
+        if entry is None or not entry.get("auto_paused"):
+            return
+        entry["resumed_at"] = datetime.now()
+        entry["auto_paused"] = False
+        _save_active_sessions()
 
 
 def _apply_review_outcome(problem_id, duration_seconds, self_solved, shakiness, started_at=None):
@@ -977,10 +1002,11 @@ def finish_review(session_token, self_solved=True, shakiness=3, duration_seconds
 
     Returns the updated problem dict, or None if the token is unknown/already used."""
     _ensure_active_sessions_loaded()
-    entry = _active_sessions.pop(session_token, None)
-    if entry is None:
-        return None
-    _save_active_sessions()
+    with _lock:
+        entry = _active_sessions.pop(session_token, None)
+        if entry is None:
+            return None
+        _save_active_sessions()
 
     started_at = entry["started_at"]
     if duration_seconds is None:
