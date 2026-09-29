@@ -102,6 +102,25 @@ def test_focus_expiry_auto_pauses_an_independent_review(isolate_state, isolate_r
     assert active["autoPaused"] is True
 
 
+def test_review_started_mid_break_starts_already_paused(isolate_state, isolate_review_db):
+    """auto_pause_for_break() only fires at the exact moment a pomodoro's
+    phase flips focus -> break (edge-triggered, from
+    _advance_pomodoro_locked()). A review started independently *after*
+    that edge has already fired -- i.e. partway through a break already in
+    progress -- must not be left running: review_store.start_review() has
+    to check for this itself, since nothing else will."""
+    session_manager.start_pomodoro_session(25, 5, 4, "soft", [], [])
+    _expire_now()
+    session_manager.get_status()  # focus -> break
+    assert session_manager.get_status()["isBreak"] is True
+
+    _start_independent_review(isolate_review_db)
+
+    active = review_store.get_active_review()
+    assert active["isPaused"] is True
+    assert active["autoPaused"] is True
+
+
 def test_break_expiry_auto_resumes_an_independent_review(isolate_state, isolate_review_db):
     _start_independent_review(isolate_review_db)
     session_manager.start_pomodoro_session(25, 5, 2, "soft", [], [])
