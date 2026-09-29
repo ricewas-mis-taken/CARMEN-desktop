@@ -11,6 +11,7 @@ import pytest
 import calendar_store
 import config
 import device_id
+import enforcer
 import review_store
 import session_history
 import session_manager
@@ -78,6 +79,14 @@ def isolate_state(isolate_config, tmp_path, monkeypatch):
     monkeypatch.setattr(session_manager, "_open_violation_index", {"process": None, "domain": None})
     monkeypatch.setattr(session_manager, "_pending_natural_end", {"value": None})
     monkeypatch.setattr(session_manager, "_pending_phase_change", {"value": None})
+
+    # enforcer.record_violation_deduped()'s own cross-path cooldown registry
+    # is module-level, real-wall-clock-keyed state too -- without resetting
+    # it here, one test recording a violation for "discord.exe" (the common
+    # example process name across these tests) can silently suppress another
+    # test's own violation a few seconds later in the same run, since
+    # nothing else ever clears it between tests.
+    monkeypatch.setattr(enforcer, "_last_recorded_violation", {})
 
     yield
 

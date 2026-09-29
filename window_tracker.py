@@ -27,7 +27,6 @@ if sys.platform == "darwin":
     list_known_browser_profiles = _mac.list_known_browser_profiles
     POLL_INTERVAL_SECONDS = _mac.POLL_INTERVAL_SECONDS
     HARD_REDIRECT_COOLDOWN_SECONDS = _mac.HARD_REDIRECT_COOLDOWN_SECONDS
-    VIOLATION_COOLDOWN_SECONDS = _mac.VIOLATION_COOLDOWN_SECONDS
 else:
     import psutil
     import win32gui
@@ -49,9 +48,11 @@ else:
     # offending process can be redirected, without touching how often violations
     # are recorded.
     HARD_REDIRECT_COOLDOWN_SECONDS = POLL_INTERVAL_SECONDS * 3
-    # Minimum gap between logging two violations for the same process -- prevents
-    # rapid-fire entries when a background app briefly steals focus repeatedly.
-    VIOLATION_COOLDOWN_SECONDS = 5
+    # Minimum gap between logging two violations for the same process now
+    # lives in enforcer.VIOLATION_RECORD_COOLDOWN_SECONDS instead of a
+    # constant here -- see enforcer.record_violation_deduped()'s module-level
+    # comment for why that dedup had to move to a place both this poll loop
+    # and enforcer.py's own instant WinEvent hook could share.
 
 
     def get_active_window():
@@ -161,8 +162,8 @@ else:
 # check that also dedupes violation logging) -- staying on the same blocked
 # app for the rest of the session after that one warning never nagged again.
 # This is a separate cooldown so the overlay periodically re-appears while
-# the user stays off-task, independent of how record_violation's own dedupe
-# behaves.
+# the user stays off-task, independent of how
+# enforcer.record_violation_deduped()'s own dedupe behaves.
 SOFT_LOCK_REWARN_SECONDS = 20
 
 
@@ -196,8 +197,18 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
     last_flagged_process = None
     last_menu_state = None
     last_hard_redirect = {"process": None, "hwnd": None, "time": 0.0}
-    last_violation_time = {}  # process_name -> time.time() of last logged violation
     last_soft_warning = {}  # process_name -> {"hwnd": hwnd, "time": time.time()} of last soft-lock overlay shown
+    # No process_name -> time cooldown tracker of this loop's own here
+    # anymore -- both violation-logging call sites below go through
+    # enforcer.record_violation_deduped() instead of calling
+    # session_manager.record_violation() directly, which dedupes against a
+    # single shared registry also used by enforcer.py's instant WinEvent
+    # hook, so the same physical violation can't be counted by both paths.
+    # is_new_flag below (and sweep's own was_iconic check) still avoid even
+    # attempting a call for an app that's continuously been the known
+    # offender since the last tick; record_violation_deduped()'s cooldown is
+    # what stops that attempt and a different path's attempt for the *same*
+    # underlying event from both actually landing.
 
     while not stop_event.is_set():
         try:
@@ -259,10 +270,7 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
                     is_new_flag = process_name != last_flagged_process
                     if is_new_flag:
                         last_flagged_process = process_name
-                        now = time.time()
-                        if now - last_violation_time.get(process_name, 0) >= VIOLATION_COOLDOWN_SECONDS:
-                            last_violation_time[process_name] = now
-                            session_manager.record_violation(process_name)
+                        enforcer.record_violation_deduped(process_name)
 
                     # lock_mode is re-read fresh on every tick, unconditionally
                     # -- not just when is_new_flag is True -- so a mid-session
@@ -341,10 +349,7 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
                 if session_manager.get_lock_mode() == "hard":
                     swept = enforcer.sweep_minimize_blocked_windows()
                     for swept_process, _swept_hwnd in swept:
-                        now = time.time()
-                        if now - last_violation_time.get(swept_process, 0) >= VIOLATION_COOLDOWN_SECONDS:
-                            last_violation_time[swept_process] = now
-                            session_manager.record_violation(swept_process)
+                        enforcer.record_violation_deduped(swept_process)
                         # No cooldown needed here anymore -- enforcer.py's
                         # show_blocked_notice routes through the same
                         # process-keyed dedup as hard_lock_redirect's own

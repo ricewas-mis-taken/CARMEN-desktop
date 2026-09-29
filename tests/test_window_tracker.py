@@ -403,3 +403,66 @@ def test_screen_time_skips_exempt_processes(isolate_state, fast_polling, monkeyp
 
     today = screentime_store._day_key()
     assert screentime_store.get_day(today)["apps"] == {}
+
+
+class _FakeProcess:
+    def __init__(self, name):
+        self._name = name
+
+    def name(self):
+        return self._name
+
+
+def test_poll_loop_and_instant_hook_do_not_double_count_one_violation(
+    isolate_state, fast_polling, monkeypatch,
+):
+    """Regression test for the two unshared violation-cooldown trackers:
+    window_tracker.py's poll loop used to keep its own process-name-keyed
+    cooldown dict before calling session_manager.record_violation(), and
+    enforcer.py's instant WinEvent hook (_on_foreground_changed) kept a
+    completely separate, unshared hwnd-keyed one before calling the exact
+    same function for the exact same physical event -- the moment the user
+    switches to a blocked app. Under timing skew, both trackers could each
+    independently decide "this is fresh" and both record a violation for
+    it, double-counting one real switch.
+
+    Exercises both real code paths: window_tracker.run_polling_loop's own
+    foreground-detection tick (via a thread, like the other tests in this
+    file), and enforcer._on_foreground_changed itself (called directly,
+    the same function the real WinEvent hook thread would call) -- not a
+    hand-rolled stand-in for either."""
+    session_manager.start_session(25, "hard", ["discord.exe"], [])
+
+    monkeypatch.setattr(
+        window_tracker, "get_active_window",
+        lambda: {"title": "Discord", "process_name": "discord.exe", "pid": 4242, "hwnd": 111},
+    )
+    monkeypatch.setattr(enforcer, "hard_lock_redirect", lambda name: None)
+    monkeypatch.setattr(enforcer, "sweep_minimize_blocked_windows", lambda: [])
+    monkeypatch.setattr(enforcer, "show_blocked_notice", lambda name: None)
+    monkeypatch.setattr(enforcer.win32process, "GetWindowThreadProcessId", lambda h: (0, 4242))
+    monkeypatch.setattr(enforcer.psutil, "Process", lambda p: _FakeProcess("discord.exe"))
+    monkeypatch.setattr(enforcer.win32gui, "ShowWindow", lambda h, cmd: None)
+
+    stop_event = threading.Event()
+    thread = threading.Thread(target=window_tracker.run_polling_loop, args=(stop_event,), daemon=True)
+    thread.start()
+    try:
+        # Let the poll loop's own foreground path log a violation for
+        # discord.exe first.
+        time.sleep(0.05)
+        assert session_manager.get_status()["violationCount"] >= 1
+
+        # The instant WinEvent hook now observes the exact same window --
+        # same physical "still on discord.exe" event the poll loop already
+        # reacted to a moment ago -- and, pre-fix, would have recorded its
+        # own separate violation for it via its own unshared cooldown.
+        enforcer._on_foreground_changed(
+            hwineventhook=0, event=enforcer._EVENT_SYSTEM_FOREGROUND, hwnd=111,
+            id_object=enforcer._OBJID_WINDOW, id_child=0, id_event_thread=0, dwms_event_time=0,
+        )
+    finally:
+        stop_event.set()
+        thread.join(timeout=2)
+
+    assert session_manager.get_status()["violationCount"] == 1

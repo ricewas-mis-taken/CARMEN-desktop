@@ -1,5 +1,9 @@
 """Soft/hard lock enforcement actions."""
 import sys
+import threading
+import time
+
+import session_manager
 
 if sys.platform == "darwin":
     import os as _os
@@ -27,8 +31,6 @@ else:
     import json
     import os
     import random
-    import threading
-    import time
     from ctypes import wintypes
 
     import psutil
@@ -38,7 +40,6 @@ else:
 
     import qt_gui_thread
     import qt_ui.enforcer_overlay as enforcer_overlay
-    import session_manager
 
     # Two separate, undocumented-in-win32con DWM window attributes (dwmapi.h),
     # set via raw ctypes -- minimizing a blocked window alone doesn't stop it
@@ -751,15 +752,12 @@ else:
     ]
     _user32.UnhookWinEvent.argtypes = [wintypes.HANDLE]
 
-    # hwnd -> time.time() of the last time this callback logged a violation for
-    # it -- independent of window_tracker's own cooldowns (VIOLATION_COOLDOWN_SECONDS,
-    # HARD_REDIRECT_COOLDOWN_SECONDS), since once this callback minimizes a
-    # window it's no longer foreground and is already iconic, so the poll loop's
-    # foreground check and sweep_minimize_blocked_windows() naturally never see
-    # it as a fresh violation on the next tick -- this is the only place that
-    # would ever record one for a window caught here.
-    _INSTANT_REMINIMIZE_COOLDOWN_SECONDS = 2.0
-    _last_instant_violation = {}
+    # This callback used to keep its own separate hwnd -> time.time() cooldown
+    # here before logging a violation, entirely unshared with
+    # window_tracker.py's poll loop's own process-name-keyed one -- see
+    # record_violation_deduped() below (defined after this if/else block,
+    # so it's available on both platforms) for why that was a real
+    # double-counting risk and how it's fixed now.
 
 
     def _on_foreground_changed(hwineventhook, event, hwnd, id_object, id_child, id_event_thread, dwms_event_time):
@@ -782,18 +780,8 @@ else:
             _hide_taskbar_preview(hwnd, True)
             win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
 
-            now = time.time()
-            if now - _last_instant_violation.get(hwnd, 0) >= _INSTANT_REMINIMIZE_COOLDOWN_SECONDS:
-                _last_instant_violation[hwnd] = now
-                # A stale hwnd (its cooldown already elapsed) is never read
-                # again -- without this, a long-running session that keeps
-                # reopening/closing a blocked app accumulates one entry per
-                # hwnd forever, since Windows never reuses an hwnd value.
-                for stale_hwnd, last_seen in list(_last_instant_violation.items()):
-                    if now - last_seen >= _INSTANT_REMINIMIZE_COOLDOWN_SECONDS:
-                        del _last_instant_violation[stale_hwnd]
-                session_manager.record_violation(process_name)
-                show_blocked_notice(process_name)
+            record_violation_deduped(process_name)
+            show_blocked_notice(process_name)
         except Exception:
             pass
 
@@ -825,3 +813,60 @@ else:
                     stop_event.wait(0.05)
         finally:
             _user32.UnhookWinEvent(hook)
+
+
+# Shared, cross-platform choke point for logging a process-blocklist
+# violation, used by BOTH window_tracker.py's ~1.5s poll loop (the
+# foreground check and sweep_minimize_blocked_windows()) and, on Windows,
+# _on_foreground_changed()'s instant WinEvent hook above. Those two used to
+# keep entirely separate, unshared cooldown trackers -- window_tracker.py's
+# own process-name-keyed dict, this module's own hwnd-keyed
+# _last_instant_violation dict -- with no way for either to know the other
+# had already logged the exact same real-world event. Under timing skew
+# (the instant hook reacts the moment Windows reports a foreground change,
+# well under one poll tick; the poll loop's own tick can have already
+# sampled that same foreground window a moment earlier), the same physical
+# "switched to a blocked app" event could get counted by both, inflating
+# violationCount.
+#
+# Deliberately NOT folded into session_manager.record_violation() itself --
+# that function stays a plain "log one violation, unconditionally" primitive
+# (existing tests, and any future caller, may legitimately want to record
+# two genuinely separate violations back-to-back with no gap). This dedup
+# is purely about recognizing "these two calls are almost certainly reports
+# of the one same event", which is a property of *how* the two callers
+# observe the world, not of what record_violation() itself should do. See
+# DESIGN_DECISIONS.txt for the full writeup of this choice.
+#
+# Keyed on process name (lowercased), not hwnd -- window_tracker.py's poll
+# loop only ever knows a process name at the point it would call this
+# (get_active_window() gives it one, but a sweep-caught window is reported
+# as (process_name, hwnd) pairs where the hwnd is incidental), so hwnd
+# can't be the shared key both paths agree on. Its own lock (not
+# session_manager's or review_store's) since it's touched from
+# window_tracker's polling thread and this module's own dedicated WinEvent
+# watcher thread, two threads with no other shared lock between them.
+_violation_dedup_lock = threading.Lock()
+_last_recorded_violation = {}  # process_name.lower() -> time.time()
+VIOLATION_RECORD_COOLDOWN_SECONDS = 5
+
+
+def record_violation_deduped(process_name):
+    """Calls session_manager.record_violation(process_name) unless another
+    call for the same process name landed within the last
+    VIOLATION_RECORD_COOLDOWN_SECONDS -- see the module-level comment above
+    for why this exists and why the dedup lives here rather than in
+    session_manager.record_violation() itself. Every real call site that
+    used to call session_manager.record_violation() directly for a
+    poll-loop- or WinEvent-observed violation now routes through this
+    instead; nothing about the enforcement actions themselves (minimize,
+    redirect, overlay) is gated by this -- only whether the violation gets
+    logged/counted."""
+    key = (process_name or "").lower()
+    now = time.time()
+    with _violation_dedup_lock:
+        last = _last_recorded_violation.get(key, 0.0)
+        if now - last < VIOLATION_RECORD_COOLDOWN_SECONDS:
+            return
+        _last_recorded_violation[key] = now
+    session_manager.record_violation(process_name)
