@@ -757,7 +757,17 @@ class _TopicView(QWidget):
         # finish_review_for_problem fallback, see _complete_finish.
         token = None if end_session_on_finish else review_store.start_review(problem["id"])
         if not end_session_on_finish and token is None:
-            QMessageBox.warning(self, "Carmen Focus", "That problem no longer exists.")
+            # start_review() returns None for two different reasons now --
+            # the problem no longer existing, or a review already being
+            # timed (review_store.py's own one-at-a-time guard, which this
+            # tab's _is_reviewing flag should already prevent reaching in
+            # the normal case, but a review started from another surface --
+            # api_server.py's route -- has no such flag). Tell them apart so
+            # the message is actually right either way.
+            if review_store.get_problem(problem["id"]) is None:
+                QMessageBox.warning(self, "Carmen Focus", "That problem no longer exists.")
+            else:
+                QMessageBox.warning(self, "Carmen Focus", "A review is already in progress.")
             self.refresh()
             return
 

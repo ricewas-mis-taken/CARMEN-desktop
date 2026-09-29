@@ -77,6 +77,38 @@ def _ensure_active_sessions_loaded():
             return
         _active_sessions_loaded = True
         _active_sessions.update(_load_active_sessions())
+        snapshot = dict(_active_sessions)
+
+    if not snapshot:
+        return
+    # One-time cleanup for whatever was already sitting in
+    # ACTIVE_SESSION_PATH: a build from before delete_topic() started
+    # evicting active-session entries for the problems it deletes could
+    # have left a stale entry on disk -- get_active_review() already treats
+    # that as "nothing active" (its own get_problem() lookup comes back
+    # None), but start_review()'s one-review-at-a-time guard would
+    # otherwise be permanently stuck refusing every future start with no
+    # way for the UI to clear it. Done exactly once, right here, rather
+    # than on every start_review() call -- review_problems.id is a plain
+    # SQLite INTEGER PRIMARY KEY (not AUTOINCREMENT), so a deleted
+    # problem's id can be reused by a later, unrelated problem, and
+    # checking "does get_problem(entry['problem_id']) exist" at some
+    # arbitrary later point could then find that unrelated problem and
+    # wrongly conclude the stale entry isn't stale. Called outside `with
+    # _lock:` -- get_problem() takes _lock itself, and _lock is a plain,
+    # non-reentrant threading.Lock.
+    dead_tokens = [
+        token for token, entry in snapshot.items() if get_problem(entry["problem_id"]) is None
+    ]
+    if not dead_tokens:
+        return
+    with _lock:
+        changed = False
+        for token in dead_tokens:
+            if _active_sessions.pop(token, None) is not None:
+                changed = True
+        if changed:
+            _save_active_sessions()
 
 
 def _save_active_sessions():
@@ -467,10 +499,28 @@ def rename_topic(topic_id, name):
 
 
 def delete_topic(topic_id):
-    """Deletes a topic and all its subjects and problems."""
+    """Deletes a topic and all its subjects and problems.
+
+    Also evicts any review_store._active_sessions entry for one of those
+    problems -- see start_review()'s docstring on its one-review-at-a-time
+    guard. Without this, a review still "in progress" on a problem whose
+    topic gets deleted out from under it would leave a stale entry that
+    nothing else ever clears, permanently blocking every future
+    start_review() call. Done inside the same `with _lock:` this function
+    already takes for its own DB writes -- _lock is the one object shared
+    by every _active_sessions access in this module too (see its
+    definition above), so this is a single critical section, not a nested
+    lock acquisition."""
+    _ensure_active_sessions_loaded()
     with _lock:
         try:
             conn = _get_conn()
+            problem_ids = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT id FROM review_problems WHERE topic_id = ?", (topic_id,)
+                ).fetchall()
+            }
             conn.execute(
                 "DELETE FROM review_sessions WHERE problem_id IN "
                 "(SELECT id FROM review_problems WHERE topic_id = ?)",
@@ -480,6 +530,16 @@ def delete_topic(topic_id):
             conn.execute("DELETE FROM review_subjects WHERE topic_id = ?", (topic_id,))
             conn.execute("DELETE FROM review_topics WHERE id = ?", (topic_id,))
             conn.commit()
+
+            if problem_ids:
+                dead_tokens = [
+                    token for token, entry in _active_sessions.items()
+                    if entry["problem_id"] in problem_ids
+                ]
+                for token in dead_tokens:
+                    _active_sessions.pop(token, None)
+                if dead_tokens:
+                    _save_active_sessions()
         except Exception:
             logger.exception("review_store.delete_topic failed for %s", topic_id)
             return
@@ -714,7 +774,30 @@ def update_problem(
 def start_review(problem_id):
     """Logs a start timestamp for a review attempt (persisted -- see
     _active_sessions above) and hands back an opaque token the caller must
-    pass to finish_review(). Returns None if the problem doesn't exist."""
+    pass to finish_review(). Returns None if the problem doesn't exist, or
+    if a different review is already being timed.
+
+    get_active_review()'s docstring has always claimed "only one review is
+    ever timed at once", but until now that was only enforced by
+    qt_ui/review_tab.py's own private UI flag (_is_reviewing) -- this
+    function itself had no guard, and api_server.py's
+    POST /review/problems/<id>/start route called it directly with none
+    either. Calling this while a review was already active silently created
+    a second _active_sessions entry that _only_active_entry_locked()/
+    get_active_review() would then just as silently ignore (dict insertion
+    order picks a winner), with no pause/resume/auto-pause ever reaching the
+    other one. Reusing the same None already returned for "problem doesn't
+    exist" keeps this function's signature/contract unchanged -- callers
+    that already handle a None token sensibly for one reason continue to,
+    though a caller that wants to tell the two apart in its own messaging
+    can call get_problem(problem_id) itself (None there means "doesn't
+    exist"; non-None combined with a None token here means "busy"). A stale
+    leftover entry for a problem that's since been deleted can't be the
+    reason this returns None for a *valid* problem_id -- see delete_topic()
+    below, which evicts any active-session entry for a problem it deletes,
+    and _ensure_active_sessions_loaded(), which does the same once for
+    whatever ACTIVE_SESSION_PATH had on disk from before that cleanup
+    existed."""
     _ensure_active_sessions_loaded()
     if get_problem(problem_id) is None:
         return None
@@ -722,6 +805,8 @@ def start_review(problem_id):
     token = uuid.uuid4().hex
     now = datetime.now()
     with _lock:
+        if _active_sessions:
+            return None
         _active_sessions[token] = {
             "problem_id": problem_id,
             "started_at": now,
