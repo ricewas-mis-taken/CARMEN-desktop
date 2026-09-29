@@ -100,6 +100,63 @@ def test_start_review_unknown_problem_returns_none(isolate_review_db):
     assert review_store.start_review(999999) is None
 
 
+def test_start_review_returns_none_while_another_is_already_active(isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    first = review_store.create_problem(
+        topic["id"], subject["id"], "First", stars=3, description_type="text", description_text="x",
+    )
+    second = review_store.create_problem(
+        topic["id"], subject["id"], "Second", stars=3, description_type="text", description_text="x",
+    )
+    token = review_store.start_review(first["id"])
+    assert token is not None
+
+    # Starting a second review -- even for a different, perfectly valid
+    # problem -- must be refused while the first is still being timed.
+    assert review_store.start_review(second["id"]) is None
+    active = review_store.get_active_review()
+    assert active["problemId"] == first["id"]
+
+    # Once the first is finished, starting the second works normally again.
+    review_store.finish_review(token)
+    token2 = review_store.start_review(second["id"])
+    assert token2 is not None
+    assert review_store.get_active_review()["problemId"] == second["id"]
+
+
+def test_delete_topic_evicts_the_active_session_for_one_of_its_problems(isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    doomed = review_store.create_problem(
+        topic["id"], subject["id"], "Doomed", stars=3, description_type="text", description_text="x",
+    )
+    review_store.start_review(doomed["id"])
+
+    # The topic (and with it, the problem the active entry still points at)
+    # gets deleted while a review on it is still "in progress". Without
+    # delete_topic() proactively evicting the matching _active_sessions
+    # entry, this would leave a stale leftover that permanently blocks
+    # every future start_review() call -- get_active_review() already
+    # treats it as absent (its own get_problem() lookup comes back None),
+    # but nothing would ever actually clear it out of _active_sessions.
+    review_store.delete_topic(topic["id"])
+    assert review_store.get_active_review() is None
+
+    # A later, unrelated problem can reuse review_problems' plain
+    # (non-AUTOINCREMENT) integer id -- this deliberately creates a fresh
+    # problem that lands on the exact same id "Doomed" had, to prove the
+    # stale entry was actually removed rather than merely being ignored
+    # because get_problem() on its old id happens to return None right now.
+    topic2, subject2 = _make_topic_and_subject(name="Other", subject_name="Other Subject", color="#123456")
+    fresh = review_store.create_problem(
+        topic2["id"], subject2["id"], "Fresh", stars=3, description_type="text", description_text="x",
+    )
+    assert fresh["id"] == doomed["id"], "test assumes sqlite reuses the deleted row's id"
+
+    token = review_store.start_review(fresh["id"])
+    assert token is not None
+    assert review_store.get_active_review()["problemId"] == fresh["id"]
+
+
 def test_get_active_review_returns_none_when_nothing_is_in_progress(isolate_review_db):
     assert review_store.get_active_review() is None
 

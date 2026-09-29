@@ -779,7 +779,14 @@ def review_problem_detail(problem_id):
 def review_problem_start(problem_id):
     token = review_store.start_review(problem_id)
     if token is None:
-        return jsonify({"error": "problem not found"}), 404
+        # start_review() returns None for two different reasons: the
+        # problem doesn't exist, or a different review is already being
+        # timed (review_store.py's own one-at-a-time guard). Distinguish
+        # them here so a client isn't told "not found" for a problem that
+        # exists just fine.
+        if review_store.get_problem(problem_id) is None:
+            return jsonify({"error": "problem not found"}), 404
+        return jsonify({"error": "a review is already in progress"}), 409
     return jsonify({"sessionToken": token})
 
 

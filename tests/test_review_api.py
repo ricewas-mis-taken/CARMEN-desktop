@@ -162,6 +162,35 @@ def test_start_review_unknown_problem_404(client, isolate_review_db):
     assert resp.status_code == 404
 
 
+def test_start_review_while_one_already_in_progress_409(client, isolate_review_db):
+    topic = _create_topic(client)
+    subject = _create_subject(client, topic["id"])
+    created = client.post(
+        f"/review/topics/{topic['id']}/problems",
+        data={
+            "name": "Solve it", "subject_id": str(subject["id"]), "stars": "3",
+            "description_type": "text", "description_text": "x",
+        },
+    ).get_json()
+    other = client.post(
+        f"/review/topics/{topic['id']}/problems",
+        data={
+            "name": "Solve another", "subject_id": str(subject["id"]), "stars": "3",
+            "description_type": "text", "description_text": "x",
+        },
+    ).get_json()
+
+    first_start = client.post(f"/review/problems/{created['id']}/start")
+    assert first_start.status_code == 200
+
+    # A second start -- even for a different, perfectly valid problem --
+    # must be rejected distinctly from "not found" while one review is
+    # already being timed (review_store.start_review()'s one-at-a-time
+    # guard, previously unenforced by this route at all).
+    second_start = client.post(f"/review/problems/{other['id']}/start")
+    assert second_start.status_code == 409
+
+
 def test_due_only_query_param(client, isolate_review_db):
     topic = _create_topic(client)
     subject = _create_subject(client, topic["id"])
