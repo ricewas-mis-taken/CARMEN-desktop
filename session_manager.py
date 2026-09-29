@@ -842,6 +842,15 @@ def record_acceptable(process_name):
 
 
 def record_violation(process_name):
+    """Logs one process-blocklist violation. Always records -- deduping
+    which real-world events are even worth calling this for is the
+    caller's job (see enforcer.record_violation_deduped(), the single
+    shared choke point window_tracker.py's poll loop and enforcer.py's
+    instant WinEvent hook both now route through so the same physical
+    violation can't reach here twice). This function itself stays a plain
+    "log one" primitive rather than trying to dedup on its own, since
+    tests and any future caller legitimately need to record two genuinely
+    separate violations back-to-back."""
     with _lock:
         if not _state["isActive"]:
             # The window-polling loop only calls this after seeing

@@ -122,3 +122,38 @@ Scope: this does NOT apply to a review driving session_manager's own
 session (end_session_on_finish=True) -- that one already deferred to
 session_manager.pause_session()/get_status()["isPaused"] as its source of
 truth, unchanged.
+
+[2026-09-28] Violation-cooldown dedup lives in a shared choke point, not in record_violation() itself
+Decision: window_tracker.py's ~1.5s poll loop and enforcer.py's instant
+WinEvent hook (_on_foreground_changed) used to keep two entirely separate,
+unshared cooldown trackers before calling session_manager.record_violation()
+-- window_tracker's own process-name-keyed dict, enforcer's own hwnd-keyed
+one. Under timing skew (the instant hook reacts the moment Windows reports a
+foreground change; the poll loop's own tick can have already sampled that
+same foreground window a moment earlier), the same physical "switched to a
+blocked app" event could get recorded by both, double-counting one real
+violation. Fixed by adding enforcer.record_violation_deduped(process_name)
+-- a single shared, lock-guarded, process-name-keyed cooldown registry used
+by every real call site in both files -- and routing all of them through it
+instead of calling session_manager.record_violation() directly.
+Why: the alternative considered was moving the dedup into
+session_manager.record_violation() itself, so it would be impossible to
+double-count no matter who calls it or how. Rejected: record_violation()
+already has direct callers (this codebase's own test suite included) that
+legitimately need to log two genuinely distinct violations back-to-back with
+no gap -- e.g. tests/test_enforcer.py calls it twice in a row to reach
+violationCount==2 for message-formatting coverage, with no real event
+separating them. A blanket cooldown inside record_violation() itself would
+have silently swallowed the second one, turning a "log one violation"
+primitive into something with an opinion about timing that not every caller
+wants. Keeping the dedup in a wrapper both real (non-test) callers route
+through instead means record_violation() stays a plain, unconditional
+primitive, while the actual production risk (two different code paths
+guessing independently about the same physical event) is fixed at the one
+place that's actually about recognizing "these two calls are almost
+certainly reports of the same event."
+Scope: only affects whether a violation gets logged/counted
+(session_manager.record_violation()). Does not gate any enforcement action
+itself (minimize, redirect, overlay) -- those keep their own existing,
+independent cooldowns/dedup (HARD_REDIRECT_COOLDOWN_SECONDS, is_new_flag,
+_show_violation_notice's own _last_violation_notice, etc.), unchanged.
