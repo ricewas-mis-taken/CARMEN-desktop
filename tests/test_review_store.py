@@ -478,3 +478,84 @@ def test_save_photo_bytes_copies_into_photos_dir(isolate_review_db):
     assert path.endswith(".png")
     with open(path, "rb") as f:
         assert f.read() == b"fake-image-bytes"
+
+
+def test_pause_active_review_is_not_corrupted_by_a_concurrent_start_review(isolate_review_db):
+    """Regression test for the missing locking around _active_sessions.
+
+    Deterministically reproduces the race rather than hoping a hammer loop
+    gets flaky-lucky: thread A calls pause_active_review() on the one active
+    entry, rigged so its started_at.isoformat() call -- inside
+    _save_active_sessions()'s `for token, entry in _active_sessions.items()`
+    loop -- blocks on an Event partway through. While it's blocked, thread B
+    calls start_review() for an unrelated problem, which inserts a second
+    entry into the same dict.
+
+    Pre-fix, neither pause_active_review() nor start_review() takes any
+    lock, so thread B's insert lands in the middle of thread A's dict
+    iteration: CPython's dict raises `RuntimeError: dictionary changed size
+    during iteration` on the very next step of that iteration, and
+    _save_active_sessions()'s own `except OSError` does NOT catch a
+    RuntimeError, so it propagates out of pause_active_review() uncaught.
+
+    Post-fix, both functions wrap their whole check-mutate-save sequence in
+    `with _lock:`, so thread B blocks until thread A's save finishes -- no
+    such interleaving is possible, and both threads return cleanly."""
+    import threading
+    from datetime import datetime as real_datetime
+
+    topic, subject = _make_topic_and_subject()
+    problem_a = review_store.create_problem(
+        topic["id"], subject["id"], "Problem A", stars=3, description_type="text", description_text="x",
+    )
+    problem_b = review_store.create_problem(
+        topic["id"], subject["id"], "Problem B", stars=3, description_type="text", description_text="x",
+    )
+
+    entered_save_loop = threading.Event()
+    allow_save_to_continue = threading.Event()
+
+    class _SlowIsoformatDatetime(real_datetime):
+        """Stands in for the started_at value of the entry being paused --
+        its isoformat() call (inside _save_active_sessions' dict
+        comprehension) signals that the save is mid-iteration, then blocks
+        so a second thread gets a real window to mutate the dict."""
+
+        def isoformat(self, *args, **kwargs):
+            entered_save_loop.set()
+            allow_save_to_continue.wait(timeout=2)
+            return super().isoformat(*args, **kwargs)
+
+    token_a = review_store.start_review(problem_a["id"])
+    # Swap the already-inserted entry's started_at for the slow stand-in --
+    # start_review() itself is untouched, this only rigs the value already
+    # stored so pause_active_review()'s own save is the one that stalls.
+    entry = review_store._active_sessions[token_a]
+    entry["started_at"] = _SlowIsoformatDatetime.fromtimestamp(entry["started_at"].timestamp())
+
+    errors = []
+
+    def pauser():
+        try:
+            review_store.pause_active_review()
+        except Exception as exc:  # noqa: BLE001 - capturing to assert on it below
+            errors.append(exc)
+
+    def inserter():
+        entered_save_loop.wait(timeout=2)
+        try:
+            review_store.start_review(problem_b["id"])
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+        finally:
+            allow_save_to_continue.set()
+
+    t1 = threading.Thread(target=pauser)
+    t2 = threading.Thread(target=inserter)
+    t1.start()
+    t2.start()
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+
+    assert not t1.is_alive() and not t2.is_alive(), "threads deadlocked or hung"
+    assert errors == [], f"concurrent access corrupted _active_sessions: {errors!r}"
