@@ -176,3 +176,24 @@ repos' CLAUDE.md.
   -- a background tab reporting a violation would resolve/repoint the
   wrong open entry. See carmen-extension/DESIGN_DECISIONS.txt for the
   extension-side fix; no desktop code changed for this one.
+
+[2026-09-29] start_review()'s existence check is re-run inside the same lock that does the insert
+Decision: a red-team pass found a TOCTOU race between start_review()'s
+existence check (run before _lock is ever taken) and delete_topic() -- if
+delete_topic() runs in the gap between that check and the insert, it finds
+nothing yet in _active_sessions to evict (this thread hasn't inserted its
+entry yet), then start_review() goes on to insert an entry for the
+now-deleted problem anyway. That orphaned entry permanently jams the
+one-review-at-a-time guard added earlier this session (start_review()
+refuses to start anything new while _active_sessions is non-empty), with
+no way to clear it short of a process restart.
+Fixed by re-running the existence check a second time, inside the same
+`with _lock:` section that does the insert. Since get_problem() itself
+takes _lock (and _lock is a plain, non-reentrant threading.Lock), the
+re-check can't just call get_problem() again without deadlocking -- it
+queries the connection directly instead, the same way delete_topic()
+already reads from the DB while holding _lock.
+Why: any TOCTOU fix has to make the check and the action it gates atomic
+with each other, not just serialize the containing dict access (which was
+already correctly locked before this fix) -- the race lived in the gap
+before the lock was ever acquired, not in the locked section itself.
