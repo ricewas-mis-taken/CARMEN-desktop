@@ -155,9 +155,22 @@ def _require_token(fn):
     return wrapper
 
 
+# A real process blocklist or domain whitelist a user actually builds by
+# hand tops out at, realistically, a few dozen entries -- these caps are
+# generous multiples of that, not a tight fit. Without them, a
+# 2-million-entry list was accepted with no complaint, bloating
+# session_state.json to 44.7MB and making every single subsequent
+# violation-tick rewrite of that file take ~0.6s (it's rewritten from
+# scratch on every violation, see session_manager.py's own _save()) --
+# degrading every poll for the rest of that session.
+_MAX_LIST_ENTRIES = 2000
+_MAX_ENTRY_LENGTH = 500
+
+
 def _is_string_list(value):
-    """True if value is a list where every element is a non-empty (after
-    stripping whitespace) string. Used to reject process/domain lists whose
+    """True if value is a list, within the size caps above, where every
+    element is a non-empty (after stripping whitespace) string no longer
+    than _MAX_ENTRY_LENGTH. Used to reject process/domain lists whose
     elements aren't strings before they ever reach session_manager -- a bad
     element there raises deep inside is_blocked()/add_domain_to_whitelist()
     (AttributeError from calling .lower() on a non-string). is_blocked() is
@@ -166,7 +179,14 @@ def _is_string_list(value):
     process/domain entry silently disables ALL enforcement for the rest of
     the session, with no visible error to the user, instead of failing loud
     and clear at the point the bad list was actually submitted."""
-    return isinstance(value, list) and all(isinstance(item, str) and item.strip() for item in value)
+    return (
+        isinstance(value, list)
+        and len(value) <= _MAX_LIST_ENTRIES
+        and all(
+            isinstance(item, str) and item.strip() and len(item) <= _MAX_ENTRY_LENGTH
+            for item in value
+        )
+    )
 
 
 @app.route("/internal/quit", methods=["POST"])

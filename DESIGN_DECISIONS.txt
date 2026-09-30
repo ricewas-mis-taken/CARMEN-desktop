@@ -199,3 +199,42 @@ Why: any check that gates a commit has to run before the commit, not
 after -- checking the returned value's shape after the side effects
 already happened can only ever confirm-after-the-fact, never actually
 prevent the wrong commit from happening in the first place.
+
+[2026-09-29] start_review()'s existence check is re-run inside the same lock that does the insert
+Decision: a red-team pass found a TOCTOU race between start_review()'s
+existence check (run before _lock is ever taken) and delete_topic() -- if
+delete_topic() runs in the gap between that check and the insert, it finds
+nothing yet in _active_sessions to evict (this thread hasn't inserted its
+entry yet), then start_review() goes on to insert an entry for the
+now-deleted problem anyway. That orphaned entry permanently jams the
+one-review-at-a-time guard added earlier this session (start_review()
+refuses to start anything new while _active_sessions is non-empty), with
+no way to clear it short of a process restart.
+Fixed by re-running the existence check a second time, inside the same
+`with _lock:` section that does the insert. Since get_problem() itself
+takes _lock (and _lock is a plain, non-reentrant threading.Lock), the
+re-check can't just call get_problem() again without deadlocking -- it
+queries the connection directly instead, the same way delete_topic()
+already reads from the DB while holding _lock.
+Why: any TOCTOU fix has to make the check and the action it gates atomic
+with each other, not just serialize the containing dict access (which was
+already correctly locked before this fix) -- the race lived in the gap
+before the lock was ever acquired, not in the locked section itself.
+
+[2026-09-29] _is_string_list() caps list size and entry length, applied to every route that reuses it
+Decision: a red-team pass found POST /session/start accepted a
+2,000,000-entry process_blocklist with no complaint, bloating
+session_state.json to 44.7MB and making every subsequent violation-tick
+rewrite of that file (done from scratch on every violation) take ~0.6s.
+Fixed by adding _MAX_LIST_ENTRIES (2000) and _MAX_ENTRY_LENGTH (500) caps
+directly inside the shared _is_string_list() validator, rather than only
+at the one route that was actually attacked -- that same helper is reused
+by /session/update, the config blocklist/whitelist routes, and
+/focus/rules's whitelist check, all of which had the identical unbounded
+gap.
+Why: fixing this at the shared validator instead of duplicating a
+length check at each call site means no future route that reuses
+_is_string_list() can reintroduce this class of bug by omission.
+Scope: 2000 entries / 500 chars per entry is a generous multiple of what a
+real hand-built blocklist or whitelist would ever need -- picked to be
+obviously above any real usage, not a tight fit.
