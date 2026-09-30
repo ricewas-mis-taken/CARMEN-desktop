@@ -177,6 +177,26 @@ repos' CLAUDE.md.
   wrong open entry. See carmen-extension/DESIGN_DECISIONS.txt for the
   extension-side fix; no desktop code changed for this one.
 
+[2026-09-29] tasks_store.add_domains_to_whitelist() replaces get_task()+update_task() for the domain-whitelist-add route
+Decision: a red-team pass found api_server.py's task_domain_whitelist_add
+route did get_task() (lock, read, release), merged the new domains into
+the list in plain Python with no lock held, then update_task() (lock,
+write, release) -- two separate lock acquisitions around an unlocked
+read-modify-write. Two concurrent adds of different domains to the same
+task both reported 200 success, but whichever update_task() call landed
+last silently discarded the other's domain. Fixed by adding
+tasks_store.add_domains_to_whitelist(task_id, domains), which does the
+whole read-merge-write inside one _lock acquisition (tasks_store's _lock
+is an RLock, so this nests safely the same way update_task()/delete_task()
+already read/write load_tasks()/save_tasks() under _lock directly rather
+than calling other locked functions).
+Why: matches the shape session_manager.add_domain_to_whitelist()/
+remove_process_from_blocklist() already correctly use for the same kind of
+merge-into-a-list operation -- any read-modify-write that needs to be
+atomic belongs inside a single lock acquisition as its own named
+operation, not composed from two already-locked functions with a gap
+between them.
+
 [2026-09-29] POST /review/problems/<id>/finish verifies the token's problem_id before committing, and forwards self_solved/shakiness/duration_seconds
 Decision: a red-team pass found two bugs in this one route. First,
 review_store.finish_review(session_token) was called -- which commits its

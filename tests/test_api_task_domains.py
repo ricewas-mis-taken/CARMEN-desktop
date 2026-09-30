@@ -48,6 +48,43 @@ def test_rejects_non_list_domains(client):
     assert resp.status_code == 400
 
 
+def test_concurrent_adds_of_different_domains_do_not_lose_either(client):
+    """Regression test: this route used to do get_task() then update_task()
+    with the merge computed in plain Python in an unlocked gap between them
+    -- two concurrent adds of different domains to the same task both read
+    the same starting list, both wrote back their own merged version, and
+    whichever update_task() call landed last silently discarded the
+    other's domain, with both requests reporting 200 success. Reproduced
+    with a barrier so both requests are genuinely in flight at the same
+    instant rather than hoping for a flaky-lucky interleaving."""
+    import threading
+
+    task = tasks_store.create_task({"name": "Math"})
+    barrier = threading.Barrier(2)
+    responses = {}
+
+    def add(name, domain):
+        barrier.wait(timeout=2)
+        responses[name] = client.post(
+            f"/tasks/{task['id']}/domain-whitelist", json={"domains": [domain]}
+        )
+
+    t1 = threading.Thread(target=add, args=("a", "site-a.com"))
+    t2 = threading.Thread(target=add, args=("b", "site-b.com"))
+    t1.start()
+    t2.start()
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+
+    assert not t1.is_alive() and not t2.is_alive(), "threads deadlocked or hung"
+    assert responses["a"].status_code == 200
+    assert responses["b"].status_code == 200
+
+    final = tasks_store.get_task(task["id"])["domainWhitelist"]
+    assert "site-a.com" in final
+    assert "site-b.com" in final
+
+
 def test_requires_token(client):
     task = tasks_store.create_task({"name": "Math"})
     resp = client.post(
