@@ -58,6 +58,41 @@ def test_session_start_accepts_blocked_browser_profiles(client, isolate_state):
     assert session_manager.get_status()["blockedBrowserProfiles"] == ["Chrome.UserData.Profile4"]
 
 
+def test_session_start_rejects_an_absurdly_large_process_blocklist(client, isolate_state):
+    """Regression test: a 2,000,000-entry process_blocklist used to be
+    accepted with no complaint, bloating session_state.json to 44.7MB and
+    making every subsequent violation-tick rewrite of that file (done from
+    scratch on every violation, see session_manager.py's own _save())
+    take ~0.6s -- degrading every poll for the rest of the session. A real
+    hand-built blocklist never comes anywhere close to this size."""
+    huge_blocklist = [f"proc{i}.exe" for i in range(2000)] + ["one_too_many.exe"]
+    resp = client.post(
+        "/session/start",
+        json={
+            "duration_minutes": 25,
+            "lock_mode": "soft",
+            "process_blocklist": huge_blocklist,
+            "domain_whitelist": [],
+        },
+    )
+    assert resp.status_code == 400
+    assert not session_manager.get_status()["isActive"]
+
+
+def test_session_start_rejects_an_absurdly_long_domain_entry(client, isolate_state):
+    resp = client.post(
+        "/session/start",
+        json={
+            "duration_minutes": 25,
+            "lock_mode": "soft",
+            "process_blocklist": [],
+            "domain_whitelist": ["a" * 501 + ".com"],
+        },
+    )
+    assert resp.status_code == 400
+    assert not session_manager.get_status()["isActive"]
+
+
 def test_session_start_falls_back_to_saved_browser_profile_blocklist(client, isolate_state):
     import config
     config.update_config(lambda cfg: cfg.update({"browserProfileBlocklist": ["Chrome"]}))

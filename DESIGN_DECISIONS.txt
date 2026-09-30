@@ -176,3 +176,21 @@ repos' CLAUDE.md.
   -- a background tab reporting a violation would resolve/repoint the
   wrong open entry. See carmen-extension/DESIGN_DECISIONS.txt for the
   extension-side fix; no desktop code changed for this one.
+
+[2026-09-29] _is_string_list() caps list size and entry length, applied to every route that reuses it
+Decision: a red-team pass found POST /session/start accepted a
+2,000,000-entry process_blocklist with no complaint, bloating
+session_state.json to 44.7MB and making every subsequent violation-tick
+rewrite of that file (done from scratch on every violation) take ~0.6s.
+Fixed by adding _MAX_LIST_ENTRIES (2000) and _MAX_ENTRY_LENGTH (500) caps
+directly inside the shared _is_string_list() validator, rather than only
+at the one route that was actually attacked -- that same helper is reused
+by /session/update, the config blocklist/whitelist routes, and
+/focus/rules's whitelist check, all of which had the identical unbounded
+gap.
+Why: fixing this at the shared validator instead of duplicating a
+length check at each call site means no future route that reuses
+_is_string_list() can reintroduce this class of bug by omission.
+Scope: 2000 entries / 500 chars per entry is a generous multiple of what a
+real hand-built blocklist or whitelist would ever need -- picked to be
+obviously above any real usage, not a tight fit.
