@@ -297,3 +297,80 @@ def test_unblock_reason_dialog_uses_the_dark_overlay_card_styling(qtbot, isolate
 
     assert win.objectName() == "LockOverlayCard"
     assert win.styleSheet() == enforcer_overlay._OVERLAY_STYLESHEET
+
+
+def test_lock_overlay_time_label_counts_up_for_a_review_session(qtbot, isolate_state, monkeypatch):
+    """Regression test: this popup's time label always showed
+    "Time remaining: {secondsRemaining}", even for a review-driven session
+    -- which uses an artificial multi-hour endTime ceiling internally
+    (same as an "Until I burnout" session), not a real deadline. The main
+    window's own status label (qt_ui/focus_tab.py) already got this right;
+    this popup's separate _tick()-driven label didn't."""
+    import session_manager
+
+    fake_status = {
+        "isActive": True,
+        "isPaused": False,
+        "isBurnout": False,
+        "source": "review",
+        "secondsRemaining": 28000,
+        "startTime": "2026-01-01T10:00:00",
+        "violationLog": [],
+    }
+    monkeypatch.setattr(session_manager, "get_status", lambda: fake_status)
+
+    win = enforcer_overlay.build_overlay("test message", duration_ms=5000)
+    qtbot.addWidget(win)
+    win._start_time -= 600  # pretend 10 real minutes have passed since open
+    win._tick()
+
+    text = win._time_label.text()
+    assert "elapsed" in text.lower()
+    assert "remaining" not in text.lower()
+    win.close()
+
+
+def test_lock_overlay_time_label_counts_up_for_a_burnout_session(qtbot, isolate_state, monkeypatch):
+    import session_manager
+
+    fake_status = {
+        "isActive": True,
+        "isPaused": False,
+        "isBurnout": True,
+        "source": "manual",
+        "secondsRemaining": 28000,
+        "startTime": "2026-01-01T10:00:00",
+        "violationLog": [],
+    }
+    monkeypatch.setattr(session_manager, "get_status", lambda: fake_status)
+
+    win = enforcer_overlay.build_overlay("test message", duration_ms=5000)
+    qtbot.addWidget(win)
+    win._tick()
+
+    assert "elapsed" in win._time_label.text().lower()
+    win.close()
+
+
+def test_lock_overlay_time_label_still_counts_down_for_a_regular_session(qtbot, isolate_state, monkeypatch):
+    import session_manager
+
+    fake_status = {
+        "isActive": True,
+        "isPaused": False,
+        "isBurnout": False,
+        "source": "manual",
+        "secondsRemaining": 90,
+        "startTime": "2026-01-01T10:00:00",
+        "violationLog": [],
+    }
+    monkeypatch.setattr(session_manager, "get_status", lambda: fake_status)
+
+    win = enforcer_overlay.build_overlay("test message", duration_ms=5000)
+    qtbot.addWidget(win)
+    win._tick()
+
+    text = win._time_label.text()
+    assert "remaining" in text.lower()
+    assert "1m 30s" in text
+    win.close()
