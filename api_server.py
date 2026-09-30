@@ -598,19 +598,13 @@ def task_domain_whitelist_add(task_id):
     if not _is_string_list(domains):
         return jsonify({"error": "domains must be a list of non-empty strings"}), 400
 
-    task = tasks_store.get_task(task_id)
-    if task is None:
+    # tasks_store.add_domains_to_whitelist() does the whole read-merge-write
+    # atomically under one lock acquisition -- see its own docstring for why
+    # this used to be get_task() then update_task() with the merge done in
+    # plain Python in an unlocked gap between them, and what that raced.
+    updated = tasks_store.add_domains_to_whitelist(task_id, domains)
+    if updated is None:
         return jsonify({"error": "task not found"}), 404
-
-    existing = list(task.get("domainWhitelist") or [])
-    existing_lower = {d.lower() for d in existing}
-    for domain in domains:
-        domain = domain.strip()
-        if domain.lower() not in existing_lower:
-            existing.append(domain)
-            existing_lower.add(domain.lower())
-
-    updated = tasks_store.update_task(task_id, {"domainWhitelist": existing})
     return jsonify({"domainWhitelist": updated["domainWhitelist"]})
 
 

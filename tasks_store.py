@@ -238,6 +238,45 @@ def update_task(task_id, data):
         return updated
 
 
+def add_domains_to_whitelist(task_id, domains):
+    """Merges `domains` into task_id's own saved domainWhitelist, case-
+    insensitive deduped against what's already there -- the atomic version
+    of what api_server.py's task_domain_whitelist_add route used to do
+    itself as get_task() then update_task() with the merge done in plain
+    Python in between. A red-team pass found that gap: two concurrent adds
+    of different domains to the same task both read the same starting
+    list, both wrote back their own merged version, and whichever
+    update_task() call landed last silently discarded the other's domain --
+    both requests reported success, but only one domain actually stuck.
+    Doing the whole read-merge-write inside one _lock acquisition (this
+    module's _lock is an RLock, so load_tasks()/save_tasks() below can
+    safely nest inside it) closes that gap, the same way
+    session_manager.add_domain_to_whitelist() already does for the
+    active-session whitelist.
+
+    Returns the updated task dict, or None if task_id doesn't exist."""
+    with _lock:
+        tasks = load_tasks(include_deleted=True)
+        updated = None
+        for task in tasks:
+            if task["id"] == task_id:
+                existing = list(task.get("domainWhitelist") or [])
+                existing_lower = {d.lower() for d in existing}
+                for domain in domains:
+                    domain = domain.strip()
+                    if domain.lower() not in existing_lower:
+                        existing.append(domain)
+                        existing_lower.add(domain.lower())
+                task["domainWhitelist"] = existing
+                task["updatedAt"] = datetime.now().isoformat()
+                updated = task
+                break
+        if updated is not None:
+            save_tasks(tasks)
+            sync_trigger.note_change()
+        return updated
+
+
 def delete_task(task_id):
     """Soft-deletes: the row is tombstoned (isDeleted=True) rather than
     removed, so a future sync push can tell other devices this task was
