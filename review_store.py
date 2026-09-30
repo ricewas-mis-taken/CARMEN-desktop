@@ -637,12 +637,25 @@ def get_problem(problem_id):
             return None
 
 
+# Matches the picker's own filter (qt_ui/board_tab.py and review_tab.py's
+# QFileDialog: "Images (*.png *.jpg *.jpeg *.gif *.bmp)") -- a red-team pass
+# found an uploaded filename's extension was used as-is with no allowlist,
+# letting an uploaded "photo" pick an arbitrary saved extension (.exe,
+# .html, ...) for bytes that are otherwise completely attacker-controlled.
+# Nothing currently serves or executes files out of PHOTOS_DIR, so this was
+# low-severity, but there's no reason the saved extension should ever be
+# anything but an actual image type.
+_ALLOWED_PHOTO_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp"}
+
+
 def save_photo_bytes(data, original_filename):
     """Copies an uploaded image's bytes into PHOTOS_DIR under a generated
     name, so the DB never depends on wherever the user originally picked the
     file from. Returns the saved file's absolute path."""
     os.makedirs(PHOTOS_DIR, exist_ok=True)
-    ext = os.path.splitext(original_filename or "")[1].lower() or ".png"
+    ext = os.path.splitext(original_filename or "")[1].lower()
+    if ext not in _ALLOWED_PHOTO_EXTENSIONS:
+        ext = ".png"
     filename = f"{uuid.uuid4().hex}{ext}"
     path = os.path.join(PHOTOS_DIR, filename)
     with open(path, "wb") as f:
