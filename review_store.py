@@ -1122,6 +1122,28 @@ def _apply_review_outcome(problem_id, duration_seconds, self_solved, shakiness, 
     return get_problem(problem_id)
 
 
+def peek_active_review_problem_id(session_token):
+    """The problem_id a still-active session_token belongs to, without
+    consuming it (finish_review() below is the only thing that actually
+    pops it) -- or None if the token is unknown/already used.
+
+    Exists so a caller that needs to verify a token belongs to a specific
+    problem (api_server.py's POST /review/problems/<id>/finish route) can
+    do that check BEFORE calling finish_review(), instead of after. A
+    red-team pass found the route used to call finish_review(session_token)
+    first -- which commits its side effects (logs the review, bumps
+    review_count, reschedules the problem) immediately -- and only checked
+    whether the returned problem's id matched the URL's problem_id
+    afterward. A token sent to the wrong problem's finish URL got silently
+    recorded against the CORRECT problem while the client was told 409
+    "doesn't belong to this problem", with the token now permanently
+    burned and no way to retry."""
+    _ensure_active_sessions_loaded()
+    with _lock:
+        entry = _active_sessions.get(session_token)
+        return entry["problem_id"] if entry is not None else None
+
+
 def finish_review(session_token, self_solved=True, shakiness=3, duration_seconds=None):
     """Ends a review started via start_review(): logs the session, bumps
     review_count/last_reviewed_at, and reschedules the problem.

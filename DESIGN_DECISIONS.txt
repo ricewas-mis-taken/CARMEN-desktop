@@ -177,6 +177,29 @@ repos' CLAUDE.md.
   wrong open entry. See carmen-extension/DESIGN_DECISIONS.txt for the
   extension-side fix; no desktop code changed for this one.
 
+[2026-09-29] POST /review/problems/<id>/finish verifies the token's problem_id before committing, and forwards self_solved/shakiness/duration_seconds
+Decision: a red-team pass found two bugs in this one route. First,
+review_store.finish_review(session_token) was called -- which commits its
+side effects (logs the review_sessions row, bumps review_count/
+last_reviewed_at, reschedules the problem) immediately -- BEFORE the route
+checked whether the token's own problem_id matched the URL's problem_id.
+A token sent to the wrong problem's finish URL got silently recorded
+against the CORRECT problem while the client was told 409 "doesn't belong
+to this problem," with the token now permanently burned and no way to
+retry. Second, the route never read self_solved/shakiness/duration_seconds
+out of the request body at all, despite finish_review()'s real signature
+accepting all three -- every review finished over HTTP was unconditionally
+logged as solved, shakiness 3, regardless of what the client actually sent.
+Fixed both: added review_store.peek_active_review_problem_id(), which
+looks up a token's problem_id without consuming it, so the route can
+verify the match BEFORE calling finish_review() at all; and added real
+validation + forwarding of self_solved (bool)/shakiness (int 1-5)/
+duration_seconds (non-negative int) from the request body.
+Why: any check that gates a commit has to run before the commit, not
+after -- checking the returned value's shape after the side effects
+already happened can only ever confirm-after-the-fact, never actually
+prevent the wrong commit from happening in the first place.
+
 [2026-09-29] start_review()'s existence check is re-run inside the same lock that does the insert
 Decision: a red-team pass found a TOCTOU race between start_review()'s
 existence check (run before _lock is ever taken) and delete_topic() -- if

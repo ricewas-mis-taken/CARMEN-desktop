@@ -818,11 +818,42 @@ def review_problem_finish(problem_id):
     if not isinstance(session_token, str) or not session_token:
         return jsonify({"error": "session_token must be a non-empty string"}), 400
 
-    problem = review_store.finish_review(session_token)
+    self_solved = body.get("self_solved", True)
+    if not isinstance(self_solved, bool):
+        return jsonify({"error": "self_solved must be a boolean"}), 400
+
+    shakiness = body.get("shakiness", 3)
+    if isinstance(shakiness, bool) or not isinstance(shakiness, int) or not (1 <= shakiness <= 5):
+        return jsonify({"error": "shakiness must be an integer from 1 to 5"}), 400
+
+    duration_seconds = body.get("duration_seconds")
+    if duration_seconds is not None and (
+        isinstance(duration_seconds, bool)
+        or not isinstance(duration_seconds, int)
+        or duration_seconds < 0
+    ):
+        return jsonify({"error": "duration_seconds must be a non-negative integer if given"}), 400
+
+    # Verified BEFORE finish_review() is ever called -- that call commits
+    # its side effects (logs the review, bumps review_count, reschedules
+    # the problem) immediately, so checking the problem_id match afterward
+    # (as this route used to) meant a token sent to the wrong problem's
+    # finish URL got silently recorded against the correct one while the
+    # client was told this 409, with the token now permanently burned.
+    token_problem_id = review_store.peek_active_review_problem_id(session_token)
+    if token_problem_id is None:
+        return jsonify({"error": "invalid or already-used session_token"}), 409
+    if token_problem_id != problem_id:
+        return jsonify({"error": "session_token does not belong to this problem"}), 409
+
+    problem = review_store.finish_review(
+        session_token,
+        self_solved=self_solved,
+        shakiness=shakiness,
+        duration_seconds=duration_seconds,
+    )
     if problem is None:
         return jsonify({"error": "invalid or already-used session_token"}), 409
-    if problem["id"] != problem_id:
-        return jsonify({"error": "session_token does not belong to this problem"}), 409
     return jsonify(problem)
 
 
