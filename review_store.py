@@ -799,6 +799,22 @@ def start_review(problem_id):
     whatever ACTIVE_SESSION_PATH had on disk from before that cleanup
     existed.
 
+    The existence check is deliberately re-run a second time inside the
+    same `with _lock:` section that does the insert below -- a red-team
+    pass found that the first check (before _lock is ever taken) leaves a
+    window where delete_topic() can run in between: it takes _lock, deletes
+    the problem, evicts any *already-inserted* _active_sessions entry for
+    it (there isn't one yet -- this thread hasn't inserted), and releases
+    the lock, all before this function gets to insert its own entry. That
+    left a permanently orphaned entry for a now-deleted problem that
+    nothing ever cleans up, jamming the one-review-at-a-time guard shut for
+    the rest of the process's life. The re-check can't just call
+    get_problem() again -- that takes _lock itself, and _lock is a plain,
+    non-reentrant threading.Lock, so calling it while already holding _lock
+    would deadlock -- it re-runs the same query directly against the
+    connection instead, the same way delete_topic() below already reads
+    from the DB while holding _lock.
+
     If a pomodoro session is currently active and on its break phase, the
     new entry starts already paused (auto_paused=True) instead of running.
     session_manager._advance_pomodoro_locked() only calls
@@ -830,6 +846,18 @@ def start_review(problem_id):
     now = datetime.now()
     with _lock:
         if _active_sessions:
+            return None
+        # Re-verify the problem still exists now that _lock is actually
+        # held -- see this function's own docstring above for why the
+        # first check up top isn't enough on its own, and why this can't
+        # just call get_problem() again (it would deadlock on _lock).
+        try:
+            conn = _get_conn()
+            row = conn.execute(f"{_PROBLEM_SELECT} WHERE p.id = ?", (problem_id,)).fetchone()
+        except Exception:
+            logger.exception("review_store.start_review failed re-checking %s", problem_id)
+            return None
+        if row is None:
             return None
         _active_sessions[token] = {
             "problem_id": problem_id,
@@ -1092,6 +1120,28 @@ def _apply_review_outcome(problem_id, duration_seconds, self_solved, shakiness, 
 
     sync_trigger.note_change()
     return get_problem(problem_id)
+
+
+def peek_active_review_problem_id(session_token):
+    """The problem_id a still-active session_token belongs to, without
+    consuming it (finish_review() below is the only thing that actually
+    pops it) -- or None if the token is unknown/already used.
+
+    Exists so a caller that needs to verify a token belongs to a specific
+    problem (api_server.py's POST /review/problems/<id>/finish route) can
+    do that check BEFORE calling finish_review(), instead of after. A
+    red-team pass found the route used to call finish_review(session_token)
+    first -- which commits its side effects (logs the review, bumps
+    review_count, reschedules the problem) immediately -- and only checked
+    whether the returned problem's id matched the URL's problem_id
+    afterward. A token sent to the wrong problem's finish URL got silently
+    recorded against the CORRECT problem while the client was told 409
+    "doesn't belong to this problem", with the token now permanently
+    burned and no way to retry."""
+    _ensure_active_sessions_loaded()
+    with _lock:
+        entry = _active_sessions.get(session_token)
+        return entry["problem_id"] if entry is not None else None
 
 
 def finish_review(session_token, self_solved=True, shakiness=3, duration_seconds=None):

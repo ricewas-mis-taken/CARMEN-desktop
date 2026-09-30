@@ -83,6 +83,7 @@ _OVERLAY_STYLESHEET = """
 """
 
 import session_manager
+import tasks_store
 
 # Qt widgets with no parent are only kept alive at the C++ level while
 # shown; without a Python-side reference here, the wrapper object can be
@@ -343,8 +344,23 @@ class _LockOverlay(QWidget):
         self._progress.setValue(int(fraction * 1000))
 
         status = session_manager.get_status()
-        minutes, seconds = divmod(status["secondsRemaining"], 60)
-        self._time_label.setText(f"Time remaining: {minutes}m {seconds}s")
+        # Review and burnout sessions use an artificial multi-hour endTime
+        # ceiling internally (see session_manager's own docs) -- it's not a
+        # real deadline, so secondsRemaining counting down from it is
+        # meaningless here. qt_ui/focus_tab.py's _refresh_status() already
+        # gets this right for the main window's own status label; this
+        # popup's time label needs the same branch, computed the same way
+        # (pause-aware elapsed time via tasks_store.worked_seconds).
+        has_no_real_deadline = status.get("isBurnout") or status.get("source") == "review"
+        if has_no_real_deadline:
+            elapsed_seconds = tasks_store.worked_seconds(
+                status.get("startTime"), None, status.get("violationLog")
+            ) if status.get("startTime") else 0
+            minutes, seconds = divmod(elapsed_seconds, 60)
+            self._time_label.setText(f"Time elapsed: {minutes}m {seconds}s")
+        else:
+            minutes, seconds = divmod(status["secondsRemaining"], 60)
+            self._time_label.setText(f"Time remaining: {minutes}m {seconds}s")
 
         try:
             self.raise_()

@@ -157,6 +157,127 @@ def test_finish_review_missing_token_rejected(client, isolate_review_db):
     assert resp.status_code == 400
 
 
+def test_finish_review_sent_to_wrong_problem_id_does_not_commit_the_outcome(client, isolate_review_db):
+    """Regression test: the route used to call review_store.finish_review()
+    -- which commits its side effects (logs the review, bumps review_count,
+    reschedules the problem) immediately -- BEFORE checking whether the
+    token's own problem_id matched the URL's problem_id. A token sent to
+    the wrong problem's finish URL got silently recorded against the
+    CORRECT problem while the client was told 409, and the token was left
+    permanently burned with no way to retry against the right URL."""
+    topic = _create_topic(client)
+    subject = _create_subject(client, topic["id"])
+    real_problem = client.post(
+        f"/review/topics/{topic['id']}/problems",
+        data={
+            "name": "Solve it", "subject_id": str(subject["id"]), "stars": "3",
+            "description_type": "text", "description_text": "x",
+        },
+    ).get_json()
+    other_problem = client.post(
+        f"/review/topics/{topic['id']}/problems",
+        data={
+            "name": "Solve another", "subject_id": str(subject["id"]), "stars": "3",
+            "description_type": "text", "description_text": "x",
+        },
+    ).get_json()
+
+    token = client.post(f"/review/problems/{real_problem['id']}/start").get_json()["sessionToken"]
+
+    wrong_resp = client.post(f"/review/problems/{other_problem['id']}/finish", json={"session_token": token})
+    assert wrong_resp.status_code == 409
+
+    # The review must NOT have been silently recorded against real_problem
+    # -- retrying against the correct problem_id with the same token must
+    # still work, not 409 as "already used".
+    right_resp = client.post(f"/review/problems/{real_problem['id']}/finish", json={"session_token": token})
+    assert right_resp.status_code == 200
+    assert right_resp.get_json()["reviewCount"] == 1
+
+
+def test_finish_review_forwards_self_solved_shakiness_and_duration(client, isolate_review_db):
+    """Regression test: the route never read self_solved/shakiness/
+    duration_seconds out of the request body at all -- every review
+    finished over HTTP was unconditionally logged as solved, shakiness 3,
+    no matter what the caller actually sent."""
+    import review_store
+
+    topic = _create_topic(client)
+    subject = _create_subject(client, topic["id"])
+    problem = client.post(
+        f"/review/topics/{topic['id']}/problems",
+        data={
+            "name": "Solve it", "subject_id": str(subject["id"]), "stars": "3",
+            "description_type": "text", "description_text": "x",
+        },
+    ).get_json()
+    token = client.post(f"/review/problems/{problem['id']}/start").get_json()["sessionToken"]
+
+    resp = client.post(
+        f"/review/problems/{problem['id']}/finish",
+        json={"session_token": token, "self_solved": False, "shakiness": 5, "duration_seconds": 42},
+    )
+    assert resp.status_code == 200
+
+    sessions = review_store.list_sessions(problem["id"])
+    assert len(sessions) == 1
+    assert sessions[0]["selfSolved"] is False
+    # shakiness only applies when self_solved=True (see
+    # _apply_review_outcome's own docstring) -- stored as None here since
+    # self_solved=False, which is itself proof the field was actually
+    # forwarded and consulted rather than silently defaulted to True.
+    assert sessions[0]["shakiness"] is None
+    assert sessions[0]["durationSeconds"] == 42
+
+
+def test_finish_review_forwards_shakiness_when_self_solved(client, isolate_review_db):
+    import review_store
+
+    topic = _create_topic(client)
+    subject = _create_subject(client, topic["id"])
+    problem = client.post(
+        f"/review/topics/{topic['id']}/problems",
+        data={
+            "name": "Solve it", "subject_id": str(subject["id"]), "stars": "3",
+            "description_type": "text", "description_text": "x",
+        },
+    ).get_json()
+    token = client.post(f"/review/problems/{problem['id']}/start").get_json()["sessionToken"]
+
+    resp = client.post(
+        f"/review/problems/{problem['id']}/finish",
+        json={"session_token": token, "self_solved": True, "shakiness": 5},
+    )
+    assert resp.status_code == 200
+
+    sessions = review_store.list_sessions(problem["id"])
+    assert sessions[0]["selfSolved"] is True
+    assert sessions[0]["shakiness"] == 5
+
+
+def test_finish_review_rejects_invalid_shakiness(client, isolate_review_db):
+    topic = _create_topic(client)
+    subject = _create_subject(client, topic["id"])
+    problem = client.post(
+        f"/review/topics/{topic['id']}/problems",
+        data={
+            "name": "Solve it", "subject_id": str(subject["id"]), "stars": "3",
+            "description_type": "text", "description_text": "x",
+        },
+    ).get_json()
+    token = client.post(f"/review/problems/{problem['id']}/start").get_json()["sessionToken"]
+
+    resp = client.post(
+        f"/review/problems/{problem['id']}/finish",
+        json={"session_token": token, "shakiness": 99},
+    )
+    assert resp.status_code == 400
+    # Token must still be usable afterward -- a rejected malformed request
+    # must not consume it.
+    ok_resp = client.post(f"/review/problems/{problem['id']}/finish", json={"session_token": token})
+    assert ok_resp.status_code == 200
+
+
 def test_start_review_unknown_problem_404(client, isolate_review_db):
     resp = client.post("/review/problems/999999/start")
     assert resp.status_code == 404
