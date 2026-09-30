@@ -157,3 +157,22 @@ Scope: only affects whether a violation gets logged/counted
 itself (minimize, redirect, overlay) -- those keep their own existing,
 independent cooldowns/dedup (HARD_REDIRECT_COOLDOWN_SECONDS, is_new_flag,
 _show_violation_notice's own _last_violation_notice, etc.), unchanged.
+
+[2026-09-29] Cross-reference: carmen-extension's alarm and violation-reporting
+fixes from this same bug-hunt pass
+Decision: two of carmen-extension's fixes from this pass are direct
+counterparts of desktop-side entries above, not independent decisions --
+recording the link both directions per the cross-sync rule now in both
+repos' CLAUDE.md.
+- carmen-extension's chrome.alarms/browser.alarms reconciliation fix (its
+  [2026-09-28] entry, "chrome.alarms/browser.alarms never unilaterally ends
+  a session") is the same "two places tracking one truth" bug class as this
+  session's review_store/_active_sessions locking and single-active-review
+  work above -- there it was the extension's own alarm racing the desktop's
+  authoritative session state instead of two in-process trackers.
+- carmen-extension restricting its POST /violation reporting to the active
+  tab only (its own [2026-09-28] entry) exists specifically because
+  _open_violation_index above (session_manager.py) is single-slot per kind
+  -- a background tab reporting a violation would resolve/repoint the
+  wrong open entry. See carmen-extension/DESIGN_DECISIONS.txt for the
+  extension-side fix; no desktop code changed for this one.
