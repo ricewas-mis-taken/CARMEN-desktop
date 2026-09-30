@@ -537,6 +537,17 @@ def test_save_photo_bytes_copies_into_photos_dir(isolate_review_db):
         assert f.read() == b"fake-image-bytes"
 
 
+def test_save_photo_bytes_rejects_non_image_extensions(isolate_review_db):
+    """Regression test: an uploaded filename's extension used to be used
+    as-is with no allowlist, letting an uploaded "photo" pick an arbitrary
+    saved extension (.exe, .html, ...) for bytes that are otherwise
+    completely attacker-controlled. Falls back to .png for anything not on
+    the real image-extension allowlist the picker itself offers."""
+    path = review_store.save_photo_bytes(b"not-really-an-exe", "totally_safe.exe")
+    assert path.endswith(".png")
+    assert not path.endswith(".exe")
+
+
 def test_pause_active_review_is_not_corrupted_by_a_concurrent_start_review(isolate_review_db):
     """Regression test for the missing locking around _active_sessions.
 
