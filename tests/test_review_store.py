@@ -616,3 +616,78 @@ def test_pause_active_review_is_not_corrupted_by_a_concurrent_start_review(isola
 
     assert not t1.is_alive() and not t2.is_alive(), "threads deadlocked or hung"
     assert errors == [], f"concurrent access corrupted _active_sessions: {errors!r}"
+
+
+def test_start_review_does_not_orphan_an_entry_when_delete_topic_races_it(isolate_review_db):
+    """Regression test for the start_review()/delete_topic() TOCTOU a
+    red-team pass found: start_review()'s existence check used to run
+    BEFORE _lock was ever taken, leaving a window where delete_topic()
+    could delete the problem (and find nothing yet in _active_sessions to
+    evict, since this thread hasn't inserted its entry yet) before
+    start_review() went on to insert one anyway -- orphaning a permanent
+    entry for a deleted problem that nothing ever cleans up, jamming the
+    one-review-at-a-time guard shut for the rest of the process's life.
+
+    Reproduces the exact interleaving: stalls start_review() right after
+    its own session_manager.get_status() call (the same window the red
+    team exploited -- after the first existence check, before _lock is
+    acquired), deletes the topic from another thread while it's stalled,
+    then lets it continue.
+
+    Pre-fix: start_review() returns a real token anyway, and a later
+    start_review() call for a completely different, valid problem
+    incorrectly returns None (the guard is jammed on the orphaned entry).
+    Post-fix: the re-check inside _lock catches the deletion and this
+    call itself returns None, leaving _active_sessions empty so a later
+    valid start works normally."""
+    import threading
+
+    import session_manager
+
+    topic, subject = _make_topic_and_subject()
+    doomed = review_store.create_problem(
+        topic["id"], subject["id"], "Doomed", stars=3, description_type="text", description_text="x",
+    )
+
+    reached_gap = threading.Event()
+    allow_continue = threading.Event()
+    real_get_status = session_manager.get_status
+
+    def _stalling_get_status():
+        result = real_get_status()
+        reached_gap.set()
+        allow_continue.wait(timeout=2)
+        return result
+
+    import unittest.mock
+
+    result = {}
+
+    def starter():
+        with unittest.mock.patch.object(session_manager, "get_status", _stalling_get_status):
+            result["token"] = review_store.start_review(doomed["id"])
+
+    def deleter():
+        reached_gap.wait(timeout=2)
+        review_store.delete_topic(topic["id"])
+        allow_continue.set()
+
+    t1 = threading.Thread(target=starter)
+    t2 = threading.Thread(target=deleter)
+    t1.start()
+    t2.start()
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+
+    assert not t1.is_alive() and not t2.is_alive(), "threads deadlocked or hung"
+    assert result["token"] is None, "start_review() must refuse once the problem is gone, not silently succeed"
+    assert review_store.get_active_review() is None
+
+    # The guard must not be jammed for a later, unrelated, still-valid problem.
+    topic2, subject2 = _make_topic_and_subject(name="Other", subject_name="Other Subject", color="#123456")
+    fresh = review_store.create_problem(
+        topic2["id"], subject2["id"], "Fresh", stars=3, description_type="text", description_text="x",
+    )
+    token = review_store.start_review(fresh["id"])
+    assert token is not None
+    assert review_store.get_active_review()["problemId"] == fresh["id"]
