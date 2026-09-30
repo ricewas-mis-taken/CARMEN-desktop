@@ -13,3 +13,10 @@ checklist step reminds you of this too.
 
 Sibling repo: `carmen-extension` (C:\Users\Lucas\carmen-extension) has its
 own copies of both files, kept in sync with these.
+
+If a design decision here has a counterpart change in `carmen-extension`
+(or vice versa) — same bug class, same protocol/contract between the two,
+same feature split across both surfaces — add a short cross-reference note
+in BOTH repos' DESIGN_DECISIONS.txt pointing at each other's dated entry,
+not just the one in the repo you're actually editing. Do this every time,
+not just when it's convenient.
