@@ -285,3 +285,15 @@ Rejected alternative: a placeholder _active_sessions entry. Not used --
 those are keyed to real problems and get_active_review()'s other callers
 (restart recovery, independent-review pause) would misread it.
 Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-10-04].
+
+[2026-10-04] A first attempt auto-pauses for pomodoro breaks via the banner, edge-triggered
+Decision: _ReviewBanner checks session_manager's isBreak every tick and, for
+a first attempt only (problem-backed reviews already get this from
+review_store.auto_pause_for_break), pauses on the not-break -> break edge and
+resumes on the break -> not-break edge, only if the pause was its own.
+Published to /status as autoPaused so the extension shows "Paused (on
+pomodoro break)".
+Why: break time isn't working time; first attempts were the one review kind
+that kept counting through a break. Edge-triggered so a manual Resume during
+a break isn't undone a second later, and a manual pause is never auto-resumed.
+Cross-reference: carmen-extension needs no change (already renders autoPaused).
