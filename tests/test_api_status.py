@@ -98,3 +98,34 @@ def test_review_pause_and_resume_via_the_api(isolate_state, isolate_review_db):
     resp = client().post("/review/resume", headers={"X-Carmen-Token": token})
     assert resp.status_code == 200
     assert client().get("/status").get_json()["reviewInProgress"]["isPaused"] is False
+
+
+def test_status_review_in_progress_carries_the_linked_tasks_color(
+    isolate_state, isolate_review_db, tmp_path, monkeypatch
+):
+    import tasks_store
+
+    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
+    task = tasks_store.create_task({"name": "Math", "color": "#D9534F"})
+    topic, subject = _make_topic_and_subject()
+    review_store.update_topic_link(topic["id"], task["id"])
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    session_manager.start_session(45, "soft", [], [], source="task", event_id="t1", event_title="School")
+    review_store.start_review(problem["id"])
+
+    data = client().get("/status").get_json()
+    assert data["reviewInProgress"]["taskColor"] == "#D9534F"
+
+
+def test_status_review_in_progress_task_color_is_none_without_a_linked_task(isolate_state, isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    session_manager.start_session(45, "soft", [], [], source="task", event_id="t1", event_title="School")
+    review_store.start_review(problem["id"])
+
+    data = client().get("/status").get_json()
+    assert data["reviewInProgress"]["taskColor"] is None
