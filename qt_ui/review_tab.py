@@ -860,6 +860,8 @@ class _ReviewBanner(QWidget):
         self._first_attempt_callback = None
         self._first_attempt_cancelled_callback = None
         self._first_attempt_started_at = None
+        self._auto_paused = False
+        self._was_on_break = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -947,7 +949,34 @@ class _ReviewBanner(QWidget):
             (self._first_attempt_started_at or datetime.now()).isoformat(),
             self._elapsed_seconds_now(),
             self._currently_paused(),
+            auto_paused=self._auto_paused,
         )
+
+    def _sync_first_attempt_with_pomodoro_break(self):
+        """Break time isn't working time -- a first attempt (the only review
+        kind this widget times with local pause bookkeeping, see
+        _is_independent_review()) auto-pauses when a pomodoro flips to its
+        break and auto-resumes when the break ends, same as review_store's
+        auto_pause_for_break()/auto_resume_from_break() do for a
+        problem-backed review. Edge-triggered on the break flag (not
+        level-triggered) so a manual Resume during a break sticks instead of
+        being re-paused a second later; and only a pause THIS method made is
+        auto-resumed, never one the user chose."""
+        if self._first_attempt_callback is None or self._end_session_on_finish:
+            return
+        on_break = bool(session_manager.get_status().get("isBreak"))
+        entered_break = on_break and not self._was_on_break
+        left_break = self._was_on_break and not on_break
+        self._was_on_break = on_break
+        if entered_break and not self._is_paused:
+            self._is_paused = True
+            self._auto_paused = True
+            self._accumulated_seconds = self._elapsed_seconds_now()
+            self._start_time = None
+        elif left_break and self._is_paused and self._auto_paused:
+            self._is_paused = False
+            self._auto_paused = False
+            self._start_time = datetime.now()
 
     def _is_independent_review(self):
         # A real review_store-tracked review (has a token) that ISN'T
@@ -1015,6 +1044,8 @@ class _ReviewBanner(QWidget):
         # showing up when there happens to be an underlying session to pause.
         self._pause_btn.setVisible(True)
         self._first_attempt_started_at = self._start_time
+        self._auto_paused = False
+        self._was_on_break = False
         self._publish_first_attempt()
         self._tick_timer.start(1000)
         self.show()
@@ -1039,6 +1070,8 @@ class _ReviewBanner(QWidget):
         return self._is_paused
 
     def _pause_button_text(self, is_paused):
+        if is_paused and self._auto_paused:
+            return "Resume (on break)"
         if is_paused and self._is_independent_review():
             active = review_store.get_active_review()
             if active and active.get("autoPaused"):
@@ -1059,6 +1092,7 @@ class _ReviewBanner(QWidget):
             # again until the app was restarted.
             self._abandon_after_external_end()
             return
+        self._sync_first_attempt_with_pomodoro_break()
         is_paused = self._currently_paused()
         self._pause_btn.setText(self._pause_button_text(is_paused))
         # Updated unconditionally, even while paused -- _elapsed_seconds_now()
@@ -1084,6 +1118,7 @@ class _ReviewBanner(QWidget):
                 review_store.pause_active_review()
             self._pause_btn.setText(self._pause_button_text(self._currently_paused()))
             return
+        self._auto_paused = False
         if self._currently_paused():
             self._is_paused = False
             self._start_time = datetime.now()

@@ -912,7 +912,7 @@ _FIRST_ATTEMPT_STALE_SECONDS = 10
 _first_attempt = None
 
 
-def publish_first_attempt(topic_id, started_at_iso, elapsed_seconds, is_paused):
+def publish_first_attempt(topic_id, started_at_iso, elapsed_seconds, is_paused, auto_paused=False):
     """Called by the first-attempt banner every tick. Anything not
     re-published for _FIRST_ATTEMPT_STALE_SECONDS reads as gone, so a banner
     that vanished without calling clear_first_attempt() (crash, an
@@ -924,6 +924,7 @@ def publish_first_attempt(topic_id, started_at_iso, elapsed_seconds, is_paused):
             "started_at": started_at_iso,
             "elapsed_seconds": int(elapsed_seconds),
             "is_paused": bool(is_paused),
+            "auto_paused": bool(auto_paused),
             "published_at": datetime.now(),
         }
 
@@ -954,7 +955,7 @@ def get_first_attempt():
         "startedAt": snap["started_at"],
         "elapsedSeconds": elapsed,
         "isPaused": snap["is_paused"],
-        "autoPaused": False,
+        "autoPaused": snap["auto_paused"],
         "isFirstAttempt": True,
         "topicId": snap["topic_id"],
     }
