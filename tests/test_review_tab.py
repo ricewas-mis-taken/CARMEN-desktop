@@ -643,3 +643,22 @@ def test_pause_button_visible_for_standalone_review(qtbot, isolate_review_db, is
     assert banner._pause_btn.text() == "Resume"
     banner._pause_resume()
     assert banner._pause_btn.text() == "Pause"
+
+
+def test_first_solved_reads_never_for_a_problem_never_reviewed(qtbot, isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    review_store.create_problem(
+        topic["id"], subject["id"], "Fresh", stars=3,
+        description_type="text", description_text="x",
+    )
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    view = tab._topic_views[topic["id"]]
+    view._set_due_only(False)
+
+    assert view._table.item(0, review_tab.COLUMN_FIRST_SOLVED).text() == "Never"
+
+
+def test_first_solved_shows_date_once_a_problem_has_been_reviewed():
+    problem = {"lastReviewedAt": "2026-10-01T10:00:00", "dateAdded": "2026-09-20"}
+    assert review_tab._first_solved_display(problem) == "Sep 20, 2026"

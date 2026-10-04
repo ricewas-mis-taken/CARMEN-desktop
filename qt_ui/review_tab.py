@@ -130,6 +130,16 @@ def _fastest_display(problem):
     return f"{_format_mmss(fastest)}{marker}"
 
 
+def _first_solved_display(problem):
+    """The First Solved column's text. A problem that has never been
+    reviewed has never been solved either -- dateAdded is just when it was
+    logged -- so it reads "Never" (same wording as Last Reviewed) rather
+    than implying it was solved on the day it was added."""
+    if not problem.get("lastReviewedAt"):
+        return "Never"
+    return _format_dmy(problem["dateAdded"])
+
+
 def _subject_and_task_text(problem):
     """"Subject — linked task" (or just the subject if its topic has no
     linked task) -- the linked task is the one review sessions for this
@@ -646,7 +656,7 @@ class _TopicView(QWidget):
             next_review_item.setTextAlignment(Qt.AlignCenter)
             self._table.setItem(row, COLUMN_NEXT_REVIEW, next_review_item)
 
-            first_item = QTableWidgetItem(_format_dmy(problem["dateAdded"]))
+            first_item = QTableWidgetItem(_first_solved_display(problem))
             self._table.setItem(row, COLUMN_FIRST_SOLVED, first_item)
 
             fastest_item = QTableWidgetItem(_fastest_display(problem))
