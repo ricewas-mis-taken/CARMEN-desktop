@@ -216,6 +216,18 @@ def device_info():
     return jsonify({"computerName": platform.node()})
 
 
+def _review_task_color(problem_id):
+    """The color of the task this review's topic is linked to, or None if
+    the topic has no linked task (or it was deleted) -- the extension colors
+    its under-the-pomodoro review chip by it, falling back to the problem's
+    own subject color."""
+    problem = review_store.get_problem(problem_id)
+    topic = review_store.get_topic(problem["topicId"]) if problem else None
+    task_id = topic.get("linkedTaskId") if topic else None
+    task = tasks_store.get_task(task_id) if task_id else None
+    return task.get("color") if task else None
+
+
 @app.route("/status", methods=["GET"])
 def status():
     status_data = session_manager.get_status()
@@ -229,7 +241,10 @@ def status():
     if active_review and not (
         status_data["isActive"] and status_data.get("reviewProblemId") == active_review["problemId"]
     ):
-        status_data["reviewInProgress"] = active_review
+        status_data["reviewInProgress"] = {
+            **active_review,
+            "taskColor": _review_task_color(active_review["problemId"]),
+        }
     else:
         status_data["reviewInProgress"] = None
     return jsonify(status_data)
