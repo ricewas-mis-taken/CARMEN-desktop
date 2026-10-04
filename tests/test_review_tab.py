@@ -662,3 +662,22 @@ def test_first_solved_reads_never_for_a_problem_never_reviewed(qtbot, isolate_re
 def test_first_solved_shows_date_once_a_problem_has_been_reviewed():
     problem = {"lastReviewedAt": "2026-10-01T10:00:00", "dateAdded": "2026-09-20"}
     assert review_tab._first_solved_display(problem) == "Sep 20, 2026"
+
+
+def test_first_attempt_banner_publishes_to_status_and_clears_on_end(qtbot, isolate_review_db, isolate_state):
+    """A first attempt has no review_store entry, so the extension could only
+    see it if the banner publishes a snapshot -- and must retract it on End."""
+    topic, _subject = _make_topic_and_subject()
+    view = review_tab._TopicView(topic["id"])
+    qtbot.addWidget(view)
+    dialog = review_tab._AddProblemDialog(
+        topic["id"], on_added=lambda _p: None, on_start_first_attempt=view._start_first_attempt,
+    )
+    qtbot.addWidget(dialog)
+
+    view._start_first_attempt(dialog)
+    published = review_store.get_first_attempt()
+    assert published is not None and published["topicId"] == topic["id"]
+
+    view._review_banner._end_early()
+    assert review_store.get_first_attempt() is None
