@@ -216,13 +216,15 @@ def device_info():
     return jsonify({"computerName": platform.node()})
 
 
-def _review_task_color(problem_id):
+def _review_task_color(problem_id=None, topic_id=None):
     """The color of the task this review's topic is linked to, or None if
     the topic has no linked task (or it was deleted) -- the extension colors
     its under-the-pomodoro review chip by it, falling back to the problem's
-    own subject color."""
-    problem = review_store.get_problem(problem_id)
-    topic = review_store.get_topic(problem["topicId"]) if problem else None
+    own subject color. A first attempt has no problem yet, only a topic."""
+    if topic_id is None and problem_id is not None:
+        problem = review_store.get_problem(problem_id)
+        topic_id = problem["topicId"] if problem else None
+    topic = review_store.get_topic(topic_id) if topic_id is not None else None
     task_id = topic.get("linkedTaskId") if topic else None
     task = tasks_store.get_task(task_id) if task_id else None
     return task.get("color") if task else None
@@ -237,13 +239,21 @@ def status():
     # exact session that review happens to be riding on top of. Suppressed
     # when it IS that same review (status_data["reviewProblemId"] already
     # carries it) so a caller doesn't render the identical review twice.
-    active_review = review_store.get_active_review()
+    # A "Start First Attempt" timing (no problem exists yet) rides along
+    # only when there's no real review being timed -- only one banner is ever
+    # shown. Never suppressed against the session: when a linked task's
+    # session itself carries the first attempt, the banner doesn't publish.
+    active_review = review_store.get_active_review() or review_store.get_first_attempt()
     if active_review and not (
-        status_data["isActive"] and status_data.get("reviewProblemId") == active_review["problemId"]
+        active_review["problemId"] is not None
+        and status_data["isActive"]
+        and status_data.get("reviewProblemId") == active_review["problemId"]
     ):
         status_data["reviewInProgress"] = {
             **active_review,
-            "taskColor": _review_task_color(active_review["problemId"]),
+            "taskColor": _review_task_color(
+                problem_id=active_review["problemId"], topic_id=active_review.get("topicId")
+            ),
         }
     else:
         status_data["reviewInProgress"] = None
