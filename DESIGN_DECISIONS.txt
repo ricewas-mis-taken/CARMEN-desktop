@@ -258,3 +258,42 @@ _is_string_list() can reintroduce this class of bug by omission.
 Scope: 2000 entries / 500 chars per entry is a generous multiple of what a
 real hand-built blocklist or whitelist would ever need -- picked to be
 obviously above any real usage, not a tight fit.
+
+[2026-10-04] /status reviewInProgress carries taskColor
+Decision: GET /status's reviewInProgress object gains taskColor -- the color
+of the task the review's topic is linked to, or null when there's no linked
+task (or it was deleted). Computed in api_server.py, not review_store, so
+review_store never has to import tasks_store.
+Why: the browser extension colors its review chip under the pomodoro chip by
+the task; subjectColor alone can't say which task it belongs to.
+Old extension builds ignore the extra field.
+Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-10-04] (review
+chip under the pomodoro chip).
+
+[2026-10-04] "Start First Attempt" is exposed to /status via a published snapshot
+Decision: the first-attempt banner (qt_ui/review_tab.py) publishes an
+in-memory snapshot to review_store (publish_first_attempt, every 1s tick;
+cleared on finish/end/external end) and GET /status falls back to it for
+reviewInProgress when no real review is being timed, flagged isFirstAttempt
+with problemName "First attempt". Snapshots not re-published for 10s read as
+gone. The extension can view it but not pause/resume it (the banner owns
+that state).
+Why: a first attempt has no problem row, so no _active_sessions entry, so it
+was invisible to the extension whenever another session (e.g. a pomodoro)
+was active.
+Rejected alternative: a placeholder _active_sessions entry. Not used --
+those are keyed to real problems and get_active_review()'s other callers
+(restart recovery, independent-review pause) would misread it.
+Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-10-04].
+
+[2026-10-04] A first attempt auto-pauses for pomodoro breaks via the banner, edge-triggered
+Decision: _ReviewBanner checks session_manager's isBreak every tick and, for
+a first attempt only (problem-backed reviews already get this from
+review_store.auto_pause_for_break), pauses on the not-break -> break edge and
+resumes on the break -> not-break edge, only if the pause was its own.
+Published to /status as autoPaused so the extension shows "Paused (on
+pomodoro break)".
+Why: break time isn't working time; first attempts were the one review kind
+that kept counting through a break. Edge-triggered so a manual Resume during
+a break isn't undone a second later, and a manual pause is never auto-resumed.
+Cross-reference: carmen-extension needs no change (already renders autoPaused).

@@ -899,6 +899,68 @@ def abandon_review(session_token):
             _save_active_sessions()
 
 
+# The Add Problem dialog's "Start First Attempt" timing has no problem row (so
+# no _active_sessions entry -- those are keyed to a real problem) until the
+# attempt is finished and the problem saved, which used to make it entirely
+# invisible to GET /status and the browser extension whenever a different
+# session was already active. The Qt banner (the only thing that owns that
+# timer) publishes a small in-memory snapshot here on every tick instead;
+# deliberately NOT folded into get_active_review(), whose other callers
+# (review_tab.py's restart-recovery and independent-review pause logic)
+# assume every entry there is a real, problem-backed review.
+_FIRST_ATTEMPT_STALE_SECONDS = 10
+_first_attempt = None
+
+
+def publish_first_attempt(topic_id, started_at_iso, elapsed_seconds, is_paused, auto_paused=False):
+    """Called by the first-attempt banner every tick. Anything not
+    re-published for _FIRST_ATTEMPT_STALE_SECONDS reads as gone, so a banner
+    that vanished without calling clear_first_attempt() (crash, an
+    unforeseen exit path) can never leave a phantom timer in /status."""
+    global _first_attempt
+    with _lock:
+        _first_attempt = {
+            "topic_id": topic_id,
+            "started_at": started_at_iso,
+            "elapsed_seconds": int(elapsed_seconds),
+            "is_paused": bool(is_paused),
+            "auto_paused": bool(auto_paused),
+            "published_at": datetime.now(),
+        }
+
+
+def clear_first_attempt():
+    global _first_attempt
+    with _lock:
+        _first_attempt = None
+
+
+def get_first_attempt():
+    """Snapshot of the first-attempt timing in progress (same keys
+    get_active_review() returns, plus topicId/isFirstAttempt), or None."""
+    with _lock:
+        snap = dict(_first_attempt) if _first_attempt else None
+    if snap is None:
+        return None
+    age = (datetime.now() - snap["published_at"]).total_seconds()
+    if age > _FIRST_ATTEMPT_STALE_SECONDS:
+        return None
+    elapsed = snap["elapsed_seconds"] + (0 if snap["is_paused"] else int(age))
+    return {
+        "token": None,
+        "problemId": None,
+        "problemName": "First attempt",
+        "subjectName": None,
+        "subjectColor": None,
+        "startedAt": snap["started_at"],
+        "elapsedSeconds": elapsed,
+        "isPaused": snap["is_paused"],
+        "autoPaused": snap["auto_paused"],
+        "isFirstAttempt": True,
+        "topicId": snap["topic_id"],
+    }
+
+
 def get_active_review():
     """Info about the review problem currently being timed by the desktop
     UI's review banner, or None if no review is in progress -- independent

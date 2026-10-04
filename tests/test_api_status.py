@@ -98,3 +98,74 @@ def test_review_pause_and_resume_via_the_api(isolate_state, isolate_review_db):
     resp = client().post("/review/resume", headers={"X-Carmen-Token": token})
     assert resp.status_code == 200
     assert client().get("/status").get_json()["reviewInProgress"]["isPaused"] is False
+
+
+def test_status_review_in_progress_carries_the_linked_tasks_color(
+    isolate_state, isolate_review_db, tmp_path, monkeypatch
+):
+    import tasks_store
+
+    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
+    task = tasks_store.create_task({"name": "Math", "color": "#D9534F"})
+    topic, subject = _make_topic_and_subject()
+    review_store.update_topic_link(topic["id"], task["id"])
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    session_manager.start_session(45, "soft", [], [], source="task", event_id="t1", event_title="School")
+    review_store.start_review(problem["id"])
+
+    data = client().get("/status").get_json()
+    assert data["reviewInProgress"]["taskColor"] == "#D9534F"
+
+
+def test_status_review_in_progress_task_color_is_none_without_a_linked_task(isolate_state, isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    session_manager.start_session(45, "soft", [], [], source="task", event_id="t1", event_title="School")
+    review_store.start_review(problem["id"])
+
+    data = client().get("/status").get_json()
+    assert data["reviewInProgress"]["taskColor"] is None
+
+
+def test_status_surfaces_a_first_attempt_alongside_an_active_session(isolate_state, isolate_review_db):
+    topic, _subject = _make_topic_and_subject()
+    session_manager.start_session(45, "soft", [], [], source="task", event_id="t1", event_title="School")
+    review_store.publish_first_attempt(topic["id"], "2026-10-04T10:00:00", 125, False)
+
+    data = client().get("/status").get_json()
+    assert data["isActive"] is True
+    assert data["reviewInProgress"]["isFirstAttempt"] is True
+    assert data["reviewInProgress"]["problemName"] == "First attempt"
+    assert data["reviewInProgress"]["elapsedSeconds"] >= 125
+    review_store.clear_first_attempt()
+
+
+def test_status_first_attempt_is_gone_once_cleared(isolate_state, isolate_review_db):
+    topic, _subject = _make_topic_and_subject()
+    review_store.publish_first_attempt(topic["id"], "2026-10-04T10:00:00", 5, False)
+    review_store.clear_first_attempt()
+
+    assert client().get("/status").get_json()["reviewInProgress"] is None
+
+
+def test_status_first_attempt_not_republished_goes_stale(isolate_state, isolate_review_db, monkeypatch):
+    topic, _subject = _make_topic_and_subject()
+    review_store.publish_first_attempt(topic["id"], "2026-10-04T10:00:00", 5, False)
+    monkeypatch.setattr(review_store, "_FIRST_ATTEMPT_STALE_SECONDS", -1)
+
+    assert client().get("/status").get_json()["reviewInProgress"] is None
+    review_store.clear_first_attempt()
+
+
+def test_status_paused_first_attempt_elapsed_is_frozen(isolate_state, isolate_review_db):
+    topic, _subject = _make_topic_and_subject()
+    review_store.publish_first_attempt(topic["id"], "2026-10-04T10:00:00", 90, True)
+
+    data = client().get("/status").get_json()["reviewInProgress"]
+    assert data["isPaused"] is True
+    assert data["elapsedSeconds"] == 90
+    review_store.clear_first_attempt()

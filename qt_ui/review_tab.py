@@ -840,7 +840,7 @@ class _TopicView(QWidget):
             add_problem_dialog.show()
 
         self._review_banner.start(
-            {"name": "your new problem"}, token=None,
+            {"name": "your new problem", "topicId": self._topic_id}, token=None,
             end_session_on_finish=end_session_on_finish,
             first_attempt_callback=_on_first_attempt_done,
             first_attempt_cancelled_callback=_on_first_attempt_cancelled,
@@ -859,6 +859,9 @@ class _ReviewBanner(QWidget):
         self._is_paused = False
         self._first_attempt_callback = None
         self._first_attempt_cancelled_callback = None
+        self._first_attempt_started_at = None
+        self._auto_paused = False
+        self._was_on_break = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -936,6 +939,45 @@ class _ReviewBanner(QWidget):
 
         self.hide()
 
+    def _publish_first_attempt(self):
+        """Mirrors a first-attempt timing (no linked-task session driving it)
+        into review_store so GET /status can show it to the extension."""
+        if self._first_attempt_callback is None or self._end_session_on_finish:
+            return
+        review_store.publish_first_attempt(
+            self._problem.get("topicId"),
+            (self._first_attempt_started_at or datetime.now()).isoformat(),
+            self._elapsed_seconds_now(),
+            self._currently_paused(),
+            auto_paused=self._auto_paused,
+        )
+
+    def _sync_first_attempt_with_pomodoro_break(self):
+        """Break time isn't working time -- a first attempt (the only review
+        kind this widget times with local pause bookkeeping, see
+        _is_independent_review()) auto-pauses when a pomodoro flips to its
+        break and auto-resumes when the break ends, same as review_store's
+        auto_pause_for_break()/auto_resume_from_break() do for a
+        problem-backed review. Edge-triggered on the break flag (not
+        level-triggered) so a manual Resume during a break sticks instead of
+        being re-paused a second later; and only a pause THIS method made is
+        auto-resumed, never one the user chose."""
+        if self._first_attempt_callback is None or self._end_session_on_finish:
+            return
+        on_break = bool(session_manager.get_status().get("isBreak"))
+        entered_break = on_break and not self._was_on_break
+        left_break = self._was_on_break and not on_break
+        self._was_on_break = on_break
+        if entered_break and not self._is_paused:
+            self._is_paused = True
+            self._auto_paused = True
+            self._accumulated_seconds = self._elapsed_seconds_now()
+            self._start_time = None
+        elif left_break and self._is_paused and self._auto_paused:
+            self._is_paused = False
+            self._auto_paused = False
+            self._start_time = datetime.now()
+
     def _is_independent_review(self):
         # A real review_store-tracked review (has a token) that ISN'T
         # driving session_manager's own session -- the case that can be
@@ -1001,6 +1043,10 @@ class _ReviewBanner(QWidget):
         # tied to a linked task session still get to pause) rather than only
         # showing up when there happens to be an underlying session to pause.
         self._pause_btn.setVisible(True)
+        self._first_attempt_started_at = self._start_time
+        self._auto_paused = False
+        self._was_on_break = False
+        self._publish_first_attempt()
         self._tick_timer.start(1000)
         self.show()
 
@@ -1024,6 +1070,8 @@ class _ReviewBanner(QWidget):
         return self._is_paused
 
     def _pause_button_text(self, is_paused):
+        if is_paused and self._auto_paused:
+            return "Resume (on break)"
         if is_paused and self._is_independent_review():
             active = review_store.get_active_review()
             if active and active.get("autoPaused"):
@@ -1044,6 +1092,7 @@ class _ReviewBanner(QWidget):
             # again until the app was restarted.
             self._abandon_after_external_end()
             return
+        self._sync_first_attempt_with_pomodoro_break()
         is_paused = self._currently_paused()
         self._pause_btn.setText(self._pause_button_text(is_paused))
         # Updated unconditionally, even while paused -- _elapsed_seconds_now()
@@ -1054,6 +1103,7 @@ class _ReviewBanner(QWidget):
         # freshly-rebuilt-after-restart banner stuck showing "00:00" the
         # entire time it stayed paused.
         self._timer_label.setText(_format_mmss(self._elapsed_seconds_now()))
+        self._publish_first_attempt()
 
     def _pause_resume(self):
         if self._is_independent_review():
@@ -1068,6 +1118,7 @@ class _ReviewBanner(QWidget):
                 review_store.pause_active_review()
             self._pause_btn.setText(self._pause_button_text(self._currently_paused()))
             return
+        self._auto_paused = False
         if self._currently_paused():
             self._is_paused = False
             self._start_time = datetime.now()
@@ -1092,6 +1143,7 @@ class _ReviewBanner(QWidget):
         again here would be a no-op at best and misattribute an "ended twice"
         history entry at worst."""
         self._tick_timer.stop()
+        review_store.clear_first_attempt()
         token = self._session_token
         first_attempt_cancelled_callback = self._first_attempt_cancelled_callback
         self._session_token = None
@@ -1107,6 +1159,7 @@ class _ReviewBanner(QWidget):
 
     def _end_early(self):
         self._tick_timer.stop()
+        review_store.clear_first_attempt()
         token = self._session_token
         end_session = self._end_session_on_finish
         first_attempt_cancelled_callback = self._first_attempt_cancelled_callback
@@ -1134,6 +1187,7 @@ class _ReviewBanner(QWidget):
 
     def _finish(self):
         self._tick_timer.stop()
+        review_store.clear_first_attempt()
         token = self._session_token
         end_session = self._end_session_on_finish
         problem = self._problem
