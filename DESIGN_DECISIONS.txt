@@ -269,3 +269,19 @@ the task; subjectColor alone can't say which task it belongs to.
 Old extension builds ignore the extra field.
 Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-10-04] (review
 chip under the pomodoro chip).
+
+[2026-10-04] "Start First Attempt" is exposed to /status via a published snapshot
+Decision: the first-attempt banner (qt_ui/review_tab.py) publishes an
+in-memory snapshot to review_store (publish_first_attempt, every 1s tick;
+cleared on finish/end/external end) and GET /status falls back to it for
+reviewInProgress when no real review is being timed, flagged isFirstAttempt
+with problemName "First attempt". Snapshots not re-published for 10s read as
+gone. The extension can view it but not pause/resume it (the banner owns
+that state).
+Why: a first attempt has no problem row, so no _active_sessions entry, so it
+was invisible to the extension whenever another session (e.g. a pomodoro)
+was active.
+Rejected alternative: a placeholder _active_sessions entry. Not used --
+those are keyed to real problems and get_active_review()'s other callers
+(restart recovery, independent-review pause) would misread it.
+Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-10-04].
