@@ -258,3 +258,14 @@ _is_string_list() can reintroduce this class of bug by omission.
 Scope: 2000 entries / 500 chars per entry is a generous multiple of what a
 real hand-built blocklist or whitelist would ever need -- picked to be
 obviously above any real usage, not a tight fit.
+
+[2026-10-04] /status reviewInProgress carries taskColor
+Decision: GET /status's reviewInProgress object gains taskColor -- the color
+of the task the review's topic is linked to, or null when there's no linked
+task (or it was deleted). Computed in api_server.py, not review_store, so
+review_store never has to import tasks_store.
+Why: the browser extension colors its review chip under the pomodoro chip by
+the task; subjectColor alone can't say which task it belongs to.
+Old extension builds ignore the extra field.
+Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-10-04] (review
+chip under the pomodoro chip).
