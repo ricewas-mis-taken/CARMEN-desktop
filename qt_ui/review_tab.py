@@ -840,7 +840,7 @@ class _TopicView(QWidget):
             add_problem_dialog.show()
 
         self._review_banner.start(
-            {"name": "your new problem"}, token=None,
+            {"name": "your new problem", "topicId": self._topic_id}, token=None,
             end_session_on_finish=end_session_on_finish,
             first_attempt_callback=_on_first_attempt_done,
             first_attempt_cancelled_callback=_on_first_attempt_cancelled,
@@ -859,6 +859,7 @@ class _ReviewBanner(QWidget):
         self._is_paused = False
         self._first_attempt_callback = None
         self._first_attempt_cancelled_callback = None
+        self._first_attempt_started_at = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -936,6 +937,18 @@ class _ReviewBanner(QWidget):
 
         self.hide()
 
+    def _publish_first_attempt(self):
+        """Mirrors a first-attempt timing (no linked-task session driving it)
+        into review_store so GET /status can show it to the extension."""
+        if self._first_attempt_callback is None or self._end_session_on_finish:
+            return
+        review_store.publish_first_attempt(
+            self._problem.get("topicId"),
+            (self._first_attempt_started_at or datetime.now()).isoformat(),
+            self._elapsed_seconds_now(),
+            self._currently_paused(),
+        )
+
     def _is_independent_review(self):
         # A real review_store-tracked review (has a token) that ISN'T
         # driving session_manager's own session -- the case that can be
@@ -1001,6 +1014,8 @@ class _ReviewBanner(QWidget):
         # tied to a linked task session still get to pause) rather than only
         # showing up when there happens to be an underlying session to pause.
         self._pause_btn.setVisible(True)
+        self._first_attempt_started_at = self._start_time
+        self._publish_first_attempt()
         self._tick_timer.start(1000)
         self.show()
 
@@ -1054,6 +1069,7 @@ class _ReviewBanner(QWidget):
         # freshly-rebuilt-after-restart banner stuck showing "00:00" the
         # entire time it stayed paused.
         self._timer_label.setText(_format_mmss(self._elapsed_seconds_now()))
+        self._publish_first_attempt()
 
     def _pause_resume(self):
         if self._is_independent_review():
@@ -1092,6 +1108,7 @@ class _ReviewBanner(QWidget):
         again here would be a no-op at best and misattribute an "ended twice"
         history entry at worst."""
         self._tick_timer.stop()
+        review_store.clear_first_attempt()
         token = self._session_token
         first_attempt_cancelled_callback = self._first_attempt_cancelled_callback
         self._session_token = None
@@ -1107,6 +1124,7 @@ class _ReviewBanner(QWidget):
 
     def _end_early(self):
         self._tick_timer.stop()
+        review_store.clear_first_attempt()
         token = self._session_token
         end_session = self._end_session_on_finish
         first_attempt_cancelled_callback = self._first_attempt_cancelled_callback
@@ -1134,6 +1152,7 @@ class _ReviewBanner(QWidget):
 
     def _finish(self):
         self._tick_timer.stop()
+        review_store.clear_first_attempt()
         token = self._session_token
         end_session = self._end_session_on_finish
         problem = self._problem
