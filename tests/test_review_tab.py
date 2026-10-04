@@ -681,3 +681,66 @@ def test_first_attempt_banner_publishes_to_status_and_clears_on_end(qtbot, isola
 
     view._review_banner._end_early()
     assert review_store.get_first_attempt() is None
+
+
+def _first_attempt_banner(qtbot, monkeypatch, break_flag):
+    topic, _subject = _make_topic_and_subject()
+    view = review_tab._TopicView(topic["id"])
+    qtbot.addWidget(view)
+    dialog = review_tab._AddProblemDialog(
+        topic["id"], on_added=lambda _p: None, on_start_first_attempt=view._start_first_attempt,
+    )
+    qtbot.addWidget(dialog)
+    real_get_status = session_manager.get_status
+    monkeypatch.setattr(
+        session_manager, "get_status", lambda: {**real_get_status(), "isBreak": break_flag["on"]}
+    )
+    view._start_first_attempt(dialog)
+    return view._review_banner
+
+
+def test_first_attempt_auto_pauses_on_pomodoro_break_and_resumes_after(qtbot, isolate_review_db, isolate_state, monkeypatch):
+    flag = {"on": False}
+    banner = _first_attempt_banner(qtbot, monkeypatch, flag)
+    banner._tick()
+    assert not banner._is_paused
+
+    flag["on"] = True
+    banner._tick()
+    assert banner._is_paused and banner._auto_paused
+    assert review_store.get_first_attempt()["autoPaused"] is True
+    assert banner._pause_btn.text() == "Resume (on break)"
+
+    flag["on"] = False
+    banner._tick()
+    assert not banner._is_paused and not banner._auto_paused
+    banner._end_early()
+
+
+def test_first_attempt_manual_resume_during_break_sticks(qtbot, isolate_review_db, isolate_state, monkeypatch):
+    flag = {"on": False}
+    banner = _first_attempt_banner(qtbot, monkeypatch, flag)
+    banner._tick()
+    flag["on"] = True
+    banner._tick()
+    assert banner._is_paused
+
+    banner._pause_resume()
+    banner._tick()
+    assert not banner._is_paused
+    banner._end_early()
+
+
+def test_first_attempt_manual_pause_is_not_auto_resumed_after_break(qtbot, isolate_review_db, isolate_state, monkeypatch):
+    flag = {"on": False}
+    banner = _first_attempt_banner(qtbot, monkeypatch, flag)
+    banner._tick()
+    banner._pause_resume()
+    assert banner._is_paused and not banner._auto_paused
+
+    flag["on"] = True
+    banner._tick()
+    flag["on"] = False
+    banner._tick()
+    assert banner._is_paused
+    banner._end_early()
