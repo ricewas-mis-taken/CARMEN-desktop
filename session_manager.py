@@ -732,7 +732,11 @@ def pause_session():
         _state["isPaused"] = True
         _state["pausedAt"] = now.isoformat()
         _state["frozenSecondsRemaining"] = seconds_remaining
-        _state["violationLog"].append({"kind": "pause", "timestamp": now.isoformat()})
+        # A pomodoro break already logged its own "pause" marker when it
+        # began -- worked-time replay must keep treating the whole break as
+        # not worked, so no extra markers while isBreak.
+        if not _state["isBreak"]:
+            _state["violationLog"].append({"kind": "pause", "timestamp": now.isoformat()})
         _save()
         return _get_status_locked()
 
@@ -753,7 +757,8 @@ def resume_session():
         _state["isPaused"] = False
         _state["pausedAt"] = None
         _state["frozenSecondsRemaining"] = None
-        _state["violationLog"].append({"kind": "resume", "timestamp": now.isoformat()})
+        if not _state["isBreak"]:
+            _state["violationLog"].append({"kind": "resume", "timestamp": now.isoformat()})
         _save()
         return _get_status_locked()
 
