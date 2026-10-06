@@ -1252,7 +1252,10 @@ def finish_review(session_token, self_solved=True, shakiness=3, duration_seconds
 
     started_at = entry["started_at"]
     if duration_seconds is None:
-        duration_seconds = max(0, int((datetime.now() - started_at).total_seconds()))
+        # Pause-aware elapsed time the store has tracked itself (see
+        # pause_active_review()/resume_active_review()), not raw wall-clock
+        # time since start, which would count paused minutes as solving time.
+        duration_seconds = max(0, _elapsed_seconds_locked(entry))
     return _apply_review_outcome(
         entry["problem_id"], duration_seconds, self_solved, shakiness, started_at=started_at
     )
