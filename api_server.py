@@ -502,9 +502,25 @@ def apps_running():
     return jsonify(window_tracker.list_running_apps())
 
 
+# GET /apps/installed is unauthenticated and each scan walks the Start Menu and
+# shells out to PowerShell, so it is cached briefly (and concurrent callers
+# share one scan) -- otherwise any web page could burn CPU by hammering it.
+_INSTALLED_APPS_TTL_SECONDS = 60
+_installed_apps_cache = {"at": 0.0, "data": None}
+_installed_apps_lock = threading.Lock()
+
+
 @app.route("/apps/installed", methods=["GET"])
 def apps_installed():
-    return jsonify(installed_apps.list_installed_apps())
+    with _installed_apps_lock:
+        now = time.monotonic()
+        if (
+            _installed_apps_cache["data"] is None
+            or now - _installed_apps_cache["at"] > _INSTALLED_APPS_TTL_SECONDS
+        ):
+            _installed_apps_cache["data"] = installed_apps.list_installed_apps()
+            _installed_apps_cache["at"] = time.monotonic()
+        return jsonify(_installed_apps_cache["data"])
 
 
 @app.route("/browser-profiles/running", methods=["GET"])
