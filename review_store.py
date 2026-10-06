@@ -414,7 +414,7 @@ def list_topics():
         try:
             conn = _get_conn()
             rows = conn.execute(
-                "SELECT * FROM review_topics ORDER BY order_index, id"
+                "SELECT * FROM review_topics WHERE is_deleted = 0 ORDER BY order_index, id"
             ).fetchall()
             return [_row_to_topic(r) for r in rows]
         except Exception:
@@ -427,11 +427,11 @@ def create_topic(name):
         try:
             conn = _get_conn()
             if conn.execute(
-                "SELECT id FROM review_topics WHERE LOWER(name) = LOWER(?)", (name,)
+                "SELECT id FROM review_topics WHERE is_deleted = 0 AND LOWER(name) = LOWER(?)", (name,)
             ).fetchone():
                 raise DuplicateNameError(f'A topic named "{name}" already exists.')
             max_order = conn.execute(
-                "SELECT COALESCE(MAX(order_index), -1) AS m FROM review_topics"
+                "SELECT COALESCE(MAX(order_index), -1) AS m FROM review_topics WHERE is_deleted = 0"
             ).fetchone()["m"]
             cur = conn.execute(
                 "INSERT INTO review_topics (name, order_index, sync_id, updated_at, device_id) "
@@ -453,7 +453,9 @@ def get_topic(topic_id):
     with _lock:
         try:
             conn = _get_conn()
-            row = conn.execute("SELECT * FROM review_topics WHERE id = ?", (topic_id,)).fetchone()
+            row = conn.execute(
+                "SELECT * FROM review_topics WHERE id = ? AND is_deleted = 0", (topic_id,)
+            ).fetchone()
             return _row_to_topic(row) if row else None
         except Exception:
             logger.exception("review_store.get_topic failed for %s", topic_id)
@@ -481,7 +483,7 @@ def rename_topic(topic_id, name):
         try:
             conn = _get_conn()
             if conn.execute(
-                "SELECT id FROM review_topics WHERE LOWER(name) = LOWER(?) AND id != ?",
+                "SELECT id FROM review_topics WHERE is_deleted = 0 AND LOWER(name) = LOWER(?) AND id != ?",
                 (name, topic_id),
             ).fetchone():
                 raise DuplicateNameError(f'A topic named "{name}" already exists.')
@@ -528,7 +530,13 @@ def delete_topic(topic_id):
             )
             conn.execute("DELETE FROM review_problems WHERE topic_id = ?", (topic_id,))
             conn.execute("DELETE FROM review_subjects WHERE topic_id = ?", (topic_id,))
-            conn.execute("DELETE FROM review_topics WHERE id = ?", (topic_id,))
+            # Tombstone instead of DELETE so the deletion can propagate through
+            # sync (sync_client gathers the is_deleted row and pushes it; the
+            # receiving device cascades the children away).
+            conn.execute(
+                "UPDATE review_topics SET is_deleted = 1, updated_at = ?, device_id = ? WHERE id = ?",
+                (datetime.now().isoformat(), device_id.get_device_id(), topic_id),
+            )
             conn.commit()
 
             if problem_ids:
@@ -1244,10 +1252,21 @@ def finish_review(session_token, self_solved=True, shakiness=3, duration_seconds
 
     started_at = entry["started_at"]
     if duration_seconds is None:
-        duration_seconds = max(0, int((datetime.now() - started_at).total_seconds()))
-    return _apply_review_outcome(
+        # Pause-aware elapsed time the store has tracked itself (see
+        # pause_active_review()/resume_active_review()), not raw wall-clock
+        # time since start, which would count paused minutes as solving time.
+        duration_seconds = max(0, _elapsed_seconds_locked(entry))
+    outcome = _apply_review_outcome(
         entry["problem_id"], duration_seconds, self_solved, shakiness, started_at=started_at
     )
+    if outcome is None and get_problem(entry["problem_id"]) is not None:
+        # The write failed but the problem still exists: put the review back
+        # so the caller can retry instead of losing it with a misleading
+        # "invalid or already-used" answer. (A deleted problem stays gone.)
+        with _lock:
+            _active_sessions[session_token] = entry
+            _save_active_sessions()
+    return outcome
 
 
 def finish_review_for_problem(problem_id, duration_seconds, self_solved=True, shakiness=3, started_at=None):

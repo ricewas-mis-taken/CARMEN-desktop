@@ -11,6 +11,7 @@ malformed RRULE, a store hiccup) can never take the whole tray app down with
 it.
 """
 import threading
+import math
 import time
 from datetime import datetime, timedelta
 
@@ -93,7 +94,27 @@ def _prune_fired(now):
     _fired.difference_update(stale)
 
 
+MAX_LEAD_MINUTES = 366 * 24 * 60
+
+
+def _max_lead_minutes(event):
+    """Longest time before an occurrence's start that this event wants to fire
+    something (a reminder offset or the focus warning) -- the occurrence
+    itself has to be expanded that far ahead, or the trigger moment arrives
+    while the occurrence is still outside the lookahead window."""
+    focus = event.get("focusProfile")
+    leads = [o for o in (event.get("reminderOffsets") or []) if isinstance(o, (int, float))]
+    if focus and focus.get("enabled") and isinstance(focus.get("warningMinutes"), (int, float)):
+        leads.append(focus["warningMinutes"])
+    # A typed/synced absurd offset (huge, inf, nan) must not blow up the
+    # lookahead arithmetic below -- clamped to a year, which no real reminder
+    # exceeds, so the event's start trigger still fires.
+    leads = [o for o in leads if math.isfinite(o)]
+    return min(max([0] + leads), MAX_LEAD_MINUTES)
+
+
 def _process_event(event, now, range_end):
+    range_end = range_end + timedelta(minutes=_max_lead_minutes(event))
     occurrences = recurrence.expand_occurrences(event, now - timedelta(hours=LOOKAHEAD_HOURS), range_end)
     focus = event.get("focusProfile")
 
@@ -101,7 +122,12 @@ def _process_event(event, now, range_end):
         occ_key = occ_start.isoformat()
 
         for offset_minutes in event.get("reminderOffsets", []) or []:
-            trigger_at = occ_start - timedelta(minutes=offset_minutes)
+            try:
+                trigger_at = occ_start - timedelta(minutes=offset_minutes)
+            except (OverflowError, ValueError):
+                # An absurd offset (typed/synced) must not abort the whole event --
+                # the start trigger below still has to fire.
+                continue
             _maybe_fire(
                 ("reminder", event["id"], occ_key, offset_minutes),
                 trigger_at, now,
@@ -109,12 +135,16 @@ def _process_event(event, now, range_end):
             )
 
         if focus and focus.get("enabled") and focus.get("warningMinutes") is not None:
-            warn_at = occ_start - timedelta(minutes=focus["warningMinutes"])
-            _maybe_fire(
-                ("focus_warning", event["id"], occ_key),
-                warn_at, now,
-                lambda ev=event: _fire_focus_warning(ev),
-            )
+            try:
+                warn_at = occ_start - timedelta(minutes=focus["warningMinutes"])
+            except (OverflowError, ValueError):
+                warn_at = None
+            if warn_at is not None:
+                _maybe_fire(
+                    ("focus_warning", event["id"], occ_key),
+                    warn_at, now,
+                    lambda ev=event: _fire_focus_warning(ev),
+                )
 
         _maybe_fire(
             ("start", event["id"], occ_key),

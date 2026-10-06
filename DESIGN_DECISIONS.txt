@@ -297,3 +297,20 @@ Why: break time isn't working time; first attempts were the one review kind
 that kept counting through a break. Edge-triggered so a manual Resume during
 a break isn't undone a second later, and a manual pause is never auto-resumed.
 Cross-reference: carmen-extension needs no change (already renders autoPaused).
+
+[2026-10-05] War-room fixes: one verified patch per bug, sync watermark deferred
+Decision: the ten-agent war-room round (see the referee report) produced 54
+verified bugs and 62 patches. One patch per bug was applied; second patches
+for the same bug were dropped, four patches that collided in api_server.py /
+sync_client.py were merged by hand (a hex-color check, topic existence check,
+duplicate-name 409 and the sync store lock now coexist), and three bugs with
+no patch got small fixes here (screentime.json in the backup, a failed review
+save restores its token, review duration capped at 7 days). Two tests needed
+fixing for interactions between patches, and the autouse test safety net now
+also isolates sync_client's owner/watermark files and the tasks/board files
+-- a sync test had written a fake user id into the real private/sync_owner.txt.
+Deferred: the sync pull watermark compares against the CLIENT-written
+updated_at, so an edit made on a device that was offline is never delivered to
+a device that already synced past it. The proper fix is a server-assigned
+timestamp column (schema migration on the Supabase project) and pulling on it;
+not applied because it changes the deployed database.

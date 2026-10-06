@@ -231,6 +231,13 @@ if sys.platform == "darwin":
     ALWAYS_ALLOWED_PROCESSES = ALWAYS_ALLOWED_PROCESSES | _ALWAYS_ALLOWED_PROCESSES_MACOS
 
 
+def _clean_entries(entries):
+    """Strips surrounding whitespace from list entries. The API accepts
+    entries that are non-empty only *after* stripping, so a padded name like
+    " discord.exe" used to be stored verbatim and then never match."""
+    return [e.strip() if isinstance(e, str) else e for e in (entries or [])]
+
+
 def is_exempt(process_name, pid=None):
     """True for our own process (tray/popups) or core shell/system processes
     that must always remain usable — alt-tab, taskbar, wifi/time flyouts,
@@ -325,8 +332,8 @@ def start_session(
         _state["startTime"] = now.isoformat()
         _state["endTime"] = end_time.isoformat()
         _state["lockMode"] = lock_mode
-        _state["processBlocklist"] = list(process_blocklist)
-        _state["domainWhitelist"] = list(domain_whitelist)
+        _state["processBlocklist"] = _clean_entries(process_blocklist)
+        _state["domainWhitelist"] = _clean_entries(domain_whitelist)
         _state["violationCount"] = 0
         _state["violationLog"] = []
         _state["lastAcceptableProcess"] = None
@@ -345,7 +352,7 @@ def start_session(
         _state["reviewSubjectName"] = review_subject_name
         _state["reviewProblemId"] = review_problem_id
         _state["isBurnout"] = is_burnout
-        _state["blockedBrowserProfiles"] = list(blocked_browser_profiles or [])
+        _state["blockedBrowserProfiles"] = _clean_entries(blocked_browser_profiles)
         # A plain start_session() always means "not a pomodoro" -- explicitly
         # cleared rather than left over from whatever the previous session
         # was, same reasoning as the source/eventId resets above.
@@ -493,8 +500,8 @@ def update_blocklist(process_blocklist, domain_whitelist, lock_mode=None):
     with _lock:
         if not _state["isActive"]:
             return
-        _state["processBlocklist"] = list(process_blocklist)
-        _state["domainWhitelist"] = list(domain_whitelist)
+        _state["processBlocklist"] = _clean_entries(process_blocklist)
+        _state["domainWhitelist"] = _clean_entries(domain_whitelist)
         if lock_mode is not None:
             _state["lockMode"] = lock_mode
         _save()
@@ -628,6 +635,14 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
     _open_violation_index["domain"] = None
     _save()
 
+    if pomodoro is not None:
+        # An independent review auto-paused for this pomodoro's break would
+        # otherwise stay paused forever when the pomodoro ends mid-break by
+        # any route other than the natural end (which resumes it itself).
+        # A no-op unless that review is still marked auto_paused.
+        import review_store
+        review_store.auto_resume_from_break()
+
     return {
         "isActive": False,
         "secondsRemaining": 0,
@@ -722,17 +737,30 @@ def pause_session():
         if seconds_remaining == 0:
             # The timer already ran out -- this call raced the natural-expiry
             # check in _get_status_locked() (only that path self-finalizes,
-            # and it's skipped entirely once isPaused is True). Finalizing
-            # here instead of pausing avoids leaving the session stuck
-            # forever as "active + paused + 0s remaining": nothing would ever
-            # un-stick it, since finalization never runs while paused.
-            _pending_natural_end["value"] = _finalize_to_history_locked(end_time, end_type="natural")
-            return _get_status_locked()
+            # and it's skipped entirely once isPaused is True). Let that same
+            # path handle the expiry instead of pausing, which avoids leaving
+            # the session stuck forever as "active + paused + 0s remaining":
+            # nothing would ever un-stick it, since finalization never runs
+            # while paused. For a plain session that finalizes it; for a
+            # pomodoro it advances to the next phase rather than ending the
+            # whole multi-cycle run early, and the pause then applies to
+            # that new phase.
+            _get_status_locked()
+            if not _state["isActive"] or _state["isPaused"]:
+                return _get_status_locked()
+            end_time = datetime.fromisoformat(_state["endTime"])
+            seconds_remaining = max(0, int((end_time - now).total_seconds()))
+            if seconds_remaining == 0:
+                return _get_status_locked()
 
         _state["isPaused"] = True
         _state["pausedAt"] = now.isoformat()
         _state["frozenSecondsRemaining"] = seconds_remaining
-        _state["violationLog"].append({"kind": "pause", "timestamp": now.isoformat()})
+        # A pomodoro break already logged its own "pause" marker when it
+        # began -- worked-time replay must keep treating the whole break as
+        # not worked, so no extra markers while isBreak.
+        if not _state["isBreak"]:
+            _state["violationLog"].append({"kind": "pause", "timestamp": now.isoformat()})
         _save()
         return _get_status_locked()
 
@@ -753,7 +781,8 @@ def resume_session():
         _state["isPaused"] = False
         _state["pausedAt"] = None
         _state["frozenSecondsRemaining"] = None
-        _state["violationLog"].append({"kind": "resume", "timestamp": now.isoformat()})
+        if not _state["isBreak"]:
+            _state["violationLog"].append({"kind": "resume", "timestamp": now.isoformat()})
         _save()
         return _get_status_locked()
 

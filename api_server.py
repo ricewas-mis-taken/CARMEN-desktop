@@ -79,13 +79,28 @@ app = Flask(__name__)
 # browser variant.
 _EXTENSION_ORIGIN_RE = re.compile(r"^(chrome|moz)-extension://.*$")
 
+# Every route is extension-origin-only: a blanket "*" let any web page the
+# user visits read /history, /status, /whitelist/domains, /review/* from
+# 127.0.0.1 (a browser on this machine will happily issue the request).
 CORS(
     app,
     resources={
-        r"/api/focus/rules": {"origins": _EXTENSION_ORIGIN_RE},
-        r"/*": {"origins": "*"},
+        r"/*": {"origins": _EXTENSION_ORIGIN_RE},
     },
 )
+
+_ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
+
+
+@app.before_request
+def _reject_foreign_host():
+    """DNS-rebinding guard: a rebinding page reaches this server with its own
+    attacker-controlled name in Host, so anything but a loopback name is
+    refused."""
+    host = (request.host or "").strip().lower()
+    hostname = host.rsplit(":", 1)[0] if not host.endswith("]") else host
+    if hostname not in _ALLOWED_HOSTS:
+        return jsonify({"error": "invalid Host header"}), 403
 
 API_PORT = 5847
 
@@ -109,10 +124,19 @@ if not _request_logger.handlers:
     _request_logger.addHandler(_handler)
 
 
+def _loggable(text):
+    """request.path is percent-DECODED, so a request for /health%0A<fake line>
+    would otherwise write a forged extra line into the request log -- whose
+    whole purpose is spotting a START with no matching END."""
+    return "".join(ch if ch.isprintable() else "\\x%02x" % ord(ch) for ch in text)
+
+
 @app.before_request
 def _log_request_start():
     request._carmen_start_time = time.time()
-    _request_logger.info("START %s %s [thread=%s]", request.method, request.path, threading.get_ident())
+    _request_logger.info(
+        "START %s %s [thread=%s]", _loggable(request.method), _loggable(request.path), threading.get_ident()
+    )
 
 
 @app.after_request
@@ -120,7 +144,7 @@ def _log_request_end(response):
     elapsed = time.time() - getattr(request, "_carmen_start_time", time.time())
     _request_logger.info(
         "END   %s %s -> %s (%.3fs) [thread=%s]",
-        request.method, request.path, response.status_code, elapsed, threading.get_ident(),
+        _loggable(request.method), _loggable(request.path), response.status_code, elapsed, threading.get_ident(),
     )
     return response
 
@@ -149,7 +173,10 @@ def _require_token(fn):
     def wrapper(*args, **kwargs):
         expected = config.get_api_token()
         provided = request.headers.get("X-Carmen-Token", "")
-        if not hmac.compare_digest(provided, expected):
+        # Compared as bytes: compare_digest raises TypeError on a str with
+        # non-ASCII characters (header values decode as latin-1), which would
+        # surface as a 500 instead of 401.
+        if not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
             return jsonify({"error": "missing or invalid X-Carmen-Token header"}), 401
         return fn(*args, **kwargs)
     return wrapper
@@ -165,6 +192,9 @@ def _require_token(fn):
 # degrading every poll for the rest of that session.
 _MAX_LIST_ENTRIES = 2000
 _MAX_ENTRY_LENGTH = 500
+_MAX_REVIEW_SECONDS = 7 * 24 * 3600
+_MAX_URL_LENGTH = 8192
+_MAX_REASON_LENGTH = 2000
 
 
 def _is_string_list(value):
@@ -187,6 +217,15 @@ def _is_string_list(value):
             for item in value
         )
     )
+
+
+def _json_body():
+    """The request's JSON body as a dict. A body that parses as valid JSON
+    but isn't an object (a list, string, number, true) used to reach
+    body.get(...) and crash the handler with an AttributeError -> HTTP 500;
+    treated the same as a missing/invalid body instead."""
+    body = request.get_json(force=True, silent=True)
+    return body if isinstance(body, dict) else {}
 
 
 @app.route("/internal/quit", methods=["POST"])
@@ -277,7 +316,7 @@ def review_resume():
 @app.route("/session/start", methods=["POST"])
 @_require_token
 def session_start():
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
 
     duration_minutes = body.get("duration_minutes")
     lock_mode = body.get("lock_mode")
@@ -317,6 +356,10 @@ def session_start():
         return jsonify({"error": "lock_mode must be 'soft' or 'hard'"}), 400
     if source not in ("manual", "calendar-event"):
         return jsonify({"error": "source must be 'manual' or 'calendar-event'"}), 400
+    if event_title is not None and not isinstance(event_title, str):
+        return jsonify({"error": "event_title must be a string or null"}), 400
+    if event_id is not None and not isinstance(event_id, str):
+        return jsonify({"error": "event_id must be a string or null"}), 400
     if source == "calendar-event" and (not isinstance(event_id, str) or not event_id.strip()):
         return jsonify({"error": "event_id is required when source is 'calendar-event'"}), 400
 
@@ -392,7 +435,7 @@ def session_update():
     button calls. Any field left out of the body keeps its current value, so
     a caller that only wants to flip lock mode doesn't have to resend the
     lists (and vice versa)."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     status = session_manager.get_status()
     if not status["isActive"]:
         return jsonify({"error": "no active session"}), 400
@@ -420,11 +463,13 @@ def violation():
     isn't in domain_whitelist during an active session — increments the
     same violation_count/violationLog GET /status returns, alongside this
     app's own process-based violations."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     url = body.get("url")
 
     if not isinstance(url, str) or not url:
         return jsonify({"error": "url must be a non-empty string"}), 400
+    if len(url) > _MAX_URL_LENGTH:
+        return jsonify({"error": f"url must be at most {_MAX_URL_LENGTH} characters"}), 400
 
     violation_count = session_manager.record_domain_violation(url)
     return jsonify({"violationCount": violation_count})
@@ -440,7 +485,7 @@ def violation_resolved():
     happens automatically via this app's own window-polling loop, so there's
     nothing else for a caller to resolve today, but the type field keeps the
     door open."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     violation_type = body.get("type", "domain")
 
     if violation_type != "domain":
@@ -460,14 +505,16 @@ def screentime_domain():
     Independent of any focus session -- recorded regardless of
     isActive/isPaused/isBreak, same as the app-side tracking in
     window_tracker.py."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     domain = body.get("domain")
     seconds = body.get("seconds")
 
     if not isinstance(domain, str) or not domain:
         return jsonify({"error": "domain must be a non-empty string"}), 400
-    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool) or not math.isfinite(seconds) or seconds <= 0:
-        return jsonify({"error": "seconds must be a finite positive number"}), 400
+    if len(domain) > _MAX_ENTRY_LENGTH:
+        return jsonify({"error": f"domain must be at most {_MAX_ENTRY_LENGTH} characters"}), 400
+    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool) or not math.isfinite(seconds) or seconds <= 0 or seconds > 86400:
+        return jsonify({"error": "seconds must be a finite positive number (at most 86400)"}), 400
 
     screentime_store.add_domain_seconds(domain, seconds)
     return jsonify({"ok": True})
@@ -487,9 +534,25 @@ def apps_running():
     return jsonify(window_tracker.list_running_apps())
 
 
+# GET /apps/installed is unauthenticated and each scan walks the Start Menu and
+# shells out to PowerShell, so it is cached briefly (and concurrent callers
+# share one scan) -- otherwise any web page could burn CPU by hammering it.
+_INSTALLED_APPS_TTL_SECONDS = 60
+_installed_apps_cache = {"at": 0.0, "data": None}
+_installed_apps_lock = threading.Lock()
+
+
 @app.route("/apps/installed", methods=["GET"])
 def apps_installed():
-    return jsonify(installed_apps.list_installed_apps())
+    with _installed_apps_lock:
+        now = time.monotonic()
+        if (
+            _installed_apps_cache["data"] is None
+            or now - _installed_apps_cache["at"] > _INSTALLED_APPS_TTL_SECONDS
+        ):
+            _installed_apps_cache["data"] = installed_apps.list_installed_apps()
+            _installed_apps_cache["at"] = time.monotonic()
+        return jsonify(_installed_apps_cache["data"])
 
 
 @app.route("/browser-profiles/running", methods=["GET"])
@@ -504,7 +567,7 @@ def browser_profiles_running():
 @app.route("/blocklist/apps", methods=["POST"])
 @_require_token
 def blocklist_apps():
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     process_blocklist = body.get("process_blocklist")
 
     if not _is_string_list(process_blocklist):
@@ -522,7 +585,7 @@ def blocklist_apps():
 def blocklist_browser_profiles():
     """Saves the default browserProfileBlocklist (AUMIs), the profile-level
     counterpart to POST /blocklist/apps."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     browser_profile_blocklist = body.get("browser_profile_blocklist")
 
     if not _is_string_list(browser_profile_blocklist):
@@ -558,7 +621,7 @@ def whitelist_domains_set():
     which only ever touches the *active session's* domainWhitelist and
     requires a reason — this endpoint is the same "just replace the saved
     default" shape as /blocklist/apps, with no session or reason involved."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     domain_whitelist = body.get("domain_whitelist")
 
     if not _is_string_list(domain_whitelist):
@@ -579,7 +642,7 @@ def blocklist_apps_remove():
     processBlocklistExceptions) — the API-level counterpart to the lock
     overlay's own "Unblock" button (enforcer.py), for any other caller
     (e.g. Carmen) that wants to drive the same mid-session unblock."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     process_name = body.get("process_name")
     reason = body.get("reason")
 
@@ -587,6 +650,8 @@ def blocklist_apps_remove():
         return jsonify({"error": "process_name must be a non-empty string"}), 400
     if not isinstance(reason, str) or not reason.strip():
         return jsonify({"error": "reason must be a non-empty string"}), 400
+    if len(process_name.strip()) > _MAX_ENTRY_LENGTH or len(reason.strip()) > _MAX_REASON_LENGTH:
+        return jsonify({"error": "process_name or reason is too long"}), 400
 
     # is_active() is checked atomically inside remove_process_from_blocklist,
     # under the same lock as the write itself, rather than as a separate
@@ -607,7 +672,7 @@ def whitelist_domains_add():
     required reason logged for the audit trail (session_manager's
     domainWhitelistAdditions) — for unblocking a site mid-session without
     ending it. Only makes sense while a session is actually running."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     domain = body.get("domain")
     reason = body.get("reason")
 
@@ -615,6 +680,8 @@ def whitelist_domains_add():
         return jsonify({"error": "domain must be a non-empty string"}), 400
     if not isinstance(reason, str) or not reason.strip():
         return jsonify({"error": "reason must be a non-empty string"}), 400
+    if len(domain.strip()) > _MAX_ENTRY_LENGTH or len(reason.strip()) > _MAX_REASON_LENGTH:
+        return jsonify({"error": "domain or reason is too long"}), 400
 
     # See blocklist_apps_remove() above for why is_active() is checked
     # atomically inside add_domain_to_whitelist rather than as a separate
@@ -637,7 +704,7 @@ def task_domain_whitelist_add(task_id):
     on this task is already allowed the next time this task starts one.
     Case-insensitive dedupe against what's already saved; existing entries
     and their original casing are left untouched."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     domains = body.get("domains")
 
     if not _is_string_list(domains):
@@ -685,7 +752,7 @@ def focus_rules_set():
     push can't silently erase someone else's addition. See
     config.set_focus_rules() for why a merge can only ever add domains, not
     remove them."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     domain_whitelist = body.get("domainWhitelist")
     base_version = body.get("baseVersion")
 
@@ -693,6 +760,8 @@ def focus_rules_set():
         isinstance(d, str) for d in domain_whitelist
     ):
         return jsonify({"error": "domainWhitelist must be a list of strings"}), 400
+    if len(domain_whitelist) > _MAX_LIST_ENTRIES or any(len(d) > _MAX_ENTRY_LENGTH for d in domain_whitelist):
+        return jsonify({"error": "domainWhitelist is too large"}), 400
     if base_version is not None and not isinstance(base_version, int):
         return jsonify({"error": "baseVersion must be an integer or omitted"}), 400
 
@@ -715,11 +784,14 @@ def review_topics_list():
 @app.route("/review/topics", methods=["POST"])
 @_require_token
 def review_topics_create():
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     name = body.get("name")
     if not isinstance(name, str) or not name.strip():
         return jsonify({"error": "name must be a non-empty string"}), 400
-    topic = review_store.create_topic(name.strip())
+    try:
+        topic = review_store.create_topic(name.strip())
+    except review_store.DuplicateNameError as exc:
+        return jsonify({"error": str(exc)}), 409
     if topic is None:
         return jsonify({"error": "failed to create topic"}), 500
     return jsonify(topic), 201
@@ -733,14 +805,24 @@ def review_subjects_list(topic_id):
 @app.route("/review/topics/<int:topic_id>/subjects", methods=["POST"])
 @_require_token
 def review_subjects_create(topic_id):
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     name = body.get("name")
     color = body.get("color")
     if not isinstance(name, str) or not name.strip():
         return jsonify({"error": "name must be a non-empty string"}), 400
     if not isinstance(color, str) or not color.strip():
         return jsonify({"error": "color must be a non-empty hex string"}), 400
-    subject = review_store.create_subject(topic_id, name.strip(), color.strip())
+    if not re.fullmatch(r"#[0-9A-Fa-f]{6}", color.strip()):
+        return jsonify({"error": "color must be a hex string like #RRGGBB"}), 400
+    # Without this the INSERT succeeds against a topic that doesn't exist
+    # (review_store doesn't enforce foreign keys), leaving an orphan subject
+    # no listing can ever reach.
+    if review_store.get_topic(topic_id) is None:
+        return jsonify({"error": "topic not found"}), 404
+    try:
+        subject = review_store.create_subject(topic_id, name.strip(), color.strip())
+    except (review_store.DuplicateNameError, review_store.DuplicateColorError) as exc:
+        return jsonify({"error": str(exc)}), 409
     if subject is None:
         return jsonify({"error": "failed to create subject"}), 500
     return jsonify(subject), 201
@@ -775,6 +857,16 @@ def review_problems_create(topic_id):
     if description_type not in ("text", "photo", "link"):
         return jsonify({"error": "description_type must be 'text', 'photo', or 'link'"}), 400
 
+    # The topic and subject must exist and the subject must belong to this
+    # topic. Previously a missing parent still inserted an orphan row (and
+    # then 500'd because the row could not be read back), and a subject from
+    # a *different* topic was accepted -- deleting that other topic later
+    # silently made the problem unreachable.
+    if review_store.get_topic(topic_id) is None:
+        return jsonify({"error": "topic not found"}), 404
+    if not any(subj["id"] == subject_id for subj in review_store.list_subjects(topic_id)):
+        return jsonify({"error": "subject not found in this topic"}), 404
+
     description_text = None
     description_link = None
     photo_bytes = None
@@ -795,11 +887,14 @@ def review_problems_create(topic_id):
         photo_bytes = photo_file.read()
         photo_filename = photo_file.filename
 
-    problem = review_store.create_problem(
-        topic_id, subject_id, name, stars, description_type,
-        description_text=description_text, description_link=description_link,
-        photo_bytes=photo_bytes, photo_filename=photo_filename,
-    )
+    try:
+        problem = review_store.create_problem(
+            topic_id, subject_id, name, stars, description_type,
+            description_text=description_text, description_link=description_link,
+            photo_bytes=photo_bytes, photo_filename=photo_filename,
+        )
+    except review_store.DuplicateNameError as exc:
+        return jsonify({"error": str(exc)}), 409
     if problem is None:
         return jsonify({"error": "failed to create problem"}), 500
     return jsonify(problem), 201
@@ -832,7 +927,7 @@ def review_problem_start(problem_id):
 @app.route("/review/problems/<int:problem_id>/finish", methods=["POST"])
 @_require_token
 def review_problem_finish(problem_id):
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     session_token = body.get("session_token")
     if not isinstance(session_token, str) or not session_token:
         return jsonify({"error": "session_token must be a non-empty string"}), 400
@@ -850,8 +945,9 @@ def review_problem_finish(problem_id):
         isinstance(duration_seconds, bool)
         or not isinstance(duration_seconds, int)
         or duration_seconds < 0
+        or duration_seconds > _MAX_REVIEW_SECONDS
     ):
-        return jsonify({"error": "duration_seconds must be a non-negative integer if given"}), 400
+        return jsonify({"error": "duration_seconds must be a non-negative integer (at most 7 days) if given"}), 400
 
     # Verified BEFORE finish_review() is ever called -- that call commits
     # its side effects (logs the review, bumps review_count, reschedules

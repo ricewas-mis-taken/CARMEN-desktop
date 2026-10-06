@@ -153,6 +153,18 @@ def _init_schema(conn):
         conn.commit()
 
 
+def _load_json_list(value):
+    """json.loads for a focus_profiles list column, tolerant of a corrupt or
+    wrongly-typed value (a synced row can carry anything). An exception
+    escaping here used to abort list_events() for EVERY event, not just the
+    one with the bad profile."""
+    try:
+        loaded = json.loads(value)
+    except (TypeError, ValueError):
+        return []
+    return [x for x in loaded if isinstance(x, str)] if isinstance(loaded, list) else []
+
+
 def _row_to_event(conn, row):
     reminders = [
         r["offset_minutes"]
@@ -163,12 +175,12 @@ def _row_to_event(conn, row):
     ]
     focus = conn.execute("SELECT * FROM focus_profiles WHERE event_id = ?", (row["id"],)).fetchone()
     focus_profile = None
-    if focus is not None:
+    if focus is not None and not focus["is_deleted"]:
         focus_profile = {
             "enabled": bool(focus["enabled"]),
             "lockMode": focus["lock_mode"],
-            "processBlocklist": json.loads(focus["process_blocklist"]),
-            "domainWhitelist": json.loads(focus["domain_whitelist"]),
+            "processBlocklist": _load_json_list(focus["process_blocklist"]),
+            "domainWhitelist": _load_json_list(focus["domain_whitelist"]),
             "warningMinutes": focus["warning_minutes"],
         }
     return {
@@ -280,23 +292,32 @@ def save_event(event):
             if focus and focus.get("enabled"):
                 conn.execute(
                     """
-                    INSERT INTO focus_profiles (event_id, enabled, lock_mode, process_blocklist, domain_whitelist, warning_minutes)
-                    VALUES (?, 1, ?, ?, ?, ?)
+                    INSERT INTO focus_profiles (event_id, enabled, lock_mode, process_blocklist, domain_whitelist,
+                                                warning_minutes, updated_at, device_id, is_deleted)
+                    VALUES (?, 1, ?, ?, ?, ?, ?, ?, 0)
                     ON CONFLICT(event_id) DO UPDATE SET
                         enabled=1, lock_mode=excluded.lock_mode,
                         process_blocklist=excluded.process_blocklist,
                         domain_whitelist=excluded.domain_whitelist,
-                        warning_minutes=excluded.warning_minutes
+                        warning_minutes=excluded.warning_minutes,
+                        updated_at=excluded.updated_at, device_id=excluded.device_id, is_deleted=0
                     """,
                     (
                         event_id, focus.get("lockMode", "soft"),
                         json.dumps(focus.get("processBlocklist", [])),
                         json.dumps(focus.get("domainWhitelist", [])),
-                        focus.get("warningMinutes"),
+                        focus.get("warningMinutes"), now, this_device,
                     ),
                 )
             else:
-                conn.execute("DELETE FROM focus_profiles WHERE event_id = ?", (event_id,))
+                # Tombstone instead of DELETE so the disable can sync: a hard
+                # delete leaves nothing for _gather_focus_profiles to push, and
+                # the other devices keep running the focus lock forever.
+                conn.execute(
+                    "UPDATE focus_profiles SET enabled = 0, is_deleted = 1, updated_at = ?, device_id = ? "
+                    "WHERE event_id = ? AND is_deleted = 0",
+                    (now, this_device, event_id),
+                )
 
             conn.commit()
             saved = True
@@ -323,8 +344,12 @@ def soft_delete_event(event_id):
     with _lock:
         try:
             conn = _get_conn()
+            now = datetime.now().isoformat()
+            # updated_at must move too: sync_client gathers events by
+            # "updated_at > last sync", so a delete that leaves it alone is
+            # never pushed to other devices.
             conn.execute(
-                "UPDATE events SET deleted_at = ? WHERE id = ?", (datetime.now().isoformat(), event_id)
+                "UPDATE events SET deleted_at = ?, updated_at = ? WHERE id = ?", (now, now, event_id)
             )
             conn.commit()
         except Exception:
@@ -338,7 +363,10 @@ def undo_delete_event(event_id):
     with _lock:
         try:
             conn = _get_conn()
-            conn.execute("UPDATE events SET deleted_at = NULL WHERE id = ?", (event_id,))
+            conn.execute(
+                "UPDATE events SET deleted_at = NULL, updated_at = ? WHERE id = ?",
+                (datetime.now().isoformat(), event_id),
+            )
             conn.commit()
         except Exception:
             logger.exception("undo_delete_event failed for %s", event_id)
@@ -376,20 +404,34 @@ def export_db(dest_path):
 
 
 def import_db(src_path):
+    global _conn
     with _lock:
+        src = dest = None
         try:
-            global _conn
+            # Validate the source BEFORE touching the live connection: a file
+            # that isn't a SQLite database used to fail at src.backup() after
+            # _conn had already been closed, leaving a dead connection that
+            # made every later list/save call fail until the app restarted.
             src = sqlite3.connect(src_path)
+            if src.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                raise sqlite3.DatabaseError("source database failed quick_check")
             if _conn is not None:
                 _conn.close()
+                _conn = None
             dest = sqlite3.connect(DB_PATH)
             with dest:
                 src.backup(dest)
-            src.close()
-            dest.close()
-            _conn = None
-            _get_conn()
             return True
         except Exception:
             logger.exception("import_db failed from %s", src_path)
             return False
+        finally:
+            if src is not None:
+                src.close()
+            if dest is not None:
+                dest.close()
+            _conn = None
+            try:
+                _get_conn()
+            except Exception:
+                logger.exception("import_db could not reopen calendar.db")

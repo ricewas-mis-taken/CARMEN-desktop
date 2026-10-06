@@ -46,6 +46,7 @@ KEYRING_USERNAME = "supabase_refresh_token"
 _lock = threading.Lock()
 _client = None
 _access_token = None
+_auth_generation = 0  # bumped by logout() so an in-flight refresh can tell it was superseded
 _current_user = None  # {"id": ..., "email": ...} while logged in, else None
 
 
@@ -57,7 +58,14 @@ def _get_client():
 
 
 def _store_refresh_token(token):
-    keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, token)
+    # Persisting is best-effort: the in-memory session is already valid, and
+    # an exception escaping here would kill login()'s background thread (the
+    # login form then stays busy forever) or crash is_logged_in() callers.
+    # The only cost of a failed save is signing in again next launch.
+    try:
+        keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, token)
+    except Exception:
+        logger.warning("Could not save the refresh token to the OS credential store", exc_info=True)
 
 
 def _load_refresh_token():
@@ -135,8 +143,9 @@ def signup(email, password):
 
 
 def logout():
-    global _access_token, _current_user
+    global _access_token, _current_user, _auth_generation
     with _lock:
+        _auth_generation += 1
         if _client is not None:
             try:
                 _client.auth.sign_out()
@@ -155,6 +164,7 @@ def _refresh_session():
     global _access_token, _current_user
     if not SUPABASE_URL or not SUPABASE_PUBLISHABLE_KEY:
         return False
+    generation = _auth_generation  # captured before reading the token so a logout() in between is noticed
     refresh_token = _load_refresh_token()
     if not refresh_token:
         return False
@@ -167,10 +177,20 @@ def _refresh_session():
     if not session:
         return False
     with _lock:
+        if generation != _auth_generation:
+            return False  # logout() ran while this refresh was in flight
         _access_token = session.access_token
         _current_user = {"id": result.user.id, "email": result.user.email}
         _store_refresh_token(session.refresh_token)
     return True
+
+
+def refresh_access_token():
+    """Forces a refresh now, even though an in-memory access token exists --
+    for a caller that just got a 401 (Supabase access tokens expire, 1h by
+    default, and is_logged_in()/get_access_token() alone never notice that).
+    Returns True if a fresh token is now held."""
+    return _refresh_session()
 
 
 def is_logged_in():

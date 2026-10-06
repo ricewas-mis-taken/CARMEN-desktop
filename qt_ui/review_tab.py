@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 import review_store
 import session_manager
 import tasks_store
+from qt_ui.safe_link import make_link_label
 
 COLOR_PALETTE = [
     "#5B8DEF", "#e53935", "#43a047", "#fb8c00", "#8e24aa",
@@ -283,9 +284,7 @@ def _build_description_content(layout, problem):
         layout.addWidget(image_label, 1)
     else:  # link
         link = problem.get("descriptionLink") or ""
-        link_label = QLabel(f'<a style="color: #1F2328;" href="{link}">{link}</a>')
-        link_label.setOpenExternalLinks(False)
-        link_label.linkActivated.connect(lambda url: QDesktopServices.openUrl(QUrl(url)))
+        link_label = make_link_label(link)
         link_label.setWordWrap(True)
         layout.addWidget(link_label, 1)
 

@@ -123,6 +123,30 @@ SYNC_INTERVAL_SECONDS = 5 * 60
 LAST_SYNC_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "last_sync.txt")
 _cached_last_sync = None
 
+# Which account the local data (and the last_sync watermark above) belongs
+# to. Without this, signing out and into a different account on the same
+# install pushes the first account's edited records into the second
+# account's cloud storage and pulls with the first account's watermark, so
+# the second account's older cloud data is never delivered.
+SYNC_OWNER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "sync_owner.txt")
+
+
+def _check_sync_owner(user_id):
+    """True if the local data may sync as user_id. The first account to sync
+    claims it (this also adopts existing installs); a different account is
+    refused rather than mixing the two accounts' data."""
+    try:
+        with open(SYNC_OWNER_PATH, "r", encoding="utf-8") as f:
+            owner = f.read().strip()
+    except OSError:
+        owner = ""
+    if owner:
+        return owner == user_id
+    os.makedirs(os.path.dirname(SYNC_OWNER_PATH), exist_ok=True)
+    with open(SYNC_OWNER_PATH, "w", encoding="utf-8") as f:
+        f.write(user_id)
+    return True
+
 REVIEW_TABLES = ("review_topics", "review_subjects", "review_problems", "review_sessions")
 
 
@@ -333,7 +357,7 @@ def _ensure_row_sync_meta(conn, table, row):
 
 
 def _gather_review_topics(conn, cutoff_local):
-    rows = conn.execute("SELECT * FROM review_topics WHERE is_deleted = 0").fetchall()
+    rows = conn.execute("SELECT * FROM review_topics").fetchall()
     records = []
     for row in rows:
         needs_meta = not row["sync_id"] or not row["updated_at"] or not row["device_id"]
@@ -457,9 +481,65 @@ def _gather_all(cutoff_local):
 
 # --- apply: tasks.json / board.json ---
 
-def _apply_json_store(records, load_fn, save_fn, id_field):
+def _is_real_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value == value and abs(value) != float("inf")
+
+
+def _normalize_task(item):
+    """Fills in defaults for fields a pulled task record lacks and replaces
+    wrongly-typed values the UI does arithmetic on -- one malformed record
+    must not be able to break the Tasks tab (and with it the whole window)."""
+    import copy
+
+    merged = copy.deepcopy(tasks_store.DEFAULT_TASK)
+    merged.update(item)
+    if not _is_real_number(merged.get("targetMinutes")) or merged["targetMinutes"] < 0:
+        merged["targetMinutes"] = tasks_store.DEFAULT_TASK["targetMinutes"]
+    for key, expected in (("name", str), ("color", str), ("recurrence", str), ("lockMode", str)):
+        if not isinstance(merged.get(key), expected):
+            merged[key] = tasks_store.DEFAULT_TASK[key]
+    for key in ("weekdays", "processBlocklist", "domainWhitelist", "targetMinutesHistory"):
+        if not isinstance(merged.get(key), list):
+            merged[key] = list(tasks_store.DEFAULT_TASK[key])
+    if not isinstance(merged.get("cashedInDates"), dict):
+        merged["cashedInDates"] = {}
+    merged["targetMinutesHistory"] = [
+        e for e in merged["targetMinutesHistory"]
+        if isinstance(e, dict) and isinstance(e.get("date"), str) and _is_real_number(e.get("minutes"))
+    ]
+    if not merged["targetMinutesHistory"]:
+        merged["targetMinutesHistory"] = [
+            {"date": (merged.get("createdAt") or datetime.now().isoformat())[:10], "minutes": merged["targetMinutes"]}
+        ]
+    return merged
+
+
+def _normalize_board_item(item):
+    import copy
+
+    merged = copy.deepcopy(board_store.DEFAULT_BOARD_TASK)
+    merged.update(item)
+    imp = merged.get("importance")
+    if not isinstance(imp, int) or isinstance(imp, bool) or not (1 <= imp <= 10):
+        merged["importance"] = board_store.DEFAULT_BOARD_TASK["importance"]
+    if not isinstance(merged.get("name"), str):
+        merged["name"] = ""
+    for key in ("tags", "recurringDays"):
+        if not isinstance(merged.get(key), list):
+            merged[key] = []
+    return merged
+
+
+def _apply_json_store(records, load_fn, save_fn, id_field, normalize=None, lock=None):
+    # lock: the store's own write lock. Its create/update/delete mutators all
+    # hold it across their read-modify-write, so the apply below (which also
+    # reads the whole file, merges, and rewrites it) must too -- otherwise a
+    # local edit landing between this read and write is silently overwritten.
     if not records:
         return 0, 0, 0
+    if lock is not None:
+        with lock:
+            return _apply_json_store(records, load_fn, save_fn, id_field, normalize=normalize)
     local = load_fn(include_deleted=True)
     index_by_id = {item[id_field]: i for i, item in enumerate(local)}
     applied = skipped = failed = 0
@@ -478,6 +558,8 @@ def _apply_json_store(records, load_fn, save_fn, id_field):
             new_item["updatedAt"] = incoming_updated_at
             new_item["deviceId"] = record["device_id"]
             new_item["isDeleted"] = record["is_deleted"]
+            if normalize is not None:
+                new_item = normalize(new_item)
             if idx is not None:
                 local[idx] = new_item
             else:
@@ -493,11 +575,17 @@ def _apply_json_store(records, load_fn, save_fn, id_field):
 
 
 def _apply_tasks(records):
-    return _apply_json_store(records, tasks_store.load_tasks, tasks_store.save_tasks, "id")
+    return _apply_json_store(
+        records, tasks_store.load_tasks, tasks_store.save_tasks, "id",
+        normalize=_normalize_task, lock=tasks_store._lock,
+    )
 
 
 def _apply_board(records):
-    return _apply_json_store(records, board_store.load_board, board_store.save_board, "id")
+    return _apply_json_store(
+        records, board_store.load_board, board_store.save_board, "id",
+        normalize=_normalize_board_item, lock=board_store._lock,
+    )
 
 
 # --- apply: calendar.db ---
@@ -513,6 +601,10 @@ def _apply_events(conn, records):
                 skipped += 1
                 continue
             data = record["data"]
+            # Reject unparsable times up front so a poison record is counted
+            # as failed instead of being stored and breaking calendar views.
+            datetime.fromisoformat(data["start"])
+            datetime.fromisoformat(data["end"])
             deleted_at = incoming_updated_at if record["is_deleted"] else None
             conn.execute(
                 """
@@ -619,6 +711,15 @@ def _apply_review_topics(conn, records):
                 skipped += 1
                 continue
             data = record["data"]
+            if row and record["is_deleted"]:
+                # A deleted topic takes its subjects/problems/sessions with it,
+                # same as review_store.delete_topic() does locally.
+                conn.execute(
+                    "DELETE FROM review_sessions WHERE problem_id IN "
+                    "(SELECT id FROM review_problems WHERE topic_id = ?)", (row["id"],),
+                )
+                conn.execute("DELETE FROM review_problems WHERE topic_id = ?", (row["id"],))
+                conn.execute("DELETE FROM review_subjects WHERE topic_id = ?", (row["id"],))
             if row:
                 conn.execute(
                     "UPDATE review_topics SET name=?, order_index=?, linked_task_id=?, updated_at=?, device_id=?, is_deleted=? "
@@ -868,6 +969,13 @@ def sync_now():
     if not token:
         return SyncResult(success=False, pushed=0, pulled=0, skipped=0, error="Not logged in.", not_logged_in=True)
 
+    user = auth_manager.get_current_user()
+    if not user or not _check_sync_owner(user["id"]):
+        return SyncResult(
+            success=False, pushed=0, pulled=0, skipped=0,
+            error="This device's local data belongs to a different account. Sign back in to that account.",
+        )
+
     sync_start_wire = datetime.now(timezone.utc).isoformat()
     last_sync_wire = _load_last_sync()
     cutoff_local = _from_wire_ts(last_sync_wire)
@@ -879,23 +987,38 @@ def sync_now():
         return SyncResult(success=False, pushed=0, pulled=0, skipped=0, error="Sync failed while reading local data.")
 
     pushed = skipped_push = 0
-    try:
-        headers = {"Authorization": f"Bearer {token}"}
-        with httpx.Client(timeout=20.0) as client:
-            if push_records:
-                resp = client.post(f"{SYNC_SERVER_URL}/sync/push", headers=headers, json=push_records)
-                resp.raise_for_status()
-                push_result = resp.json()
-                pushed = len(push_result.get("accepted", []))
-                skipped_push = len(push_result.get("skipped", []))
+    refreshed = False
+    while True:
+        try:
+            headers = {"Authorization": f"Bearer {token}"}
+            with httpx.Client(timeout=20.0) as client:
+                if push_records:
+                    resp = client.post(f"{SYNC_SERVER_URL}/sync/push", headers=headers, json=push_records)
+                    resp.raise_for_status()
+                    push_result = resp.json()
+                    pushed = len(push_result.get("accepted", []))
+                    skipped_push = len(push_result.get("skipped", []))
 
-            params = {"since": last_sync_wire} if last_sync_wire else {}
-            resp = client.get(f"{SYNC_SERVER_URL}/sync/pull", headers=headers, params=params)
-            resp.raise_for_status()
-            pulled_records = resp.json()
-    except httpx.HTTPError as exc:
-        logger.warning("sync_client.sync_now: couldn't reach sync server at %s: %s", SYNC_SERVER_URL, exc)
-        return SyncResult(success=False, pushed=0, pulled=0, skipped=0, error="Couldn't reach the sync server.")
+                params = {"since": last_sync_wire} if last_sync_wire else {}
+                resp = client.get(f"{SYNC_SERVER_URL}/sync/pull", headers=headers, params=params)
+                resp.raise_for_status()
+                pulled_records = resp.json()
+            break
+        except httpx.HTTPStatusError as exc:
+            # An expired access token (Supabase's default lifetime is 1h) is
+            # answered with 401 -- refresh once from the stored refresh token
+            # and retry, instead of failing every sync until the app restarts.
+            if exc.response.status_code == 401 and not refreshed:
+                refreshed = True
+                if auth_manager.refresh_access_token():
+                    token = auth_manager.get_access_token()
+                    if token:
+                        continue
+            logger.warning("sync_client.sync_now: couldn't reach sync server at %s: %s", SYNC_SERVER_URL, exc)
+            return SyncResult(success=False, pushed=0, pulled=0, skipped=0, error="Couldn't reach the sync server.")
+        except httpx.HTTPError as exc:
+            logger.warning("sync_client.sync_now: couldn't reach sync server at %s: %s", SYNC_SERVER_URL, exc)
+            return SyncResult(success=False, pushed=0, pulled=0, skipped=0, error="Couldn't reach the sync server.")
 
     try:
         pulled, skipped_pull, failed = _apply_all(pulled_records)

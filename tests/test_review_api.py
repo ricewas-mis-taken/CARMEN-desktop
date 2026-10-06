@@ -326,3 +326,40 @@ def test_due_only_query_param(client, isolate_review_db):
     all_problems = client.get(f"/review/topics/{topic['id']}/problems?due_only=false").get_json()
     assert due == []
     assert len(all_problems) == 1
+
+
+def test_finish_review_over_a_week_is_rejected_without_burning_the_token(client, isolate_review_db):
+    topic = _create_topic(client)
+    subject = _create_subject(client, topic["id"])
+    created = client.post(
+        f"/review/topics/{topic['id']}/problems",
+        data={
+            "name": "Solve it", "subject_id": str(subject["id"]), "stars": "3",
+            "description_type": "text", "description_text": "x",
+        },
+    ).get_json()
+    token = client.post(f"/review/problems/{created['id']}/start").get_json()["sessionToken"]
+
+    bad = client.post(f"/review/problems/{created['id']}/finish", json={"session_token": token, "duration_seconds": 10 ** 30})
+    assert bad.status_code == 400
+
+    ok = client.post(f"/review/problems/{created['id']}/finish", json={"session_token": token})
+    assert ok.status_code == 200
+
+
+def test_finish_review_whose_write_fails_can_be_retried(isolate_review_db, monkeypatch):
+    import review_store
+
+    topic = review_store.create_topic("Math")
+    subject = review_store.create_subject(topic["id"], "Quadratics", "#4A90D9")
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=3, description_type="text", description_text="x",
+    )
+    token = review_store.start_review(problem["id"])
+
+    real = review_store._apply_review_outcome
+    monkeypatch.setattr(review_store, "_apply_review_outcome", lambda *a, **kw: None)
+    assert review_store.finish_review(token) is None
+
+    monkeypatch.setattr(review_store, "_apply_review_outcome", real)
+    assert review_store.finish_review(token) is not None

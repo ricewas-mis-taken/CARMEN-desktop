@@ -67,6 +67,14 @@ def _check_and_pull():
     if local.returncode != 0 or remote.returncode != 0 or local.stdout.strip() == remote.stdout.strip():
         return False  # already up to date (or couldn't tell -- treat the same, safe)
 
+    # origin already contained in HEAD means local is *ahead* (unpushed
+    # commits), not behind -- `pull --ff-only` would succeed as a no-op
+    # ("Already up to date") and be mistaken for a real update, restarting
+    # the app every minute forever.
+    ahead = _run_git("merge-base", "--is-ancestor", f"origin/{branch}", "HEAD")
+    if ahead.returncode == 0:
+        return False
+
     status = _run_git("status", "--porcelain")
     if status.stdout.strip():
         logger.info("auto_updater: update available on origin/%s but working tree is dirty -- skipping", branch)

@@ -152,9 +152,16 @@ def get_task(task_id):
     return None
 
 
+# Same allowlist review_store.save_photo_bytes() enforces (the picker's own
+# "Images" filter) -- the uploaded filename's extension used to be written as-is.
+_ALLOWED_PHOTO_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp"}
+
+
 def save_photo_bytes(data, original_filename):
     os.makedirs(PHOTOS_DIR, exist_ok=True)
-    ext = os.path.splitext(original_filename or "")[1].lower() or ".png"
+    ext = os.path.splitext(original_filename or "")[1].lower()
+    if ext not in _ALLOWED_PHOTO_EXTENSIONS:
+        ext = ".png"
     filename = f"{uuid.uuid4().hex}{ext}"
     path = os.path.join(PHOTOS_DIR, filename)
     with open(path, "wb") as f:

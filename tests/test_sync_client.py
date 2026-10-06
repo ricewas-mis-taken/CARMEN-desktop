@@ -41,6 +41,7 @@ def isolate_device(tmp_path, monkeypatch):
         monkeypatch.setattr(device_id, "_cached_id", None)
         monkeypatch.setattr(sync_client, "LAST_SYNC_PATH", str(base / "last_sync.txt"))
         monkeypatch.setattr(sync_client, "_cached_last_sync", None)
+        monkeypatch.setattr(sync_client, "SYNC_OWNER_PATH", str(base / "sync_owner.txt"))
     return _make
 
 
@@ -48,6 +49,7 @@ def isolate_device(tmp_path, monkeypatch):
 def fake_logged_in(monkeypatch):
     monkeypatch.setattr(auth_manager, "is_logged_in", lambda: True)
     monkeypatch.setattr(auth_manager, "get_access_token", lambda: "fake-token")
+    monkeypatch.setattr(auth_manager, "get_current_user", lambda: {"id": "user-1", "email": "u@example.com"})
 
 
 @pytest.fixture

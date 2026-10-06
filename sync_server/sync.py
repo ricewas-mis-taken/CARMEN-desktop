@@ -7,7 +7,7 @@ not a substitute for it.
 """
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
@@ -22,6 +22,12 @@ router = APIRouter()
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_PUBLISHABLE_KEY = os.environ.get("SUPABASE_PUBLISHABLE_KEY")
 REST_URL = f"{SUPABASE_URL.rstrip('/')}/rest/v1/sync_records" if SUPABASE_URL else None
+
+# Last-write-wins compares the CLIENT-supplied updated_at, so one write stamped
+# far in the future (a device with a wrong clock) would make every later,
+# correctly-stamped edit of that record lose until real time catches up. A
+# push stamped further ahead than this is refused instead of stored.
+MAX_CLOCK_SKEW = timedelta(minutes=10)
 
 RECORD_FIELDS = ("table_name", "sync_id", "data", "device_id", "updated_at", "is_deleted")
 
@@ -76,6 +82,8 @@ async def push(records: list[dict], auth: AuthContext = Depends(require_auth)):
     _require_configured()
     accepted = []
     skipped = []
+    rejected = []
+    latest_allowed = datetime.now(timezone.utc) + MAX_CLOCK_SKEW
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         for record in records:
@@ -86,6 +94,17 @@ async def push(records: list[dict], auth: AuthContext = Depends(require_auth)):
             table_name = record["table_name"]
             sync_id = record["sync_id"]
             updated_at = record["updated_at"]
+
+            incoming_ts = _parse_ts(updated_at)
+            if incoming_ts.tzinfo is None:
+                incoming_ts = incoming_ts.replace(tzinfo=timezone.utc)
+            if incoming_ts > latest_allowed:
+                logger.warning(
+                    "refusing %s/%s: updated_at %s is more than %s in the future (device clock wrong?)",
+                    table_name, sync_id, updated_at, MAX_CLOCK_SKEW,
+                )
+                rejected.append({"table_name": table_name, "sync_id": sync_id})
+                continue
 
             existing_resp = await _postgrest_request(
                 client,
@@ -121,17 +140,38 @@ async def push(records: list[dict], auth: AuthContext = Depends(require_auth)):
             )
             accepted.append({"table_name": table_name, "sync_id": sync_id})
 
-    return {"accepted": accepted, "skipped": skipped}
+    return {"accepted": accepted, "skipped": skipped, "rejected": rejected}
+
+
+# PostgREST (Supabase) silently caps any response at its max-rows setting
+# (default 1000). Without paging, a pull returned only the first rows and
+# the client then advanced its watermark past the rest, losing them. Page
+# through with a stable order until a short page comes back.
+PULL_PAGE_SIZE = 1000
 
 
 @router.get("/sync/pull")
 async def pull(since: Optional[str] = Query(default=None), auth: AuthContext = Depends(require_auth)):
     _require_configured()
-    params = {"select": ",".join(RECORD_FIELDS)}
+    params = {
+        "select": ",".join(RECORD_FIELDS),
+        "order": "updated_at.asc,sync_id.asc",
+        "limit": str(PULL_PAGE_SIZE),
+    }
     if since:
         params["updated_at"] = f"gt.{since}"
 
+    records = []
     async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await _postgrest_request(client, "GET", headers=_headers(auth.access_token), params=params)
+        offset = 0
+        while True:
+            resp = await _postgrest_request(
+                client, "GET", headers=_headers(auth.access_token), params={**params, "offset": str(offset)}
+            )
+            page = resp.json()
+            records.extend(page)
+            if len(page) < PULL_PAGE_SIZE:
+                break
+            offset += len(page)
 
-    return resp.json()
+    return records

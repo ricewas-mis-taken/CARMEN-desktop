@@ -22,6 +22,7 @@ if sys.platform == "darwin":
 else:
     import ctypes
     import os
+    import re
 
     from winsdk.windows.data.xml.dom import XmlDocument
     from winsdk.windows.ui.notifications import ToastNotification, ToastNotificationManager
@@ -148,9 +149,14 @@ else:
             logger.exception("show_toast failed: %s / %s", title, body)
 
 
+    # XML 1.0 forbids most C0 control characters outright (even escaped); one in
+    # an event title makes XmlDocument.load_xml raise and the toast is dropped.
+    _XML_ILLEGAL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
+
+
     def _escape(text):
         return (
-            (text or "")
+            _XML_ILLEGAL.sub("", text or "")
             .replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")

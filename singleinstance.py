@@ -27,6 +27,7 @@ import urllib.request
 import psutil
 
 import api_server
+import config
 from calendar_log import logger
 
 if sys.platform == "darwin":
@@ -60,8 +61,26 @@ def _is_running_python_process(pid):
         return False
     try:
         proc = psutil.Process(pid)
-        return "python" in proc.name().lower()
-    except psutil.NoSuchProcess:
+        if "python" not in proc.name().lower():
+            return False
+        # A recycled PID can belong to any unrelated python process -- only
+        # treat it as a stale Carmen instance if it is actually running
+        # this repo's main.py.
+        main_py = os.path.normcase(os.path.join(os.path.dirname(os.path.abspath(__file__)), "main.py"))
+        for arg in proc.cmdline()[1:]:
+            if os.path.basename(arg).lower() != "main.py":
+                continue
+            if os.path.isabs(arg):
+                candidate = arg
+            else:
+                try:
+                    candidate = os.path.join(proc.cwd(), arg)
+                except psutil.Error:
+                    continue
+            if os.path.normcase(os.path.abspath(candidate)) == main_py:
+                return True
+        return False
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
         return False
 
 
@@ -70,8 +89,11 @@ def _request_graceful_quit():
     True only if the request was actually delivered -- a connection refused
     (server not up yet, or already gone) means there's nothing to wait on."""
     try:
+        # /internal/quit is token-gated; the stale instance shares this
+        # machine's config.json, so its token is the one we read here.
         req = urllib.request.Request(_QUIT_URL, data=b"{}", method="POST",
-                                      headers={"Content-Type": "application/json"})
+                                      headers={"Content-Type": "application/json",
+                                               "X-Carmen-Token": config.get_api_token()})
         with urllib.request.urlopen(req, timeout=_GRACEFUL_HTTP_TIMEOUT_SECONDS) as resp:
             json.loads(resp.read())
         return True
