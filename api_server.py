@@ -192,6 +192,7 @@ def _require_token(fn):
 # degrading every poll for the rest of that session.
 _MAX_LIST_ENTRIES = 2000
 _MAX_ENTRY_LENGTH = 500
+_MAX_REVIEW_SECONDS = 7 * 24 * 3600
 _MAX_URL_LENGTH = 8192
 _MAX_REASON_LENGTH = 2000
 
@@ -944,8 +945,9 @@ def review_problem_finish(problem_id):
         isinstance(duration_seconds, bool)
         or not isinstance(duration_seconds, int)
         or duration_seconds < 0
+        or duration_seconds > _MAX_REVIEW_SECONDS
     ):
-        return jsonify({"error": "duration_seconds must be a non-negative integer if given"}), 400
+        return jsonify({"error": "duration_seconds must be a non-negative integer (at most 7 days) if given"}), 400
 
     # Verified BEFORE finish_review() is ever called -- that call commits
     # its side effects (logs the review, bumps review_count, reschedules

@@ -1256,9 +1256,17 @@ def finish_review(session_token, self_solved=True, shakiness=3, duration_seconds
         # pause_active_review()/resume_active_review()), not raw wall-clock
         # time since start, which would count paused minutes as solving time.
         duration_seconds = max(0, _elapsed_seconds_locked(entry))
-    return _apply_review_outcome(
+    outcome = _apply_review_outcome(
         entry["problem_id"], duration_seconds, self_solved, shakiness, started_at=started_at
     )
+    if outcome is None and get_problem(entry["problem_id"]) is not None:
+        # The write failed but the problem still exists: put the review back
+        # so the caller can retry instead of losing it with a misleading
+        # "invalid or already-used" answer. (A deleted problem stays gone.)
+        with _lock:
+            _active_sessions[session_token] = entry
+            _save_active_sessions()
+    return outcome
 
 
 def finish_review_for_problem(problem_id, duration_seconds, self_solved=True, shakiness=3, started_at=None):
