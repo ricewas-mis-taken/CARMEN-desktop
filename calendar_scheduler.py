@@ -11,6 +11,7 @@ malformed RRULE, a store hiccup) can never take the whole tray app down with
 it.
 """
 import threading
+import math
 import time
 from datetime import datetime, timedelta
 
@@ -93,6 +94,9 @@ def _prune_fired(now):
     _fired.difference_update(stale)
 
 
+MAX_LEAD_MINUTES = 366 * 24 * 60
+
+
 def _max_lead_minutes(event):
     """Longest time before an occurrence's start that this event wants to fire
     something (a reminder offset or the focus warning) -- the occurrence
@@ -102,7 +106,11 @@ def _max_lead_minutes(event):
     leads = [o for o in (event.get("reminderOffsets") or []) if isinstance(o, (int, float))]
     if focus and focus.get("enabled") and isinstance(focus.get("warningMinutes"), (int, float)):
         leads.append(focus["warningMinutes"])
-    return max([0] + leads)
+    # A typed/synced absurd offset (huge, inf, nan) must not blow up the
+    # lookahead arithmetic below -- clamped to a year, which no real reminder
+    # exceeds, so the event's start trigger still fires.
+    leads = [o for o in leads if math.isfinite(o)]
+    return min(max([0] + leads), MAX_LEAD_MINUTES)
 
 
 def _process_event(event, now, range_end):
