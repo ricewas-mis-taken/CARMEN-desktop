@@ -14,7 +14,7 @@ Two halves:
 """
 from datetime import datetime
 
-from dateutil.rrule import rrulestr
+from dateutil.rrule import DAILY, rrulestr
 
 WEEKDAY_CODES = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
 
@@ -63,6 +63,26 @@ def describe_rrule(rrule_str):
         return rrule_str
 
 
+# An event's rrule can arrive from the sync server (not only from
+# build_rrule above), so a stored FREQ=SECONDLY (or a DAILY rule with
+# BYHOUR/BYMINUTE/BYSECOND lists) would make dateutil walk millions of
+# occurrences from dtstart on the calling thread -- measured at ~79s for one
+# next_occurrences() call on the Qt GUI thread. Nothing the editor can build
+# is denser than a few per day.
+_MAX_OCCURRENCES_PER_DAY = 48
+
+
+def _is_too_dense(rule):
+    if getattr(rule, "_freq", 0) > DAILY:
+        return True
+    per_day = (
+        len(getattr(rule, "_byhour", None) or (0,))
+        * len(getattr(rule, "_byminute", None) or (0,))
+        * len(getattr(rule, "_bysecond", None) or (0,))
+    )
+    return per_day > _MAX_OCCURRENCES_PER_DAY
+
+
 def expand_occurrences(event, range_start, range_end):
     """Returns [(occurrence_start, occurrence_end), ...] datetimes for this
     event that overlap [range_start, range_end]. Non-recurring events yield
@@ -85,6 +105,8 @@ def expand_occurrences(event, range_start, range_end):
     try:
         rule = rrulestr(f"RRULE:{event['rrule']}", dtstart=start_dt)
     except Exception:
+        return []
+    if _is_too_dense(rule):
         return []
 
     # rrule.between's start bound must account for events whose *duration*
