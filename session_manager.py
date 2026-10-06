@@ -628,6 +628,14 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
     _open_violation_index["domain"] = None
     _save()
 
+    if pomodoro is not None:
+        # An independent review auto-paused for this pomodoro's break would
+        # otherwise stay paused forever when the pomodoro ends mid-break by
+        # any route other than the natural end (which resumes it itself).
+        # A no-op unless that review is still marked auto_paused.
+        import review_store
+        review_store.auto_resume_from_break()
+
     return {
         "isActive": False,
         "secondsRemaining": 0,
