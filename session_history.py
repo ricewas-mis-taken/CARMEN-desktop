@@ -8,17 +8,52 @@ manually (tray "End Session" / POST /session/end) or by running out the
 clock — so it survives past whatever session_state.json currently holds.
 """
 import json
+import logging
 import os
+import shutil
 import threading
+import time
 
 HISTORY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "session_history.json")
 
 _lock = threading.Lock()
 
 
+logger = logging.getLogger(__name__)
+
+
 def append_entry(entry):
     with _lock:
-        history = _load_all_locked()
+        history = None
+        # A read failure must never be mistaken for "no history yet": the
+        # save below rewrites the whole file, so that would destroy every
+        # earlier session. Retry a transient OSError (e.g. another process
+        # briefly locking the file); preserve a corrupt file before starting
+        # a new one.
+        for attempt in range(3):
+            if not os.path.exists(HISTORY_PATH):
+                history = []
+                break
+            try:
+                with open(HISTORY_PATH, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if not isinstance(data, list):
+                    raise json.JSONDecodeError("history is not a list", "", 0)
+                history = data
+                break
+            except json.JSONDecodeError:
+                try:
+                    shutil.copy2(HISTORY_PATH, f"{HISTORY_PATH}.corrupt-{int(time.time())}")
+                except OSError:
+                    logger.exception("could not back up corrupt session history")
+                    return
+                history = []
+                break
+            except OSError:
+                time.sleep(0.05)
+        if history is None:
+            logger.error("session history unreadable; not overwriting it with a new entry")
+            return
         history.append(entry)
         _save_all_locked(history)
 
