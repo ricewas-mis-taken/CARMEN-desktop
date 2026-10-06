@@ -466,8 +466,8 @@ def screentime_domain():
 
     if not isinstance(domain, str) or not domain:
         return jsonify({"error": "domain must be a non-empty string"}), 400
-    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool) or not math.isfinite(seconds) or seconds <= 0:
-        return jsonify({"error": "seconds must be a finite positive number"}), 400
+    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool) or not math.isfinite(seconds) or seconds <= 0 or seconds > 86400:
+        return jsonify({"error": "seconds must be a finite positive number (at most 86400)"}), 400
 
     screentime_store.add_domain_seconds(domain, seconds)
     return jsonify({"ok": True})

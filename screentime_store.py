@@ -82,7 +82,7 @@ def add_app_seconds(process_name, seconds, when=None):
 
 
 def add_domain_seconds(domain, seconds, when=None):
-    if not domain or seconds <= 0:
+    if not domain or seconds <= 0 or seconds != seconds or seconds == float("inf"):
         return
     day = _day_key(when)
     with _lock:
