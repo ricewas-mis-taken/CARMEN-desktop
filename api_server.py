@@ -341,6 +341,10 @@ def session_start():
         return jsonify({"error": "lock_mode must be 'soft' or 'hard'"}), 400
     if source not in ("manual", "calendar-event"):
         return jsonify({"error": "source must be 'manual' or 'calendar-event'"}), 400
+    if event_title is not None and not isinstance(event_title, str):
+        return jsonify({"error": "event_title must be a string or null"}), 400
+    if event_id is not None and not isinstance(event_id, str):
+        return jsonify({"error": "event_id must be a string or null"}), 400
     if source == "calendar-event" and (not isinstance(event_id, str) or not event_id.strip()):
         return jsonify({"error": "event_id is required when source is 'calendar-event'"}), 400
 
