@@ -390,16 +390,31 @@ def _task_history_entries(task_id, sessions):
     ]
 
 
+def _worked_seconds_on_day(start_iso, end_iso, violation_log, day):
+    """worked_seconds() restricted to calendar `day`: a session that crosses
+    midnight is split between the days it actually spans instead of being
+    credited wholly to the day it started on. Computed as a difference of two
+    cumulative worked_seconds() values so a pause in effect at midnight is
+    still respected."""
+    day_start = datetime.combine(day, datetime.min.time())
+    day_end = day_start + timedelta(days=1)
+    start = datetime.fromisoformat(start_iso)
+    end = datetime.fromisoformat(end_iso) if end_iso else datetime.now()
+    if end <= day_start or start >= day_end:
+        return 0
+    upto_end = worked_seconds(start_iso, min(end, day_end).isoformat(), violation_log)
+    before_day = worked_seconds(start_iso, day_start.isoformat(), violation_log) if start < day_start else 0
+    return max(0, upto_end - before_day)
+
+
 def logged_seconds_for_date(task, day, sessions, live_status=None):
     """Total seconds worked on `task` on date `day`, from finished
-    session_history entries plus (if `day` is today and a live session for
-    this task is running) the in-progress session's elapsed time so far."""
+    session_history entries plus (if a live session for this task is running
+    and overlaps `day`) the in-progress session's elapsed time so far.
+    Sessions that cross midnight count toward each day they overlap."""
     total = 0
     for entry in _task_history_entries(task["id"], sessions):
-        start = datetime.fromisoformat(entry["startTime"])
-        if start.date() != day:
-            continue
-        total += worked_seconds(entry["startTime"], entry.get("endTime"), entry.get("violationLog"))
+        total += _worked_seconds_on_day(entry["startTime"], entry.get("endTime"), entry.get("violationLog"), day)
 
     if (
         live_status
@@ -408,9 +423,7 @@ def logged_seconds_for_date(task, day, sessions, live_status=None):
         and live_status.get("eventId") == task["id"]
         and live_status.get("startTime")
     ):
-        start = datetime.fromisoformat(live_status["startTime"])
-        if start.date() == day:
-            total += worked_seconds(live_status["startTime"], None, live_status.get("violationLog"))
+        total += _worked_seconds_on_day(live_status["startTime"], None, live_status.get("violationLog"), day)
 
     return total
 
