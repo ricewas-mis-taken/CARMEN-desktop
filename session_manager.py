@@ -231,6 +231,13 @@ if sys.platform == "darwin":
     ALWAYS_ALLOWED_PROCESSES = ALWAYS_ALLOWED_PROCESSES | _ALWAYS_ALLOWED_PROCESSES_MACOS
 
 
+def _clean_entries(entries):
+    """Strips surrounding whitespace from list entries. The API accepts
+    entries that are non-empty only *after* stripping, so a padded name like
+    " discord.exe" used to be stored verbatim and then never match."""
+    return [e.strip() if isinstance(e, str) else e for e in (entries or [])]
+
+
 def is_exempt(process_name, pid=None):
     """True for our own process (tray/popups) or core shell/system processes
     that must always remain usable — alt-tab, taskbar, wifi/time flyouts,
@@ -325,8 +332,8 @@ def start_session(
         _state["startTime"] = now.isoformat()
         _state["endTime"] = end_time.isoformat()
         _state["lockMode"] = lock_mode
-        _state["processBlocklist"] = list(process_blocklist)
-        _state["domainWhitelist"] = list(domain_whitelist)
+        _state["processBlocklist"] = _clean_entries(process_blocklist)
+        _state["domainWhitelist"] = _clean_entries(domain_whitelist)
         _state["violationCount"] = 0
         _state["violationLog"] = []
         _state["lastAcceptableProcess"] = None
@@ -345,7 +352,7 @@ def start_session(
         _state["reviewSubjectName"] = review_subject_name
         _state["reviewProblemId"] = review_problem_id
         _state["isBurnout"] = is_burnout
-        _state["blockedBrowserProfiles"] = list(blocked_browser_profiles or [])
+        _state["blockedBrowserProfiles"] = _clean_entries(blocked_browser_profiles)
         # A plain start_session() always means "not a pomodoro" -- explicitly
         # cleared rather than left over from whatever the previous session
         # was, same reasoning as the source/eventId resets above.
@@ -493,8 +500,8 @@ def update_blocklist(process_blocklist, domain_whitelist, lock_mode=None):
     with _lock:
         if not _state["isActive"]:
             return
-        _state["processBlocklist"] = list(process_blocklist)
-        _state["domainWhitelist"] = list(domain_whitelist)
+        _state["processBlocklist"] = _clean_entries(process_blocklist)
+        _state["domainWhitelist"] = _clean_entries(domain_whitelist)
         if lock_mode is not None:
             _state["lockMode"] = lock_mode
         _save()
