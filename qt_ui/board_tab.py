@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 import board_store
+from qt_ui.safe_link import make_link_label
 
 # Not a real preset tag -- board_store.PRESET_TAGS only holds tags a task can
 # actually be assigned, and this one can't be (a task either has tags or it
@@ -115,9 +116,7 @@ def _build_info_content(layout, task):
     link = (task.get("descriptionLink") or "").strip()
     if link:
         any_content = True
-        link_label = QLabel(f'<a style="color: #1F2328;" href="{link}">{link}</a>')
-        link_label.setOpenExternalLinks(False)
-        link_label.linkActivated.connect(lambda url: QDesktopServices.openUrl(QUrl(url)))
+        link_label = make_link_label(link)
         link_label.setWordWrap(True)
         layout.addWidget(link_label)
 
