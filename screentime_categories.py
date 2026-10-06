@@ -105,7 +105,7 @@ _DOMAIN_CATEGORIES = _load_domain_categories()
 def _registrable_domain(domain):
     if not domain:
         return domain
-    domain = domain.lower().strip()
+    domain = domain.lower().strip().rstrip(".")
     if domain.startswith("www."):
         domain = domain[4:]
     return domain
@@ -118,10 +118,13 @@ def categorize_domain(domain):
     if key in _DOMAIN_CATEGORIES:
         return _DOMAIN_CATEGORIES[key]
     # A subdomain of a known site (mail.google.com) still counts as that
-    # site (google.com) for categorization purposes.
+    # site (google.com) for categorization purposes. Walk up one label at a
+    # time rather than only trying the last two labels: the bundled list has
+    # thousands of entries on multi-label suffixes (10000games.co.uk,
+    # 1001jogos.com.br), where "news.10000games.co.uk" -> "co.uk" never matched.
     parts = key.split(".")
-    if len(parts) > 2:
-        parent = ".".join(parts[-2:])
+    for i in range(1, len(parts) - 1):
+        parent = ".".join(parts[i:])
         if parent in _DOMAIN_CATEGORIES:
             return _DOMAIN_CATEGORIES[parent]
     return "Other"
