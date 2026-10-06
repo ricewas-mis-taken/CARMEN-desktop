@@ -457,7 +457,56 @@ def _gather_all(cutoff_local):
 
 # --- apply: tasks.json / board.json ---
 
-def _apply_json_store(records, load_fn, save_fn, id_field):
+def _is_real_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value == value and abs(value) != float("inf")
+
+
+def _normalize_task(item):
+    """Fills in defaults for fields a pulled task record lacks and replaces
+    wrongly-typed values the UI does arithmetic on -- one malformed record
+    must not be able to break the Tasks tab (and with it the whole window)."""
+    import copy
+
+    merged = copy.deepcopy(tasks_store.DEFAULT_TASK)
+    merged.update(item)
+    if not _is_real_number(merged.get("targetMinutes")) or merged["targetMinutes"] < 0:
+        merged["targetMinutes"] = tasks_store.DEFAULT_TASK["targetMinutes"]
+    for key, expected in (("name", str), ("color", str), ("recurrence", str), ("lockMode", str)):
+        if not isinstance(merged.get(key), expected):
+            merged[key] = tasks_store.DEFAULT_TASK[key]
+    for key in ("weekdays", "processBlocklist", "domainWhitelist", "targetMinutesHistory"):
+        if not isinstance(merged.get(key), list):
+            merged[key] = list(tasks_store.DEFAULT_TASK[key])
+    if not isinstance(merged.get("cashedInDates"), dict):
+        merged["cashedInDates"] = {}
+    merged["targetMinutesHistory"] = [
+        e for e in merged["targetMinutesHistory"]
+        if isinstance(e, dict) and isinstance(e.get("date"), str) and _is_real_number(e.get("minutes"))
+    ]
+    if not merged["targetMinutesHistory"]:
+        merged["targetMinutesHistory"] = [
+            {"date": (merged.get("createdAt") or datetime.now().isoformat())[:10], "minutes": merged["targetMinutes"]}
+        ]
+    return merged
+
+
+def _normalize_board_item(item):
+    import copy
+
+    merged = copy.deepcopy(board_store.DEFAULT_BOARD_TASK)
+    merged.update(item)
+    imp = merged.get("importance")
+    if not isinstance(imp, int) or isinstance(imp, bool) or not (1 <= imp <= 10):
+        merged["importance"] = board_store.DEFAULT_BOARD_TASK["importance"]
+    if not isinstance(merged.get("name"), str):
+        merged["name"] = ""
+    for key in ("tags", "recurringDays"):
+        if not isinstance(merged.get(key), list):
+            merged[key] = []
+    return merged
+
+
+def _apply_json_store(records, load_fn, save_fn, id_field, normalize=None):
     if not records:
         return 0, 0, 0
     local = load_fn(include_deleted=True)
@@ -478,6 +527,8 @@ def _apply_json_store(records, load_fn, save_fn, id_field):
             new_item["updatedAt"] = incoming_updated_at
             new_item["deviceId"] = record["device_id"]
             new_item["isDeleted"] = record["is_deleted"]
+            if normalize is not None:
+                new_item = normalize(new_item)
             if idx is not None:
                 local[idx] = new_item
             else:
@@ -493,11 +544,11 @@ def _apply_json_store(records, load_fn, save_fn, id_field):
 
 
 def _apply_tasks(records):
-    return _apply_json_store(records, tasks_store.load_tasks, tasks_store.save_tasks, "id")
+    return _apply_json_store(records, tasks_store.load_tasks, tasks_store.save_tasks, "id", normalize=_normalize_task)
 
 
 def _apply_board(records):
-    return _apply_json_store(records, board_store.load_board, board_store.save_board, "id")
+    return _apply_json_store(records, board_store.load_board, board_store.save_board, "id", normalize=_normalize_board_item)
 
 
 # --- apply: calendar.db ---
