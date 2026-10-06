@@ -124,14 +124,35 @@ async def push(records: list[dict], auth: AuthContext = Depends(require_auth)):
     return {"accepted": accepted, "skipped": skipped}
 
 
+# PostgREST (Supabase) silently caps any response at its max-rows setting
+# (default 1000). Without paging, a pull returned only the first rows and
+# the client then advanced its watermark past the rest, losing them. Page
+# through with a stable order until a short page comes back.
+PULL_PAGE_SIZE = 1000
+
+
 @router.get("/sync/pull")
 async def pull(since: Optional[str] = Query(default=None), auth: AuthContext = Depends(require_auth)):
     _require_configured()
-    params = {"select": ",".join(RECORD_FIELDS)}
+    params = {
+        "select": ",".join(RECORD_FIELDS),
+        "order": "updated_at.asc,sync_id.asc",
+        "limit": str(PULL_PAGE_SIZE),
+    }
     if since:
         params["updated_at"] = f"gt.{since}"
 
+    records = []
     async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await _postgrest_request(client, "GET", headers=_headers(auth.access_token), params=params)
+        offset = 0
+        while True:
+            resp = await _postgrest_request(
+                client, "GET", headers=_headers(auth.access_token), params={**params, "offset": str(offset)}
+            )
+            page = resp.json()
+            records.extend(page)
+            if len(page) < PULL_PAGE_SIZE:
+                break
+            offset += len(page)
 
-    return resp.json()
+    return records
