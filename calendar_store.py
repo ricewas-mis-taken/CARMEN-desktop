@@ -404,20 +404,34 @@ def export_db(dest_path):
 
 
 def import_db(src_path):
+    global _conn
     with _lock:
+        src = dest = None
         try:
-            global _conn
+            # Validate the source BEFORE touching the live connection: a file
+            # that isn't a SQLite database used to fail at src.backup() after
+            # _conn had already been closed, leaving a dead connection that
+            # made every later list/save call fail until the app restarted.
             src = sqlite3.connect(src_path)
+            if src.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                raise sqlite3.DatabaseError("source database failed quick_check")
             if _conn is not None:
                 _conn.close()
+                _conn = None
             dest = sqlite3.connect(DB_PATH)
             with dest:
                 src.backup(dest)
-            src.close()
-            dest.close()
-            _conn = None
-            _get_conn()
             return True
         except Exception:
             logger.exception("import_db failed from %s", src_path)
             return False
+        finally:
+            if src is not None:
+                src.close()
+            if dest is not None:
+                dest.close()
+            _conn = None
+            try:
+                _get_conn()
+            except Exception:
+                logger.exception("import_db could not reopen calendar.db")
