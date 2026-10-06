@@ -124,10 +124,19 @@ if not _request_logger.handlers:
     _request_logger.addHandler(_handler)
 
 
+def _loggable(text):
+    """request.path is percent-DECODED, so a request for /health%0A<fake line>
+    would otherwise write a forged extra line into the request log -- whose
+    whole purpose is spotting a START with no matching END."""
+    return "".join(ch if ch.isprintable() else "\\x%02x" % ord(ch) for ch in text)
+
+
 @app.before_request
 def _log_request_start():
     request._carmen_start_time = time.time()
-    _request_logger.info("START %s %s [thread=%s]", request.method, request.path, threading.get_ident())
+    _request_logger.info(
+        "START %s %s [thread=%s]", _loggable(request.method), _loggable(request.path), threading.get_ident()
+    )
 
 
 @app.after_request
@@ -135,7 +144,7 @@ def _log_request_end(response):
     elapsed = time.time() - getattr(request, "_carmen_start_time", time.time())
     _request_logger.info(
         "END   %s %s -> %s (%.3fs) [thread=%s]",
-        request.method, request.path, response.status_code, elapsed, threading.get_ident(),
+        _loggable(request.method), _loggable(request.path), response.status_code, elapsed, threading.get_ident(),
     )
     return response
 
