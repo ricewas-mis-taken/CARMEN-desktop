@@ -123,6 +123,30 @@ SYNC_INTERVAL_SECONDS = 5 * 60
 LAST_SYNC_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "last_sync.txt")
 _cached_last_sync = None
 
+# Which account the local data (and the last_sync watermark above) belongs
+# to. Without this, signing out and into a different account on the same
+# install pushes the first account's edited records into the second
+# account's cloud storage and pulls with the first account's watermark, so
+# the second account's older cloud data is never delivered.
+SYNC_OWNER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "sync_owner.txt")
+
+
+def _check_sync_owner(user_id):
+    """True if the local data may sync as user_id. The first account to sync
+    claims it (this also adopts existing installs); a different account is
+    refused rather than mixing the two accounts' data."""
+    try:
+        with open(SYNC_OWNER_PATH, "r", encoding="utf-8") as f:
+            owner = f.read().strip()
+    except OSError:
+        owner = ""
+    if owner:
+        return owner == user_id
+    os.makedirs(os.path.dirname(SYNC_OWNER_PATH), exist_ok=True)
+    with open(SYNC_OWNER_PATH, "w", encoding="utf-8") as f:
+        f.write(user_id)
+    return True
+
 REVIEW_TABLES = ("review_topics", "review_subjects", "review_problems", "review_sessions")
 
 
@@ -931,6 +955,13 @@ def sync_now():
     token = auth_manager.get_access_token()
     if not token:
         return SyncResult(success=False, pushed=0, pulled=0, skipped=0, error="Not logged in.", not_logged_in=True)
+
+    user = auth_manager.get_current_user()
+    if not user or not _check_sync_owner(user["id"]):
+        return SyncResult(
+            success=False, pushed=0, pulled=0, skipped=0,
+            error="This device's local data belongs to a different account. Sign back in to that account.",
+        )
 
     sync_start_wire = datetime.now(timezone.utc).isoformat()
     last_sync_wire = _load_last_sync()
