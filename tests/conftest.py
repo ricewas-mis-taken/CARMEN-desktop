@@ -13,6 +13,9 @@ import config
 import device_id
 import enforcer
 import review_store
+import board_store
+import tasks_store
+import sync_client
 import screentime_store
 import session_history
 import session_manager
@@ -56,6 +59,15 @@ def isolate_real_data_paths(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(review_store, "_active_sessions_loaded", True)
     monkeypatch.setattr(review_store, "ACTIVE_SESSION_PATH", str(base / "active_review.json"))
     monkeypatch.setattr(review_store, "PHOTOS_DIR", str(base / "review_photos"))
+    # sync_client's account-owner marker and watermark: a test that calls
+    # sync_now() without isolating them used to write a fake user id into the
+    # real private/sync_owner.txt, which would then lock the real app out of
+    # its own account.
+    monkeypatch.setattr(sync_client, "SYNC_OWNER_PATH", str(base / "sync_owner.txt"))
+    monkeypatch.setattr(sync_client, "LAST_SYNC_PATH", str(base / "last_sync.txt"))
+    monkeypatch.setattr(sync_client, "_cached_last_sync", None)
+    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(base / "tasks.json"))
+    monkeypatch.setattr(board_store, "BOARD_PATH", str(base / "board.json"))
     yield
 
 
