@@ -114,7 +114,12 @@ def _process_event(event, now, range_end):
         occ_key = occ_start.isoformat()
 
         for offset_minutes in event.get("reminderOffsets", []) or []:
-            trigger_at = occ_start - timedelta(minutes=offset_minutes)
+            try:
+                trigger_at = occ_start - timedelta(minutes=offset_minutes)
+            except (OverflowError, ValueError):
+                # An absurd offset (typed/synced) must not abort the whole event --
+                # the start trigger below still has to fire.
+                continue
             _maybe_fire(
                 ("reminder", event["id"], occ_key, offset_minutes),
                 trigger_at, now,
@@ -122,12 +127,16 @@ def _process_event(event, now, range_end):
             )
 
         if focus and focus.get("enabled") and focus.get("warningMinutes") is not None:
-            warn_at = occ_start - timedelta(minutes=focus["warningMinutes"])
-            _maybe_fire(
-                ("focus_warning", event["id"], occ_key),
-                warn_at, now,
-                lambda ev=event: _fire_focus_warning(ev),
-            )
+            try:
+                warn_at = occ_start - timedelta(minutes=focus["warningMinutes"])
+            except (OverflowError, ValueError):
+                warn_at = None
+            if warn_at is not None:
+                _maybe_fire(
+                    ("focus_warning", event["id"], occ_key),
+                    warn_at, now,
+                    lambda ev=event: _fire_focus_warning(ev),
+                )
 
         _maybe_fire(
             ("start", event["id"], occ_key),
