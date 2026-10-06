@@ -31,6 +31,15 @@ DEFAULT_CONFIG = {
 
 
 def load_config():
+    # Serialized with update_config()'s write (see _config_lock) -- on Windows
+    # an unlocked read overlapping another thread's os.replace() of this file
+    # either makes that replace fail (PermissionError) or fails itself, and the
+    # OSError fallback below then returned defaults for a perfectly good file.
+    with _config_lock:
+        return _load_config_locked()
+
+
+def _load_config_locked():
     if not os.path.exists(CONFIG_PATH):
         # Deep copy — DEFAULT_CONFIG's list values must never be handed out
         # by reference, or an in-place mutation on a caller's "loaded"
@@ -80,7 +89,7 @@ def save_config(config):
 # the same starting config.json, and whichever finishes last silently
 # overwrites the other's change. Route every config mutation through
 # update_config() below instead of a raw load/mutate/save sequence.
-_config_lock = threading.Lock()
+_config_lock = threading.RLock()
 
 
 def update_config(mutator):
@@ -113,7 +122,10 @@ def get_api_token():
         return token
 
     def _mutate(c):
-        c["apiToken"] = secrets.token_hex(32)
+        # Re-checked under the lock so a stale/empty read above can never
+        # overwrite a token another caller already minted.
+        if not c.get("apiToken"):
+            c["apiToken"] = secrets.token_hex(32)
 
     cfg = update_config(_mutate)
     return cfg["apiToken"]
