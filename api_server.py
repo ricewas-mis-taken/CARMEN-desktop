@@ -216,6 +216,15 @@ def _is_string_list(value):
     )
 
 
+def _json_body():
+    """The request's JSON body as a dict. A body that parses as valid JSON
+    but isn't an object (a list, string, number, true) used to reach
+    body.get(...) and crash the handler with an AttributeError -> HTTP 500;
+    treated the same as a missing/invalid body instead."""
+    body = request.get_json(force=True, silent=True)
+    return body if isinstance(body, dict) else {}
+
+
 @app.route("/internal/quit", methods=["POST"])
 @_require_token
 def internal_quit():
@@ -304,7 +313,7 @@ def review_resume():
 @app.route("/session/start", methods=["POST"])
 @_require_token
 def session_start():
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
 
     duration_minutes = body.get("duration_minutes")
     lock_mode = body.get("lock_mode")
@@ -423,7 +432,7 @@ def session_update():
     button calls. Any field left out of the body keeps its current value, so
     a caller that only wants to flip lock mode doesn't have to resend the
     lists (and vice versa)."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     status = session_manager.get_status()
     if not status["isActive"]:
         return jsonify({"error": "no active session"}), 400
@@ -451,7 +460,7 @@ def violation():
     isn't in domain_whitelist during an active session — increments the
     same violation_count/violationLog GET /status returns, alongside this
     app's own process-based violations."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     url = body.get("url")
 
     if not isinstance(url, str) or not url:
@@ -471,7 +480,7 @@ def violation_resolved():
     happens automatically via this app's own window-polling loop, so there's
     nothing else for a caller to resolve today, but the type field keeps the
     door open."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     violation_type = body.get("type", "domain")
 
     if violation_type != "domain":
@@ -491,7 +500,7 @@ def screentime_domain():
     Independent of any focus session -- recorded regardless of
     isActive/isPaused/isBreak, same as the app-side tracking in
     window_tracker.py."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     domain = body.get("domain")
     seconds = body.get("seconds")
 
@@ -551,7 +560,7 @@ def browser_profiles_running():
 @app.route("/blocklist/apps", methods=["POST"])
 @_require_token
 def blocklist_apps():
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     process_blocklist = body.get("process_blocklist")
 
     if not _is_string_list(process_blocklist):
@@ -569,7 +578,7 @@ def blocklist_apps():
 def blocklist_browser_profiles():
     """Saves the default browserProfileBlocklist (AUMIs), the profile-level
     counterpart to POST /blocklist/apps."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     browser_profile_blocklist = body.get("browser_profile_blocklist")
 
     if not _is_string_list(browser_profile_blocklist):
@@ -605,7 +614,7 @@ def whitelist_domains_set():
     which only ever touches the *active session's* domainWhitelist and
     requires a reason — this endpoint is the same "just replace the saved
     default" shape as /blocklist/apps, with no session or reason involved."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     domain_whitelist = body.get("domain_whitelist")
 
     if not _is_string_list(domain_whitelist):
@@ -626,7 +635,7 @@ def blocklist_apps_remove():
     processBlocklistExceptions) — the API-level counterpart to the lock
     overlay's own "Unblock" button (enforcer.py), for any other caller
     (e.g. Carmen) that wants to drive the same mid-session unblock."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     process_name = body.get("process_name")
     reason = body.get("reason")
 
@@ -654,7 +663,7 @@ def whitelist_domains_add():
     required reason logged for the audit trail (session_manager's
     domainWhitelistAdditions) — for unblocking a site mid-session without
     ending it. Only makes sense while a session is actually running."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     domain = body.get("domain")
     reason = body.get("reason")
 
@@ -684,7 +693,7 @@ def task_domain_whitelist_add(task_id):
     on this task is already allowed the next time this task starts one.
     Case-insensitive dedupe against what's already saved; existing entries
     and their original casing are left untouched."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     domains = body.get("domains")
 
     if not _is_string_list(domains):
@@ -732,7 +741,7 @@ def focus_rules_set():
     push can't silently erase someone else's addition. See
     config.set_focus_rules() for why a merge can only ever add domains, not
     remove them."""
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     domain_whitelist = body.get("domainWhitelist")
     base_version = body.get("baseVersion")
 
@@ -762,7 +771,7 @@ def review_topics_list():
 @app.route("/review/topics", methods=["POST"])
 @_require_token
 def review_topics_create():
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     name = body.get("name")
     if not isinstance(name, str) or not name.strip():
         return jsonify({"error": "name must be a non-empty string"}), 400
@@ -780,7 +789,7 @@ def review_subjects_list(topic_id):
 @app.route("/review/topics/<int:topic_id>/subjects", methods=["POST"])
 @_require_token
 def review_subjects_create(topic_id):
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     name = body.get("name")
     color = body.get("color")
     if not isinstance(name, str) or not name.strip():
@@ -881,7 +890,7 @@ def review_problem_start(problem_id):
 @app.route("/review/problems/<int:problem_id>/finish", methods=["POST"])
 @_require_token
 def review_problem_finish(problem_id):
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     session_token = body.get("session_token")
     if not isinstance(session_token, str) or not session_token:
         return jsonify({"error": "session_token must be a non-empty string"}), 400
