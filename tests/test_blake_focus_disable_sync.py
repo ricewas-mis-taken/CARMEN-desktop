@@ -48,6 +48,7 @@ def isolate_device(tmp_path, monkeypatch):
 def fake_logged_in(monkeypatch):
     monkeypatch.setattr(auth_manager, "is_logged_in", lambda: True)
     monkeypatch.setattr(auth_manager, "get_access_token", lambda: "fake-token")
+    monkeypatch.setattr(auth_manager, "get_current_user", lambda: {"id": "user-1", "email": "a@example.com"})
 
 
 @pytest.fixture
