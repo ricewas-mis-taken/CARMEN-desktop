@@ -8,6 +8,7 @@ anything checked here.
 """
 import logging
 import os
+import time
 from dataclasses import dataclass
 
 import jwt
@@ -26,11 +27,31 @@ if not SUPABASE_JWKS_URL:
 
 _jwk_client = None
 
+# PyJWKClient re-downloads the whole JWKS whenever a token's `kid` isn't in
+# its cache. Verification happens before authentication, so anyone could send
+# garbage tokens with random kids and make this server hit the JWKS endpoint
+# once per request. Allow a refetch at most this often; a genuinely rotated
+# key is picked up on the next allowed refresh.
+JWKS_REFETCH_MIN_INTERVAL_SECONDS = 30
+
+
+class _ThrottledJWKClient(PyJWKClient):
+    _last_forced_refresh = float("-inf")
+
+    def get_signing_keys(self, refresh=False):
+        if refresh:
+            now = time.monotonic()
+            if now - self._last_forced_refresh < JWKS_REFETCH_MIN_INTERVAL_SECONDS:
+                refresh = False
+            else:
+                self._last_forced_refresh = now
+        return super().get_signing_keys(refresh=refresh)
+
 
 def _get_jwk_client():
     global _jwk_client
     if _jwk_client is None:
-        _jwk_client = PyJWKClient(SUPABASE_JWKS_URL)
+        _jwk_client = _ThrottledJWKClient(SUPABASE_JWKS_URL)
     return _jwk_client
 
 
@@ -40,9 +61,13 @@ class AuthContext:
     access_token: str
 
 
-async def require_auth(authorization: str = Header(default=None)) -> AuthContext:
+def require_auth(authorization: str = Header(default=None)) -> AuthContext:
     """FastAPI dependency. Raises 401 if the Authorization header is
-    missing, malformed, or carries an invalid/expired token."""
+    missing, malformed, or carries an invalid/expired token.
+
+    A plain `def`, not `async def`: PyJWKClient does blocking network I/O, and
+    FastAPI runs sync dependencies in a worker thread instead of on the event
+    loop (where a slow JWKS fetch stalled every other request)."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or malformed Authorization header")
     token = authorization[len("Bearer "):].strip()
