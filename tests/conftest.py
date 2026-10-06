@@ -13,6 +13,7 @@ import config
 import device_id
 import enforcer
 import review_store
+import screentime_store
 import session_history
 import session_manager
 import sync_trigger
@@ -29,6 +30,33 @@ def disable_sync_trigger(monkeypatch):
     specifically exercise sync_trigger's own debounce/enable/disable
     behavior override this themselves."""
     monkeypatch.setattr(sync_trigger, "note_change", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def isolate_real_data_paths(tmp_path_factory, monkeypatch):
+    """Safety net: every module whose data file path is a module-level
+    constant defaulting to <repo>/private/... is pointed at a throwaway dir
+    for EVERY test, so a test that forgets its own isolation fixture can no
+    longer create or mutate the real calendar.db, screentime.json,
+    config.json, device_id.txt or active_review.json (running the suite in
+    the owner's real checkout used to write phantom discord.exe screen time
+    into the real screentime.json, among other things). Tests that need a
+    specific location still override these with their own monkeypatch --
+    those run after this autouse fixture."""
+    base = tmp_path_factory.mktemp("isolated_private")
+    monkeypatch.setattr(config, "CONFIG_PATH", str(base / "config.json"))
+    monkeypatch.setattr(screentime_store, "STATE_PATH", str(base / "screentime.json"))
+    monkeypatch.setattr(screentime_store, "_data", {})
+    monkeypatch.setattr(device_id, "DEVICE_ID_PATH", str(base / "device_id.txt"))
+    monkeypatch.setattr(device_id, "_cached_id", None)
+    monkeypatch.setattr(calendar_store, "DB_PATH", str(base / "calendar.db"))
+    monkeypatch.setattr(calendar_store, "_conn", None)
+    monkeypatch.setattr(review_store, "_schema_ready", False)
+    monkeypatch.setattr(review_store, "_active_sessions", {})
+    monkeypatch.setattr(review_store, "_active_sessions_loaded", True)
+    monkeypatch.setattr(review_store, "ACTIVE_SESSION_PATH", str(base / "active_review.json"))
+    monkeypatch.setattr(review_store, "PHOTOS_DIR", str(base / "review_photos"))
+    yield
 
 
 @pytest.fixture
