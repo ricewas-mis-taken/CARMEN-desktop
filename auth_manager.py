@@ -57,7 +57,14 @@ def _get_client():
 
 
 def _store_refresh_token(token):
-    keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, token)
+    # Persisting is best-effort: the in-memory session is already valid, and
+    # an exception escaping here would kill login()'s background thread (the
+    # login form then stays busy forever) or crash is_logged_in() callers.
+    # The only cost of a failed save is signing in again next launch.
+    try:
+        keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, token)
+    except Exception:
+        logger.warning("Could not save the refresh token to the OS credential store", exc_info=True)
 
 
 def _load_refresh_token():
