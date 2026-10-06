@@ -813,6 +813,11 @@ def review_subjects_create(topic_id):
         return jsonify({"error": "color must be a non-empty hex string"}), 400
     if not re.fullmatch(r"#[0-9A-Fa-f]{6}", color.strip()):
         return jsonify({"error": "color must be a hex string like #RRGGBB"}), 400
+    # Without this the INSERT succeeds against a topic that doesn't exist
+    # (review_store doesn't enforce foreign keys), leaving an orphan subject
+    # no listing can ever reach.
+    if review_store.get_topic(topic_id) is None:
+        return jsonify({"error": "topic not found"}), 404
     try:
         subject = review_store.create_subject(topic_id, name.strip(), color.strip())
     except (review_store.DuplicateNameError, review_store.DuplicateColorError) as exc:
@@ -850,6 +855,16 @@ def review_problems_create(topic_id):
         return jsonify({"error": "stars must be an integer between 1 and 5"}), 400
     if description_type not in ("text", "photo", "link"):
         return jsonify({"error": "description_type must be 'text', 'photo', or 'link'"}), 400
+
+    # The topic and subject must exist and the subject must belong to this
+    # topic. Previously a missing parent still inserted an orphan row (and
+    # then 500'd because the row could not be read back), and a subject from
+    # a *different* topic was accepted -- deleting that other topic later
+    # silently made the problem unreachable.
+    if review_store.get_topic(topic_id) is None:
+        return jsonify({"error": "topic not found"}), 404
+    if not any(subj["id"] == subject_id for subj in review_store.list_subjects(topic_id)):
+        return jsonify({"error": "subject not found in this topic"}), 404
 
     description_text = None
     description_link = None
