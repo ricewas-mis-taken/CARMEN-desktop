@@ -4,7 +4,9 @@ import copy
 import json
 import os
 import secrets
+import shutil
 import threading
+import time
 from datetime import datetime, timezone
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "config.json")
@@ -63,6 +65,39 @@ def _load_config_locked():
     return merged
 
 
+class ConfigLoadError(Exception):
+    """config.json exists but could not be read even after retrying."""
+
+
+def _load_for_update():
+    """load_config() for read-modify-write callers. load_config() maps an
+    unreadable/corrupt file to DEFAULT_CONFIG, which is fine for display but
+    destructive here: the caller saves the result straight back, wiping the
+    user's saved lists and regenerating apiToken. So retry a transient
+    OSError (raise if it persists) and back up a corrupt file before
+    falling back to defaults."""
+    if not os.path.exists(CONFIG_PATH):
+        return load_config()
+    last_exc = None
+    for _ in range(3):
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            merged = copy.deepcopy(DEFAULT_CONFIG)
+            merged.update(data)
+            return merged
+        except json.JSONDecodeError:
+            try:
+                shutil.copy2(CONFIG_PATH, f"{CONFIG_PATH}.corrupt-{int(time.time())}")
+            except OSError as exc:
+                raise ConfigLoadError(f"config.json is corrupt and could not be backed up: {exc}") from exc
+            return copy.deepcopy(DEFAULT_CONFIG)
+        except OSError as exc:
+            last_exc = exc
+            time.sleep(0.05)
+    raise ConfigLoadError(f"failed to read {CONFIG_PATH}: {last_exc}") from last_exc
+
+
 def save_config(config):
     # Atomic write — config.json is written from both the Flask thread and
     # the Tkinter GUI thread; a plain in-place write killed mid-save would
@@ -99,7 +134,7 @@ def update_config(mutator):
     why every config mutation needs to go through this rather than its own
     ad hoc load/mutate/save."""
     with _config_lock:
-        cfg = load_config()
+        cfg = _load_for_update()
         replacement = mutator(cfg)
         if replacement is not None:
             cfg = replacement
@@ -172,7 +207,7 @@ def set_focus_rules(domain_whitelist, base_version=None):
     Returns the updated config dict.
     """
     with _config_lock:
-        cfg = load_config()
+        cfg = _load_for_update()
         current_version = int(cfg.get("focusRulesVersion") or 0)
         conflict = base_version is not None and int(base_version) != current_version
 
