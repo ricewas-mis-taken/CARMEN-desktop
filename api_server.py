@@ -79,13 +79,28 @@ app = Flask(__name__)
 # browser variant.
 _EXTENSION_ORIGIN_RE = re.compile(r"^(chrome|moz)-extension://.*$")
 
+# Every route is extension-origin-only: a blanket "*" let any web page the
+# user visits read /history, /status, /whitelist/domains, /review/* from
+# 127.0.0.1 (a browser on this machine will happily issue the request).
 CORS(
     app,
     resources={
-        r"/api/focus/rules": {"origins": _EXTENSION_ORIGIN_RE},
-        r"/*": {"origins": "*"},
+        r"/*": {"origins": _EXTENSION_ORIGIN_RE},
     },
 )
+
+_ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
+
+
+@app.before_request
+def _reject_foreign_host():
+    """DNS-rebinding guard: a rebinding page reaches this server with its own
+    attacker-controlled name in Host, so anything but a loopback name is
+    refused."""
+    host = (request.host or "").strip().lower()
+    hostname = host.rsplit(":", 1)[0] if not host.endswith("]") else host
+    if hostname not in _ALLOWED_HOSTS:
+        return jsonify({"error": "invalid Host header"}), 403
 
 API_PORT = 5847
 
