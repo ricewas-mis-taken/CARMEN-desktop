@@ -787,6 +787,8 @@ def review_subjects_create(topic_id):
         return jsonify({"error": "name must be a non-empty string"}), 400
     if not isinstance(color, str) or not color.strip():
         return jsonify({"error": "color must be a non-empty hex string"}), 400
+    if not re.fullmatch(r"#[0-9A-Fa-f]{6}", color.strip()):
+        return jsonify({"error": "color must be a hex string like #RRGGBB"}), 400
     subject = review_store.create_subject(topic_id, name.strip(), color.strip())
     if subject is None:
         return jsonify({"error": "failed to create subject"}), 500
