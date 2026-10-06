@@ -173,6 +173,14 @@ def _refresh_session():
     return True
 
 
+def refresh_access_token():
+    """Forces a refresh now, even though an in-memory access token exists --
+    for a caller that just got a 401 (Supabase access tokens expire, 1h by
+    default, and is_logged_in()/get_access_token() alone never notice that).
+    Returns True if a fresh token is now held."""
+    return _refresh_session()
+
+
 def is_logged_in():
     if _access_token and _current_user:
         return True

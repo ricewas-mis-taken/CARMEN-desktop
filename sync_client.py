@@ -883,23 +883,38 @@ def sync_now():
         return SyncResult(success=False, pushed=0, pulled=0, skipped=0, error="Sync failed while reading local data.")
 
     pushed = skipped_push = 0
-    try:
-        headers = {"Authorization": f"Bearer {token}"}
-        with httpx.Client(timeout=20.0) as client:
-            if push_records:
-                resp = client.post(f"{SYNC_SERVER_URL}/sync/push", headers=headers, json=push_records)
-                resp.raise_for_status()
-                push_result = resp.json()
-                pushed = len(push_result.get("accepted", []))
-                skipped_push = len(push_result.get("skipped", []))
+    refreshed = False
+    while True:
+        try:
+            headers = {"Authorization": f"Bearer {token}"}
+            with httpx.Client(timeout=20.0) as client:
+                if push_records:
+                    resp = client.post(f"{SYNC_SERVER_URL}/sync/push", headers=headers, json=push_records)
+                    resp.raise_for_status()
+                    push_result = resp.json()
+                    pushed = len(push_result.get("accepted", []))
+                    skipped_push = len(push_result.get("skipped", []))
 
-            params = {"since": last_sync_wire} if last_sync_wire else {}
-            resp = client.get(f"{SYNC_SERVER_URL}/sync/pull", headers=headers, params=params)
-            resp.raise_for_status()
-            pulled_records = resp.json()
-    except httpx.HTTPError as exc:
-        logger.warning("sync_client.sync_now: couldn't reach sync server at %s: %s", SYNC_SERVER_URL, exc)
-        return SyncResult(success=False, pushed=0, pulled=0, skipped=0, error="Couldn't reach the sync server.")
+                params = {"since": last_sync_wire} if last_sync_wire else {}
+                resp = client.get(f"{SYNC_SERVER_URL}/sync/pull", headers=headers, params=params)
+                resp.raise_for_status()
+                pulled_records = resp.json()
+            break
+        except httpx.HTTPStatusError as exc:
+            # An expired access token (Supabase's default lifetime is 1h) is
+            # answered with 401 -- refresh once from the stored refresh token
+            # and retry, instead of failing every sync until the app restarts.
+            if exc.response.status_code == 401 and not refreshed:
+                refreshed = True
+                if auth_manager.refresh_access_token():
+                    token = auth_manager.get_access_token()
+                    if token:
+                        continue
+            logger.warning("sync_client.sync_now: couldn't reach sync server at %s: %s", SYNC_SERVER_URL, exc)
+            return SyncResult(success=False, pushed=0, pulled=0, skipped=0, error="Couldn't reach the sync server.")
+        except httpx.HTTPError as exc:
+            logger.warning("sync_client.sync_now: couldn't reach sync server at %s: %s", SYNC_SERVER_URL, exc)
+            return SyncResult(success=False, pushed=0, pulled=0, skipped=0, error="Couldn't reach the sync server.")
 
     try:
         pulled, skipped_pull, failed = _apply_all(pulled_records)
