@@ -192,6 +192,8 @@ def _require_token(fn):
 # degrading every poll for the rest of that session.
 _MAX_LIST_ENTRIES = 2000
 _MAX_ENTRY_LENGTH = 500
+_MAX_URL_LENGTH = 8192
+_MAX_REASON_LENGTH = 2000
 
 
 def _is_string_list(value):
@@ -465,6 +467,8 @@ def violation():
 
     if not isinstance(url, str) or not url:
         return jsonify({"error": "url must be a non-empty string"}), 400
+    if len(url) > _MAX_URL_LENGTH:
+        return jsonify({"error": f"url must be at most {_MAX_URL_LENGTH} characters"}), 400
 
     violation_count = session_manager.record_domain_violation(url)
     return jsonify({"violationCount": violation_count})
@@ -506,6 +510,8 @@ def screentime_domain():
 
     if not isinstance(domain, str) or not domain:
         return jsonify({"error": "domain must be a non-empty string"}), 400
+    if len(domain) > _MAX_ENTRY_LENGTH:
+        return jsonify({"error": f"domain must be at most {_MAX_ENTRY_LENGTH} characters"}), 400
     if not isinstance(seconds, (int, float)) or isinstance(seconds, bool) or not math.isfinite(seconds) or seconds <= 0 or seconds > 86400:
         return jsonify({"error": "seconds must be a finite positive number (at most 86400)"}), 400
 
@@ -643,6 +649,8 @@ def blocklist_apps_remove():
         return jsonify({"error": "process_name must be a non-empty string"}), 400
     if not isinstance(reason, str) or not reason.strip():
         return jsonify({"error": "reason must be a non-empty string"}), 400
+    if len(process_name.strip()) > _MAX_ENTRY_LENGTH or len(reason.strip()) > _MAX_REASON_LENGTH:
+        return jsonify({"error": "process_name or reason is too long"}), 400
 
     # is_active() is checked atomically inside remove_process_from_blocklist,
     # under the same lock as the write itself, rather than as a separate
@@ -671,6 +679,8 @@ def whitelist_domains_add():
         return jsonify({"error": "domain must be a non-empty string"}), 400
     if not isinstance(reason, str) or not reason.strip():
         return jsonify({"error": "reason must be a non-empty string"}), 400
+    if len(domain.strip()) > _MAX_ENTRY_LENGTH or len(reason.strip()) > _MAX_REASON_LENGTH:
+        return jsonify({"error": "domain or reason is too long"}), 400
 
     # See blocklist_apps_remove() above for why is_active() is checked
     # atomically inside add_domain_to_whitelist rather than as a separate
@@ -749,6 +759,8 @@ def focus_rules_set():
         isinstance(d, str) for d in domain_whitelist
     ):
         return jsonify({"error": "domainWhitelist must be a list of strings"}), 400
+    if len(domain_whitelist) > _MAX_LIST_ENTRIES or any(len(d) > _MAX_ENTRY_LENGTH for d in domain_whitelist):
+        return jsonify({"error": "domainWhitelist is too large"}), 400
     if base_version is not None and not isinstance(base_version, int):
         return jsonify({"error": "baseVersion must be an integer or omitted"}), 400
 
