@@ -46,6 +46,7 @@ KEYRING_USERNAME = "supabase_refresh_token"
 _lock = threading.Lock()
 _client = None
 _access_token = None
+_auth_generation = 0  # bumped by logout() so an in-flight refresh can tell it was superseded
 _current_user = None  # {"id": ..., "email": ...} while logged in, else None
 
 
@@ -142,8 +143,9 @@ def signup(email, password):
 
 
 def logout():
-    global _access_token, _current_user
+    global _access_token, _current_user, _auth_generation
     with _lock:
+        _auth_generation += 1
         if _client is not None:
             try:
                 _client.auth.sign_out()
@@ -162,6 +164,7 @@ def _refresh_session():
     global _access_token, _current_user
     if not SUPABASE_URL or not SUPABASE_PUBLISHABLE_KEY:
         return False
+    generation = _auth_generation  # captured before reading the token so a logout() in between is noticed
     refresh_token = _load_refresh_token()
     if not refresh_token:
         return False
@@ -174,6 +177,8 @@ def _refresh_session():
     if not session:
         return False
     with _lock:
+        if generation != _auth_generation:
+            return False  # logout() ran while this refresh was in flight
         _access_token = session.access_token
         _current_user = {"id": result.user.id, "email": result.user.email}
         _store_refresh_token(session.refresh_token)
