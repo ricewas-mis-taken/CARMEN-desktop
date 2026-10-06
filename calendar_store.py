@@ -163,7 +163,7 @@ def _row_to_event(conn, row):
     ]
     focus = conn.execute("SELECT * FROM focus_profiles WHERE event_id = ?", (row["id"],)).fetchone()
     focus_profile = None
-    if focus is not None:
+    if focus is not None and not focus["is_deleted"]:
         focus_profile = {
             "enabled": bool(focus["enabled"]),
             "lockMode": focus["lock_mode"],
@@ -280,23 +280,32 @@ def save_event(event):
             if focus and focus.get("enabled"):
                 conn.execute(
                     """
-                    INSERT INTO focus_profiles (event_id, enabled, lock_mode, process_blocklist, domain_whitelist, warning_minutes)
-                    VALUES (?, 1, ?, ?, ?, ?)
+                    INSERT INTO focus_profiles (event_id, enabled, lock_mode, process_blocklist, domain_whitelist,
+                                                warning_minutes, updated_at, device_id, is_deleted)
+                    VALUES (?, 1, ?, ?, ?, ?, ?, ?, 0)
                     ON CONFLICT(event_id) DO UPDATE SET
                         enabled=1, lock_mode=excluded.lock_mode,
                         process_blocklist=excluded.process_blocklist,
                         domain_whitelist=excluded.domain_whitelist,
-                        warning_minutes=excluded.warning_minutes
+                        warning_minutes=excluded.warning_minutes,
+                        updated_at=excluded.updated_at, device_id=excluded.device_id, is_deleted=0
                     """,
                     (
                         event_id, focus.get("lockMode", "soft"),
                         json.dumps(focus.get("processBlocklist", [])),
                         json.dumps(focus.get("domainWhitelist", [])),
-                        focus.get("warningMinutes"),
+                        focus.get("warningMinutes"), now, this_device,
                     ),
                 )
             else:
-                conn.execute("DELETE FROM focus_profiles WHERE event_id = ?", (event_id,))
+                # Tombstone instead of DELETE so the disable can sync: a hard
+                # delete leaves nothing for _gather_focus_profiles to push, and
+                # the other devices keep running the focus lock forever.
+                conn.execute(
+                    "UPDATE focus_profiles SET enabled = 0, is_deleted = 1, updated_at = ?, device_id = ? "
+                    "WHERE event_id = ? AND is_deleted = 0",
+                    (now, this_device, event_id),
+                )
 
             conn.commit()
             saved = True
