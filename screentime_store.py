@@ -11,6 +11,7 @@ process has no visibility into which domain a browser tab is on by itself.
 """
 import json
 import os
+import shutil
 import threading
 import time
 from datetime import datetime, timedelta
@@ -29,21 +30,75 @@ _FLUSH_INTERVAL_SECONDS = 10.0
 _last_flush = 0.0
 
 
-def _load():
-    global _data
+# True while STATE_PATH exists but could not be read (e.g. briefly locked by
+# another process). While set, _save_locked() must not write: the in-memory
+# tally is only today's new seconds, and saving it would replace the user's
+# whole history on disk with that.
+_load_failed = False
+
+
+def _read_disk():
+    """Parsed contents of STATE_PATH ({} if it doesn't exist). Raises OSError
+    if the file can't be read; a corrupt/non-object file is set aside as
+    STATE_PATH.corrupt-<timestamp> (never silently overwritten) and treated
+    as empty."""
     if not os.path.exists(STATE_PATH):
-        return
+        return {}
+    last_exc = None
+    for _ in range(3):
+        try:
+            with open(STATE_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            break
+        except json.JSONDecodeError:
+            data = None
+            break
+        except OSError as exc:
+            last_exc = exc
+            time.sleep(0.05)
+    else:
+        raise last_exc
+    if isinstance(data, dict):
+        return data
     try:
-        with open(STATE_PATH, "r", encoding="utf-8") as f:
-            _data = json.load(f)
-    except (json.JSONDecodeError, OSError):
+        shutil.copy2(STATE_PATH, f"{STATE_PATH}.corrupt-{datetime.now():%Y%m%d-%H%M%S-%f}")
+    except OSError:
+        pass
+    return {}
+
+
+def _load():
+    global _data, _load_failed
+    try:
+        _data = _read_disk()
+        _load_failed = False
+    except OSError:
         _data = {}
+        _load_failed = True
 
 
 _load()
 
 
+def _merge_into(disk, pending):
+    for day, bucket in pending.items():
+        target = disk.setdefault(day, {"apps": {}, "domains": {}})
+        for kind in ("apps", "domains"):
+            dest = target.setdefault(kind, {})
+            for name, secs in bucket.get(kind, {}).items():
+                dest[name] = dest.get(name, 0) + secs
+    return disk
+
+
 def _save_locked():
+    global _data, _load_failed
+    if _load_failed:
+        try:
+            disk = _read_disk()
+        except OSError:
+            return  # still unreadable: keep counting in memory, never overwrite
+        _data = _merge_into(disk, _data)
+        _load_failed = False
     os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
     tmp_path = STATE_PATH + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
