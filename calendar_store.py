@@ -344,8 +344,12 @@ def soft_delete_event(event_id):
     with _lock:
         try:
             conn = _get_conn()
+            now = datetime.now().isoformat()
+            # updated_at must move too: sync_client gathers events by
+            # "updated_at > last sync", so a delete that leaves it alone is
+            # never pushed to other devices.
             conn.execute(
-                "UPDATE events SET deleted_at = ? WHERE id = ?", (datetime.now().isoformat(), event_id)
+                "UPDATE events SET deleted_at = ?, updated_at = ? WHERE id = ?", (now, now, event_id)
             )
             conn.commit()
         except Exception:
@@ -359,7 +363,10 @@ def undo_delete_event(event_id):
     with _lock:
         try:
             conn = _get_conn()
-            conn.execute("UPDATE events SET deleted_at = NULL WHERE id = ?", (event_id,))
+            conn.execute(
+                "UPDATE events SET deleted_at = NULL, updated_at = ? WHERE id = ?",
+                (datetime.now().isoformat(), event_id),
+            )
             conn.commit()
         except Exception:
             logger.exception("undo_delete_event failed for %s", event_id)
