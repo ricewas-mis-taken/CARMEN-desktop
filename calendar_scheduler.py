@@ -93,7 +93,20 @@ def _prune_fired(now):
     _fired.difference_update(stale)
 
 
+def _max_lead_minutes(event):
+    """Longest time before an occurrence's start that this event wants to fire
+    something (a reminder offset or the focus warning) -- the occurrence
+    itself has to be expanded that far ahead, or the trigger moment arrives
+    while the occurrence is still outside the lookahead window."""
+    focus = event.get("focusProfile")
+    leads = [o for o in (event.get("reminderOffsets") or []) if isinstance(o, (int, float))]
+    if focus and focus.get("enabled") and isinstance(focus.get("warningMinutes"), (int, float)):
+        leads.append(focus["warningMinutes"])
+    return max([0] + leads)
+
+
 def _process_event(event, now, range_end):
+    range_end = range_end + timedelta(minutes=_max_lead_minutes(event))
     occurrences = recurrence.expand_occurrences(event, now - timedelta(hours=LOOKAHEAD_HOURS), range_end)
     focus = event.get("focusProfile")
 
