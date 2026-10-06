@@ -414,7 +414,7 @@ def list_topics():
         try:
             conn = _get_conn()
             rows = conn.execute(
-                "SELECT * FROM review_topics ORDER BY order_index, id"
+                "SELECT * FROM review_topics WHERE is_deleted = 0 ORDER BY order_index, id"
             ).fetchall()
             return [_row_to_topic(r) for r in rows]
         except Exception:
@@ -427,11 +427,11 @@ def create_topic(name):
         try:
             conn = _get_conn()
             if conn.execute(
-                "SELECT id FROM review_topics WHERE LOWER(name) = LOWER(?)", (name,)
+                "SELECT id FROM review_topics WHERE is_deleted = 0 AND LOWER(name) = LOWER(?)", (name,)
             ).fetchone():
                 raise DuplicateNameError(f'A topic named "{name}" already exists.')
             max_order = conn.execute(
-                "SELECT COALESCE(MAX(order_index), -1) AS m FROM review_topics"
+                "SELECT COALESCE(MAX(order_index), -1) AS m FROM review_topics WHERE is_deleted = 0"
             ).fetchone()["m"]
             cur = conn.execute(
                 "INSERT INTO review_topics (name, order_index, sync_id, updated_at, device_id) "
@@ -453,7 +453,9 @@ def get_topic(topic_id):
     with _lock:
         try:
             conn = _get_conn()
-            row = conn.execute("SELECT * FROM review_topics WHERE id = ?", (topic_id,)).fetchone()
+            row = conn.execute(
+                "SELECT * FROM review_topics WHERE id = ? AND is_deleted = 0", (topic_id,)
+            ).fetchone()
             return _row_to_topic(row) if row else None
         except Exception:
             logger.exception("review_store.get_topic failed for %s", topic_id)
@@ -481,7 +483,7 @@ def rename_topic(topic_id, name):
         try:
             conn = _get_conn()
             if conn.execute(
-                "SELECT id FROM review_topics WHERE LOWER(name) = LOWER(?) AND id != ?",
+                "SELECT id FROM review_topics WHERE is_deleted = 0 AND LOWER(name) = LOWER(?) AND id != ?",
                 (name, topic_id),
             ).fetchone():
                 raise DuplicateNameError(f'A topic named "{name}" already exists.')
@@ -528,7 +530,13 @@ def delete_topic(topic_id):
             )
             conn.execute("DELETE FROM review_problems WHERE topic_id = ?", (topic_id,))
             conn.execute("DELETE FROM review_subjects WHERE topic_id = ?", (topic_id,))
-            conn.execute("DELETE FROM review_topics WHERE id = ?", (topic_id,))
+            # Tombstone instead of DELETE so the deletion can propagate through
+            # sync (sync_client gathers the is_deleted row and pushes it; the
+            # receiving device cascades the children away).
+            conn.execute(
+                "UPDATE review_topics SET is_deleted = 1, updated_at = ?, device_id = ? WHERE id = ?",
+                (datetime.now().isoformat(), device_id.get_device_id(), topic_id),
+            )
             conn.commit()
 
             if problem_ids:

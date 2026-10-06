@@ -333,7 +333,7 @@ def _ensure_row_sync_meta(conn, table, row):
 
 
 def _gather_review_topics(conn, cutoff_local):
-    rows = conn.execute("SELECT * FROM review_topics WHERE is_deleted = 0").fetchall()
+    rows = conn.execute("SELECT * FROM review_topics").fetchall()
     records = []
     for row in rows:
         needs_meta = not row["sync_id"] or not row["updated_at"] or not row["device_id"]
@@ -674,6 +674,15 @@ def _apply_review_topics(conn, records):
                 skipped += 1
                 continue
             data = record["data"]
+            if row and record["is_deleted"]:
+                # A deleted topic takes its subjects/problems/sessions with it,
+                # same as review_store.delete_topic() does locally.
+                conn.execute(
+                    "DELETE FROM review_sessions WHERE problem_id IN "
+                    "(SELECT id FROM review_problems WHERE topic_id = ?)", (row["id"],),
+                )
+                conn.execute("DELETE FROM review_problems WHERE topic_id = ?", (row["id"],))
+                conn.execute("DELETE FROM review_subjects WHERE topic_id = ?", (row["id"],))
             if row:
                 conn.execute(
                     "UPDATE review_topics SET name=?, order_index=?, linked_task_id=?, updated_at=?, device_id=?, is_deleted=? "
