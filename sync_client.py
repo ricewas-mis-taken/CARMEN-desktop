@@ -530,9 +530,16 @@ def _normalize_board_item(item):
     return merged
 
 
-def _apply_json_store(records, load_fn, save_fn, id_field, normalize=None):
+def _apply_json_store(records, load_fn, save_fn, id_field, normalize=None, lock=None):
+    # lock: the store's own write lock. Its create/update/delete mutators all
+    # hold it across their read-modify-write, so the apply below (which also
+    # reads the whole file, merges, and rewrites it) must too -- otherwise a
+    # local edit landing between this read and write is silently overwritten.
     if not records:
         return 0, 0, 0
+    if lock is not None:
+        with lock:
+            return _apply_json_store(records, load_fn, save_fn, id_field, normalize=normalize)
     local = load_fn(include_deleted=True)
     index_by_id = {item[id_field]: i for i, item in enumerate(local)}
     applied = skipped = failed = 0
@@ -568,11 +575,17 @@ def _apply_json_store(records, load_fn, save_fn, id_field, normalize=None):
 
 
 def _apply_tasks(records):
-    return _apply_json_store(records, tasks_store.load_tasks, tasks_store.save_tasks, "id", normalize=_normalize_task)
+    return _apply_json_store(
+        records, tasks_store.load_tasks, tasks_store.save_tasks, "id",
+        normalize=_normalize_task, lock=tasks_store._lock,
+    )
 
 
 def _apply_board(records):
-    return _apply_json_store(records, board_store.load_board, board_store.save_board, "id", normalize=_normalize_board_item)
+    return _apply_json_store(
+        records, board_store.load_board, board_store.save_board, "id",
+        normalize=_normalize_board_item, lock=board_store._lock,
+    )
 
 
 # --- apply: calendar.db ---
