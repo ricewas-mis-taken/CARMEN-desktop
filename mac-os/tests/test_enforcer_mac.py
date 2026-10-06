@@ -11,7 +11,6 @@ import pytest
 
 import session_manager
 
-sys.path.insert(0, r"C:\Users\Lucas\carmen-desktop")
 
 
 class _FakeProcess:
