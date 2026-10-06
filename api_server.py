@@ -787,7 +787,10 @@ def review_topics_create():
     name = body.get("name")
     if not isinstance(name, str) or not name.strip():
         return jsonify({"error": "name must be a non-empty string"}), 400
-    topic = review_store.create_topic(name.strip())
+    try:
+        topic = review_store.create_topic(name.strip())
+    except review_store.DuplicateNameError as exc:
+        return jsonify({"error": str(exc)}), 409
     if topic is None:
         return jsonify({"error": "failed to create topic"}), 500
     return jsonify(topic), 201
@@ -810,7 +813,10 @@ def review_subjects_create(topic_id):
         return jsonify({"error": "color must be a non-empty hex string"}), 400
     if not re.fullmatch(r"#[0-9A-Fa-f]{6}", color.strip()):
         return jsonify({"error": "color must be a hex string like #RRGGBB"}), 400
-    subject = review_store.create_subject(topic_id, name.strip(), color.strip())
+    try:
+        subject = review_store.create_subject(topic_id, name.strip(), color.strip())
+    except (review_store.DuplicateNameError, review_store.DuplicateColorError) as exc:
+        return jsonify({"error": str(exc)}), 409
     if subject is None:
         return jsonify({"error": "failed to create subject"}), 500
     return jsonify(subject), 201
@@ -865,11 +871,14 @@ def review_problems_create(topic_id):
         photo_bytes = photo_file.read()
         photo_filename = photo_file.filename
 
-    problem = review_store.create_problem(
-        topic_id, subject_id, name, stars, description_type,
-        description_text=description_text, description_link=description_link,
-        photo_bytes=photo_bytes, photo_filename=photo_filename,
-    )
+    try:
+        problem = review_store.create_problem(
+            topic_id, subject_id, name, stars, description_type,
+            description_text=description_text, description_link=description_link,
+            photo_bytes=photo_bytes, photo_filename=photo_filename,
+        )
+    except review_store.DuplicateNameError as exc:
+        return jsonify({"error": str(exc)}), 409
     if problem is None:
         return jsonify({"error": "failed to create problem"}), 500
     return jsonify(problem), 201
