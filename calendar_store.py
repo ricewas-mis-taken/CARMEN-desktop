@@ -153,6 +153,18 @@ def _init_schema(conn):
         conn.commit()
 
 
+def _load_json_list(value):
+    """json.loads for a focus_profiles list column, tolerant of a corrupt or
+    wrongly-typed value (a synced row can carry anything). An exception
+    escaping here used to abort list_events() for EVERY event, not just the
+    one with the bad profile."""
+    try:
+        loaded = json.loads(value)
+    except (TypeError, ValueError):
+        return []
+    return [x for x in loaded if isinstance(x, str)] if isinstance(loaded, list) else []
+
+
 def _row_to_event(conn, row):
     reminders = [
         r["offset_minutes"]
@@ -167,8 +179,8 @@ def _row_to_event(conn, row):
         focus_profile = {
             "enabled": bool(focus["enabled"]),
             "lockMode": focus["lock_mode"],
-            "processBlocklist": json.loads(focus["process_blocklist"]),
-            "domainWhitelist": json.loads(focus["domain_whitelist"]),
+            "processBlocklist": _load_json_list(focus["process_blocklist"]),
+            "domainWhitelist": _load_json_list(focus["domain_whitelist"]),
             "warningMinutes": focus["warning_minutes"],
         }
     return {
