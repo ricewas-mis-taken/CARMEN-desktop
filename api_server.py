@@ -173,7 +173,10 @@ def _require_token(fn):
     def wrapper(*args, **kwargs):
         expected = config.get_api_token()
         provided = request.headers.get("X-Carmen-Token", "")
-        if not hmac.compare_digest(provided, expected):
+        # Compared as bytes: compare_digest raises TypeError on a str with
+        # non-ASCII characters (header values decode as latin-1), which would
+        # surface as a 500 instead of 401.
+        if not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
             return jsonify({"error": "missing or invalid X-Carmen-Token header"}), 401
         return fn(*args, **kwargs)
     return wrapper
