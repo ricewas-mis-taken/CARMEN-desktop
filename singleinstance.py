@@ -27,6 +27,7 @@ import urllib.request
 import psutil
 
 import api_server
+import config
 from calendar_log import logger
 
 if sys.platform == "darwin":
@@ -70,8 +71,11 @@ def _request_graceful_quit():
     True only if the request was actually delivered -- a connection refused
     (server not up yet, or already gone) means there's nothing to wait on."""
     try:
+        # /internal/quit is token-gated; the stale instance shares this
+        # machine's config.json, so its token is the one we read here.
         req = urllib.request.Request(_QUIT_URL, data=b"{}", method="POST",
-                                      headers={"Content-Type": "application/json"})
+                                      headers={"Content-Type": "application/json",
+                                               "X-Carmen-Token": config.get_api_token()})
         with urllib.request.urlopen(req, timeout=_GRACEFUL_HTTP_TIMEOUT_SECONDS) as resp:
             json.loads(resp.read())
         return True
