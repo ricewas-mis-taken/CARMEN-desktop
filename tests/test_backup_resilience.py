@@ -39,3 +39,12 @@ def test_one_locked_file_does_not_abort_the_backup(env, monkeypatch):
     assert (snapshot / "board.json").exists()
     assert (snapshot / "config.json").exists()
     assert not old.exists()  # pruning still ran
+
+
+def test_screentime_history_is_backed_up(env):
+    data, root, old = env
+    (data / "screentime.json").write_text("{}", encoding="utf-8")
+    backup.run_backup()
+
+    snapshot = next(p for p in root.iterdir() if p.name != "2000-01-01")
+    assert (snapshot / "screentime.json").exists()

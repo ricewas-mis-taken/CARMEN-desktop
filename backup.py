@@ -23,6 +23,7 @@ FILES = [
     "tasks.json",
     "board.json",
     "config.json",
+    "screentime.json",
     os.path.join("data", "daily_summaries.json"),
 ]
 
