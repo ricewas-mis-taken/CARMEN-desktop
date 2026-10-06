@@ -18,6 +18,8 @@ canonical, so calling flush_through_yesterday() repeatedly is safe and cheap.
 import json
 import logging
 import os
+import shutil
+import time
 from datetime import date, datetime
 
 SUMMARY_PATH = os.path.join(
@@ -35,6 +37,29 @@ def _load():
             return json.load(f)
     except (json.JSONDecodeError, OSError):
         return {}
+
+
+def _load_for_update():
+    """Like _load(), but safe for a read-modify-write caller: _load() maps a
+    read failure to {} and the caller then saves only what it just computed,
+    erasing every earlier day. A transient OSError is retried and, if it
+    persists, raised (flush_through_yesterday's own handler logs it and
+    skips the write); a corrupt file is backed up before starting fresh."""
+    if not os.path.exists(SUMMARY_PATH):
+        return {}
+    last_exc = None
+    for _ in range(3):
+        try:
+            with open(SUMMARY_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except json.JSONDecodeError:
+            shutil.copy2(SUMMARY_PATH, f"{SUMMARY_PATH}.corrupt-{int(time.time())}")
+            return {}
+        except OSError as exc:
+            last_exc = exc
+            time.sleep(0.05)
+    raise last_exc
 
 
 def _save(data):
@@ -61,7 +86,7 @@ def flush_through_yesterday():
         if not sessions or not tasks:
             return
 
-        summaries = _load()
+        summaries = _load_for_update()
         changed = False
 
         past_days = {
