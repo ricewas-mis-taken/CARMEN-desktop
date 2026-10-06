@@ -68,8 +68,13 @@ def expand_occurrences(event, range_start, range_end):
     event that overlap [range_start, range_end]. Non-recurring events yield
     at most one occurrence — their own start/end, if they overlap the range.
     """
-    start_dt = datetime.fromisoformat(event["start"])
-    end_dt = datetime.fromisoformat(event["end"])
+    try:
+        start_dt = datetime.fromisoformat(event["start"])
+        end_dt = datetime.fromisoformat(event["end"])
+    except (KeyError, TypeError, ValueError):
+        # A malformed row (e.g. pulled from sync) must not take down every
+        # view/widget that expands events -- treat it as having no occurrences.
+        return []
     duration = end_dt - start_dt
 
     if not event.get("rrule"):

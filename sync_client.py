@@ -513,6 +513,10 @@ def _apply_events(conn, records):
                 skipped += 1
                 continue
             data = record["data"]
+            # Reject unparsable times up front so a poison record is counted
+            # as failed instead of being stored and breaking calendar views.
+            datetime.fromisoformat(data["start"])
+            datetime.fromisoformat(data["end"])
             deleted_at = incoming_updated_at if record["is_deleted"] else None
             conn.execute(
                 """
