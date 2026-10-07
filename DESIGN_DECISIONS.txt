@@ -314,3 +314,6 @@ updated_at, so an edit made on a device that was offline is never delivered to
 a device that already synced past it. The proper fix is a server-assigned
 timestamp column (schema migration on the Supabase project) and pulling on it;
 not applied because it changes the deployed database.
+
+Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-10-06] (the
+extension's fixes from the second war-room round, same approach).
