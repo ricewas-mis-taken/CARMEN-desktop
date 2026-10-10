@@ -35,6 +35,68 @@ def disable_sync_trigger(monkeypatch):
     monkeypatch.setattr(sync_trigger, "note_change", lambda: None)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def no_real_log_files():
+    """The app's two file loggers (calendar_errors.log, api_requests.log) write
+    to private/ next to the real data. Every test's logged errors and every
+    Flask test-client request landed in the owner's real logs when the suite
+    ran from the real checkout. Detach the file handlers for the whole session."""
+    import logging
+
+    detached = []
+    for name in ("carmen_calendar", "carmen_api_requests"):
+        log = logging.getLogger(name)
+        for handler in list(log.handlers):
+            if isinstance(handler, logging.FileHandler):
+                log.removeHandler(handler)
+                detached.append((log, handler))
+        log.addHandler(logging.NullHandler())
+    yield
+    for log, handler in detached:
+        log.addHandler(handler)
+
+
+class _NullNotifier:
+    """Stands in for WinRT's ToastNotifier so the REAL show_toast() code runs
+    in tests but nothing ever appears on the owner's screen."""
+
+    def __init__(self):
+        self.shown = []
+
+    def show(self, toast):
+        self.shown.append(toast)
+
+
+@pytest.fixture(autouse=True)
+def no_real_toasts(monkeypatch):
+    """A scheduler test that fires an event start used to call the real
+    calendar_toast.show_toast -- an "Exam is starting now." desktop
+    notification on the owner's screen every time the suite ran. Tests that
+    want to inspect toasts set their own _notifier and win (they run after)."""
+    try:
+        import calendar_toast
+    except Exception:
+        yield
+        return
+    if hasattr(calendar_toast, "_notifier"):
+        monkeypatch.setattr(calendar_toast, "_notifier", _NullNotifier())
+    yield
+
+
+@pytest.fixture(autouse=True)
+def no_real_installed_app_scans(monkeypatch):
+    """The Qt pickers/editors call installed_apps.list_installed_apps(), which
+    walks the Start Menu and shells out to PowerShell -- a slow, real scan of
+    the machine the suite runs on, repeated in a dozen tests. Default to an
+    empty list; tests that care patch their own."""
+    try:
+        import installed_apps
+    except Exception:
+        return
+    if hasattr(installed_apps, "list_installed_apps"):
+        monkeypatch.setattr(installed_apps, "list_installed_apps", lambda: [])
+
+
 @pytest.fixture(autouse=True)
 def isolate_real_data_paths(tmp_path_factory, monkeypatch):
     """Safety net: every module whose data file path is a module-level
