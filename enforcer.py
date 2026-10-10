@@ -110,6 +110,51 @@ else:
             _hide_taskbar_preview(hwnd, False)
 
 
+    def _hidden_hwnd_process_name(hwnd):
+        """Process name owning a hidden hwnd, or None if the window is gone or
+        can't be read (in which case there is nothing left to un-hide)."""
+        try:
+            if not win32gui.IsWindow(hwnd):
+                return None
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            return psutil.Process(pid).name()
+        except Exception:
+            return None
+
+
+    def _unhide_windows_of_process(process_name):
+        """Reverts _hide_taskbar_preview for EVERY remembered window of
+        process_name, visible or not. The unblock flow used to un-hide only
+        whichever single window _find_window_by_process_name happened to pick
+        (the first visible, titled one) -- an app with several top-level windows
+        or one hidden to the tray (Discord, other Electron apps) could keep
+        DWMWA_FORCE_ICONIC_REPRESENTATION on the window hard lock actually
+        minimized, so after the unblock clicking its taskbar/tray icon never
+        brought it back and it had to be force-quit."""
+        with _hidden_hwnds_lock:
+            hwnds = list(_hidden_hwnds)
+        for hwnd in hwnds:
+            name = _hidden_hwnd_process_name(hwnd)
+            if name is None:
+                _hide_taskbar_preview(hwnd, False)  # window is gone: forget it
+            elif name.lower() == process_name.lower():
+                _hide_taskbar_preview(hwnd, False)
+
+
+    def _release_windows_no_longer_blocked():
+        """Self-healing pass, run on every sweep: any remembered hidden window
+        whose process is no longer blocked (unblocked through ANY path -- the
+        Unblock button, the picker, a mid-session blocklist edit from the API
+        or extension) gets its taskbar-preview hiding reverted, so nothing
+        stays stuck iconic until the session ends."""
+        with _hidden_hwnds_lock:
+            hwnds = list(_hidden_hwnds)
+        for hwnd in hwnds:
+            name = _hidden_hwnd_process_name(hwnd)
+            if name is None or not is_blocked_window(name, hwnd):
+                _hide_taskbar_preview(hwnd, False)
+
+
     # --- Per-window AppUserModelID (for blocking one Chrome/Edge profile) ---
     #
     # Chrome/Edge run every open profile as ONE OS process (a second
@@ -560,6 +605,7 @@ else:
                 pass
 
         win32gui.EnumWindows(callback, None)
+        _release_windows_no_longer_blocked()
         return minimized
 
 
@@ -585,6 +631,7 @@ else:
         it out of the taskbar themselves, and in the meantime it looks
         identical to "the unblock didn't work" even though processBlocklist
         was updated correctly."""
+        _unhide_windows_of_process(process_name)
         hwnd = _find_window_by_process_name(process_name)
         if not hwnd:
             return
