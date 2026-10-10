@@ -176,6 +176,7 @@ def isolate_state(isolate_config, tmp_path, monkeypatch):
         "blockedBrowserProfiles": [],
         "pomodoro": None,
         "isBreak": False,
+        "parkedSession": None,
     }
     monkeypatch.setattr(session_manager, "_state", copy.deepcopy(fresh_state))
     monkeypatch.setattr(session_manager, "_open_violation_index", {"process": None, "domain": None})

@@ -3,6 +3,7 @@
 State is kept in memory and persisted to session_state.json after every
 mutation so an in-progress session survives a crash/restart.
 """
+import copy
 import json
 import math
 import os
@@ -100,6 +101,12 @@ _state = {
     # isPaused, the countdown keeps running during a break (it's ticking down
     # its own breakMinutes, not frozen), so this can't just reuse isPaused.
     "isBreak": False,
+    # A paused session set aside while a different one runs (see
+    # start_session()): a full copy of every field above as it was at that
+    # moment, or None. At most one. It never enforces anything and its clock
+    # stays frozen; when the running session ends, it comes back as the
+    # current (still paused) session.
+    "parkedSession": None,
 }
 
 # Chromium-based browsers where every open profile shares one OS process --
@@ -314,7 +321,14 @@ def start_session(
 
     with _lock:
         now = datetime.now()
-        if _state["isActive"]:
+        if _state["isActive"] and _state["isPaused"] and _state.get("parkedSession") is None:
+            # A paused session isn't being worked on, so starting something
+            # else shouldn't destroy it: set it aside (untouched, clock
+            # frozen, no enforcement) and let it return once the new session
+            # ends. Only one session can run at a time -- the new one runs,
+            # the old one just waits.
+            _park_current_locked(now)
+        elif _state["isActive"]:
             # A session is already running (e.g. a calendar event fires
             # mid-way through a manual session, or two events overlap) —
             # the new session still wins outright rather than trying to
@@ -322,11 +336,12 @@ def start_session(
             # the one being replaced must not just vanish. Finalize it to
             # history first, same as a normal end, so its violation
             # count/log and whichever lists it was actually running under
-            # aren't silently discarded.
+            # aren't silently discarded. Whatever is parked stays parked.
             _finalize_to_history_locked(
                 now,
                 end_type="superseded",
                 reason=f"Overwritten by a new {source} session starting.",
+                restore_parked=False,
             )
         end_time = now + timedelta(minutes=duration_minutes)
         _state["isActive"] = True
@@ -542,7 +557,7 @@ def end_session(end_type="manual", reason=None):
     return result
 
 
-def _finalize_to_history_locked(now, end_type="natural", reason=None):
+def _finalize_to_history_locked(now, end_type="natural", reason=None, restore_parked=True):
     """Records the current session into session_history.json and resets
     in-memory state for the next one. Must be called with _lock held.
     Shared by end_session() and get_status()'s natural-expiry path, so a
@@ -639,6 +654,8 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
     _state["isBreak"] = False
     _open_violation_index["process"] = None
     _open_violation_index["domain"] = None
+    if restore_parked and _state.get("parkedSession"):
+        _restore_parked_locked()
     _save()
     state_events.bump()
 
@@ -720,7 +737,119 @@ def _get_status_locked():
         "blockedBrowserProfiles": list(_state["blockedBrowserProfiles"]),
         "isBreak": _state["isBreak"],
         "pomodoro": dict(_state["pomodoro"]) if _state["pomodoro"] is not None else None,
+        "parkedSession": _parked_summary_locked(),
     }
+
+
+def _snapshot_current_locked():
+    return copy.deepcopy({k: v for k, v in _state.items() if k != "parkedSession"})
+
+
+def _park_current_locked(now):
+    """Sets the current (paused) session aside. Must hold _lock."""
+    _resolve_open_violation_locked("process", now)
+    _resolve_open_violation_locked("domain", now)
+    _state["parkedSession"] = _snapshot_current_locked()
+    _open_violation_index["process"] = None
+    _open_violation_index["domain"] = None
+
+
+def _restore_parked_locked():
+    """Brings the parked session back as the current one, still paused.
+    Must hold _lock, with no session currently active."""
+    parked = _state["parkedSession"]
+    _state["parkedSession"] = None
+    _state.update(parked)
+    _open_violation_index["process"] = None
+    _open_violation_index["domain"] = None
+
+
+def _parked_summary_locked():
+    """What other code (UI, /status) may know about the parked session."""
+    parked = _state.get("parkedSession")
+    if not parked:
+        return None
+    return {
+        "startTime": parked["startTime"],
+        "secondsRemaining": parked["frozenSecondsRemaining"] or 0,
+        "lockMode": parked["lockMode"],
+        "processBlocklist": list(parked["processBlocklist"]),
+        "domainWhitelist": list(parked["domainWhitelist"]),
+        "violationLog": list(parked["violationLog"]),
+        "source": parked["source"],
+        "eventId": parked["eventId"],
+        "eventTitle": parked["eventTitle"],
+        "reviewProblemName": parked["reviewProblemName"],
+        "reviewSubjectName": parked["reviewSubjectName"],
+        "reviewProblemId": parked["reviewProblemId"],
+        "isBurnout": parked["isBurnout"],
+        "isBreak": parked["isBreak"],
+        "pomodoro": dict(parked["pomodoro"]) if parked["pomodoro"] is not None else None,
+    }
+
+
+def end_parked_session(end_type="manual", reason=None):
+    """Ends the parked session (filing it into history) while the running one
+    carries on untouched. Returns its final summary, or None if nothing is
+    parked."""
+    with _lock:
+        if not _state.get("parkedSession"):
+            return None
+        now = datetime.now()
+        current = _snapshot_current_locked()
+        open_indexes = dict(_open_violation_index)
+        parked = _state["parkedSession"]
+        _state["parkedSession"] = None
+        _state.update(parked)
+        _open_violation_index["process"] = None
+        _open_violation_index["domain"] = None
+        result = _finalize_to_history_locked(now, end_type=end_type, reason=reason, restore_parked=False)
+        _state.update(current)
+        _open_violation_index.update(open_indexes)
+        _save()
+    state_events.bump()
+    return result
+
+
+def swap_with_parked():
+    """Trades places with the parked session: the running one is paused and
+    set aside, and the parked one resumes. Still only one running at a time.
+    No-op without a parked session, or when the current session has nothing
+    left to freeze (its clock already hit zero)."""
+    with _lock:
+        if not _state["isActive"] or not _state.get("parkedSession"):
+            return _get_status_locked()
+        now = datetime.now()
+        if not _state["isPaused"]:
+            end_time = datetime.fromisoformat(_state["endTime"])
+            remaining = int((end_time - now).total_seconds())
+            if remaining <= 0:
+                return _get_status_locked()
+            _state["isPaused"] = True
+            _state["pausedAt"] = now.isoformat()
+            _state["frozenSecondsRemaining"] = remaining
+            if not _state["isBreak"]:
+                _state["violationLog"].append({"kind": "pause", "timestamp": now.isoformat()})
+        _resolve_open_violation_locked("process", now)
+        _resolve_open_violation_locked("domain", now)
+        current = _snapshot_current_locked()
+        parked = _state["parkedSession"]
+        _state.update(parked)
+        _state["parkedSession"] = current
+        _open_violation_index["process"] = None
+        _open_violation_index["domain"] = None
+        # Resume the one that just came to the front, exactly as
+        # resume_session() would.
+        _state["endTime"] = (now + timedelta(seconds=_state["frozenSecondsRemaining"] or 0)).isoformat()
+        _state["isPaused"] = False
+        _state["pausedAt"] = None
+        _state["frozenSecondsRemaining"] = None
+        if not _state["isBreak"]:
+            _state["violationLog"].append({"kind": "resume", "timestamp": now.isoformat()})
+        _save()
+        status = _get_status_locked()
+    state_events.bump()
+    return status
 
 
 def pause_session():
