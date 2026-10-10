@@ -11,6 +11,7 @@ import threading
 from datetime import datetime, timedelta
 
 import session_history
+import state_events
 
 STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "session_state.json")
 
@@ -361,6 +362,7 @@ def start_session(
         _open_violation_index["process"] = None
         _open_violation_index["domain"] = None
         _save()
+        state_events.bump()
     return get_status()
 
 
@@ -416,6 +418,7 @@ def start_pomodoro_session(
             "phase": "focus",
         }
         _save()
+        state_events.bump()
     return get_status()
 
 
@@ -456,6 +459,7 @@ def _advance_pomodoro_locked(now):
             "totalCycles": pomo["totalCycles"],
         }
         _save()
+        state_events.bump()
         return
 
     import review_store
@@ -480,6 +484,7 @@ def _advance_pomodoro_locked(now):
         "totalCycles": pomo["totalCycles"],
     }
     _save()
+    state_events.bump()
 
 
 def pop_pending_phase_change():
@@ -505,6 +510,7 @@ def update_blocklist(process_blocklist, domain_whitelist, lock_mode=None):
         if lock_mode is not None:
             _state["lockMode"] = lock_mode
         _save()
+        state_events.bump()
 
 
 def end_session(end_type="manual", reason=None):
@@ -634,6 +640,7 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
     _open_violation_index["process"] = None
     _open_violation_index["domain"] = None
     _save()
+    state_events.bump()
 
     if pomodoro is not None:
         # An independent review auto-paused for this pomodoro's break would
@@ -762,6 +769,7 @@ def pause_session():
         if not _state["isBreak"]:
             _state["violationLog"].append({"kind": "pause", "timestamp": now.isoformat()})
         _save()
+        state_events.bump()
         return _get_status_locked()
 
 
@@ -784,6 +792,7 @@ def resume_session():
         if not _state["isBreak"]:
             _state["violationLog"].append({"kind": "resume", "timestamp": now.isoformat()})
         _save()
+        state_events.bump()
         return _get_status_locked()
 
 
