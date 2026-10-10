@@ -67,6 +67,12 @@ class FocusTab(QWidget):
         self._pause_button.clicked.connect(self._pause_resume)
         button_row.addWidget(self._pause_button)
 
+        # Only while a paused session is waiting behind the running one.
+        self._swap_button = QPushButton("Switch to Paused Session")
+        self._swap_button.setProperty("class", "SecondaryButton")
+        self._swap_button.clicked.connect(lambda: session_manager.swap_with_parked())
+        button_row.addWidget(self._swap_button)
+
         self._nuclear_button = QPushButton("End Session (Nuclear)")
         self._nuclear_button.setProperty("class", "SecondaryButton")
         self._nuclear_button.clicked.connect(self._open_nuclear_dialog)
@@ -110,6 +116,9 @@ class FocusTab(QWidget):
 
         nuclear_dialog.open_nuclear_reason_dialog(_NullIcon(), tray.format_end_summary)
 
+    def _set_status(self, text):
+        self._status_label.setText(text + self._parked_note)
+
     def _refresh_status(self):
         status = session_manager.get_status()
         active = status["isActive"]
@@ -129,10 +138,21 @@ class FocusTab(QWidget):
         # firing mid-session, not for an accidental double-click here).
         # End the current one first instead of stacking dialogs that would
         # each try to start their own.
-        self._start_button.setDisabled(active)
+        # A paused session can wait while another one runs (any number can
+        # wait), so Start only stays disabled for a session that's running.
+        parked = status.get("parkedSessions") or []
+        blocked = active and not status["isPaused"]
+        self._start_button.setDisabled(blocked)
         self._start_button.setToolTip(
-            "End the current session first." if active else ""
+            "End the current session first." if blocked else
+            "The paused session will wait until this one ends." if active else ""
         )
+        self._swap_button.setVisible(bool(parked))
+        self._parked_note = ""
+        if parked:
+            names = [p.get("reviewProblemName") or p.get("eventTitle") or "a session" for p in parked[:3]]
+            more = f" (+{len(parked) - 3} more)" if len(parked) > 3 else ""
+            self._parked_note = f"\nWaiting (paused): {', '.join(names)}{more}"
         if not active:
             self._status_label.setText("No active focus session.")
             return
@@ -151,7 +171,7 @@ class FocusTab(QWidget):
             # Tasks tab's running card, instead of the generic elapsed text.
             subject = status.get("reviewSubjectName")
             problem_label = f"{review_problem}, {subject}" if subject else review_problem
-            self._status_label.setText(
+            self._set_status(
                 f"{problem_label}, time elapsed {minutes}m {seconds}s{paused}\n"
                 f"Lock mode: {status['lockMode']}   Violations: {status['violationCount']}"
             )
@@ -164,7 +184,7 @@ class FocusTab(QWidget):
                 status.get("startTime"), None, status.get("violationLog")
             ) if status.get("startTime") else 0
             minutes, seconds = divmod(elapsed_seconds, 60)
-            self._status_label.setText(
+            self._set_status(
                 f"Until burnout, time elapsed {minutes}m {seconds}s{paused}\n"
                 f"Lock mode: {status['lockMode']}   Violations: {status['violationCount']}"
             )
@@ -177,7 +197,7 @@ class FocusTab(QWidget):
             source_note = f"\nFrom calendar event: {status['eventTitle']}"
         elif status.get("source") == "task" and status.get("eventTitle"):
             source_note = f"\nTask: {status['eventTitle']}"
-        self._status_label.setText(
+        self._set_status(
             f"Active session{paused} — {minutes}m {seconds}s remaining\n"
             f"Lock mode: {status['lockMode']}   Violations: {status['violationCount']}"
             f"{source_note}"

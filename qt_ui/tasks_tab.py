@@ -711,13 +711,30 @@ class _TaskCard(QFrame):
         )
         self._disarm()
 
+    def _parked_entry(self, status):
+        """This task's session waiting behind a different one, or None."""
+        if status.get("isActive") and self._belongs_to_this_task(status):
+            return None
+        for parked in status.get("parkedSessions") or []:
+            if self._belongs_to_this_task(parked):
+                return parked
+        return None
+
     def _pause_resume(self):
+        parked = self._parked_entry(session_manager.get_status())
+        if parked:
+            session_manager.swap_with_parked(parked["parkId"])
+            return
         if session_manager.get_status()["isPaused"]:
             session_manager.resume_session()
         else:
             session_manager.pause_session()
 
     def _end_task(self):
+        parked = self._parked_entry(session_manager.get_status())
+        if parked:
+            session_manager.end_parked_session(park_id=parked["parkId"], end_type="manual")
+            return
         session_manager.end_session(end_type="manual")
 
     def _cash_in_max(self):
@@ -784,7 +801,14 @@ class _TaskCard(QFrame):
         status = session_manager.get_status()
         if not status["isActive"]:
             return False
-        return not self._belongs_to_this_task(status)
+        if self._belongs_to_this_task(status):
+            return False
+        # A paused session doesn't block starting a different task: it just
+        # waits (session_manager.start_session()).
+        if status["isPaused"]:
+            return False
+        # This task's own session may be one of the waiting ones.
+        return self._parked_entry(status) is None
 
     def update_dynamic(self, status, sessions):
         today = date.today()
@@ -828,29 +852,34 @@ class _TaskCard(QFrame):
         self._vacation_label.setToolTip(vacation_text if elided != vacation_text else "")
 
         is_running = status.get("isActive") and self._belongs_to_this_task(status)
+        parked = self._parked_entry(status)
+        is_parked_here = parked is not None
+        # What the running panel describes: the live session, or this task's
+        # session waiting (paused) while a different one runs.
+        view = status if is_running else {**(parked or {}), "isActive": True, "isPaused": True}
         locked_by_other = self._is_locked_by_other_session()
         self._refresh_cash_in_visibility()
 
-        if is_running:
+        if is_running or is_parked_here:
             if self._armed:
                 self._disarm()
             self._close_cash_in_editor()
             self._content.setVisible(False)
             self._armed_overlay.setVisible(False)
             self._running_panel.setVisible(True)
-            paused = " (paused)" if status.get("isPaused") else ""
-            violations = status.get("violationCount", 0)
+            paused = " (paused)" if view.get("isPaused") else ""
+            violations = view.get("violationCount", 0)
             violation_text = f"  •  {violations} violation{'s' if violations != 1 else ''}" if violations else ""
-            review_problem = status.get("source") == "review" and status.get("reviewProblemName")
-            if review_problem or status.get("isBurnout"):
+            review_problem = view.get("source") == "review" and view.get("reviewProblemName")
+            if review_problem or view.get("isBurnout"):
                 # Reviews and burnout sessions are a stopwatch, not a timer
                 # -- there's no fixed duration to count down to, so show
                 # elapsed time instead, computed pause-aware from
                 # startTime/violationLog (same math as the day's
                 # logged-minutes tally).
                 elapsed_seconds = tasks_store.worked_seconds(
-                    status.get("startTime"), None, status.get("violationLog")
-                ) if status.get("startTime") else 0
+                    view.get("startTime"), None, view.get("violationLog")
+                ) if view.get("startTime") else 0
                 el_minutes, el_seconds = divmod(elapsed_seconds, 60)
                 if review_problem:
                     # A review timer (started against this task's linked
@@ -867,16 +896,21 @@ class _TaskCard(QFrame):
             else:
                 # Fixed-duration sessions count down the pause-aware
                 # secondsRemaining from session_manager, not elapsed time.
-                rem_minutes, rem_seconds = divmod(status.get("secondsRemaining", 0), 60)
-                pomo = status.get("pomodoro")
+                rem_minutes, rem_seconds = divmod(view.get("secondsRemaining", 0), 60)
+                pomo = view.get("pomodoro")
                 phase_text = ""
                 if pomo:
-                    phase_label = "Break" if status.get("isBreak") else "Focus"
+                    phase_label = "Break" if view.get("isBreak") else "Focus"
                     phase_text = f"  •  {phase_label} {pomo['currentCycle']}/{pomo['totalCycles']}"
                 self._countdown_label.setText(
                     f"{rem_minutes}m {rem_seconds}s remaining{phase_text}{paused}{violation_text}"
                 )
-            self._pause_button.setText("Resume" if status.get("isPaused") else "Pause")
+            if is_parked_here:
+                paused_label = "Waiting"
+                self._countdown_label.setText(f"{self._countdown_label.text()}  \u2022  {paused_label} while another task runs")
+                self._pause_button.setText("Switch to this")
+            else:
+                self._pause_button.setText("Resume" if view.get("isPaused") else "Pause")
         else:
             self._running_panel.setVisible(False)
             self._content.setVisible(True)

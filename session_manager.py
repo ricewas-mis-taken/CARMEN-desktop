@@ -3,11 +3,13 @@
 State is kept in memory and persisted to session_state.json after every
 mutation so an in-progress session survives a crash/restart.
 """
+import copy
 import json
 import math
 import os
 import sys
 import threading
+import uuid
 from datetime import datetime, timedelta
 
 import session_history
@@ -100,6 +102,13 @@ _state = {
     # isPaused, the countdown keeps running during a break (it's ticking down
     # its own breakMinutes, not frozen), so this can't just reuse isPaused.
     "isBreak": False,
+    # Paused sessions set aside while a different one runs (see
+    # start_session()), oldest first: each is a full copy of every field above
+    # as it was at that moment, plus a "parkId". Any number can wait. They
+    # never enforce anything and their clocks stay frozen; when the running
+    # session ends, the most recently set-aside one comes back as the current
+    # (still paused) session.
+    "parkedSessions": [],
 }
 
 # Chromium-based browsers where every open profile shares one OS process --
@@ -314,7 +323,14 @@ def start_session(
 
     with _lock:
         now = datetime.now()
-        if _state["isActive"]:
+        if _state["isActive"] and _state["isPaused"]:
+            # A paused session isn't being worked on, so starting something
+            # else shouldn't destroy it: set it aside (untouched, clock
+            # frozen, no enforcement) and let it return once the new session
+            # ends. Only one session can run at a time -- the new one runs,
+            # the others just wait, however many there are.
+            _park_current_locked(now)
+        elif _state["isActive"]:
             # A session is already running (e.g. a calendar event fires
             # mid-way through a manual session, or two events overlap) —
             # the new session still wins outright rather than trying to
@@ -322,11 +338,12 @@ def start_session(
             # the one being replaced must not just vanish. Finalize it to
             # history first, same as a normal end, so its violation
             # count/log and whichever lists it was actually running under
-            # aren't silently discarded.
+            # aren't silently discarded. Whatever is waiting keeps waiting.
             _finalize_to_history_locked(
                 now,
                 end_type="superseded",
                 reason=f"Overwritten by a new {source} session starting.",
+                restore_parked=False,
             )
         end_time = now + timedelta(minutes=duration_minutes)
         _state["isActive"] = True
@@ -542,7 +559,7 @@ def end_session(end_type="manual", reason=None):
     return result
 
 
-def _finalize_to_history_locked(now, end_type="natural", reason=None):
+def _finalize_to_history_locked(now, end_type="natural", reason=None, restore_parked=True):
     """Records the current session into session_history.json and resets
     in-memory state for the next one. Must be called with _lock held.
     Shared by end_session() and get_status()'s natural-expiry path, so a
@@ -639,6 +656,8 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None):
     _state["isBreak"] = False
     _open_violation_index["process"] = None
     _open_violation_index["domain"] = None
+    if restore_parked and _state.get("parkedSessions"):
+        _restore_parked_locked()
     _save()
     state_events.bump()
 
@@ -720,7 +739,143 @@ def _get_status_locked():
         "blockedBrowserProfiles": list(_state["blockedBrowserProfiles"]),
         "isBreak": _state["isBreak"],
         "pomodoro": dict(_state["pomodoro"]) if _state["pomodoro"] is not None else None,
+        "parkedSessions": _parked_summaries_locked(),
+        # The one that comes back next (kept for older readers of /status).
+        "parkedSession": (_parked_summaries_locked() or [None])[0],
     }
+
+
+def _snapshot_current_locked():
+    return copy.deepcopy({k: v for k, v in _state.items() if k != "parkedSessions"})
+
+
+def _park_current_locked(now):
+    """Sets the current (paused) session aside. Must hold _lock."""
+    _resolve_open_violation_locked("process", now)
+    _resolve_open_violation_locked("domain", now)
+    snapshot = _snapshot_current_locked()
+    snapshot["parkId"] = uuid.uuid4().hex
+    _state.setdefault("parkedSessions", []).append(snapshot)
+    _open_violation_index["process"] = None
+    _open_violation_index["domain"] = None
+
+
+def _take_parked_locked(park_id=None):
+    """Removes and returns a waiting session: the one with this parkId, or
+    (no id) the one that came back next -- the most recently set aside."""
+    parked = _state.get("parkedSessions") or []
+    if not parked:
+        return None
+    if park_id is None:
+        return parked.pop()
+    for index, entry in enumerate(parked):
+        if entry.get("parkId") == park_id:
+            return parked.pop(index)
+    return None
+
+
+def _install_session_locked(entry):
+    entry = {k: v for k, v in entry.items() if k != "parkId"}
+    _state.update(entry)
+    _open_violation_index["process"] = None
+    _open_violation_index["domain"] = None
+
+
+def _restore_parked_locked():
+    """Brings the most recently set-aside session back as the current one,
+    still paused. Must hold _lock, with no session currently active."""
+    entry = _take_parked_locked()
+    if entry is not None:
+        _install_session_locked(entry)
+
+
+def _parked_summaries_locked():
+    """What other code (UI, /status, the extension) may know about the
+    waiting sessions, in the order they come back (next first)."""
+    summaries = []
+    for parked in reversed(_state.get("parkedSessions") or []):
+        summaries.append({
+            "parkId": parked.get("parkId"),
+            "startTime": parked["startTime"],
+            "secondsRemaining": parked["frozenSecondsRemaining"] or 0,
+            "lockMode": parked["lockMode"],
+            "processBlocklist": list(parked["processBlocklist"]),
+            "domainWhitelist": list(parked["domainWhitelist"]),
+            "violationLog": list(parked["violationLog"]),
+            "source": parked["source"],
+            "eventId": parked["eventId"],
+            "eventTitle": parked["eventTitle"],
+            "reviewProblemName": parked["reviewProblemName"],
+            "reviewSubjectName": parked["reviewSubjectName"],
+            "reviewProblemId": parked["reviewProblemId"],
+            "isBurnout": parked["isBurnout"],
+            "isBreak": parked["isBreak"],
+            "pomodoro": dict(parked["pomodoro"]) if parked["pomodoro"] is not None else None,
+        })
+    return summaries
+
+
+def end_parked_session(park_id=None, end_type="manual", reason=None):
+    """Ends a waiting session (filing it into history) while the running one
+    carries on untouched. park_id picks which; without it, the one that would
+    come back next. Returns its final summary, or None if there's no such one."""
+    with _lock:
+        entry = _take_parked_locked(park_id)
+        if entry is None:
+            return None
+        now = datetime.now()
+        current = _snapshot_current_locked()
+        open_indexes = dict(_open_violation_index)
+        _install_session_locked(entry)
+        result = _finalize_to_history_locked(now, end_type=end_type, reason=reason, restore_parked=False)
+        _state.update(current)
+        _open_violation_index.update(open_indexes)
+        _save()
+    state_events.bump()
+    return result
+
+
+def swap_with_parked(park_id=None):
+    """Trades places with a waiting session (park_id, or the one that would
+    come back next): the running one is paused and set aside, and the chosen
+    one resumes. Still only one running at a time. No-op when nothing is
+    waiting, or when the current session has nothing left to freeze (its clock
+    already hit zero)."""
+    with _lock:
+        if not _state["isActive"] or not _state.get("parkedSessions"):
+            return _get_status_locked()
+        if park_id is not None and not any(e.get("parkId") == park_id for e in _state["parkedSessions"]):
+            return _get_status_locked()
+        now = datetime.now()
+        if not _state["isPaused"]:
+            end_time = datetime.fromisoformat(_state["endTime"])
+            remaining = int((end_time - now).total_seconds())
+            if remaining <= 0:
+                return _get_status_locked()
+            _state["isPaused"] = True
+            _state["pausedAt"] = now.isoformat()
+            _state["frozenSecondsRemaining"] = remaining
+            if not _state["isBreak"]:
+                _state["violationLog"].append({"kind": "pause", "timestamp": now.isoformat()})
+        _resolve_open_violation_locked("process", now)
+        _resolve_open_violation_locked("domain", now)
+        chosen = _take_parked_locked(park_id)
+        current = _snapshot_current_locked()
+        current["parkId"] = uuid.uuid4().hex
+        _state["parkedSessions"].append(current)
+        _install_session_locked(chosen)
+        # Resume the one that just came to the front, exactly as
+        # resume_session() would.
+        _state["endTime"] = (now + timedelta(seconds=_state["frozenSecondsRemaining"] or 0)).isoformat()
+        _state["isPaused"] = False
+        _state["pausedAt"] = None
+        _state["frozenSecondsRemaining"] = None
+        if not _state["isBreak"]:
+            _state["violationLog"].append({"kind": "resume", "timestamp": now.isoformat()})
+        _save()
+        status = _get_status_locked()
+    state_events.bump()
+    return status
 
 
 def pause_session():

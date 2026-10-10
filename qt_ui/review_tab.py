@@ -988,6 +988,24 @@ class _ReviewBanner(QWidget):
         # local-only pause bookkeeping below, unchanged.
         return not self._end_session_on_finish and self._session_token is not None
 
+    def _linked_view(self):
+        """(status, is_parked) for the task session this banner rides on.
+        Normally the live session. When a different task is running and this
+        review's session is the one waiting in session_manager's parking spot,
+        that parked session (frozen, paused). If neither is this review's, the
+        session is gone: {"isActive": False}. Without this the banner would read
+        -- and its buttons would pause, resume or end -- the OTHER task."""
+        status = session_manager.get_status()
+        problem_id = (self._problem or {}).get("id")
+        if not self._end_session_on_finish or problem_id is None:
+            return status, False
+        if status.get("isActive") and status.get("reviewProblemId") == problem_id:
+            return status, False
+        for parked in status.get("parkedSessions") or []:
+            if parked.get("reviewProblemId") == problem_id:
+                return {**parked, "isActive": True, "isPaused": True}, True
+        return {"isActive": False}, False
+
     def _elapsed_seconds_now(self):
         if self._end_session_on_finish:
             # Pause-aware off the linked task session's own startTime/
@@ -995,7 +1013,7 @@ class _ReviewBanner(QWidget):
             # this session can be paused/resumed from either tab, so its own
             # local start_time/accumulated_seconds bookkeeping (below)
             # can't be trusted to reflect a pause that happened elsewhere.
-            status = session_manager.get_status()
+            status, _ = self._linked_view()
             if not status.get("startTime"):
                 return 0
             return tasks_store.worked_seconds(status["startTime"], None, status.get("violationLog"))
@@ -1062,13 +1080,15 @@ class _ReviewBanner(QWidget):
         # session and no review_store token) there's nothing external to
         # defer to, so _is_paused is authoritative.
         if self._end_session_on_finish:
-            return session_manager.get_status().get("isPaused", False)
+            return self._linked_view()[0].get("isPaused", False)
         if self._is_independent_review():
             active = review_store.get_active_review()
             return bool(active and active.get("isPaused"))
         return self._is_paused
 
     def _pause_button_text(self, is_paused):
+        if self._end_session_on_finish and self._linked_view()[1]:
+            return "Switch to this"
         if is_paused and self._auto_paused:
             return "Resume (on break)"
         if is_paused and self._is_independent_review():
@@ -1078,7 +1098,7 @@ class _ReviewBanner(QWidget):
         return "Resume" if is_paused else "Pause"
 
     def _tick(self):
-        if self._end_session_on_finish and not session_manager.get_status().get("isActive"):
+        if self._end_session_on_finish and not self._linked_view()[0].get("isActive"):
             # The linked task session was ended from somewhere else entirely
             # -- the Tasks tab's "End Task", the Focus tab's Nuclear End, a
             # natural timeout, or a direct API call -- none of which know or
@@ -1105,6 +1125,11 @@ class _ReviewBanner(QWidget):
         self._publish_first_attempt()
 
     def _pause_resume(self):
+        if self._end_session_on_finish and self._linked_view()[1]:
+            # This review's session is waiting behind a different task: the
+            # button brings it to the front (the other task takes its place).
+            session_manager.swap_with_parked(self._linked_view()[0].get("parkId"))
+            return
         if self._is_independent_review():
             # review_store is the source of truth here (see
             # _currently_paused()) -- delegate the actual state change to it
@@ -1172,7 +1197,7 @@ class _ReviewBanner(QWidget):
         # start_review() session to abandon).
         review_store.abandon_review(token)
         if end_session:
-            session_manager.end_session()
+            _end_session_for_problem(self._problem)
         if first_attempt_cancelled_callback is not None:
             # Clicking "End" (or the session it rode on getting ended
             # externally) mid first-attempt used to just vanish -- the Add
@@ -1195,7 +1220,7 @@ class _ReviewBanner(QWidget):
         # after the post-review dialog closes) resets session_manager's
         # state -- only needed for the token=None recovery path below, but
         # harmless to capture unconditionally.
-        started_at_iso = session_manager.get_status().get("startTime")
+        started_at_iso = self._linked_view()[0].get("startTime")
         first_attempt_callback = self._first_attempt_callback
         self._session_token = None
         self._end_session_on_finish = False
@@ -1235,8 +1260,21 @@ class _ReviewBanner(QWidget):
                 started_at=datetime.fromisoformat(started_at_iso) if started_at_iso else None,
             )
         if end_session:
-            session_manager.end_session()
+            _end_session_for_problem(problem)
         self._on_finished()
+
+
+def _end_session_for_problem(problem):
+    """Ends the task session a review rode on -- which may be one of the
+    waiting sessions rather than the running one."""
+    problem_id = (problem or {}).get("id")
+    status = session_manager.get_status()
+    if problem_id is not None and status.get("reviewProblemId") != problem_id:
+        for parked in status.get("parkedSessions") or []:
+            if parked.get("reviewProblemId") == problem_id:
+                session_manager.end_parked_session(park_id=parked.get("parkId"))
+                return
+    session_manager.end_session()
 
 
 class _ShakinessPicker(QWidget):
