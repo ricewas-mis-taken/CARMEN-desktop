@@ -1001,9 +1001,9 @@ class _ReviewBanner(QWidget):
             return status, False
         if status.get("isActive") and status.get("reviewProblemId") == problem_id:
             return status, False
-        parked = status.get("parkedSession")
-        if parked and parked.get("reviewProblemId") == problem_id:
-            return {**parked, "isActive": True, "isPaused": True}, True
+        for parked in status.get("parkedSessions") or []:
+            if parked.get("reviewProblemId") == problem_id:
+                return {**parked, "isActive": True, "isPaused": True}, True
         return {"isActive": False}, False
 
     def _elapsed_seconds_now(self):
@@ -1128,7 +1128,7 @@ class _ReviewBanner(QWidget):
         if self._end_session_on_finish and self._linked_view()[1]:
             # This review's session is waiting behind a different task: the
             # button brings it to the front (the other task takes its place).
-            session_manager.swap_with_parked()
+            session_manager.swap_with_parked(self._linked_view()[0].get("parkId"))
             return
         if self._is_independent_review():
             # review_store is the source of truth here (see
@@ -1265,18 +1265,16 @@ class _ReviewBanner(QWidget):
 
 
 def _end_session_for_problem(problem):
-    """Ends the task session a review rode on -- which may be the one waiting
-    in the parking spot rather than the running one."""
+    """Ends the task session a review rode on -- which may be one of the
+    waiting sessions rather than the running one."""
     problem_id = (problem or {}).get("id")
     status = session_manager.get_status()
-    parked = status.get("parkedSession")
-    if (
-        problem_id is not None and parked and parked.get("reviewProblemId") == problem_id
-        and status.get("reviewProblemId") != problem_id
-    ):
-        session_manager.end_parked_session()
-    else:
-        session_manager.end_session()
+    if problem_id is not None and status.get("reviewProblemId") != problem_id:
+        for parked in status.get("parkedSessions") or []:
+            if parked.get("reviewProblemId") == problem_id:
+                session_manager.end_parked_session(park_id=parked.get("parkId"))
+                return
+    session_manager.end_session()
 
 
 class _ShakinessPicker(QWidget):

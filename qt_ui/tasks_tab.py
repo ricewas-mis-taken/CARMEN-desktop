@@ -711,15 +711,19 @@ class _TaskCard(QFrame):
         )
         self._disarm()
 
-    def _is_parked_here(self):
-        status = session_manager.get_status()
-        parked = status.get("parkedSession")
-        return bool(parked) and not (status["isActive"] and self._belongs_to_this_task(status)) \
-            and self._belongs_to_this_task(parked)
+    def _parked_entry(self, status):
+        """This task's session waiting behind a different one, or None."""
+        if status.get("isActive") and self._belongs_to_this_task(status):
+            return None
+        for parked in status.get("parkedSessions") or []:
+            if self._belongs_to_this_task(parked):
+                return parked
+        return None
 
     def _pause_resume(self):
-        if self._is_parked_here():
-            session_manager.swap_with_parked()
+        parked = self._parked_entry(session_manager.get_status())
+        if parked:
+            session_manager.swap_with_parked(parked["parkId"])
             return
         if session_manager.get_status()["isPaused"]:
             session_manager.resume_session()
@@ -727,8 +731,9 @@ class _TaskCard(QFrame):
             session_manager.pause_session()
 
     def _end_task(self):
-        if self._is_parked_here():
-            session_manager.end_parked_session(end_type="manual")
+        parked = self._parked_entry(session_manager.get_status())
+        if parked:
+            session_manager.end_parked_session(park_id=parked["parkId"], end_type="manual")
             return
         session_manager.end_session(end_type="manual")
 
@@ -798,12 +803,12 @@ class _TaskCard(QFrame):
             return False
         if self._belongs_to_this_task(status):
             return False
-        # A paused session with nothing parked yet doesn't block starting a
-        # different task: it just waits (session_manager.start_session()).
-        if status["isPaused"] and not status.get("parkedSession"):
+        # A paused session doesn't block starting a different task: it just
+        # waits (session_manager.start_session()).
+        if status["isPaused"]:
             return False
-        # This task's own session may be the one waiting in the parking spot.
-        return not self._belongs_to_this_task(status.get("parkedSession") or {})
+        # This task's own session may be one of the waiting ones.
+        return self._parked_entry(status) is None
 
     def update_dynamic(self, status, sessions):
         today = date.today()
@@ -847,8 +852,8 @@ class _TaskCard(QFrame):
         self._vacation_label.setToolTip(vacation_text if elided != vacation_text else "")
 
         is_running = status.get("isActive") and self._belongs_to_this_task(status)
-        parked = status.get("parkedSession")
-        is_parked_here = bool(parked) and not is_running and self._belongs_to_this_task(parked)
+        parked = self._parked_entry(status)
+        is_parked_here = parked is not None
         # What the running panel describes: the live session, or this task's
         # session waiting (paused) while a different one runs.
         view = status if is_running else {**(parked or {}), "isActive": True, "isPaused": True}

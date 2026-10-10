@@ -343,27 +343,30 @@ Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-10-09] (wake loop).
 
 [2026-10-10] A paused session waits behind a new one instead of being ended
 Decision: start_session() over a PAUSED session parks it (session_manager's
-parkedSession: a full copy of its state, one slot) instead of filing it as
+parkedSessions: full copies of their state, oldest first, any number) instead of filing it as
 "superseded". Only one session runs at a time; the parked one has a frozen
 clock and enforces nothing. When the running session ends (any way: natural,
-manual, nuclear) the parked one comes back as the current session, still
+manual, nuclear) the most recently parked one comes back as the current session, still
 paused, so Resume/End work exactly as they always did. Starting over a
-RUNNING session still replaces it, and with the slot already taken a paused
-session is replaced as before. swap_with_parked() trades places;
-end_parked_session() ends the waiting one without touching the running one.
+RUNNING session still replaces it. swap_with_parked(parkId) trades places with
+any waiting one; end_parked_session(parkId) ends a waiting one without touching
+the running one.
 Why: pausing a task and starting something else with different restrictions
 used to silently destroy the paused task. Automatically coming back as paused
 (rather than staying hidden until the user remembers) reuses the one state the
 user already understands.
-Rejected alternative: a list/stack of any number of waiting sessions -- the
-ask was one on, one paused; more is a UI problem (which one resumes?) with no
-request behind it.
+First built with a single waiting slot; changed the same day to any number
+because the real use is "a pile of paused things plus the one I'm doing" and a
+hard cap just reintroduced the silent-destroy problem at slot two. Order is
+last-in-first-out; any waiting one can also be picked by id.
 Rejected alternative: letting two sessions run with merged restrictions --
 explicitly not wanted.
 Review timers linked to a task session follow it: the banner reads its own
 session from the parking spot instead of whatever is running (session_manager
 state is shared), and its Pause button becomes "Switch to this".
-Not covered: the browser extension only ever sees the running session
-(/status also carries parkedSession for it to use later); a waiting task's
-already-worked minutes only count toward the Tasks tab's daily bar once it is
-ended or back in front.
+Browser extension: /status carries parkedSessions and the popup lists them,
+read-only; enforcement still follows only the running session.
+/status also keeps parkedSession (the first of them) for older readers.
+Not covered: a waiting task's already-worked minutes only count toward the
+Tasks tab's daily bar once it is ended or back in front.
+Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-10-10] (waiting sessions in the popup).

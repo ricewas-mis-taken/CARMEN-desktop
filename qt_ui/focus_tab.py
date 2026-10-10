@@ -70,7 +70,7 @@ class FocusTab(QWidget):
         # Only while a paused session is waiting behind the running one.
         self._swap_button = QPushButton("Switch to Paused Session")
         self._swap_button.setProperty("class", "SecondaryButton")
-        self._swap_button.clicked.connect(session_manager.swap_with_parked)
+        self._swap_button.clicked.connect(lambda: session_manager.swap_with_parked())
         button_row.addWidget(self._swap_button)
 
         self._nuclear_button = QPushButton("End Session (Nuclear)")
@@ -138,11 +138,10 @@ class FocusTab(QWidget):
         # firing mid-session, not for an accidental double-click here).
         # End the current one first instead of stacking dialogs that would
         # each try to start their own.
-        # A paused session can wait while another one runs (one waiting at a
-        # time), so Start only stays disabled for a running session, or when
-        # the waiting spot is already taken.
-        parked = status.get("parkedSession")
-        blocked = active and not (status["isPaused"] and not parked)
+        # A paused session can wait while another one runs (any number can
+        # wait), so Start only stays disabled for a session that's running.
+        parked = status.get("parkedSessions") or []
+        blocked = active and not status["isPaused"]
         self._start_button.setDisabled(blocked)
         self._start_button.setToolTip(
             "End the current session first." if blocked else
@@ -151,8 +150,9 @@ class FocusTab(QWidget):
         self._swap_button.setVisible(bool(parked))
         self._parked_note = ""
         if parked:
-            what = parked.get("reviewProblemName") or parked.get("eventTitle") or "a session"
-            self._parked_note = f"\nWaiting (paused): {what}"
+            names = [p.get("reviewProblemName") or p.get("eventTitle") or "a session" for p in parked[:3]]
+            more = f" (+{len(parked) - 3} more)" if len(parked) > 3 else ""
+            self._parked_note = f"\nWaiting (paused): {', '.join(names)}{more}"
         if not active:
             self._status_label.setText("No active focus session.")
             return

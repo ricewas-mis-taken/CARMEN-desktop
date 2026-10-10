@@ -92,15 +92,66 @@ def test_starting_over_a_running_session_still_replaces_it():
     assert [h["endType"] for h in session_history.load_all()] == ["superseded"]
 
 
-def test_only_one_session_can_be_parked_a_second_paused_one_is_replaced():
+def test_any_number_of_paused_sessions_can_wait_behind_the_running_one():
+    for n in range(100):
+        _start(f"T{n}", [f"t{n}.exe"])
+        sm.pause_session()
+    status = _start("T100", ["t100.exe"])
+    assert status["eventTitle"] == "T100" and not status["isPaused"]
+    assert len(status["parkedSessions"]) == 100
+    assert session_history.load_all() == []  # nothing was thrown away
+    assert [sm.is_blocked(f"t{n}.exe") for n in range(100)] == [False] * 100 and sm.is_blocked("t100.exe")
+
+
+def test_waiting_sessions_come_back_most_recent_first_each_as_the_next_one_ends():
+    for name in ("A", "B", "C"):
+        _start(name, [f"{name.lower()}.exe"])
+        sm.pause_session()
+    _start("D", ["d.exe"])
+    assert [p["eventTitle"] for p in sm.get_status()["parkedSessions"]] == ["C", "B", "A"]  # next first
+    seen = []
+    for _ in range(3):
+        sm.end_session()
+        status = sm.get_status()
+        assert status["isPaused"]
+        seen.append(status["eventTitle"])
+        sm.resume_session()
+    assert seen == ["C", "B", "A"]
+
+
+def test_starting_over_a_paused_one_again_adds_another_waiting_session():
     _paused_a()
     _start("B", ["b.exe"])
     sm.pause_session()
     _start("C", ["c.exe"])
     status = sm.get_status()
     assert status["eventTitle"] == "C"
-    assert status["parkedSession"]["eventTitle"] == "A"  # A kept its place
-    assert [(h["eventTitle"], h["endType"]) for h in session_history.load_all()] == [("B", "superseded")]
+    assert [p["eventTitle"] for p in status["parkedSessions"]] == ["B", "A"]
+    assert session_history.load_all() == []
+
+
+def test_swap_can_pick_any_waiting_session_by_id():
+    for name in ("A", "B", "C"):
+        _start(name, [])
+        sm.pause_session()
+    _start("D", [])
+    oldest = sm.get_status()["parkedSessions"][-1]
+    assert oldest["eventTitle"] == "A"
+    status = sm.swap_with_parked(oldest["parkId"])
+    assert status["eventTitle"] == "A" and not status["isPaused"]
+    assert [p["eventTitle"] for p in status["parkedSessions"]] == ["D", "C", "B"]
+    assert sm.swap_with_parked("no-such-id")["eventTitle"] == "A"
+
+
+def test_ending_one_chosen_waiting_session_leaves_the_others_waiting():
+    for name in ("A", "B", "C"):
+        _start(name, [])
+        sm.pause_session()
+    _start("D", [])
+    middle = [p for p in sm.get_status()["parkedSessions"] if p["eventTitle"] == "B"][0]
+    assert sm.end_parked_session(park_id=middle["parkId"])["eventTitle"] == "B"
+    assert [p["eventTitle"] for p in sm.get_status()["parkedSessions"]] == ["C", "A"]
+    assert [h["eventTitle"] for h in session_history.load_all()] == ["B"]
 
 
 def test_ending_the_parked_session_files_it_and_leaves_the_running_one_alone():
@@ -138,8 +189,8 @@ def test_a_parked_session_survives_an_app_restart():
     _paused_a()
     _start("B", ["b.exe"])
     saved = json.load(open(sm.STATE_PATH, encoding="utf-8"))
-    assert saved["parkedSession"]["eventTitle"] == "A"
-    sm._state["parkedSession"] = None
+    assert [p["eventTitle"] for p in saved["parkedSessions"]] == ["A"]
+    sm._state["parkedSessions"] = []
     sm._state.update(saved)
     sm.end_session()
     assert sm.get_status()["eventTitle"] == "A"
