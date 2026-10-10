@@ -1,19 +1,21 @@
 """Phase 4 Part A -- gathers local changes and exchanges them with
-sync_server (auth_manager.py handles login; sync_server is the separate
-FastAPI backend this module talks to over HTTP).
+Supabase (auth_manager.py handles login; sync_cloud.py is the thin HTTP layer
+that talks straight to Supabase, no separate server to host).
 
 sync_now() is the only thing callers (the future UI, sync_scheduler.py,
 scripts/manual_sync_check.py) need. It:
   1. Requires auth_manager.is_logged_in() -- returns a failure SyncResult
      (not_logged_in=True) rather than raising if not.
-  2. Reads the last successful sync's watermark from private/last_sync.txt.
+  2. Reads the last successful sync's watermark from private/last_sync.txt
+     (this device's own clock; only decides what to PUSH).
   3. Gathers every local record changed since that watermark, across
      tasks.json, board.json, and calendar.db's events/reminders/
      focus_profiles/review_* tables.
-  4. Pushes them to {SYNC_SERVER_URL}/sync/push.
-  5. Pulls everything changed since the watermark from
-     {SYNC_SERVER_URL}/sync/pull and applies it locally, last-write-wins.
-  6. On success, advances the watermark and returns counts.
+  4. Pushes them (and any new photos) to Supabase.
+  5. Pulls everything the SERVER stamped after private/pull_cursor.txt (the
+     server's own clock, so a device with a wrong clock can't hide rows) and
+     applies it locally, last-write-wins, then fetches any missing photos.
+  6. On success, advances both watermarks and returns counts.
 
 Never raises out to a caller -- any network/server problem is caught and
 turned into a failure SyncResult, logged via calendar_log's shared logger
@@ -40,13 +42,13 @@ _apply_review_sessions. Rows created before Phase 4's write-path wiring
 (review_store.py) can still have a NULL sync_id; _ensure_row_sync_meta()
 mints and saves one lazily the first time such a row is gathered.
 
-Known gaps, matching how Phase 3 scoped focus_profiles: delete_topic()
-still hard-deletes (no tombstone), so topic/subject/problem/session
-deletions don't propagate through sync yet. review_problems'
-descriptionPhotoPath is a local file path -- the path syncs, but the
-photo file itself does not (no blob storage in this phase), so a pulled
-problem with a photo will show a broken image on the receiving device
-until file sync is built.
+Deletes: review_store.delete_topic() tombstones the topic and the receiving
+device cascades its subjects/problems/sessions away; tasks, board items and
+events carry their own is_deleted flag.
+
+Photos (board attachments and review problem photos) travel through a private
+Supabase Storage bucket, see sync_photos.py. Records carry only the photo's
+file name (never an absolute path from another machine).
 """
 import logging
 import os
@@ -63,6 +65,8 @@ import board_store
 import calendar_store
 import device_id
 import review_store
+import sync_cloud
+import sync_photos
 import tasks_store
 from calendar_log import logger as calendar_logger
 
@@ -113,8 +117,6 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", ".env")
 load_dotenv(ENV_PATH)
 
-SYNC_SERVER_URL = os.environ.get("SYNC_SERVER_URL", "http://127.0.0.1:8420").rstrip("/")
-
 # How often sync_scheduler.py's background timer calls sync_now(). A named
 # constant instead of a literal in sync_scheduler.py so it's discoverable
 # from the module that actually defines what "syncing" means.
@@ -122,6 +124,11 @@ SYNC_INTERVAL_SECONDS = 5 * 60
 
 LAST_SYNC_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "last_sync.txt")
 _cached_last_sync = None
+
+# The pull cursor is a timestamp the SERVER wrote (server_updated_at of the
+# newest row seen), kept apart from the watermark above, which is this
+# device's own clock and only decides what is worth pushing.
+PULL_CURSOR_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "pull_cursor.txt")
 
 # Which account the local data (and the last_sync watermark above) belongs
 # to. Without this, signing out and into a different account on the same
@@ -185,6 +192,22 @@ def _load_last_sync():
     return None
 
 
+def _load_pull_cursor():
+    try:
+        with open(PULL_CURSOR_PATH, "r", encoding="utf-8") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def _save_pull_cursor(server_ts):
+    os.makedirs(os.path.dirname(PULL_CURSOR_PATH), exist_ok=True)
+    tmp_path = PULL_CURSOR_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        f.write(server_ts)
+    os.replace(tmp_path, PULL_CURSOR_PATH)
+
+
 def _save_last_sync(wire_ts):
     global _cached_last_sync
     os.makedirs(os.path.dirname(LAST_SYNC_PATH), exist_ok=True)
@@ -244,7 +267,10 @@ def _gather_tasks(cutoff_local):
 
 
 def _gather_board(cutoff_local):
-    return _gather_json_store(board_store.load_board(include_deleted=True), "board", "id", cutoff_local)
+    records = _gather_json_store(board_store.load_board(include_deleted=True), "board", "id", cutoff_local)
+    for record in records:
+        record["data"] = sync_photos.to_wire(record["data"])
+    return records
 
 
 # --- gather: calendar.db (events / reminders / focus_profiles) ---
@@ -410,7 +436,8 @@ def _gather_review_problems(conn, cutoff_local):
         sync_id, updated_at, dev = _ensure_row_sync_meta(conn, "review_problems", row)
         data = {
             "name": row["name"], "stars": row["stars"], "descriptionType": row["description_type"],
-            "descriptionText": row["description_text"], "descriptionPhotoPath": row["description_photo_path"],
+            "descriptionText": row["description_text"],
+            "descriptionPhotoFile": sync_photos.file_name_from_path(row["description_photo_path"]),
             "descriptionLink": row["description_link"], "dateAdded": row["date_added"],
             "reviewCount": row["review_count"], "lastReviewedAt": row["last_reviewed_at"],
             "fastestTimeSeconds": row["fastest_time_seconds"], "fastestTimeIsSolved": row["fastest_time_is_solved"],
@@ -524,6 +551,7 @@ def _normalize_board_item(item):
         merged["importance"] = board_store.DEFAULT_BOARD_TASK["importance"]
     if not isinstance(merged.get("name"), str):
         merged["name"] = ""
+    sync_photos.resolve_incoming("board", merged)
     for key in ("tags", "recurringDays"):
         if not isinstance(merged.get(key), list):
             merged[key] = []
@@ -820,7 +848,8 @@ def _apply_review_problems(conn, records):
                 continue
             values = (
                 topic_row["id"], subject_row["id"], data["name"], data["stars"], data["descriptionType"],
-                data.get("descriptionText"), data.get("descriptionPhotoPath"), data.get("descriptionLink"),
+                data.get("descriptionText"), sync_photos.resolve_incoming("review", dict(data)).get("descriptionPhotoPath"),
+                data.get("descriptionLink"),
                 data.get("dateAdded"), data.get("reviewCount", 0), data.get("lastReviewedAt"),
                 data.get("fastestTimeSeconds"), data.get("fastestTimeIsSolved"),
                 data.get("scheduleStage", 0), data.get("nextReviewDate"),
@@ -986,24 +1015,23 @@ def sync_now():
         calendar_logger.exception("sync_client.sync_now: failed gathering local changes")
         return SyncResult(success=False, pushed=0, pulled=0, skipped=0, error="Sync failed while reading local data.")
 
+    cursor = _load_pull_cursor()
     pushed = skipped_push = 0
     refreshed = False
     while True:
         try:
-            headers = {"Authorization": f"Bearer {token}"}
             with httpx.Client(timeout=20.0) as client:
-                if push_records:
-                    resp = client.post(f"{SYNC_SERVER_URL}/sync/push", headers=headers, json=push_records)
-                    resp.raise_for_status()
-                    push_result = resp.json()
-                    pushed = len(push_result.get("accepted", []))
-                    skipped_push = len(push_result.get("skipped", []))
-
-                params = {"since": last_sync_wire} if last_sync_wire else {}
-                resp = client.get(f"{SYNC_SERVER_URL}/sync/pull", headers=headers, params=params)
-                resp.raise_for_status()
-                pulled_records = resp.json()
+                # Photos first, so no device ever sees a record whose photo
+                # hasn't been uploaded yet.
+                sync_photos.upload_for_records(client, token, user["id"], push_records)
+                pushed, skipped_push = sync_cloud.push(client, token, user["id"], push_records)
+                pulled_records, new_cursor = sync_cloud.pull(client, token, cursor)
             break
+        except sync_cloud.NotConfigured:
+            return SyncResult(
+                success=False, pushed=0, pulled=0, skipped=0,
+                error="Sync isn't set up on this install (missing Supabase settings).",
+            )
         except httpx.HTTPStatusError as exc:
             # An expired access token (Supabase's default lifetime is 1h) is
             # answered with 401 -- refresh once from the stored refresh token
@@ -1014,11 +1042,16 @@ def sync_now():
                     token = auth_manager.get_access_token()
                     if token:
                         continue
-            logger.warning("sync_client.sync_now: couldn't reach sync server at %s: %s", SYNC_SERVER_URL, exc)
-            return SyncResult(success=False, pushed=0, pulled=0, skipped=0, error="Couldn't reach the sync server.")
+            logger.warning("sync_client.sync_now: cloud rejected the request: %s %s", exc, exc.response.text[:300])
+            if exc.response.status_code in (400, 404) and "server_updated_at" in exc.response.text:
+                return SyncResult(
+                    success=False, pushed=0, pulled=0, skipped=0,
+                    error="The cloud database needs its one-time update (run sync_server/migrations/001_direct_sync.sql).",
+                )
+            return SyncResult(success=False, pushed=0, pulled=0, skipped=0, error="Couldn't reach the sync service.")
         except httpx.HTTPError as exc:
-            logger.warning("sync_client.sync_now: couldn't reach sync server at %s: %s", SYNC_SERVER_URL, exc)
-            return SyncResult(success=False, pushed=0, pulled=0, skipped=0, error="Couldn't reach the sync server.")
+            logger.warning("sync_client.sync_now: couldn't reach Supabase: %s", exc)
+            return SyncResult(success=False, pushed=0, pulled=0, skipped=0, error="Couldn't reach the sync service.")
 
     try:
         pulled, skipped_pull, failed = _apply_all(pulled_records)
@@ -1033,6 +1066,13 @@ def sync_now():
         )
 
     _save_last_sync(sync_start_wire)
+    if new_cursor:
+        _save_pull_cursor(new_cursor)
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            sync_photos.download_missing(client, token, user["id"])
+    except Exception:
+        logger.warning("sync_client.sync_now: photo download pass failed", exc_info=True)
     return SyncResult(
         success=True, pushed=pushed, pulled=pulled, skipped=skipped_push + skipped_pull, error=None, failed=failed,
     )

@@ -25,7 +25,7 @@ import sync_client
 
 
 def main():
-    print(f"SYNC_SERVER_URL: {sync_client.SYNC_SERVER_URL}")
+    print(f"Supabase: {auth_manager.SUPABASE_URL}")
 
     if not auth_manager.is_logged_in():
         print("Not logged in yet -- log in with your real account (not a throwaway).")
