@@ -11,7 +11,7 @@ import state_events
 @pytest.fixture(autouse=True)
 def fresh_counter(monkeypatch):
     monkeypatch.setattr(state_events, "_version", 0)
-    monkeypatch.setattr(state_events, "_waiters", 0)
+    monkeypatch.setattr(state_events, "_waiters", [])
 
 
 @pytest.fixture

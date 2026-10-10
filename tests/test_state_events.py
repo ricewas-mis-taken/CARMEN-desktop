@@ -11,7 +11,7 @@ import state_events
 @pytest.fixture(autouse=True)
 def fresh_counter(monkeypatch):
     monkeypatch.setattr(state_events, "_version", 0)
-    monkeypatch.setattr(state_events, "_waiters", 0)
+    monkeypatch.setattr(state_events, "_waiters", [])
 
 
 def test_no_since_returns_the_baseline_immediately():
@@ -45,17 +45,32 @@ def test_a_bump_wakes_a_waiter_right_away():
     assert time.time() - start < 1
 
 
-def test_waiters_are_capped(monkeypatch):
+def test_a_newcomer_beyond_the_cap_evicts_the_oldest_waiter(monkeypatch):
     monkeypatch.setattr(state_events, "MAX_WAITERS", 1)
-    threads = [threading.Thread(target=state_events.wait_for_change, args=(0, 0.6)) for _ in range(1)]
-    for t in threads:
-        t.start()
-    time.sleep(0.1)
-    start = time.time()
-    assert state_events.wait_for_change(0, 5) == (0, False)
-    assert time.time() - start < 0.3
-    for t in threads:
-        t.join(2)
+    first = {}
+
+    def old_waiter():
+        start = time.time()
+        first["r"] = state_events.wait_for_change(0, 5)
+        first["t"] = time.time() - start
+
+    t = threading.Thread(target=old_waiter)
+    t.start()
+    time.sleep(0.15)
+    second = {}
+
+    def new_waiter():
+        second["r"] = state_events.wait_for_change(0, 5)
+
+    t2 = threading.Thread(target=new_waiter)
+    t2.start()
+    t.join(2)
+    assert first["r"] == (0, False) and first["t"] < 1      # evicted at once, unchanged
+    assert "r" not in second                                 # the newcomer is still parked
+    state_events.bump()
+    t2.join(2)
+    assert second["r"] == (1, True)
+    assert state_events._waiters == []
 
 
 def test_starting_and_ending_a_session_bump_the_counter(isolate_state):
