@@ -508,3 +508,56 @@ def test_natural_session_end_restores_all_taskbar_previews(isolate_state, monkey
 
     assert summary == {"endType": "natural"}
     assert restore_calls == [1]
+
+
+def _fake_windows(monkeypatch, process_by_hwnd, alive=None):
+    """hwnd -> process name table behind IsWindow/GetWindowThreadProcessId/psutil."""
+    alive = set(process_by_hwnd) if alive is None else set(alive)
+    monkeypatch.setattr(enforcer.win32gui, "IsWindow", lambda h: h in alive)
+    monkeypatch.setattr(enforcer.win32process, "GetWindowThreadProcessId", lambda h: (0, h))
+    monkeypatch.setattr(enforcer.psutil, "Process", lambda pid: _FakeProcess(process_by_hwnd[pid]))
+
+
+def test_unblock_re_shows_every_hidden_window_of_the_process_not_just_the_first_found(isolate_state, monkeypatch):
+    """Regression test: restore_window_for_process only un-hid the single window
+    _find_window_by_process_name picked, so an app with several top-level
+    windows (or one hidden to the tray, like Discord) kept
+    DWMWA_FORCE_ICONIC_REPRESENTATION on the one hard lock really minimized --
+    clicking it afterwards never brought it back until it was force-quit."""
+    calls = []
+    enforcer._hidden_hwnds.update({10, 11, 12})
+    _fake_windows(monkeypatch, {10: "discord.exe", 11: "Discord.exe", 12: "chrome.exe"})
+    monkeypatch.setattr(enforcer, "_hide_taskbar_preview", lambda hwnd, hide: calls.append((hwnd, hide)))
+    monkeypatch.setattr(enforcer, "_find_window_by_process_name", lambda name: None)
+
+    enforcer.restore_window_for_process("discord.exe")
+
+    assert sorted(calls) == [(10, False), (11, False)]
+
+
+def test_unblock_forgets_a_hidden_window_that_no_longer_exists(isolate_state, monkeypatch):
+    calls = []
+    enforcer._hidden_hwnds.add(10)
+    _fake_windows(monkeypatch, {10: "discord.exe"}, alive=[])
+    monkeypatch.setattr(enforcer, "_hide_taskbar_preview", lambda hwnd, hide: calls.append((hwnd, hide)))
+    monkeypatch.setattr(enforcer, "_find_window_by_process_name", lambda name: None)
+
+    enforcer.restore_window_for_process("discord.exe")
+
+    assert calls == [(10, False)]
+
+
+def test_sweep_releases_windows_whose_process_was_unblocked_any_other_way(isolate_state, monkeypatch):
+    """A blocklist edit that doesn't go through the Unblock button or the picker
+    (API / extension / task edit) must not leave a minimized window stuck
+    iconic: every sweep re-checks the windows hard lock remembers."""
+    calls = []
+    enforcer._hidden_hwnds.update({10, 12})
+    _fake_windows(monkeypatch, {10: "discord.exe", 12: "chrome.exe"})
+    session_manager.start_session(25, "hard", ["chrome.exe"], [])      # discord is no longer blocked
+    monkeypatch.setattr(enforcer, "_hide_taskbar_preview", lambda hwnd, hide: calls.append((hwnd, hide)))
+    monkeypatch.setattr(enforcer.win32gui, "EnumWindows", lambda cb, extra: None)
+
+    enforcer.sweep_minimize_blocked_windows()
+
+    assert calls == [(10, False)]
