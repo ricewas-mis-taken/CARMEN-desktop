@@ -1,3 +1,8 @@
+> **Not used by the desktop app any more.** Since 2026-10-10 the app syncs
+> straight to Supabase (see `sync_cloud.py`), so nothing needs hosting. Set up
+> cloud sync by applying `schema.sql` and then `migrations/001_direct_sync.sql`
+> once in the Supabase SQL editor. This folder is kept for reference and its tests.
+
 # sync_server
 
 FastAPI backend for CARMEN's multi-device sync. Verifies Supabase-issued
