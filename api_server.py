@@ -61,6 +61,7 @@ import screentime_categories
 import screentime_store
 import session_history
 import session_manager
+import state_events
 import tasks_store
 import window_tracker
 
@@ -243,6 +244,32 @@ def internal_quit():
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"ok": True})
+
+
+_MAX_EVENT_WAIT_SECONDS = 25
+
+
+@app.route("/events/wait", methods=["GET"])
+def events_wait():
+    """Long-poll the browser extension uses as a wake-up hint: returns as soon
+    as a session/review change bumps state_events' counter past `since` (or
+    after `timeout` seconds, default and max 25, with changed=false). Carries
+    nothing but the counter -- the extension then asks /status for the real
+    state, and keeps polling /status on its own timer as a backstop. Open like
+    /status (read-only, no secrets)."""
+    try:
+        since = int(request.args["since"]) if "since" in request.args else None
+    except ValueError:
+        return jsonify({"error": "since must be an integer"}), 400
+    try:
+        timeout = float(request.args.get("timeout", _MAX_EVENT_WAIT_SECONDS))
+    except ValueError:
+        return jsonify({"error": "timeout must be a number"}), 400
+    if not math.isfinite(timeout):
+        return jsonify({"error": "timeout must be a number"}), 400
+    timeout = max(0.0, min(timeout, _MAX_EVENT_WAIT_SECONDS))
+    version, changed = state_events.wait_for_change(since, timeout)
+    return jsonify({"version": version, "changed": changed})
 
 
 @app.route("/device/info", methods=["GET"])

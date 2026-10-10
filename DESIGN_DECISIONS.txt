@@ -314,3 +314,29 @@ updated_at, so an edit made on a device that was offline is never delivered to
 a device that already synced past it. The proper fix is a server-assigned
 timestamp column (schema migration on the Supabase project) and pulling on it;
 not applied because it changes the deployed database.
+
+[2026-10-09] Desktop wakes the extension with a long-poll instead of waiting for its 7s poll
+Decision: GET /events/wait?since=<n> holds the request open (max 25s, at most
+4 at once) until state_events' counter moves, which session_manager bumps on
+start/end/pause/resume/pomodoro phase/mid-session edits and review_store bumps
+whenever its in-progress review changes. Returns {version, changed}; the
+extension then asks /status for the real state. Open like /status, nothing but
+a counter. The extension keeps its 7s poll as the backstop.
+Why: a session started on the desktop while the user sits on a distracting tab
+went unnoticed for up to 7s, and the extension can't receive a true push.
+Rejected alternative: Chrome native messaging -- needs a host manifest
+registered on the machine, much heavier than an open local request.
+Rejected alternative: just polling every 1-2s -- constant load for something
+that changes a few times a day.
+Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-10-09].
+
+[2026-10-10] /events/wait evicts the oldest waiter at the cap (max 8) instead of refusing newcomers
+Decision: when a ninth request arrives, the oldest parked one is released with
+"no change" and the newcomer takes its place. MAX_WAITERS is 8 (was 4).
+Why: stress testing showed a refuse-newcomers cap can be starved by requests
+whose client already vanished -- an extension background script that restarts
+leaves its old request open on the server until the 25s timeout -- locking
+live clients out of instant wake-ups until then. Refusing was the wrong side to
+protect. The extension also pauses before re-asking after any instant answer,
+so eviction cannot turn into a request storm.
+Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-10-09] (wake loop).

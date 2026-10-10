@@ -22,6 +22,7 @@ from datetime import date, datetime, timedelta
 import calendar_store
 import device_id
 import review_scheduler
+import state_events
 import sync_trigger
 from calendar_log import logger
 
@@ -118,6 +119,7 @@ def _save_active_sessions():
     concurrent mutation during that iteration (from another thread that
     didn't take the lock) would risk a `RuntimeError: dictionary changed
     size during iteration` or a torn read of an in-progress pause/resume."""
+    state_events.bump()
     try:
         os.makedirs(os.path.dirname(ACTIVE_SESSION_PATH), exist_ok=True)
         serializable = {
