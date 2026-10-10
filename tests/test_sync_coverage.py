@@ -55,7 +55,7 @@ SYNCED_FILES = {"tasks.json", "board.json", "calendar.db"}
 LOCAL_ONLY_FILES = {
     "config.json", "screentime.json", "session_history.json", "session_state.json",
     "daily_summaries.json", "active_review.json", "device_id.txt", "last_sync.txt",
-    "pull_cursor.txt", "sync_owner.txt", "uploaded_photos.json",
+    "pull_cursor.txt", "sync_owner.txt", "uploaded_photos.json", "taskbar_quiet_saved.json",
 }
 # Reference data that ships with the app, not something a user creates.
 SHIPPED_REFERENCE_FILES = {"screentime_domains.json", "screentime_domains_curated.json"}

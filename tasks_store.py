@@ -44,6 +44,9 @@ DEFAULT_TASK = {
     "lockMode": "soft",
     "processBlocklist": [],
     "domainWhitelist": [],
+    # Quiet taskbar while this task runs (see taskbar_quiet.py).
+    "hideTaskbarBadges": False,
+    "stopTaskbarFlashing": False,
     "cashedInDates": {},  # {"YYYY-MM-DD": minutes} spent from the vacation balance
     "targetMinutesHistory": [],  # [{"date": "YYYY-MM-DD", "minutes": N}], oldest first
     "archived": False,

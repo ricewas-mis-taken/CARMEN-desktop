@@ -695,6 +695,8 @@ class _TaskCard(QFrame):
             source="task",
             event_id=self._task["id"],
             event_title=self._task["name"],
+            hide_taskbar_badges=bool(self._task.get("hideTaskbarBadges")),
+            stop_taskbar_flashing=bool(self._task.get("stopTaskbarFlashing")),
         )
         self._disarm()
 
@@ -708,6 +710,8 @@ class _TaskCard(QFrame):
             event_id=self._task["id"],
             event_title=self._task.get("name") or "(untitled task)",
             is_burnout=is_burnout,
+            hide_taskbar_badges=bool(self._task.get("hideTaskbarBadges")),
+            stop_taskbar_flashing=bool(self._task.get("stopTaskbarFlashing")),
         )
         self._disarm()
 

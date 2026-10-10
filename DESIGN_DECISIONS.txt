@@ -402,3 +402,15 @@ and reports "needs its one-time setup". Without that guard an upsert would succe
 with no newer-wins check and an old edit could overwrite a newer one in the cloud.
 Photos: every local photo a record points at is uploaded once (list kept in
 private/uploaded_photos.json), not only photos of records changed this sync.
+
+2026-10-10 -- Quiet taskbar (badges / flashing) during sessions
+Choice: flip the two real Windows taskbar settings (TaskbarBadges, TaskbarFlashing)
+for the length of the session, instead of hiding the taskbar or muting apps one by
+one. Covers every app, and is one registry value each.
+Safety: the user value is written to private/taskbar_quiet_saved.json before it is
+changed, and put back when the session ends, pauses, hits a pomodoro break, on quit,
+and at startup (so a crash cannot leave the taskbar quiet for good).
+Per session: stored on the task and on the custom-session dialog (last choice kept),
+carried in session state so a waiting session brings its choice back with it.
+Not covered yet: calendar-event focus profiles (needs a DB column + sync).
+Desktop only; nothing in the extension reads these fields.
