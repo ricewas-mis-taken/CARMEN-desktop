@@ -88,6 +88,11 @@ _state = {
     # blocking can't tell one profile's windows apart from another's -- see
     # is_blocked_browser_profile() and enforcer.is_blocked_window().
     "blockedBrowserProfiles": [],
+    # Per-session "quiet taskbar" choices (see taskbar_quiet.py): hide the
+    # unread-count badges on taskbar icons / stop taskbar icons flashing for
+    # as long as this session is running and not paused.
+    "hideTaskbarBadges": False,
+    "stopTaskbarFlashing": False,
     # Non-None while a Pomodoro-style session (see start_pomodoro_session) is
     # running: {"focusMinutes", "breakMinutes", "totalCycles", "currentCycle"
     # (1-based, which focus block we're on), "phase" ("focus"/"break")}. None
@@ -305,6 +310,8 @@ def start_session(
     review_problem_id=None,
     is_burnout=False,
     blocked_browser_profiles=None,
+    hide_taskbar_badges=False,
+    stop_taskbar_flashing=False,
 ):
     # api_server.py's /session/start already validates this for the
     # network-facing path, but start_session() is also called in-process
@@ -371,6 +378,8 @@ def start_session(
         _state["reviewProblemId"] = review_problem_id
         _state["isBurnout"] = is_burnout
         _state["blockedBrowserProfiles"] = _clean_entries(blocked_browser_profiles)
+        _state["hideTaskbarBadges"] = bool(hide_taskbar_badges)
+        _state["stopTaskbarFlashing"] = bool(stop_taskbar_flashing)
         # A plain start_session() always means "not a pomodoro" -- explicitly
         # cleared rather than left over from whatever the previous session
         # was, same reasoning as the source/eventId resets above.
@@ -394,6 +403,8 @@ def start_pomodoro_session(
     event_id=None,
     event_title=None,
     blocked_browser_profiles=None,
+    hide_taskbar_badges=False,
+    stop_taskbar_flashing=False,
 ):
     """Starts a Pomodoro-style session: `cycles` repetitions of a focus block
     (fully enforced, same as a plain start_session()) followed by a break
@@ -425,6 +436,8 @@ def start_pomodoro_session(
         event_id=event_id,
         event_title=event_title,
         blocked_browser_profiles=blocked_browser_profiles,
+        hide_taskbar_badges=hide_taskbar_badges,
+        stop_taskbar_flashing=stop_taskbar_flashing,
     )
     with _lock:
         _state["pomodoro"] = {
@@ -509,6 +522,18 @@ def pop_pending_phase_change():
         value = _pending_phase_change["value"]
         _pending_phase_change["value"] = None
         return value
+
+
+def update_taskbar_quiet(hide_badges, stop_flashing):
+    """Changes the running session's quiet-taskbar choices (a task edited
+    while it runs). No-op when nothing is running."""
+    with _lock:
+        if not _state["isActive"]:
+            return
+        _state["hideTaskbarBadges"] = bool(hide_badges)
+        _state["stopTaskbarFlashing"] = bool(stop_flashing)
+        _save()
+        state_events.bump()
 
 
 def update_blocklist(process_blocklist, domain_whitelist, lock_mode=None):
@@ -652,6 +677,8 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None, restore_pa
     _state["reviewProblemId"] = None
     _state["isBurnout"] = False
     _state["blockedBrowserProfiles"] = []
+    _state["hideTaskbarBadges"] = False
+    _state["stopTaskbarFlashing"] = False
     _state["pomodoro"] = None
     _state["isBreak"] = False
     _open_violation_index["process"] = None
@@ -737,6 +764,8 @@ def _get_status_locked():
         "reviewProblemId": _state["reviewProblemId"],
         "isBurnout": _state["isBurnout"],
         "blockedBrowserProfiles": list(_state["blockedBrowserProfiles"]),
+        "hideTaskbarBadges": bool(_state.get("hideTaskbarBadges")),
+        "stopTaskbarFlashing": bool(_state.get("stopTaskbarFlashing")),
         "isBreak": _state["isBreak"],
         "pomodoro": dict(_state["pomodoro"]) if _state["pomodoro"] is not None else None,
         "parkedSessions": _parked_summaries_locked(),

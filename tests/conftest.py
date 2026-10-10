@@ -187,6 +187,8 @@ def isolate_state(isolate_config, tmp_path, monkeypatch):
         "reviewProblemId": None,
         "isBurnout": False,
         "blockedBrowserProfiles": [],
+        "hideTaskbarBadges": False,
+        "stopTaskbarFlashing": False,
         "pomodoro": None,
         "isBreak": False,
         "parkedSessions": [],
