@@ -61,3 +61,51 @@ def test_window_is_frameless_on_top_and_resizable(qtbot, isolate_state):
     assert flags & Qt.WindowStaysOnTopHint and flags & Qt.FramelessWindowHint
     win.resize(300, 340)
     assert (win.width(), win.height()) == (300, 340)
+
+
+def test_background_is_solid_black():
+    assert mini_timer.BACKGROUND.alpha() == 255 and mini_timer.BACKGROUND.name() == "#000000"
+
+
+def test_has_a_close_x_and_no_resize_grip(qtbot, isolate_state):
+    from PySide6.QtWidgets import QSizeGrip
+    win = mini_timer.MiniTimer()
+    qtbot.addWidget(win)
+    win.show()
+    assert win.findChildren(QSizeGrip) == []
+    assert win._close.x() > win.width() - 40 and win._close.y() < 20
+    assert not win._button.geometry().intersects(win._close.geometry())
+    win._close.click()
+    assert not win.isVisible()
+
+
+def test_edges_and_corners_are_resize_handles(qtbot, isolate_state):
+    from PySide6.QtCore import QPointF, Qt
+    win = mini_timer.MiniTimer()
+    qtbot.addWidget(win)
+    win.resize(200, 240)
+    assert win._edges_at(QPointF(100, 120)) == Qt.Edge(0)
+    assert win._edges_at(QPointF(199, 239)) == Qt.RightEdge | Qt.BottomEdge
+    assert win._edges_at(QPointF(2, 120)) == Qt.LeftEdge
+    assert win._edges_at(QPointF(100, 1)) == Qt.TopEdge
+
+
+def test_position_and_size_come_back_next_launch(qtbot, isolate_state):
+    first = mini_timer.MiniTimer()
+    qtbot.addWidget(first)
+    first.setGeometry(120, 130, 260, 300)
+    first.close()
+    second = mini_timer.MiniTimer()
+    qtbot.addWidget(second)
+    g = second.geometry()
+    assert (g.x(), g.y(), g.width(), g.height()) == (120, 130, 260, 300)
+
+
+def test_a_saved_spot_on_a_missing_monitor_is_ignored():
+    from PySide6.QtCore import QRect
+    screens = [QRect(0, 0, 1920, 1080)]
+    assert mini_timer.visible_geometry([100, 100, 200, 230], screens) == [100, 100, 200, 230]
+    assert mini_timer.visible_geometry([5000, 100, 200, 230], screens) is None
+    assert mini_timer.visible_geometry([100, 100, 10, 10], screens) is None
+    for junk in (None, "x", [1, 2, 3], [1, 2, "a", 4], [True, 1, 200, 200]):
+        assert mini_timer.visible_geometry(junk, screens) is None
