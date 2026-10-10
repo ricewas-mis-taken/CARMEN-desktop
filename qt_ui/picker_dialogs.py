@@ -17,6 +17,7 @@ import sys
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -353,7 +354,7 @@ class _TimerDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle("Carmen Focus — Start Session")
-        self.resize(300, 260)
+        self.resize(300, 320)
 
         cfg = config.load_config()
         layout = QVBoxLayout(self)
@@ -377,6 +378,13 @@ class _TimerDialog(QWidget):
         mode_row.addWidget(self._soft_radio)
         mode_row.addWidget(self._hard_radio)
         layout.addLayout(mode_row)
+
+        self._badges_check = QCheckBox("Hide taskbar badges")
+        self._badges_check.setChecked(bool(cfg.get("last_hide_taskbar_badges")))
+        layout.addWidget(self._badges_check)
+        self._flashing_check = QCheckBox("Stop taskbar flashing")
+        self._flashing_check.setChecked(bool(cfg.get("last_stop_taskbar_flashing")))
+        layout.addWidget(self._flashing_check)
 
         process_count = len(cfg.get("processBlocklist", []))
         profile_count = len(cfg.get("browserProfileBlocklist", []))
@@ -450,6 +458,8 @@ class _TimerDialog(QWidget):
         session_manager.start_session(
             duration_minutes, lock_mode, process_blocklist, domain_whitelist,
             blocked_browser_profiles=blocked_browser_profiles,
+            hide_taskbar_badges=self._badges_check.isChecked(),
+            stop_taskbar_flashing=self._flashing_check.isChecked(),
         )
 
         # Mutates a freshly-loaded config inside update_config()'s lock
@@ -462,6 +472,8 @@ class _TimerDialog(QWidget):
         config.update_config(lambda cfg: cfg.update({
             "last_duration_minutes": duration_minutes,
             "last_lock_mode": lock_mode,
+            "last_hide_taskbar_badges": self._badges_check.isChecked(),
+            "last_stop_taskbar_flashing": self._flashing_check.isChecked(),
         }))
 
         self.close()

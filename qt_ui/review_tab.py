@@ -756,6 +756,8 @@ class _TopicView(QWidget):
                     review_problem_name=problem["name"],
                     review_subject_name=problem["subjectName"],
                     review_problem_id=problem["id"],
+                    hide_taskbar_badges=bool(task.get("hideTaskbarBadges")),
+                    stop_taskbar_flashing=bool(task.get("stopTaskbarFlashing")),
                 )
                 end_session_on_finish = True
 
@@ -821,6 +823,8 @@ class _TopicView(QWidget):
                     event_title=f"{task['name']} - first attempt",
                     review_problem_name="First attempt",
                     review_subject_name=None,
+                    hide_taskbar_badges=bool(task.get("hideTaskbarBadges")),
+                    stop_taskbar_flashing=bool(task.get("stopTaskbarFlashing")),
                 )
                 end_session_on_finish = True
 
