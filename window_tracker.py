@@ -168,6 +168,20 @@ else:
 SOFT_LOCK_REWARN_SECONDS = 20
 
 
+def release_hidden_windows_unless_hard_locked(status):
+    """Hard lock hides a blocked window's taskbar preview (DWM "iconic" mode),
+    which leaves the window black and unmovable if it is ever opened while
+    still hidden. Only a running, unpaused, non-break hard-lock session may keep
+    that; for anything else (paused, a break, a swapped-in soft session) give
+    every hidden window back right away instead of waiting for a session end."""
+    enforcing_hard = (
+        status["isActive"] and not status["isPaused"] and not status["isBreak"]
+        and status["lockMode"] == "hard"
+    )
+    if not enforcing_hard:
+        enforcer.restore_all_taskbar_previews()
+
+
 def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_change=None):
     """Runs until stop_event is set. Intended to be launched in its own thread.
 
@@ -215,6 +229,7 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
         try:
             status = session_manager.get_status()
             taskbar_quiet.reconcile(status)
+            release_hidden_windows_unless_hard_locked(status)
 
             if tray_icon is not None:
                 menu_state = (status["isActive"], status["isPaused"])
