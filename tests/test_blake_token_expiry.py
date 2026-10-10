@@ -11,6 +11,7 @@ import device_id
 import review_store
 import sync_client
 import tasks_store
+from fake_supabase import FakeSupabase
 
 _RealClient = httpx.Client
 
@@ -28,6 +29,7 @@ def device(tmp_path, monkeypatch):
     monkeypatch.setattr(device_id, "_cached_id", None)
     monkeypatch.setattr(sync_client, "LAST_SYNC_PATH", str(tmp_path / "last_sync.txt"))
     monkeypatch.setattr(sync_client, "_cached_last_sync", None)
+    monkeypatch.setattr(sync_client, "PULL_CURSOR_PATH", str(tmp_path / "pull_cursor.txt"))
 
 
 def test_sync_recovers_after_access_token_expires(device, monkeypatch):
@@ -45,15 +47,7 @@ def test_sync_recovers_after_access_token_expires(device, monkeypatch):
 
     monkeypatch.setattr(auth_manager, "_refresh_session", fake_refresh)
 
-    def handler(request):
-        if request.headers.get("authorization") != "Bearer fresh-token":
-            return httpx.Response(401, json={"detail": "Invalid or expired token"})
-        if request.url.path == "/sync/pull":
-            return httpx.Response(200, json=[])
-        return httpx.Response(200, json={"accepted": [], "skipped": []})
-
-    monkeypatch.setattr(sync_client.httpx, "Client",
-                        lambda **kw: _RealClient(transport=httpx.MockTransport(handler)))
+    FakeSupabase(user_id="u", token="fresh-token").install(monkeypatch, sync_client)
     tasks_store.create_task({"name": "Alpha", "color": "#111111"})
 
     first = sync_client.sync_now()
