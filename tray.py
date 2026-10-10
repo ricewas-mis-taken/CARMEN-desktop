@@ -8,6 +8,7 @@ import config
 import history_gui
 import picker_gui
 import qt_gui_thread
+import qt_ui.mini_timer as mini_timer
 import qt_ui.nuclear_dialog as nuclear_dialog
 import session_manager
 import tasks_store
@@ -105,6 +106,9 @@ def build_tray_icon(on_quit):
         # here rather than directly off the tray menu.
         calendar_gui.open_main_window()
 
+    def on_mini_timer(icon, item):
+        qt_gui_thread.run_on_gui_thread(mini_timer.open_mini_timer)
+
     def on_status(icon, item):
         icon.notify(_format_status_text(), title="Carmen Focus Status")
 
@@ -162,6 +166,7 @@ def build_tray_icon(on_quit):
         # that opens a main window on click" behavior. It's also included
         # normally in the right-click menu as "Open Carmen Focus".
         pystray.MenuItem("Open Carmen Focus", on_open_window, default=True),
+        pystray.MenuItem("Mini Timer", on_mini_timer),
         pystray.MenuItem("Status", on_status),
         pystray.MenuItem("Session History", on_view_history),
         pystray.MenuItem("Copy API Token (for browser extension)", on_copy_api_token),
