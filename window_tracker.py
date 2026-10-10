@@ -13,6 +13,7 @@ import time
 import enforcer
 import screentime_store
 import session_manager
+import taskbar_quiet
 
 if sys.platform == "darwin":
     import os as _os
@@ -213,6 +214,7 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
     while not stop_event.is_set():
         try:
             status = session_manager.get_status()
+            taskbar_quiet.reconcile(status)
 
             if tray_icon is not None:
                 menu_state = (status["isActive"], status["isPaused"])

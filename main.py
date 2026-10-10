@@ -22,6 +22,7 @@ import qt_gui_thread
 import screentime_store
 import singleinstance
 import sync_scheduler
+import taskbar_quiet
 import tray
 import window_tracker
 from api_server import run_server
@@ -112,6 +113,10 @@ def main():
         import qt_ui.main_window as main_window
         qt_gui_thread.run_on_gui_thread(main_window.open_main_window)
 
+    # A crash or kill mid-session can leave the taskbar badges/flashing
+    # switched off; put them back before anything decides what is wanted now.
+    taskbar_quiet.restore_all()
+
     api_thread = threading.Thread(target=run_server, daemon=True)
     api_thread.start()
 
@@ -124,6 +129,7 @@ def main():
         # only flushes to disk every ~10s -- without an explicit flush here,
         # up to that much of the day's tally could be lost on a clean quit.
         screentime_store.flush()
+        taskbar_quiet.restore_all()
         # Must go through qt_gui_thread's queued marshal, not a direct
         # QApplication.instance().quit() — on_quit() itself runs on
         # pystray's callback thread (see on_quit_clicked in tray.py), and a
