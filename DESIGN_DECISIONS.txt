@@ -329,3 +329,14 @@ registered on the machine, much heavier than an open local request.
 Rejected alternative: just polling every 1-2s -- constant load for something
 that changes a few times a day.
 Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-10-09].
+
+[2026-10-10] /events/wait evicts the oldest waiter at the cap (max 8) instead of refusing newcomers
+Decision: when a ninth request arrives, the oldest parked one is released with
+"no change" and the newcomer takes its place. MAX_WAITERS is 8 (was 4).
+Why: stress testing showed a refuse-newcomers cap can be starved by requests
+whose client already vanished -- an extension background script that restarts
+leaves its old request open on the server until the 25s timeout -- locking
+live clients out of instant wake-ups until then. Refusing was the wrong side to
+protect. The extension also pauses before re-asking after any instant answer,
+so eviction cannot turn into a request storm.
+Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-10-09] (wake loop).
