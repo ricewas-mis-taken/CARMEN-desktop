@@ -364,8 +364,9 @@ explicitly not wanted.
 Review timers linked to a task session follow it: the banner reads its own
 session from the parking spot instead of whatever is running (session_manager
 state is shared), and its Pause button becomes "Switch to this".
-Browser extension: /status carries parkedSessions and the popup lists them,
-read-only; enforcement still follows only the running session.
+Browser extension: /status carries parkedSessions and the popup lists them with
+Switch and End buttons (POST /session/parked/switch and /session/parked/end, token-gated,
+body {parkId}; unknown id = 404). Enforcement still follows only the running session.
 /status also keeps parkedSession (the first of them) for older readers.
 Not covered: a waiting task's already-worked minutes only count toward the
 Tasks tab's daily bar once it is ended or back in front.

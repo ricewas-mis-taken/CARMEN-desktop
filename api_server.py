@@ -452,6 +452,41 @@ def session_resume():
     return jsonify(session_manager.resume_session())
 
 
+def _waiting_park_id():
+    """The parkId in the request body if it names a session that is waiting
+    behind the running one, else None (callers answer 400/404)."""
+    park_id = _json_body().get("parkId")
+    if not isinstance(park_id, str) or not park_id or len(park_id) > 64:
+        return None, (jsonify({"error": "parkId must be a non-empty string"}), 400)
+    if not any(p["parkId"] == park_id for p in session_manager.get_status()["parkedSessions"]):
+        return None, (jsonify({"error": "no such waiting session"}), 404)
+    return park_id, None
+
+
+@app.route("/session/parked/switch", methods=["POST"])
+@_require_token
+def session_parked_switch():
+    """Brings a waiting (paused) session to the front and pauses the running
+    one in its place -- still only one running at a time."""
+    park_id, error = _waiting_park_id()
+    if error:
+        return error
+    return jsonify(session_manager.swap_with_parked(park_id))
+
+
+@app.route("/session/parked/end", methods=["POST"])
+@_require_token
+def session_parked_end():
+    """Ends a waiting session (filed in history) without touching the running one."""
+    park_id, error = _waiting_park_id()
+    if error:
+        return error
+    result = session_manager.end_parked_session(park_id=park_id)
+    if result is None:
+        return jsonify({"error": "no such waiting session"}), 404
+    return jsonify(result)
+
+
 @app.route("/session/update", methods=["POST"])
 @_require_token
 def session_update():
