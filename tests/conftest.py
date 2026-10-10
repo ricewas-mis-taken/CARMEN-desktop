@@ -84,6 +84,20 @@ def no_real_toasts(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_installed_app_scans(monkeypatch):
+    """The Qt pickers/editors call installed_apps.list_installed_apps(), which
+    walks the Start Menu and shells out to PowerShell -- a slow, real scan of
+    the machine the suite runs on, repeated in a dozen tests. Default to an
+    empty list; tests that care patch their own."""
+    try:
+        import installed_apps
+    except Exception:
+        return
+    if hasattr(installed_apps, "list_installed_apps"):
+        monkeypatch.setattr(installed_apps, "list_installed_apps", lambda: [])
+
+
+@pytest.fixture(autouse=True)
 def isolate_real_data_paths(tmp_path_factory, monkeypatch):
     """Safety net: every module whose data file path is a module-level
     constant defaulting to <repo>/private/... is pointed at a throwaway dir
