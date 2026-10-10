@@ -200,3 +200,59 @@ def test_legacy_absolute_path_from_another_machine_becomes_a_local_path(isolate_
     assert sync_client.sync_now().success
     p = review_store.list_problems(topic["id"], due_only=False)[0]
     assert p["descriptionPhotoPath"] == os.path.join(review_store.PHOTOS_DIR, "abc123.png")
+
+
+# --- before the one-time database setup ---
+
+def test_nothing_is_written_to_a_database_that_has_not_been_migrated(isolate_device, fake_logged_in, server):
+    server.migrated = False
+    isolate_device("a")
+    tasks_store.create_task({"name": "Would overwrite", "color": "#111111"})
+    _problem_with_photo()
+    result = sync_client.sync_now()
+    assert not result.success
+    assert "one-time setup" in result.error
+    assert server.writes == 0 and not server.rows
+    assert not server.photos  # not even photos go up
+
+
+# --- photos that were already there before cloud sync ---
+
+def test_photo_of_an_old_untouched_record_still_uploads(isolate_device, fake_logged_in, server):
+    isolate_device("a")
+    _problem_with_photo(b"old-photo")
+    # as on a real install: the watermark is already newer than every record
+    sync_client._save_last_sync(datetime.now(timezone.utc).isoformat())
+    assert sync_client.sync_now().success
+    assert list(server.photos.values()) == [b"old-photo"]
+
+
+def test_failed_photo_upload_is_retried_on_the_next_sync(isolate_device, fake_logged_in, server, monkeypatch):
+    isolate_device("a")
+    _problem_with_photo(b"flaky")
+    real_handler = server.handler
+    calls = {"fail": True}
+
+    def flaky(request):
+        if request.method == "POST" and request.url.path.startswith("/storage/") and calls["fail"]:
+            return httpx.Response(500, json={"message": "boom"})
+        return real_handler(request)
+
+    server.handler = flaky
+    server.install(monkeypatch, sync_client)
+    assert sync_client.sync_now().success
+    assert not server.photos
+    calls["fail"] = False
+    assert sync_client.sync_now().success
+    assert list(server.photos.values()) == [b"flaky"]
+
+
+def test_uploaded_photos_are_remembered_across_restarts(isolate_device, fake_logged_in, server, monkeypatch):
+    import sync_photos
+    isolate_device("a")
+    _problem_with_photo(b"once")
+    assert sync_client.sync_now().success
+    uploads = [r for r in server.requests if r[0] == "POST" and r[1].startswith("/storage/")]
+    monkeypatch.setattr(sync_photos, "_uploaded", None)  # a new process re-reads the saved list
+    assert sync_client.sync_now().success
+    assert [r for r in server.requests if r[0] == "POST" and r[1].startswith("/storage/")] == uploads

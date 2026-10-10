@@ -43,14 +43,15 @@ def test_same_account_keeps_syncing(sync_env, monkeypatch):
     _as(monkeypatch, "user-a")
     assert sync_client.sync_now().success
     assert sync_client.sync_now().success
-    assert len(sync_env) == 2
+    assert len(sync_env) == 3  # readiness probe + pull, then another pull
 
 
 def test_different_account_is_refused_instead_of_inheriting_the_watermark(sync_env, monkeypatch):
     _as(monkeypatch, "user-a")
     assert sync_client.sync_now().success
+    requests_before = len(sync_env)
     _as(monkeypatch, "user-b")
     result = sync_client.sync_now()
     assert result.success is False
     assert "different account" in result.error
-    assert len(sync_env) == 1  # nothing was pushed/pulled under user-b's token
+    assert len(sync_env) == requests_before  # nothing was pushed/pulled under user-b's token

@@ -11,6 +11,7 @@ Names that arrive from the cloud are untrusted: they must match a strict
 pattern (no path separators, allowed image extension) before they are ever
 joined onto a local folder or used in a storage URL.
 """
+import json
 import os
 import re
 import time
@@ -22,9 +23,11 @@ from calendar_log import logger
 
 KINDS = ("board", "review")
 
-# Photos known to be on the server already, and photos the server said it
-# doesn't have (not retried for a while instead of on every sync).
-_uploaded = set()
+# Photos known to be in the cloud bucket (remembered across restarts so a
+# photo is uploaded once, however old its record is), and photos the server
+# said it doesn't have (not retried for a while instead of on every sync).
+UPLOADED_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "uploaded_photos.json")
+_uploaded = None
 _missing_until = {}
 MISSING_RETRY_SECONDS = 3600
 
@@ -68,12 +71,39 @@ def resolve_incoming(kind, data):
     return data
 
 
-def upload_for_records(client, token, user_id, records):
-    """Uploads the photo of every outgoing record that has one on disk."""
-    for record in records:
-        kind = {"board": "board", "review_problems": "review"}.get(record["table_name"])
-        name = record["data"].get("descriptionPhotoFile") if kind else None
-        if not name or name in _uploaded:
+def _uploaded_names():
+    global _uploaded
+    if _uploaded is None:
+        try:
+            with open(UPLOADED_PATH, "r", encoding="utf-8") as f:
+                _uploaded = {n for n in json.load(f) if isinstance(n, str)}
+        except (OSError, ValueError):
+            _uploaded = set()
+    return _uploaded
+
+
+def _mark_uploaded(name):
+    names = _uploaded_names()
+    if name in names:
+        return
+    names.add(name)
+    try:
+        os.makedirs(os.path.dirname(UPLOADED_PATH), exist_ok=True)
+        tmp = UPLOADED_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(sorted(names), f)
+        os.replace(tmp, UPLOADED_PATH)
+    except OSError:
+        logger.warning("sync_photos: couldn't save the uploaded-photos list", exc_info=True)
+
+
+def upload_missing(client, token, user_id):
+    """Uploads every local photo a record points at that the cloud doesn't
+    have yet. Goes through all local records, not just the ones changing in
+    this sync: a photo whose record was last edited before cloud sync existed
+    (or whose earlier upload failed) must still get there."""
+    for kind, name in _referenced_photos():
+        if name in _uploaded_names():
             continue
         path = local_path(kind, name)
         if not path or not os.path.isfile(path):
@@ -82,7 +112,7 @@ def upload_for_records(client, token, user_id, records):
             with open(path, "rb") as f:
                 data = f.read()
             if sync_cloud.upload_photo(client, token, user_id, kind, name, data):
-                _uploaded.add(name)
+                _mark_uploaded(name)
         except Exception:
             logger.warning("sync_photos: couldn't upload %s", name, exc_info=True)
 
@@ -123,6 +153,6 @@ def download_missing(client, token, user_id):
             with open(tmp, "wb") as f:
                 f.write(data)
             os.replace(tmp, path)
-            _uploaded.add(name)
+            _mark_uploaded(name)
         except Exception:
             logger.warning("sync_photos: couldn't download %s", name, exc_info=True)

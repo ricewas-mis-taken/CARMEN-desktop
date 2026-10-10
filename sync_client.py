@@ -1027,7 +1027,8 @@ def sync_now():
             with httpx.Client(timeout=20.0) as client:
                 # Photos first, so no device ever sees a record whose photo
                 # hasn't been uploaded yet.
-                sync_photos.upload_for_records(client, token, user["id"], push_records)
+                sync_cloud.ensure_ready(client, token)
+                sync_photos.upload_missing(client, token, user["id"])
                 pushed, skipped_push = sync_cloud.push(client, token, user["id"], push_records)
                 pulled_records, new_cursor = sync_cloud.pull(client, token, cursor)
             break
@@ -1047,10 +1048,13 @@ def sync_now():
                     if token:
                         continue
             logger.warning("sync_client.sync_now: cloud rejected the request: %s %s", exc, exc.response.text[:300])
-            if exc.response.status_code in (400, 404) and "server_updated_at" in exc.response.text:
+            if exc.response.status_code in (400, 404) and (
+                "server_updated_at" in exc.response.text or "sync_records" in exc.response.text
+            ):
                 return SyncResult(
                     success=False, pushed=0, pulled=0, skipped=0,
-                    error="The cloud database needs its one-time update (run sync_server/migrations/001_direct_sync.sql).",
+                    error="The cloud database needs its one-time setup (run schema.sql, then "
+                          "sync_server/migrations/001_direct_sync.sql, in the Supabase SQL editor).",
                 )
             return SyncResult(success=False, pushed=0, pulled=0, skipped=0, error="Couldn't reach the sync service.")
         except httpx.HTTPError as exc:

@@ -19,6 +19,10 @@ class FakeSupabase:
         self.requests = []      # (method, path) log
         self.clock = datetime.now(timezone.utc)  # the server's clock; tests may move it
         self.pull_page_size = None  # simulate a smaller max-rows cap when set
+        # False behaves like a real project before migration 001: writes are
+        # accepted with no newer-wins check, and anything naming the new column fails.
+        self.migrated = True
+        self.writes = 0
 
     def tick(self):
         self.clock += timedelta(milliseconds=1)
@@ -49,7 +53,16 @@ class FakeSupabase:
             return httpx.Response(401, json={"message": "JWT expired"})
         path = request.url.path
         if path == "/rest/v1/sync_records":
+            self._check_params(request)
+            if not self.migrated and "server_updated_at" in str(request.url.params):
+                return httpx.Response(400, json={
+                    "code": "42703", "message": "column sync_records.server_updated_at does not exist"})
             if request.method == "POST":
+                if not self.migrated:
+                    for p in json.loads(request.content):
+                        self.writes += 1
+                        self.rows[(p["table_name"], p["sync_id"])] = dict(p)  # blind overwrite
+                    return httpx.Response(200, json=[{"sync_id": p["sync_id"]} for p in json.loads(request.content)])
                 kept = [self._upsert(p) for p in json.loads(request.content)]
                 return httpx.Response(200, json=[{"sync_id": r["sync_id"]} for r in kept if r])
             if request.method == "GET":
@@ -57,6 +70,20 @@ class FakeSupabase:
         if path.startswith("/storage/v1/object/"):
             return self._storage(request, path)
         raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    ALLOWED_PARAMS = {
+        "GET": {"select", "order", "limit", "offset", "server_updated_at"},
+        "POST": {"on_conflict", "select"},
+    }
+
+    def _check_params(self, request):
+        """A real server would happily ignore (or choke on) a parameter the
+        client invented; the fake refuses so a typo or a revert to the old
+        client-clock filter can't pass unnoticed."""
+        unknown = set(request.url.params.keys()) - self.ALLOWED_PARAMS[request.method]
+        assert not unknown, f"unexpected query parameters {sorted(unknown)}"
+        if request.method == "GET":
+            assert request.url.params.get("order", "server_updated_at.asc").startswith("server_updated_at"), request.url
 
     def _select(self, params):
         rows = sorted(self.rows.values(), key=lambda r: (r["server_updated_at"], r["sync_id"]))

@@ -17,6 +17,7 @@ import board_store
 import tasks_store
 import auth_manager
 import sync_client
+import sync_cloud
 import sync_photos
 import screentime_store
 import session_history
@@ -135,7 +136,9 @@ def isolate_real_data_paths(tmp_path_factory, monkeypatch):
     # from private/.env even if it forgets to mock the transport.
     monkeypatch.setattr(auth_manager, "SUPABASE_URL", "https://test-project.supabase.co")
     monkeypatch.setattr(auth_manager, "SUPABASE_PUBLISHABLE_KEY", "test-publishable-key")
-    monkeypatch.setattr(sync_photos, "_uploaded", set())
+    monkeypatch.setattr(sync_photos, "_uploaded", None)
+    monkeypatch.setattr(sync_photos, "UPLOADED_PATH", str(base / "uploaded_photos.json"))
+    monkeypatch.setattr(sync_cloud, "_verified", False)
     monkeypatch.setattr(sync_photos, "_missing_until", {})
     monkeypatch.setattr(tasks_store, "TASKS_PATH", str(base / "tasks.json"))
     monkeypatch.setattr(board_store, "BOARD_PATH", str(base / "board.json"))

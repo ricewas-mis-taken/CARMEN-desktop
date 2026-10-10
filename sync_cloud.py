@@ -54,6 +54,25 @@ def _parse_ts(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+_verified = False
+
+
+def ensure_ready(client, token):
+    """Raises httpx.HTTPStatusError unless the database has been given
+    migration 001. Called before anything is written: without that migration
+    an upsert would succeed but with no newer-wins check, so an old edit
+    could overwrite a newer one in the cloud."""
+    global _verified
+    if _verified:
+        return
+    base, _ = _base_url()
+    resp = client.get(
+        f"{base}{TABLE_PATH}", headers=_headers(token), params={"select": "server_updated_at", "limit": "1"}
+    )
+    resp.raise_for_status()
+    _verified = True
+
+
 def push(client, token, user_id, records):
     """Upserts records. Returns (accepted, skipped): rows the database kept
     versus rows it ignored because it already holds a newer version."""
