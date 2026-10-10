@@ -102,9 +102,11 @@ def pull(client, token, cursor):
         )
         resp.raise_for_status()
         page = resp.json()
-        records.extend(page)
-        if len(page) < PULL_PAGE_SIZE:
+        if not page:
             break
+        records.extend(page)
+        # Not "stop on a short page": a project's max-rows setting can be
+        # lower than the page size asked for, which would end the pull early.
         offset += len(page)
     newest = cursor
     for record in records:

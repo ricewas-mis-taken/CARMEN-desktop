@@ -37,7 +37,7 @@ def file_name_from_path(path):
     """The safe file name inside a stored path (from any OS), or None."""
     if not path or not isinstance(path, str):
         return None
-    name = re.split(r"[\/]", path)[-1]
+    name = re.split(r"[\\/]", path)[-1]
     return name if sync_cloud.is_safe_photo_name(name) else None
 
 
