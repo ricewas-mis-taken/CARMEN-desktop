@@ -411,6 +411,19 @@ _PROBLEM_SELECT = """
 """
 
 
+def list_photo_paths():
+    """Stored photo paths of every live problem -- sync_photos uses this to
+    find photos that arrived from another device but aren't on disk yet."""
+    with _lock:
+        conn = _get_conn()
+        return [
+            row[0] for row in conn.execute(
+                "SELECT description_photo_path FROM review_problems "
+                "WHERE is_deleted = 0 AND description_photo_path IS NOT NULL"
+            ).fetchall()
+        ]
+
+
 def list_topics():
     with _lock:
         try:

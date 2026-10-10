@@ -371,3 +371,34 @@ body {parkId}; unknown id = 404). Enforcement still follows only the running ses
 Not covered: a waiting task's already-worked minutes only count toward the
 Tasks tab's daily bar once it is ended or back in front.
 Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-10-10] (waiting sessions in the popup).
+
+[2026-10-10] Sync goes straight to Supabase; the pull cursor is the server's clock
+Decision: sync_client no longer talks to sync_server. sync_cloud.py sends the
+signed-in user's own access token to Supabase's REST and Storage endpoints, and
+row-level security (schema.sql) keeps accounts apart exactly as before. The
+rules sync_server enforced in Python moved into one Postgres trigger
+(sync_server/migrations/001_direct_sync.sql): an update that isn't newer than
+the stored row is ignored, a write stamped >10 minutes ahead of the server
+clock is treated as "now", and every accepted write gets server_updated_at from
+the server's clock. Pulls ask for server_updated_at > cursor (minus a 30s
+overlap) and store the largest value seen, never this device's clock.
+Why: the app defaulted to a sync server on 127.0.0.1:8420 that nobody hosts, so
+cross-device sync could not work. Hosting a FastAPI proxy only to forward the
+same token to Supabase added a bill and a thing to keep running for no security
+gain. A client-clock watermark also hid rows: a device with a slow clock stamped
+records before another device's last sync time, and that device never pulled
+them.
+Rejected alternative: host sync_server -- needs an account, costs money,
+changes nothing about who can read what.
+Rejected alternative: keep both paths -- two transports to test and a watermark
+that means different things in each.
+Photos: records carry only the file name (descriptionPhotoFile), never an
+absolute path; the bytes go to a private bucket, one folder per user, uploaded
+before the record that points at them. Names from the cloud are validated
+before they touch a path or URL.
+Rollout: the SQL migration must be run by hand once, before this code is merged;
+until it is, sync probes the database first, writes nothing (no records, no photos)
+and reports "needs its one-time setup". Without that guard an upsert would succeed
+with no newer-wins check and an old edit could overwrite a newer one in the cloud.
+Photos: every local photo a record points at is uploaded once (list kept in
+private/uploaded_photos.json), not only photos of records changed this sync.

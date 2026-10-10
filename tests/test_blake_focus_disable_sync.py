@@ -21,6 +21,7 @@ import tasks_store
 
 import auth_manager
 import sync_client
+from fake_supabase import FakeSupabase
 
 _RealClient = httpx.Client
 
@@ -41,6 +42,7 @@ def isolate_device(tmp_path, monkeypatch):
         monkeypatch.setattr(device_id, "_cached_id", None)
         monkeypatch.setattr(sync_client, "LAST_SYNC_PATH", str(base / "last_sync.txt"))
         monkeypatch.setattr(sync_client, "_cached_last_sync", None)
+        monkeypatch.setattr(sync_client, "PULL_CURSOR_PATH", str(base / "pull_cursor.txt"))
     return _make
 
 
@@ -53,38 +55,9 @@ def fake_logged_in(monkeypatch):
 
 @pytest.fixture
 def fake_server(monkeypatch):
-    """{(table_name, sync_id): record} with sync_server's own last-write-
-    wins upsert and updated_at > since pull filtering."""
-    store = {}
-
-    def handler(request):
-        if request.url.path == "/sync/push":
-            import json as _json
-            records = _json.loads(request.content)
-            accepted, skipped = [], []
-            for record in records:
-                key = (record["table_name"], record["sync_id"])
-                existing = store.get(key)
-                if existing and existing["updated_at"] >= record["updated_at"]:
-                    skipped.append(key)
-                    continue
-                store[key] = record
-                accepted.append(key)
-            return httpx.Response(200, json={"accepted": accepted, "skipped": skipped})
-        if request.url.path == "/sync/pull":
-            since = request.url.params.get("since")
-            result = [r for r in store.values() if not since or r["updated_at"] > since]
-            return httpx.Response(200, json=result)
-        raise AssertionError(f"unexpected request: {request.url}")
-
-    def install():
-        monkeypatch.setattr(
-            sync_client.httpx, "Client",
-            lambda **kwargs: _RealClient(transport=httpx.MockTransport(handler)),
-        )
-
-    install()
-    return store
+    server = FakeSupabase(user_id="user-1")
+    server.install(monkeypatch, sync_client)
+    return server
 
 
 

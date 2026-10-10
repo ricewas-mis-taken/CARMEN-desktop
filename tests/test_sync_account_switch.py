@@ -8,6 +8,7 @@ import sync_client
 def sync_env(tmp_path, monkeypatch):
     monkeypatch.setattr(sync_client, "LAST_SYNC_PATH", str(tmp_path / "last_sync.txt"))
     monkeypatch.setattr(sync_client, "_cached_last_sync", None)
+    monkeypatch.setattr(sync_client, "PULL_CURSOR_PATH", str(tmp_path / "pull_cursor.txt"))
     monkeypatch.setattr(sync_client, "SYNC_OWNER_PATH", str(tmp_path / "sync_owner.txt"), raising=False)
     monkeypatch.setattr(auth_manager, "is_logged_in", lambda: True)
     monkeypatch.setattr(auth_manager, "get_access_token", lambda: "tok")
@@ -42,14 +43,15 @@ def test_same_account_keeps_syncing(sync_env, monkeypatch):
     _as(monkeypatch, "user-a")
     assert sync_client.sync_now().success
     assert sync_client.sync_now().success
-    assert "since" in sync_env[1]
+    assert len(sync_env) == 3  # readiness probe + pull, then another pull
 
 
 def test_different_account_is_refused_instead_of_inheriting_the_watermark(sync_env, monkeypatch):
     _as(monkeypatch, "user-a")
     assert sync_client.sync_now().success
+    requests_before = len(sync_env)
     _as(monkeypatch, "user-b")
     result = sync_client.sync_now()
     assert result.success is False
     assert "different account" in result.error
-    assert len(sync_env) == 1  # nothing was pushed/pulled under user-b's token
+    assert len(sync_env) == requests_before  # nothing was pushed/pulled under user-b's token
