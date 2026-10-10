@@ -517,6 +517,13 @@ class _TopicView(QWidget):
         self._review_banner = _ReviewBanner(on_finished=self._banner_finished)
         layout.addWidget(self._review_banner)
         self._resume_if_active()
+        # A review's session can come back while this view is already open
+        # (switched to from the Tasks tab or the extension, or restored when
+        # the task running over it ended) -- nothing else tells this view, so
+        # it looks again while its banner is hidden.
+        self._follow_timer = QTimer(self)
+        self._follow_timer.timeout.connect(self._show_banner_for_linked_session)
+        self._follow_timer.start(1000)
 
         self._table = QTableWidget(0, len(COLUMN_HEADERS))
         self._table.setHorizontalHeaderLabels(COLUMN_HEADERS)
@@ -541,6 +548,38 @@ class _TopicView(QWidget):
 
         self.refresh()
 
+    def _show_banner_for_linked_session(self):
+        if not self._review_banner.is_running():
+            self._resume_linked_session()
+
+    def _resume_linked_session(self):
+        """Starts the banner for this topic's task session if one exists,
+        running or waiting behind another task. Returns True if it did."""
+        status = session_manager.get_status()
+        candidates = []
+        if status.get("isActive"):
+            candidates.append(status)
+        candidates.extend(status.get("parkedSessions") or [])
+        topic = review_store.get_topic(self._topic_id)
+        if not topic or not topic.get("linkedTaskId"):
+            return False
+        for session in candidates:
+            if session.get("source") == "review" and session.get("eventId") == topic["linkedTaskId"]:
+                problem_name = session.get("reviewProblemName") or "this review"
+                if self._review_tab:
+                    self._review_tab.on_review_started()
+                # token=None: review_store's own active-session tracking
+                # (_active_sessions) is in-memory only and did not survive
+                # whatever took this session_manager session and this
+                # widget out of sync in the first place. Finish still logs
+                # a real review_sessions row via reviewProblemId.
+                self._review_banner.start(
+                    {"name": problem_name, "id": session.get("reviewProblemId")},
+                    token=None, end_session_on_finish=True,
+                )
+                return True
+        return False
+
     def _resume_if_active(self):
         # A review-linked task session survives independently of this
         # widget (it lives in session_manager, persisted to
@@ -554,26 +593,8 @@ class _TopicView(QWidget):
         # fresh every time) but this banner would otherwise just sit
         # hidden, showing no timer at all for a session that's very much
         # still active and still enforcing.
-        status = session_manager.get_status()
-        if status.get("isActive") and status.get("source") == "review":
-            topic = review_store.get_topic(self._topic_id)
-            if topic and topic.get("linkedTaskId") and topic["linkedTaskId"] == status.get("eventId"):
-                problem_name = status.get("reviewProblemName") or "this review"
-                if self._review_tab:
-                    self._review_tab.on_review_started()
-                # token=None: review_store's own active-session tracking
-                # (_active_sessions) is in-memory only and didn't survive
-                # whatever took this session_manager session and this
-                # widget out of sync in the first place. Finish still logs
-                # a real review_sessions row though, via reviewProblemId
-                # (persisted in session_manager's own state, unlike
-                # _active_sessions) and _ReviewBanner's
-                # finish_review_for_problem fallback -- see _complete_finish.
-                self._review_banner.start(
-                    {"name": problem_name, "id": status.get("reviewProblemId")},
-                    token=None, end_session_on_finish=True,
-                )
-                return
+        if self._resume_linked_session():
+            return
 
         # Independent review -- one that was (or still is) running
         # alongside a completely different session, or with no session at
@@ -1070,6 +1091,9 @@ class _ReviewBanner(QWidget):
         self._publish_first_attempt()
         self._tick_timer.start(1000)
         self.show()
+
+    def is_running(self):
+        return self._tick_timer.isActive()
 
     def _currently_paused(self):
         # When a linked task session is driving this review, session_manager
