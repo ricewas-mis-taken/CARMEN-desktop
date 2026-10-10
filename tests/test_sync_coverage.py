@@ -55,8 +55,10 @@ SYNCED_FILES = {"tasks.json", "board.json", "calendar.db"}
 LOCAL_ONLY_FILES = {
     "config.json", "screentime.json", "session_history.json", "session_state.json",
     "daily_summaries.json", "active_review.json", "device_id.txt", "last_sync.txt",
-    "pull_cursor.txt", "sync_owner.txt",
+    "pull_cursor.txt", "sync_owner.txt", "uploaded_photos.json",
 }
+# Reference data that ships with the app, not something a user creates.
+SHIPPED_REFERENCE_FILES = {"screentime_domains.json", "screentime_domains_curated.json"}
 
 
 @pytest.fixture
@@ -80,21 +82,25 @@ def test_every_calendar_db_table_is_either_synced_or_listed_as_local_only(isolat
     assert not unknown, f"new table(s) {sorted(unknown)}: wire them into sync_client or list them as local-only"
 
 
+def _data_file_names_mentioned_in_the_code():
+    """Every "something.json/.db/.txt" string literal in the app's own source
+    (tests excluded), so a new module's data file shows up here by itself."""
+    import re
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    pattern = re.compile(r"""["']([\w\-]+\.(?:json|db|txt|sqlite3?|ini|cfg|pkl))["']""")
+    skip_dirs = {".git", "tests", "__pycache__", "node_modules", "venv", ".venv", "mac-os", "scripts"}
+    found = set()
+    for folder, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
+        for name in files:
+            if name.endswith(".py"):
+                with open(os.path.join(folder, name), encoding="utf-8", errors="ignore") as f:
+                    found.update(pattern.findall(f.read()))
+    return found
+
+
 def test_every_data_file_is_either_synced_or_listed_as_local_only():
-    import glob
-    root = os.path.join(os.path.dirname(os.path.abspath(sync_client.__file__)), "private")
-    # The real private/ folder may not exist in a fresh checkout; what matters
-    # is the names modules write, so look at the module-level path constants.
-    import config, device_id, screentime_store, session_manager
-    written = {
-        os.path.basename(p) for p in (
-            config.CONFIG_PATH, screentime_store.STATE_PATH, session_manager.STATE_PATH,
-            device_id.DEVICE_ID_PATH, review_store.ACTIVE_SESSION_PATH, tasks_store.TASKS_PATH,
-            board_store.BOARD_PATH, calendar_store.DB_PATH, sync_client.LAST_SYNC_PATH,
-            sync_client.PULL_CURSOR_PATH, sync_client.SYNC_OWNER_PATH,
-        )
-    }
-    unknown = written - SYNCED_FILES - LOCAL_ONLY_FILES
+    unknown = _data_file_names_mentioned_in_the_code() - SYNCED_FILES - LOCAL_ONLY_FILES - SHIPPED_REFERENCE_FILES
     assert not unknown, f"new data file(s) {sorted(unknown)}: decide whether they sync"
 
 

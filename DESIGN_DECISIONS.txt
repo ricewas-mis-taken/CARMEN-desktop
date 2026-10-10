@@ -366,4 +366,8 @@ absolute path; the bytes go to a private bucket, one folder per user, uploaded
 before the record that points at them. Names from the cloud are validated
 before they touch a path or URL.
 Rollout: the SQL migration must be run by hand once, before this code is merged;
-until it is, sync reports "needs its one-time update" and local data is unaffected.
+until it is, sync probes the database first, writes nothing (no records, no photos)
+and reports "needs its one-time setup". Without that guard an upsert would succeed
+with no newer-wins check and an old edit could overwrite a newer one in the cloud.
+Photos: every local photo a record points at is uploaded once (list kept in
+private/uploaded_photos.json), not only photos of records changed this sync.
