@@ -781,7 +781,7 @@ def _apply_review_subjects(conn, records):
         with ctx:
             data = record["data"]
             topic_row = conn.execute(
-                "SELECT id FROM review_topics WHERE sync_id = ?", (data.get("topicSyncId"),)
+                "SELECT id FROM review_topics WHERE sync_id = ? AND is_deleted = 0", (data.get("topicSyncId"),)
             ).fetchone()
             if not topic_row:
                 logger.warning(
@@ -833,8 +833,12 @@ def _apply_review_problems(conn, records):
         ctx = _log_record_failure(record)
         with ctx:
             data = record["data"]
-            topic_row = conn.execute("SELECT id FROM review_topics WHERE sync_id = ?", (data.get("topicSyncId"),)).fetchone()
-            subject_row = conn.execute("SELECT id FROM review_subjects WHERE sync_id = ?", (data.get("subjectSyncId"),)).fetchone()
+            topic_row = conn.execute(
+                "SELECT id FROM review_topics WHERE sync_id = ? AND is_deleted = 0", (data.get("topicSyncId"),)
+            ).fetchone()
+            subject_row = conn.execute(
+                "SELECT id FROM review_subjects WHERE sync_id = ? AND is_deleted = 0", (data.get("subjectSyncId"),)
+            ).fetchone()
             if not topic_row or not subject_row:
                 logger.warning(
                     "sync_client: skipping pulled review_problem %s -- parent topic/subject not found locally", record["sync_id"]
@@ -900,7 +904,7 @@ def _apply_review_sessions(conn, records):
         with ctx:
             data = record["data"]
             problem_row = conn.execute(
-                "SELECT id FROM review_problems WHERE sync_id = ?", (data.get("problemSyncId"),)
+                "SELECT id FROM review_problems WHERE sync_id = ? AND is_deleted = 0", (data.get("problemSyncId"),)
             ).fetchone()
             if not problem_row:
                 logger.warning(
