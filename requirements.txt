@@ -10,6 +10,7 @@ PySide6
 watchdog
 supabase
 httpx
+websockets
 keyring
 python-dotenv
 pytest
