@@ -18,6 +18,7 @@ import tasks_store
 import auth_manager
 import sync_client
 import sync_cloud
+import sync_live
 import sync_photos
 import screentime_store
 import session_history
@@ -132,6 +133,8 @@ def isolate_real_data_paths(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(sync_client, "LAST_SYNC_PATH", str(base / "last_sync.txt"))
     monkeypatch.setattr(sync_client, "_cached_last_sync", None)
     monkeypatch.setattr(sync_client, "PULL_CURSOR_PATH", str(base / "pull_cursor.txt"))
+    monkeypatch.setattr(sync_live, "CURSOR_PATH", str(base / "live_cursor.txt"))
+    monkeypatch.setattr(sync_live, "HISTORY_PUSHED_PATH", str(base / "live_history_pushed.txt"))
     # A fixed fake project, so no test can ever reach the real Supabase URL
     # from private/.env even if it forgets to mock the transport.
     monkeypatch.setattr(auth_manager, "SUPABASE_URL", "https://test-project.supabase.co")
@@ -186,6 +189,7 @@ def isolate_state(isolate_config, tmp_path, monkeypatch):
         "reviewSubjectName": None,
         "reviewProblemId": None,
         "isBurnout": False,
+        "sessionId": None,
         "blockedBrowserProfiles": [],
         "hideTaskbarBadges": False,
         "stopTaskbarFlashing": False,
