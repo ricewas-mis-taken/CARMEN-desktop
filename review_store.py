@@ -22,6 +22,7 @@ from datetime import date, datetime, timedelta
 import calendar_store
 import device_id
 import review_scheduler
+import server_clock
 import state_events
 import sync_trigger
 from calendar_log import logger
@@ -59,6 +60,20 @@ _schema_ready = False
 _active_sessions = {}
 _active_sessions_loaded = False
 
+# Sharing the running review with another computer (see sync_live.py): when it
+# last changed here (cloud time, see server_clock), which review ended most
+# recently here (a shared "nothing running" only ends a review it names), and
+# who to tell about a local change.
+_review_stamp = None
+_ended_token = None
+_last_saved_tokens = set()
+_change_listeners = []
+_SYNC_KEY = "__sync__"
+
+
+def add_change_listener(listener):
+    _change_listeners.append(listener)
+
 
 def _ensure_active_sessions_loaded():
     # Lazy, not a bare module-level read at import time -- this module is
@@ -78,6 +93,7 @@ def _ensure_active_sessions_loaded():
             return
         _active_sessions_loaded = True
         _active_sessions.update(_load_active_sessions())
+        _last_saved_tokens.update(_active_sessions)
         snapshot = dict(_active_sessions)
 
     if not snapshot:
@@ -112,14 +128,25 @@ def _ensure_active_sessions_loaded():
             _save_active_sessions()
 
 
-def _save_active_sessions():
-    """Must be called with _lock already held, matching
+def _save_active_sessions(stamp=True, at_least=None):
+    """`stamp` marks this as a change made here (the default); a review copied
+    in from another computer passes stamp=False so it is not pushed straight
+    back.
+
+    Must be called with _lock already held, matching
     _elapsed_seconds_locked()'s naming convention below -- it iterates
     _active_sessions.items() directly with no defensive copy, so a
     concurrent mutation during that iteration (from another thread that
     didn't take the lock) would risk a `RuntimeError: dictionary changed
     size during iteration` or a torn read of an in-progress pause/resume."""
+    global _review_stamp, _ended_token, _last_saved_tokens
     state_events.bump()
+    if stamp:
+        gone = _last_saved_tokens - set(_active_sessions)
+        if gone:
+            _ended_token = sorted(gone)[0]
+        _review_stamp = server_clock.next_stamp(at_least)
+    _last_saved_tokens = set(_active_sessions)
     try:
         os.makedirs(os.path.dirname(ACTIVE_SESSION_PATH), exist_ok=True)
         serializable = {
@@ -132,12 +159,19 @@ def _save_active_sessions():
             }
             for token, entry in _active_sessions.items()
         }
+        serializable[_SYNC_KEY] = {"stamp": _review_stamp, "endedToken": _ended_token}
         tmp_path = ACTIVE_SESSION_PATH + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(serializable, f)
         os.replace(tmp_path, ACTIVE_SESSION_PATH)
     except OSError:
         logger.exception("review_store._save_active_sessions failed")
+    if stamp:
+        for listener in list(_change_listeners):
+            try:
+                listener()
+            except Exception:
+                pass
 
 
 def _load_active_sessions():
@@ -147,7 +181,14 @@ def _load_active_sessions():
         with open(ACTIVE_SESSION_PATH, "r", encoding="utf-8") as f:
             raw = json.load(f)
         result = {}
+        global _review_stamp, _ended_token
+        meta = raw.get(_SYNC_KEY)
+        if isinstance(meta, dict):
+            _review_stamp = meta.get("stamp")
+            _ended_token = meta.get("endedToken")
         for token, entry in raw.items():
+            if token == _SYNC_KEY:
+                continue
             started_at = datetime.fromisoformat(entry["started_at"])
             # .get() with defaults -- a file written before pause tracking
             # was added only has problem_id/started_at; treat it as
@@ -1093,6 +1134,76 @@ def auto_pause_for_break():
         entry["resumed_at"] = None
         entry["auto_paused"] = True
         _save_active_sessions()
+
+
+# --- sharing the running review with another computer (see sync_live.py) ---
+
+def review_stamp():
+    _ensure_active_sessions_loaded()
+    with _lock:
+        return _review_stamp
+
+
+def export_active_review():
+    """{"stamp", "endedToken", "review"} for the other computer; review is None
+    when nothing is running. times are this computer's local ones."""
+    _ensure_active_sessions_loaded()
+    with _lock:
+        review = None
+        if _active_sessions:
+            token, entry = next(iter(_active_sessions.items()))
+            review = {
+                "token": token,
+                "problemId": entry["problem_id"],
+                "startedAt": entry["started_at"].isoformat(),
+                "accumulatedSeconds": entry.get("accumulated_seconds", 0),
+                "resumedAt": entry["resumed_at"].isoformat() if entry.get("resumed_at") else None,
+                "autoPaused": bool(entry.get("auto_paused", False)),
+            }
+        return {"stamp": _review_stamp, "endedToken": _ended_token, "review": review}
+
+
+def apply_remote_review(review, ended_token, stamp):
+    """Takes the running review another computer shared, if it is newer than
+    ours. Returns "applied", "ignored" or "kept-local". `review` is None, or a
+    dict shaped like export_active_review()'s with times in local time and
+    problemId already this computer's own id for that problem.
+
+    A newer shared "nothing running" ends our review only if it names it as the
+    one that ended; otherwise ours was started while apart and is kept (and
+    re-stamped so it becomes the shared one). A different running review from
+    the other computer replaces ours -- only one is ever timed at once."""
+    global _review_stamp, _ended_token
+    if server_clock.parse(stamp) is None:
+        return "ignored"
+    _ensure_active_sessions_loaded()
+    entry = None
+    if review is not None:
+        try:
+            entry = {
+                "problem_id": int(review["problemId"]),
+                "started_at": datetime.fromisoformat(review["startedAt"]),
+                "accumulated_seconds": max(0, int(review.get("accumulatedSeconds") or 0)),
+                "resumed_at": datetime.fromisoformat(review["resumedAt"]) if review.get("resumedAt") else None,
+                "auto_paused": bool(review.get("autoPaused")),
+            }
+            token = str(review["token"])
+        except (KeyError, TypeError, ValueError):
+            return "ignored"
+    with _lock:
+        if not server_clock.is_newer(stamp, _review_stamp):
+            return "ignored"
+        local_token = next(iter(_active_sessions), None)
+        if local_token is not None and entry is None and ended_token != local_token:
+            _save_active_sessions(at_least=stamp)
+            return "kept-local"
+        _active_sessions.clear()
+        if entry is not None:
+            _active_sessions[token] = entry
+        _review_stamp = stamp
+        _ended_token = ended_token
+        _save_active_sessions(stamp=False)
+    return "applied"
 
 
 def auto_resume_from_break():

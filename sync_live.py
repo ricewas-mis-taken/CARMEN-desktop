@@ -13,17 +13,23 @@ computer cannot know a session started elsewhere unless it asks. A failure
 (offline, database not set up yet) backs off quietly instead of retrying
 every few seconds forever.
 """
+import hashlib
+import json
 import os
+import platform
 import re
 import threading
+import time
 from datetime import datetime, timedelta
 
 import httpx
 
 import auth_manager
 import calendar_store
+import config
 import device_id
 import review_store
+import screentime_store
 import server_clock
 import session_history
 import session_manager
@@ -34,7 +40,8 @@ from calendar_log import logger
 HISTORY_TABLE = "session_history"
 LIVE_TABLE = "live_session"
 LIVE_SYNC_ID = "current"          # one row per account: the state of "what is running"
-LANE_TABLES = (HISTORY_TABLE, LIVE_TABLE)
+REVIEW_TABLE = "live_review"      # the review being timed with no task session under it
+LANE_TABLES = sync_cloud.FAST_LANE_TABLES
 POLL_SECONDS = 5
 MAX_BACKOFF_SECONDS = 60
 
@@ -42,6 +49,12 @@ _PRIVATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private")
 CURSOR_PATH = os.path.join(_PRIVATE, "live_cursor.txt")
 HISTORY_PUSHED_PATH = os.path.join(_PRIVATE, "live_history_pushed.txt")
 LIVE_PUSHED_PATH = os.path.join(_PRIVATE, "live_state_pushed.txt")
+REVIEW_PUSHED_PATH = os.path.join(_PRIVATE, "live_review_pushed.txt")
+SETTINGS_TABLE = "settings"       # the saved block/allow lists and Start-dialog defaults
+SETTINGS_PUSHED_PATH = os.path.join(_PRIVATE, "live_settings_pushed.txt")
+SCREENTIME_PUSHED_PATH = os.path.join(_PRIVATE, "live_screentime_pushed.json")
+SCREENTIME_TABLE = "screentime"   # one row per computer per day; each computer writes only its own
+SCREENTIME_PUSH_SECONDS = 60      # it changes every second; once a minute is plenty
 
 _NAIVE_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$")
 _AWARE_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
@@ -225,6 +238,148 @@ def _apply_live(records):
             logger.exception("sync_live: could not apply the shared session state")
 
 
+# --- gather / apply: a review being timed on its own ---
+
+_pending_review = None     # a shared review whose problem has not reached this computer yet
+
+
+def _gather_review():
+    stamp = review_store.review_stamp()
+    if not stamp or not server_clock.is_newer(stamp, _read(REVIEW_PUSHED_PATH)):
+        return [], None
+    exported = review_store.export_active_review()
+    offset = server_clock.offset_seconds()
+    wire = {"endedToken": exported["endedToken"], "review": None}
+    review = exported["review"]
+    if review is not None:
+        problem_sync_id = _review_problem_sync_id(review["problemId"])
+        if not problem_sync_id:
+            return [], None          # the problem has not been synced yet: try again next pass
+        shifted = _convert(
+            {k: v for k, v in review.items() if k != "problemId"}, _NAIVE_ISO,
+            lambda value: _shift(sync_client._to_wire_ts(value), offset),
+        )
+        wire["review"] = {**shifted, "problemSyncId": problem_sync_id}
+    stamp = exported["stamp"] or stamp
+    return [{
+        "table_name": REVIEW_TABLE, "sync_id": LIVE_SYNC_ID, "data": wire,
+        "device_id": device_id.get_device_id(), "updated_at": stamp, "is_deleted": False,
+    }], stamp
+
+
+def _apply_review(records):
+    global _pending_review
+    for record in records:
+        if record.get("sync_id") != LIVE_SYNC_ID or not isinstance(record.get("data"), dict):
+            continue
+        try:
+            data = record["data"]
+            review = data.get("review")
+            if review is not None:
+                if not isinstance(review, dict):
+                    continue
+                offset = server_clock.offset_seconds()
+                local = _convert(
+                    review, _AWARE_ISO, lambda value: sync_client._from_wire_ts(_shift(value, -offset))
+                )
+                local["problemId"] = _review_problem_local_id(local.pop("problemSyncId", None))
+                if local["problemId"] is None:
+                    _pending_review = record      # wait for the problem to arrive
+                    continue
+                review = local
+            _pending_review = None
+            outcome = review_store.apply_remote_review(review, data.get("endedToken"), record.get("updated_at"))
+            if outcome == "applied":
+                _write(REVIEW_PUSHED_PATH, record["updated_at"])
+        except Exception:
+            logger.exception("sync_live: could not apply the shared review")
+
+
+# --- gather / apply: saved defaults ---
+
+def _gather_settings():
+    exported = config.export_shared_settings()
+    stamp = exported["stamp"]
+    if not stamp or not server_clock.is_newer(stamp, _read(SETTINGS_PUSHED_PATH)):
+        return [], None
+    return [{
+        "table_name": SETTINGS_TABLE, "sync_id": "defaults", "data": {"settings": exported["settings"]},
+        "device_id": device_id.get_device_id(), "updated_at": stamp, "is_deleted": False,
+    }], stamp
+
+
+def _apply_settings(records):
+    for record in records:
+        data = record.get("data")
+        if record.get("sync_id") != "defaults" or not isinstance(data, dict):
+            continue
+        try:
+            if config.apply_remote_settings(data.get("settings"), record.get("updated_at")):
+                _write(SETTINGS_PUSHED_PATH, record["updated_at"])
+        except Exception:
+            logger.exception("sync_live: could not apply the shared defaults")
+
+
+# --- gather / apply: screen time, one row per computer per day ---
+
+_last_screentime_push = 0.0
+
+
+def _gather_screentime():
+    """This computer's days whose totals changed since they were last sent.
+    Returns (records, {day: fingerprint}) -- empty until a minute has passed."""
+    global _last_screentime_push
+    if _last_screentime_push and time.monotonic() - _last_screentime_push < SCREENTIME_PUSH_SECONDS:
+        return [], {}
+    try:
+        with open(SCREENTIME_PUSHED_PATH, "r", encoding="utf-8") as f:
+            sent = json.load(f)
+        sent = sent if isinstance(sent, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        sent = {}
+    me = device_id.get_device_id()
+    records, fingerprints = [], {}
+    for day, bucket in screentime_store.export_days().items():
+        if not (bucket["apps"] or bucket["domains"]):
+            continue
+        fingerprint = hashlib.sha1(json.dumps(bucket, sort_keys=True).encode("utf-8")).hexdigest()
+        if sent.get(day) == fingerprint:
+            continue
+        fingerprints[day] = fingerprint
+        records.append({
+            "table_name": SCREENTIME_TABLE, "sync_id": f"{me}:{day}",
+            "data": {"deviceId": me, "deviceName": platform.node() or "Computer", "day": day, **bucket},
+            "device_id": me, "updated_at": server_clock.next_stamp(), "is_deleted": False,
+        })
+    return records, fingerprints
+
+
+def _remember_screentime_sent(fingerprints):
+    global _last_screentime_push
+    _last_screentime_push = time.monotonic()
+    if not fingerprints:
+        return
+    try:
+        with open(SCREENTIME_PUSHED_PATH, "r", encoding="utf-8") as f:
+            sent = json.load(f)
+        sent = sent if isinstance(sent, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        sent = {}
+    sent.update(fingerprints)
+    _write(SCREENTIME_PUSHED_PATH, json.dumps(sent))
+
+
+def _apply_screentime(records):
+    me = device_id.get_device_id()
+    for record in records:
+        data = record.get("data")
+        if record.get("is_deleted") or not isinstance(data, dict) or data.get("deviceId") == me:
+            continue
+        screentime_store.merge_remote_day(
+            data.get("deviceId"), data.get("deviceName"), data.get("day"), data.get("apps"), data.get("domains")
+        )
+
+
 # --- one pass ---
 
 def _apply(records):
@@ -233,6 +388,9 @@ def _apply(records):
         by_table.setdefault(record["table_name"], []).append(record)
     _apply_history(by_table.get(HISTORY_TABLE, []))
     _apply_live(by_table.get(LIVE_TABLE, []))
+    _apply_review(([_pending_review] if _pending_review else []) + by_table.get(REVIEW_TABLE, []))
+    _apply_screentime(by_table.get(SCREENTIME_TABLE, []))
+    _apply_settings(by_table.get(SETTINGS_TABLE, []))
 
 
 def tick():
@@ -247,6 +405,12 @@ def tick():
     push_records, history_watermark = _gather_history()
     live_records, live_stamp = _gather_live()
     push_records += live_records
+    review_records, review_stamp = _gather_review()
+    push_records += review_records
+    settings_records, settings_stamp = _gather_settings()
+    push_records += settings_records
+    screentime_records, screentime_fingerprints = _gather_screentime()
+    push_records += screentime_records
     refreshed = False
     while True:
         try:
@@ -270,6 +434,11 @@ def tick():
         _write(HISTORY_PUSHED_PATH, history_watermark)
     if live_stamp:
         _write(LIVE_PUSHED_PATH, live_stamp)
+    if review_stamp:
+        _write(REVIEW_PUSHED_PATH, review_stamp)
+    if settings_stamp:
+        _write(SETTINGS_PUSHED_PATH, settings_stamp)
+    _remember_screentime_sent(screentime_fingerprints)
     _apply(records)
     if cursor:
         _write(CURSOR_PATH, cursor)
@@ -279,6 +448,8 @@ def tick():
 # --- the loop ---
 
 session_manager.add_change_listener(lambda: _wake.set())
+review_store.add_change_listener(lambda: _wake.set())
+config.add_change_listener(lambda: _wake.set())
 
 
 def enable():

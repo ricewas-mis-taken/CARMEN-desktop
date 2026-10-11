@@ -9,6 +9,8 @@ import threading
 import time
 from datetime import datetime, timezone
 
+import server_clock
+
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "config.json")
 
 DEFAULT_CONFIG = {
@@ -32,7 +34,26 @@ DEFAULT_CONFIG = {
     # change" in general.
     "focusRulesVersion": 0,
     "focusRulesUpdatedAt": None,
+    # When the shared settings below last changed on any computer (cloud time).
+    "settingsUpdatedAt": None,
 }
+
+# The saved defaults every computer should agree on: what a new session blocks
+# and allows, and what the Start dialog remembers. Everything else in this file
+# is about one computer (window geometry, browser profile ids, the API token).
+SHARED_SETTINGS = (
+    "processBlocklist", "domainWhitelist", "last_duration_minutes", "last_lock_mode",
+    "last_hide_taskbar_badges", "last_stop_taskbar_flashing",
+)
+_change_listeners = []
+
+
+def add_change_listener(listener):
+    _change_listeners.append(listener)
+
+
+def shared_settings(cfg):
+    return {key: copy.deepcopy(cfg.get(key, DEFAULT_CONFIG[key])) for key in SHARED_SETTINGS}
 
 
 def load_config():
@@ -138,11 +159,79 @@ def update_config(mutator):
     ad hoc load/mutate/save."""
     with _config_lock:
         cfg = _load_for_update()
+        before = shared_settings(cfg)
         replacement = mutator(cfg)
         if replacement is not None:
             cfg = replacement
+        changed = shared_settings(cfg) != before
+        if changed:
+            cfg["settingsUpdatedAt"] = server_clock.next_stamp()
         save_config(cfg)
-        return cfg
+    if changed:
+        for listener in list(_change_listeners):
+            try:
+                listener()
+            except Exception:
+                pass
+    return cfg
+
+
+# --- sharing the saved defaults with another computer (see sync_live.py) ---
+
+def export_shared_settings():
+    """{"stamp", "settings"} for the other computer. Defaults saved before they
+    were shared get a stamp the first time they are sent."""
+    with _config_lock:
+        cfg = _load_for_update()
+        settings = shared_settings(cfg)
+        stamp = cfg.get("settingsUpdatedAt")
+        if stamp is None and settings != shared_settings({}):
+            stamp = cfg["settingsUpdatedAt"] = server_clock.next_stamp()
+            save_config(cfg)
+    return {"stamp": stamp, "settings": settings}
+
+
+def _clean_shared_settings(data):
+    """Only the sane parts of what another computer sent."""
+    if not isinstance(data, dict):
+        return {}
+    clean = {}
+    for key in ("processBlocklist", "domainWhitelist"):
+        value = data.get(key)
+        if (isinstance(value, list) and len(value) <= 2000
+                and all(isinstance(v, str) and v.strip() and len(v) <= 300 for v in value)):
+            clean[key] = list(value)
+    minutes = data.get("last_duration_minutes")
+    if (isinstance(minutes, (int, float)) and not isinstance(minutes, bool)
+            and minutes == minutes and 0 < minutes <= 100000):
+        clean["last_duration_minutes"] = minutes
+    if data.get("last_lock_mode") in ("soft", "hard"):
+        clean["last_lock_mode"] = data["last_lock_mode"]
+    for key in ("last_hide_taskbar_badges", "last_stop_taskbar_flashing"):
+        if isinstance(data.get(key), bool):
+            clean[key] = data[key]
+    return clean
+
+
+def apply_remote_settings(settings, stamp):
+    """Takes the saved defaults another computer shared, if newer than ours.
+    Returns True if they were applied. A changed domain list also bumps the
+    focus-rules version so the browser extension picks it up."""
+    clean = _clean_shared_settings(settings)
+    if not clean or server_clock.parse(stamp) is None:
+        return False
+    with _config_lock:
+        cfg = _load_for_update()
+        if not server_clock.is_newer(stamp, cfg.get("settingsUpdatedAt")):
+            return False
+        domains_changed = "domainWhitelist" in clean and clean["domainWhitelist"] != cfg.get("domainWhitelist")
+        cfg.update(copy.deepcopy(clean))
+        cfg["settingsUpdatedAt"] = stamp
+        if domains_changed:
+            cfg["focusRulesVersion"] = int(cfg.get("focusRulesVersion") or 0) + 1
+            cfg["focusRulesUpdatedAt"] = datetime.now(timezone.utc).isoformat()
+        save_config(cfg)
+    return True
 
 
 def get_api_token():
