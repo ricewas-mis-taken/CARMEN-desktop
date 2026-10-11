@@ -116,6 +116,8 @@ def isolate_real_data_paths(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(config, "CONFIG_PATH", str(base / "config.json"))
     monkeypatch.setattr(screentime_store, "STATE_PATH", str(base / "screentime.json"))
     monkeypatch.setattr(screentime_store, "_data", {})
+    monkeypatch.setattr(screentime_store, "REMOTE_PATH", str(base / "screentime_remote.json"))
+    monkeypatch.setattr(screentime_store, "_remote", None)
     monkeypatch.setattr(device_id, "DEVICE_ID_PATH", str(base / "device_id.txt"))
     monkeypatch.setattr(device_id, "_cached_id", None)
     monkeypatch.setattr(calendar_store, "DB_PATH", str(base / "calendar.db"))
@@ -140,6 +142,8 @@ def isolate_real_data_paths(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(sync_live, "HISTORY_PUSHED_PATH", str(base / "live_history_pushed.txt"))
     monkeypatch.setattr(sync_live, "LIVE_PUSHED_PATH", str(base / "live_state_pushed.txt"))
     monkeypatch.setattr(sync_live, "REVIEW_PUSHED_PATH", str(base / "live_review_pushed.txt"))
+    monkeypatch.setattr(sync_live, "SCREENTIME_PUSHED_PATH", str(base / "live_screentime_pushed.json"))
+    monkeypatch.setattr(sync_live, "_last_screentime_push", 0.0)
     # A fixed fake project, so no test can ever reach the real Supabase URL
     # from private/.env even if it forgets to mock the transport.
     monkeypatch.setattr(auth_manager, "SUPABASE_URL", "https://test-project.supabase.co")

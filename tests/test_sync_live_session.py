@@ -11,6 +11,7 @@ import pytest
 import device_id
 import calendar_store
 import review_store
+import screentime_store
 import server_clock
 import session_history
 import session_manager as sm
@@ -33,6 +34,7 @@ def server(monkeypatch):
 @pytest.fixture
 def device(tmp_path, monkeypatch):
     states = {}
+    screens = {}
 
     def _switch(name):
         base = tmp_path / name
@@ -67,6 +69,12 @@ def device(tmp_path, monkeypatch):
         monkeypatch.setattr(sync_client, "LAST_SYNC_PATH", str(base / "last_sync.txt"))
         monkeypatch.setattr(sync_client, "_cached_last_sync", None)
         monkeypatch.setattr(sync_client, "PULL_CURSOR_PATH", str(base / "pull_cursor.txt"))
+        # screen time: this computer's own days, and what other computers sent
+        monkeypatch.setattr(screentime_store, "_data", screens.setdefault(name, {}))
+        monkeypatch.setattr(screentime_store, "REMOTE_PATH", str(base / "screentime_remote.json"))
+        monkeypatch.setattr(screentime_store, "_remote", None)
+        monkeypatch.setattr(sync_live, "SCREENTIME_PUSHED_PATH", str(base / "live_screentime_pushed.json"))
+        monkeypatch.setattr(sync_live, "_last_screentime_push", 0.0)
         return states[name]
     return _switch
 
