@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 import auth_manager
 import qt_gui_thread
 import sync_client
+import sync_live
 import sync_scheduler
 import sync_trigger
 
@@ -130,6 +131,7 @@ class AccountArea(QWidget):
             self._account_row.set_email(user.get("email") if user else None)
             sync_trigger.enable()
             sync_scheduler.enable()
+            sync_live.enable()
         else:
             self._status_label.setVisible(False)
             sync_trigger.disable()
@@ -172,6 +174,7 @@ class AccountArea(QWidget):
     def _logout(self):
         sync_trigger.disable()
         sync_scheduler.disable()
+        sync_live.disable()
         auth_manager.logout()
         self.refresh()
 
