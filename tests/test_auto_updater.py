@@ -80,17 +80,13 @@ def test_check_and_pull_skips_a_dirty_tree_without_touching_it(repo_pair, tmp_pa
 
 def test_an_untracked_file_does_not_block_an_update(repo_pair, tmp_path, monkeypatch):
     origin, clone = repo_pair
-    _push_new_commit(origin, tmp_path, "hello
-world
-")
+    _push_new_commit(origin, tmp_path, "hello\nworld\n")
     monkeypatch.setattr(auto_updater, "REPO_ROOT", str(clone))
 
     (clone / "some-private.key").write_text("not part of the repo")
 
     assert auto_updater._check_and_pull() is True
-    assert (clone / "f.txt").read_text() == "hello
-world
-"
+    assert (clone / "f.txt").read_text() == "hello\nworld\n"
     assert (clone / "some-private.key").exists()
 
 
