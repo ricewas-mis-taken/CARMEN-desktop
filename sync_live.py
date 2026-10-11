@@ -13,9 +13,13 @@ computer cannot know a session started elsewhere unless it asks. A failure
 (offline, database not set up yet) backs off quietly instead of retrying
 every few seconds forever.
 """
+import hashlib
+import json
 import os
+import platform
 import re
 import threading
+import time
 from datetime import datetime, timedelta
 
 import httpx
@@ -24,6 +28,7 @@ import auth_manager
 import calendar_store
 import device_id
 import review_store
+import screentime_store
 import server_clock
 import session_history
 import session_manager
@@ -44,6 +49,9 @@ CURSOR_PATH = os.path.join(_PRIVATE, "live_cursor.txt")
 HISTORY_PUSHED_PATH = os.path.join(_PRIVATE, "live_history_pushed.txt")
 LIVE_PUSHED_PATH = os.path.join(_PRIVATE, "live_state_pushed.txt")
 REVIEW_PUSHED_PATH = os.path.join(_PRIVATE, "live_review_pushed.txt")
+SCREENTIME_PUSHED_PATH = os.path.join(_PRIVATE, "live_screentime_pushed.json")
+SCREENTIME_TABLE = "screentime"   # one row per computer per day; each computer writes only its own
+SCREENTIME_PUSH_SECONDS = 60      # it changes every second; once a minute is plenty
 
 _NAIVE_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$")
 _AWARE_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
@@ -284,6 +292,66 @@ def _apply_review(records):
             logger.exception("sync_live: could not apply the shared review")
 
 
+# --- gather / apply: screen time, one row per computer per day ---
+
+_last_screentime_push = 0.0
+
+
+def _gather_screentime():
+    """This computer's days whose totals changed since they were last sent.
+    Returns (records, {day: fingerprint}) -- empty until a minute has passed."""
+    global _last_screentime_push
+    if _last_screentime_push and time.monotonic() - _last_screentime_push < SCREENTIME_PUSH_SECONDS:
+        return [], {}
+    try:
+        with open(SCREENTIME_PUSHED_PATH, "r", encoding="utf-8") as f:
+            sent = json.load(f)
+        sent = sent if isinstance(sent, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        sent = {}
+    me = device_id.get_device_id()
+    records, fingerprints = [], {}
+    for day, bucket in screentime_store.export_days().items():
+        if not (bucket["apps"] or bucket["domains"]):
+            continue
+        fingerprint = hashlib.sha1(json.dumps(bucket, sort_keys=True).encode("utf-8")).hexdigest()
+        if sent.get(day) == fingerprint:
+            continue
+        fingerprints[day] = fingerprint
+        records.append({
+            "table_name": SCREENTIME_TABLE, "sync_id": f"{me}:{day}",
+            "data": {"deviceId": me, "deviceName": platform.node() or "Computer", "day": day, **bucket},
+            "device_id": me, "updated_at": server_clock.next_stamp(), "is_deleted": False,
+        })
+    return records, fingerprints
+
+
+def _remember_screentime_sent(fingerprints):
+    global _last_screentime_push
+    _last_screentime_push = time.monotonic()
+    if not fingerprints:
+        return
+    try:
+        with open(SCREENTIME_PUSHED_PATH, "r", encoding="utf-8") as f:
+            sent = json.load(f)
+        sent = sent if isinstance(sent, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        sent = {}
+    sent.update(fingerprints)
+    _write(SCREENTIME_PUSHED_PATH, json.dumps(sent))
+
+
+def _apply_screentime(records):
+    me = device_id.get_device_id()
+    for record in records:
+        data = record.get("data")
+        if record.get("is_deleted") or not isinstance(data, dict) or data.get("deviceId") == me:
+            continue
+        screentime_store.merge_remote_day(
+            data.get("deviceId"), data.get("deviceName"), data.get("day"), data.get("apps"), data.get("domains")
+        )
+
+
 # --- one pass ---
 
 def _apply(records):
@@ -293,6 +361,7 @@ def _apply(records):
     _apply_history(by_table.get(HISTORY_TABLE, []))
     _apply_live(by_table.get(LIVE_TABLE, []))
     _apply_review(([_pending_review] if _pending_review else []) + by_table.get(REVIEW_TABLE, []))
+    _apply_screentime(by_table.get(SCREENTIME_TABLE, []))
 
 
 def tick():
@@ -309,6 +378,8 @@ def tick():
     push_records += live_records
     review_records, review_stamp = _gather_review()
     push_records += review_records
+    screentime_records, screentime_fingerprints = _gather_screentime()
+    push_records += screentime_records
     refreshed = False
     while True:
         try:
@@ -334,6 +405,7 @@ def tick():
         _write(LIVE_PUSHED_PATH, live_stamp)
     if review_stamp:
         _write(REVIEW_PUSHED_PATH, review_stamp)
+    _remember_screentime_sent(screentime_fingerprints)
     _apply(records)
     if cursor:
         _write(CURSOR_PATH, cursor)
