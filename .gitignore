@@ -11,3 +11,8 @@ dist/
 # attachments) lives here now -- see each store module's *_PATH/PHOTOS_DIR
 # constant. Never committed.
 private/
+
+# Private keys never belong in the repo (and an unignored one used to make the
+# working tree look "dirty").
+*.key
+*.pem
