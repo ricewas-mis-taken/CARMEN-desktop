@@ -55,6 +55,18 @@ def device(tmp_path, monkeypatch):
         monkeypatch.setattr(tasks_store, "TASKS_PATH", str(base / "tasks.json"))
         monkeypatch.setattr(sync_cloud, "_verified", False)
         monkeypatch.setattr(server_clock, "_offset_seconds", 0.0)
+        # a review being timed on its own, and the slower lane's bookkeeping
+        monkeypatch.setattr(review_store, "ACTIVE_SESSION_PATH", str(base / "active_review.json"))
+        monkeypatch.setattr(review_store, "_active_sessions", {})
+        monkeypatch.setattr(review_store, "_active_sessions_loaded", False)
+        monkeypatch.setattr(review_store, "_review_stamp", None)
+        monkeypatch.setattr(review_store, "_ended_token", None)
+        monkeypatch.setattr(review_store, "_last_saved_tokens", set())
+        monkeypatch.setattr(review_store, "PHOTOS_DIR", str(base / "review_photos"))
+        monkeypatch.setattr(sync_live, "REVIEW_PUSHED_PATH", str(base / "live_review_pushed.txt"))
+        monkeypatch.setattr(sync_client, "LAST_SYNC_PATH", str(base / "last_sync.txt"))
+        monkeypatch.setattr(sync_client, "_cached_last_sync", None)
+        monkeypatch.setattr(sync_client, "PULL_CURSOR_PATH", str(base / "pull_cursor.txt"))
         return states[name]
     return _switch
 
