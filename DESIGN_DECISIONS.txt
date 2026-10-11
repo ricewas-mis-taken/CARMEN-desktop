@@ -441,3 +441,26 @@ computer plus "All computers".
 Not shared: browser-only extension sessions (no desktop app involved).
 Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-10-11] (nothing to
 change there: the extension reads whichever session its own desktop has).
+
+2026-10-11 -- Live connection (Realtime) for the fast sync lane, polling as the net
+Choice: sync_realtime.py holds a Supabase Realtime websocket and, when it hears
+"a sync_records row changed" from ANOTHER device, runs sync_live's ordinary pass
+at once. The message carries no data we rely on, so there is one apply path and
+a lost message costs nothing. Polling stays as the safety net: every 30 s while
+live (or when live is pointless), every 5 s when live is wanted but not working
+(blocked network, migration 002 not run), so nothing got slower than before.
+Held only when it can help: the account has used a second computer in the last
+30 days (multi_device.py: any pulled record carrying another device id), and a
+session/review is running or someone touched this computer in the last 5 min.
+An idle computer drops the connection and reconnects (with an immediate
+catch-up) the moment someone touches it. This keeps a one-computer user off the
+connection quota (200 concurrent on Supabase's free plan) and scales better than
+polling, whose load grows with every online user.
+Rejected: polling every 1-2 s -- 5-10x the requests for a still-not-instant
+result, battery and quota cost on every computer, risk of throttling.
+Rejected: sending the changed row over the socket and applying it directly -- a
+second apply path to keep correct, and nothing gained over one extra GET.
+Not verified against the real Supabase: the 1.0.0 message shapes follow the
+documented protocol and are covered by a local websocket server in the tests,
+but the first real run is the real test.
+Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-10-11] (no change there).

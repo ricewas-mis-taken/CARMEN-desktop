@@ -34,6 +34,7 @@ import auth_manager
 import qt_gui_thread
 import sync_client
 import sync_live
+import sync_realtime
 import sync_scheduler
 import sync_trigger
 
@@ -141,6 +142,7 @@ class AccountArea(QWidget):
             sync_trigger.enable()
             sync_scheduler.enable()
             sync_live.enable()
+            sync_realtime.enable()
             self._reconnect_timer.stop()
         else:
             sync_trigger.disable()
@@ -212,6 +214,7 @@ class AccountArea(QWidget):
         sync_trigger.disable()
         sync_scheduler.disable()
         sync_live.disable()
+        sync_realtime.disable()
         auth_manager.logout()
         self.refresh()
 

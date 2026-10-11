@@ -22,6 +22,7 @@ import qt_gui_thread
 import screentime_store
 import singleinstance
 import sync_live
+import sync_realtime
 import sync_scheduler
 import taskbar_quiet
 import tray
@@ -124,6 +125,7 @@ def main():
     calendar_scheduler.start(stop_event)
     sync_scheduler.start(stop_event)
     sync_live.start(stop_event)
+    sync_realtime.start(stop_event)
 
     def on_quit():
         stop_event.set()
