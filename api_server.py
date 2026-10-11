@@ -1043,4 +1043,36 @@ def run_server():
     # a bare TCP connect + GET /health got zero bytes back indefinitely while
     # the process was still running -- the single worker was stuck serving
     # something else and never got back around to it.
-    app.run(host="127.0.0.1", port=API_PORT, debug=False, use_reloader=False, threaded=True)
+    #
+    # Built with make_server() + serve_forever() rather than app.run(): Flask's
+    # app.run() goes through werkzeug's run_simple(), which marks the listening
+    # socket INHERITABLE even with the reloader off. When the auto-updater then
+    # restarts the app (os.execv, which on Windows starts a child that inherits
+    # every inheritable handle), the child ended up holding the old process's
+    # listening socket -- a second listener on the API port that nothing ever
+    # accepts from. The browser extension's requests landed on it and hung
+    # ("Failed to fetch") until the app was killed by hand.
+    #
+    # A restart may also reach this before the old process has fully let go of
+    # the port, so binding is retried for a few seconds instead of dying silently
+    # in this daemon thread.
+    from werkzeug.serving import make_server
+
+    global _server
+    deadline = time.monotonic() + BIND_RETRY_SECONDS
+    while True:
+        try:
+            server = make_server("127.0.0.1", API_PORT, app, threaded=True)
+            break
+        except (OSError, SystemExit):
+            # (werkzeug reports "port in use" by logging it and calling sys.exit)
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.5)
+    server.socket.set_inheritable(False)
+    _server = server
+    server.serve_forever()
+
+
+_server = None
+BIND_RETRY_SECONDS = 20
