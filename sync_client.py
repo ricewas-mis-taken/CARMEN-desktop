@@ -64,6 +64,7 @@ import auth_manager
 import board_store
 import calendar_store
 import device_id
+import multi_device
 import review_store
 import sync_cloud
 import sync_photos
@@ -1063,6 +1064,7 @@ def sync_now():
             logger.warning("sync_client.sync_now: couldn't reach Supabase: %s", exc)
             return SyncResult(success=False, pushed=0, pulled=0, skipped=0, error="Couldn't reach the sync service.")
 
+    multi_device.note_records(pulled_records)
     try:
         pulled, skipped_pull, failed = _apply_all(pulled_records)
     except Exception:
