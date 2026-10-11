@@ -75,7 +75,10 @@ def _check_and_pull():
     if ahead.returncode == 0:
         return False
 
-    status = _run_git("status", "--porcelain")
+    # Only edits to files git already tracks count as "dirty". An untracked file
+    # (a key, a note, a scratch file) used to block every update forever, and
+    # `pull --ff-only` already refuses by itself if it would overwrite one.
+    status = _run_git("status", "--porcelain", "--untracked-files=no")
     if status.stdout.strip():
         logger.info("auto_updater: update available on origin/%s but working tree is dirty -- skipping", branch)
         return False
