@@ -19,6 +19,7 @@ import threading
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
+    QCheckBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -36,6 +37,8 @@ import sync_scheduler
 import sync_trigger
 
 _STATUS_CLEAR_MS = 4000
+# Long enough to actually read a sentence and act on it.
+_ERROR_CLEAR_MS = 30000
 
 
 class _AccountRow(QWidget):
@@ -96,6 +99,9 @@ class AccountArea(QWidget):
 
         self._status_label = QLabel("")
         self._status_label.setStyleSheet("color: #8A8F98; font-size: 11px; padding: 0px 14px;")
+        # Wraps instead of being cut off at the sidebar edge: a sync error can be
+        # a whole sentence, and the part that says what to do is at the end.
+        self._status_label.setWordWrap(True)
         self._status_label.setVisible(False)
         layout.addWidget(self._status_label)
 
@@ -161,7 +167,7 @@ class AccountArea(QWidget):
         if result.success:
             self._set_status("Synced just now", auto_clear=True)
         else:
-            self._set_status(f"Sync error: {result.error}", auto_clear=True)
+            self._set_status(f"Sync error: {result.error}", auto_clear=True, duration_ms=_ERROR_CLEAR_MS)
 
     def _logout(self):
         sync_trigger.disable()
@@ -171,11 +177,12 @@ class AccountArea(QWidget):
 
     # --- status line ---
 
-    def _set_status(self, text, auto_clear=False):
+    def _set_status(self, text, auto_clear=False, duration_ms=None):
         self._status_label.setText(text)
+        self._status_label.setToolTip(text)
         self._status_label.setVisible(True)
         if auto_clear:
-            self._status_timer.start(_STATUS_CLEAR_MS)
+            self._status_timer.start(duration_ms or _STATUS_CLEAR_MS)
         else:
             self._status_timer.stop()
 
@@ -284,6 +291,12 @@ class _AuthTab(QWidget):
         self._password_edit = QLineEdit()
         self._password_edit.setEchoMode(QLineEdit.Password)
         layout.addWidget(self._password_edit)
+
+        self._show_password = QCheckBox("Show password")
+        self._show_password.toggled.connect(
+            lambda shown: self._password_edit.setEchoMode(QLineEdit.Normal if shown else QLineEdit.Password)
+        )
+        layout.addWidget(self._show_password)
 
         self._message_label = QLabel("")
         self._message_label.setWordWrap(True)
