@@ -93,11 +93,15 @@ skip it silently.
    [ ] Check tasks_store.py's/board_store.py's own sync_trigger.note_change()
        call sites — a new mutation path needs to call it too, or the change
        won't get pushed to other devices.
-   [ ] Session-level fields (session_manager.py's _state) are NOT synced
-       across devices — they're local-machine-only and exposed to the
-       extension purely via the local HTTP API. Don't assume a session
-       field needs device-sync treatment; only tasks/board/calendar data
-       does.
+   [ ] The running session IS shared between computers (sync_live.py, every
+       ~5 s): session_manager's _state, including waiting sessions, travels as
+       one record, and finished sessions (session_history) travel as one row
+       each, keyed by sessionId. A new field in _state therefore needs: a
+       default in _DEFAULT_STATE, a type that _clean_remote_session accepts,
+       a decision on whether it is per-computer (add to _LOCAL_ONLY_KEYS) and,
+       if it is a local row number rather than a shared id, a mapping in
+       sync_live (see reviewProblemId). Not shared yet: independent reviews
+       (active_review.json) and browser-only extension sessions.
    [ ] If unsure whether something needs sync, check how the nearest
        existing similar field is handled rather than guessing.
 
