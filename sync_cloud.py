@@ -27,6 +27,10 @@ PULL_PAGE_SIZE = 1000
 CURSOR_OVERLAP = timedelta(seconds=30)
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
 
+# Table names handled by sync_live's fast lane; the slower lane in sync_client
+# leaves them out of its own pulls.
+FAST_LANE_TABLES = ("session_history",)
+
 RECORD_FIELDS = ("table_name", "sync_id", "data", "device_id", "updated_at", "is_deleted")
 
 
@@ -102,15 +106,21 @@ def push(client, token, user_id, records):
     return accepted, len(records) - accepted
 
 
-def pull(client, token, cursor):
+def pull(client, token, cursor, tables=None, exclude=None):
     """Returns (records, new_cursor). `cursor` is the largest server_updated_at
-    seen by the previous pull (or None for everything)."""
+    seen by the previous pull (or None for everything). `tables` limits the pull
+    to those table_names; `exclude` leaves some out (the two lanes of sync split
+    the table names between them)."""
     base, _ = _base_url()
     params = {
         "select": ",".join(RECORD_FIELDS + ("server_updated_at",)),
         "order": "server_updated_at.asc,sync_id.asc",
         "limit": str(PULL_PAGE_SIZE),
     }
+    if tables:
+        params["table_name"] = f"in.({','.join(tables)})"
+    elif exclude:
+        params["table_name"] = f"not.in.({','.join(exclude)})"
     if cursor:
         params["server_updated_at"] = f"gt.{(_parse_ts(cursor) - CURSOR_OVERLAP).isoformat()}"
     records = []

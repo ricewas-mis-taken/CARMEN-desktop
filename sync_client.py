@@ -1030,7 +1030,9 @@ def sync_now():
                 sync_cloud.ensure_ready(client, token)
                 sync_photos.upload_missing(client, token, user["id"])
                 pushed, skipped_push = sync_cloud.push(client, token, user["id"], push_records)
-                pulled_records, new_cursor = sync_cloud.pull(client, token, cursor)
+                pulled_records, new_cursor = sync_cloud.pull(
+                    client, token, cursor, exclude=sync_cloud.FAST_LANE_TABLES
+                )
             break
         except sync_cloud.NotConfigured:
             return SyncResult(
