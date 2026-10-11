@@ -6,6 +6,7 @@ import pytest
 
 import auth_manager
 import calendar_store
+import review_store
 import device_id
 import session_history
 import session_manager as sm
@@ -39,6 +40,7 @@ def device(tmp_path, monkeypatch):
         monkeypatch.setattr(device_id, "_cached_id", None)
         monkeypatch.setattr(calendar_store, "DB_PATH", str(base / "calendar.db"))
         monkeypatch.setattr(calendar_store, "_conn", None)
+        monkeypatch.setattr(review_store, "_schema_ready", False)
         monkeypatch.setattr(tasks_store, "TASKS_PATH", str(base / "tasks.json"))
         monkeypatch.setattr(sync_cloud, "_verified", False)
     return _switch
