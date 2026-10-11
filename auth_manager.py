@@ -19,6 +19,7 @@ starts up fine; sign-in just won't work until it's set up.
 import logging
 import os
 import threading
+import time
 
 import keyring
 import keyring.errors
@@ -44,16 +45,37 @@ KEYRING_SERVICE = "CarmenDesktop"
 KEYRING_USERNAME = "supabase_refresh_token"
 
 _lock = threading.Lock()
+# One refresh at a time. Every refresh uses up the refresh token it was given and
+# returns a new one, so two refreshes running together with the same token make
+# Supabase think it was stolen and end the whole sign-in.
+_refresh_lock = threading.Lock()
+# After a refresh that failed for lack of a connection, wait before trying again
+# (callers ask "am I signed in?" every few seconds).
+_OFFLINE_RETRY_SECONDS = 15
+_retry_not_before = 0.0
 _client = None
 _access_token = None
 _auth_generation = 0  # bumped by logout() so an in-flight refresh can tell it was superseded
 _current_user = None  # {"id": ..., "email": ...} while logged in, else None
 
 
+def _on_auth_event(event, session):
+    """The Supabase client renews its own login in the background and each renewal
+    replaces the refresh token. Whatever we saved at sign-in is then already used up
+    -- next launch it is refused, and that was the "I keep having to sign in" bug.
+    So every renewal is saved the moment it happens."""
+    global _access_token
+    if event != "TOKEN_REFRESHED" or session is None or _current_user is None:
+        return                      # (signed out, or not signed in by us: never bring it back)
+    _access_token = session.access_token
+    _store_refresh_token(session.refresh_token)
+
+
 def _get_client():
     global _client
     if _client is None:
         _client = create_client(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
+        _client.auth.on_auth_state_change(_on_auth_event)
     return _client
 
 
@@ -156,33 +178,65 @@ def logout():
         _clear_refresh_token()
 
 
-def _refresh_session():
+def _was_rejected(exc):
+    """True if Supabase itself refused the refresh token (revoked, already used,
+    expired) -- as opposed to us simply not being able to reach it."""
+    status = getattr(exc, "status", None)
+    text = str(exc).lower()
+    return status in (400, 401, 403) or any(
+        term in text for term in ("invalid refresh token", "refresh_token_not_found", "already used", "session_not_found")
+    )
+
+
+def has_saved_login():
+    """True if a refresh token is saved -- i.e. the user signed in on this computer
+    and has not signed out, even if we cannot reach Supabase right now."""
+    return bool(_load_refresh_token())
+
+
+def _refresh_session(force=True):
     """Exchanges the stored refresh token for a fresh access token.
     Returns True on success. Used both at startup (no in-memory session
     yet) and whenever a request gets a 401 (the sync module's job, once
-    it exists) -- calling this again is how that recovers."""
-    global _access_token, _current_user
+    it exists) -- calling this again is how that recovers.
+
+    force=False returns at once if another thread has just done it. A refresh
+    that failed for lack of a connection keeps the saved token (the user is still
+    signed in, we just cannot prove it yet) and is not retried for a few seconds;
+    only a refusal from Supabase itself discards it."""
+    global _access_token, _current_user, _retry_not_before
     if not SUPABASE_URL or not SUPABASE_PUBLISHABLE_KEY:
         return False
-    generation = _auth_generation  # captured before reading the token so a logout() in between is noticed
-    refresh_token = _load_refresh_token()
-    if not refresh_token:
-        return False
-    try:
-        result = _get_client().auth.refresh_session(refresh_token)
-    except Exception:
-        return False
+    with _refresh_lock:
+        if not force and _access_token and _current_user:
+            return True
+        if time.monotonic() < _retry_not_before:
+            return False
+        generation = _auth_generation  # captured before reading the token so a logout() in between is noticed
+        refresh_token = _load_refresh_token()
+        if not refresh_token:
+            return False
+        try:
+            result = _get_client().auth.refresh_session(refresh_token)
+        except Exception as exc:
+            if _was_rejected(exc):
+                logger.warning("The saved sign-in was refused by Supabase; signing out: %s", exc)
+                _clear_refresh_token()
+            else:
+                _retry_not_before = time.monotonic() + _OFFLINE_RETRY_SECONDS
+            return False
 
-    session = result.session
-    if not session:
-        return False
-    with _lock:
-        if generation != _auth_generation:
-            return False  # logout() ran while this refresh was in flight
-        _access_token = session.access_token
-        _current_user = {"id": result.user.id, "email": result.user.email}
-        _store_refresh_token(session.refresh_token)
-    return True
+        session = result.session
+        if not session:
+            return False
+        _retry_not_before = 0.0
+        with _lock:
+            if generation != _auth_generation:
+                return False  # logout() ran while this refresh was in flight
+            _access_token = session.access_token
+            _current_user = {"id": result.user.id, "email": result.user.email}
+            _store_refresh_token(session.refresh_token)
+        return True
 
 
 def refresh_access_token():
@@ -196,7 +250,7 @@ def refresh_access_token():
 def is_logged_in():
     if _access_token and _current_user:
         return True
-    return _refresh_session()
+    return _refresh_session(force=False)
 
 
 def get_current_user():
