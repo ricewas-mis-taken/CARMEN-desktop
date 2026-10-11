@@ -11,6 +11,7 @@ process has no visibility into which domain a browser tab is on by itself.
 """
 import json
 import os
+import re
 import shutil
 import threading
 import time
@@ -146,15 +147,23 @@ def add_domain_seconds(domain, seconds, when=None):
         _maybe_flush_locked()
 
 
-def get_day(date_str):
+def get_day(date_str, device=None):
+    """One day's seconds per app/domain. device: None/"this" is this computer,
+    "all" adds every other computer, or the id of one other computer."""
+    apps = {}
+    domains = {}
     with _lock:
-        bucket = _data.get(date_str, {})
-        return {"apps": dict(bucket.get("apps", {})), "domains": dict(bucket.get("domains", {}))}
+        for bucket in _buckets_for(date_str, device):
+            for name, secs in bucket.get("apps", {}).items():
+                apps[name] = apps.get(name, 0) + secs
+            for name, secs in bucket.get("domains", {}).items():
+                domains[name] = domains.get(name, 0) + secs
+    return {"apps": apps, "domains": domains}
 
 
-def get_range(start_date_str, end_date_str):
+def get_range(start_date_str, end_date_str, device=None):
     """Sums apps/domains across every day from start_date_str to
-    end_date_str inclusive (both "YYYY-MM-DD")."""
+    end_date_str inclusive (both "YYYY-MM-DD"); `device` as in get_day()."""
     start = datetime.strptime(start_date_str, "%Y-%m-%d").date()
     end = datetime.strptime(end_date_str, "%Y-%m-%d").date()
     apps = {}
@@ -162,11 +171,101 @@ def get_range(start_date_str, end_date_str):
     with _lock:
         d = start
         while d <= end:
-            bucket = _data.get(d.isoformat())
-            if bucket:
+            for bucket in _buckets_for(d.isoformat(), device):
                 for name, secs in bucket.get("apps", {}).items():
                     apps[name] = apps.get(name, 0) + secs
                 for name, secs in bucket.get("domains", {}).items():
                     domains[name] = domains.get(name, 0) + secs
             d += timedelta(days=1)
     return {"apps": apps, "domains": domains}
+
+
+# --- other computers' screen time (see sync_live.py) ---
+#
+# Each computer only ever writes its own days; what other computers sent is
+# kept apart, per device, so the tab can show them one at a time or together.
+
+REMOTE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "screentime_remote.json")
+_remote = None            # {deviceId: {"name": str, "days": {day: {"apps": {}, "domains": {}}}}}
+_SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_SAFE_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_MAX_NAMES_PER_DAY = 2000
+_MAX_SECONDS = 10 * 24 * 3600
+
+
+def _load_remote_locked():
+    global _remote
+    if _remote is None:
+        try:
+            with open(REMOTE_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            _remote = data if isinstance(data, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            _remote = {}
+    return _remote
+
+
+def _clean_seconds(table):
+    """{name: seconds} with only sane entries, or None if it is not a dict."""
+    if not isinstance(table, dict):
+        return None
+    clean = {}
+    for name, secs in table.items():
+        if (isinstance(name, str) and 0 < len(name) <= 200 and isinstance(secs, (int, float))
+                and not isinstance(secs, bool) and secs == secs and 0 < secs <= _MAX_SECONDS):
+            clean[name] = secs
+        if len(clean) >= _MAX_NAMES_PER_DAY:
+            break
+    return clean
+
+
+def merge_remote_day(device_id, name, day, apps, domains):
+    """Stores one day of another computer's screen time, replacing what we had
+    for that computer and day. Returns False if the data is not usable."""
+    clean_apps, clean_domains = _clean_seconds(apps), _clean_seconds(domains)
+    if (not isinstance(device_id, str) or not _SAFE_ID.match(device_id) or not isinstance(day, str)
+            or not _SAFE_DAY.match(day) or clean_apps is None or clean_domains is None):
+        return False
+    label = name.strip()[:64] if isinstance(name, str) and name.strip() else device_id[:8]
+    with _lock:
+        remote = _load_remote_locked()
+        entry = remote.setdefault(device_id, {"name": label, "days": {}})
+        entry["name"] = label
+        entry["days"][day] = {"apps": clean_apps, "domains": clean_domains}
+        os.makedirs(os.path.dirname(REMOTE_PATH), exist_ok=True)
+        tmp_path = REMOTE_PATH + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(remote, f)
+        os.replace(tmp_path, REMOTE_PATH)
+    return True
+
+
+def remote_devices():
+    """[{"id", "name"}] for every other computer that has sent screen time,
+    named after the computer (a short id is added when two share a name)."""
+    with _lock:
+        devices = [{"id": did, "name": entry.get("name") or did[:8]} for did, entry in _load_remote_locked().items()]
+    names = [d["name"] for d in devices]
+    for d in devices:
+        if names.count(d["name"]) > 1:
+            d["name"] = f"{d['name']} ({d['id'][:4]})"
+    return sorted(devices, key=lambda d: d["name"].lower())
+
+
+def export_days():
+    """A copy of this computer's own days: {day: {"apps", "domains"}}."""
+    with _lock:
+        return {day: {"apps": dict(b.get("apps", {})), "domains": dict(b.get("domains", {}))}
+                for day, b in _data.items() if isinstance(b, dict)}
+
+
+def _buckets_for(day, device):
+    """The buckets of `day` that `device` ("this", None, "all" or a device id) covers."""
+    buckets = []
+    if device in (None, "this", "all"):
+        buckets.append(_data.get(day))
+    if device == "all":
+        buckets += [entry.get("days", {}).get(day) for entry in _load_remote_locked().values()]
+    elif device not in (None, "this"):
+        buckets.append(_load_remote_locked().get(device, {}).get("days", {}).get(day))
+    return [b for b in buckets if b]
