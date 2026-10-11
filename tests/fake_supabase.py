@@ -72,7 +72,7 @@ class FakeSupabase:
         raise AssertionError(f"unexpected request: {request.method} {request.url}")
 
     ALLOWED_PARAMS = {
-        "GET": {"select", "order", "limit", "offset", "server_updated_at"},
+        "GET": {"select", "order", "limit", "offset", "server_updated_at", "table_name"},
         "POST": {"on_conflict", "select"},
     }
 
@@ -92,6 +92,12 @@ class FakeSupabase:
             assert flt.startswith("gt."), flt
             cutoff = datetime.fromisoformat(flt[3:].replace("Z", "+00:00"))
             rows = [r for r in rows if datetime.fromisoformat(r["server_updated_at"]) > cutoff]
+        names = params.get("table_name")
+        if names:
+            listed = names[names.index("(") + 1:-1].split(",")
+            keep_listed = names.startswith("in.(")
+            assert keep_listed or names.startswith("not.in.("), names
+            rows = [r for r in rows if (r["table_name"] in listed) == keep_listed]
         offset = int(params.get("offset", 0))
         limit = int(params.get("limit", 1000))
         if self.pull_page_size:

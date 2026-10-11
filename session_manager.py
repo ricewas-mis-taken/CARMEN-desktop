@@ -79,6 +79,9 @@ _state = {
     # a countdown from the full 8-hour ceiling instead of "Until burnout"
     # with elapsed time underneath.
     "isBurnout": False,
+    # Identity of this one session, minted when it starts and carried into its
+    # history entry. Two synced devices that both see it end file ONE entry.
+    "sessionId": None,
     # AppUserModelIDs (see enforcer.get_window_aumi) of Chrome/Edge profile
     # windows to block for just that one profile -- unlike processBlocklist,
     # which blocks chrome.exe/msedge.exe outright (every profile equally).
@@ -377,6 +380,7 @@ def start_session(
         _state["reviewSubjectName"] = review_subject_name
         _state["reviewProblemId"] = review_problem_id
         _state["isBurnout"] = is_burnout
+        _state["sessionId"] = uuid.uuid4().hex
         _state["blockedBrowserProfiles"] = _clean_entries(blocked_browser_profiles)
         _state["hideTaskbarBadges"] = bool(hide_taskbar_badges)
         _state["stopTaskbarFlashing"] = bool(stop_taskbar_flashing)
@@ -625,6 +629,7 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None, restore_pa
     # indistinguishable from a plain session that happened to get paused and
     # resumed a few times.
     pomodoro = dict(_state["pomodoro"]) if _state["pomodoro"] is not None else None
+    session_id = _state.get("sessionId")
 
     if was_active:
         session_history.append_entry(
@@ -651,6 +656,7 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None, restore_pa
                 "reviewProblemName": review_problem_name,
                 "reviewSubjectName": review_subject_name,
                 "pomodoro": pomodoro,
+                "sessionId": session_id,
             }
         )
 
@@ -676,6 +682,7 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None, restore_pa
     _state["reviewSubjectName"] = None
     _state["reviewProblemId"] = None
     _state["isBurnout"] = False
+    _state["sessionId"] = None
     _state["blockedBrowserProfiles"] = []
     _state["hideTaskbarBadges"] = False
     _state["stopTaskbarFlashing"] = False
@@ -763,6 +770,7 @@ def _get_status_locked():
         "reviewSubjectName": _state["reviewSubjectName"],
         "reviewProblemId": _state["reviewProblemId"],
         "isBurnout": _state["isBurnout"],
+        "sessionId": _state.get("sessionId"),
         "blockedBrowserProfiles": list(_state["blockedBrowserProfiles"]),
         "hideTaskbarBadges": bool(_state.get("hideTaskbarBadges")),
         "stopTaskbarFlashing": bool(_state.get("stopTaskbarFlashing")),

@@ -7,6 +7,7 @@ Lives in session_history.json, appended to whenever a session ends —
 manually (tray "End Session" / POST /session/end) or by running out the
 clock — so it survives past whatever session_state.json currently holds.
 """
+import hashlib
 import json
 import logging
 import os
@@ -22,7 +23,35 @@ _lock = threading.Lock()
 logger = logging.getLogger(__name__)
 
 
+def entry_id(entry):
+    """Identity of a history entry across devices: the sessionId stamped when
+    the session started, or -- for an entry filed before sessions had ids -- a
+    fingerprint of its own start/end, so every device derives the same id."""
+    session_id = entry.get("sessionId")
+    if session_id:
+        return session_id
+    raw = "|".join(str(entry.get(k)) for k in (
+        "startTime", "endTime", "source", "eventId", "eventTitle", "reviewProblemName"))
+    return "legacy-" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:24]
+
+
 def append_entry(entry):
+    """Files one finished session. A session already on file (same id) is not
+    added twice -- two synced devices can both see the same session end."""
+    _append_entries([entry])
+
+
+def merge_remote(entries):
+    """Adds sessions another device filed. Returns how many were new."""
+    return _append_entries(entries)
+
+
+def entries_ended_after(watermark):
+    """Entries whose endTime is later than `watermark` (all of them when None)."""
+    return [e for e in load_all() if watermark is None or (e.get("endTime") or "") > watermark]
+
+
+def _append_entries(new_entries):
     with _lock:
         history = None
         # A read failure must never be mistaken for "no history yet": the
@@ -54,8 +83,18 @@ def append_entry(entry):
         if history is None:
             logger.error("session history unreadable; not overwriting it with a new entry")
             return
-        history.append(entry)
-        _save_all_locked(history)
+        known = {entry_id(e) for e in history}
+        added = 0
+        for entry in new_entries:
+            if entry_id(entry) in known:
+                continue
+            known.add(entry_id(entry))
+            history.append(entry)
+            added += 1
+        if added:
+            history.sort(key=lambda e: e.get("endTime") or e.get("startTime") or "")
+            _save_all_locked(history)
+        return added
 
 
 def load_all():
