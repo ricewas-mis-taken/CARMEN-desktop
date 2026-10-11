@@ -100,8 +100,12 @@ skip it silently.
        default in _DEFAULT_STATE, a type that _clean_remote_session accepts,
        a decision on whether it is per-computer (add to _LOCAL_ONLY_KEYS) and,
        if it is a local row number rather than a shared id, a mapping in
-       sync_live (see reviewProblemId). Not shared yet: independent reviews
-       (active_review.json) and browser-only extension sessions.
+       sync_live (see reviewProblemId). Also shared the same way: a review
+       being timed on its own (review_store), screen time (one row per
+       computer per day, shown per computer in the Screen Time tab), and the
+       saved block/allow lists and Start-dialog defaults (config.py's
+       SHARED_SETTINGS -- a new setting is per-computer unless it is listed
+       there). Not shared: browser-only extension sessions.
    [ ] If unsure whether something needs sync, check how the nearest
        existing similar field is handled rather than guessing.
 

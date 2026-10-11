@@ -432,7 +432,12 @@ Duplicates: both computers may run out the same clock; the entry id is the
 sessionId, so history files it once. A newer "nothing running" from the other
 computer only ends our session if it names that session as the one it ended;
 otherwise ours is kept and re-stamped (two sessions started while apart).
-Not shared yet: independent reviews (active_review.json), browser-only
-extension sessions, per-computer screen time.
+Also shared: a review timed on its own (same newest-wins + "which one ended"
+rule as the session), the saved block/allow lists and Start-dialog defaults
+(config.SHARED_SETTINGS; window geometry, browser profile ids and the API
+token stay per computer), and screen time -- one row per computer per day, each
+computer writing only its own, so nothing can conflict; the tab has a button per
+computer plus "All computers".
+Not shared: browser-only extension sessions (no desktop app involved).
 Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-10-11] (nothing to
 change there: the extension reads whichever session its own desktop has).
