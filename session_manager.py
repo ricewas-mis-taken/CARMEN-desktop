@@ -12,6 +12,7 @@ import threading
 import uuid
 from datetime import datetime, timedelta
 
+import server_clock
 import session_history
 import state_events
 
@@ -82,6 +83,13 @@ _state = {
     # Identity of this one session, minted when it starts and carried into its
     # history entry. Two synced devices that both see it end file ONE entry.
     "sessionId": None,
+    # The session that ended most recently here. A shared "nothing is running"
+    # only ends the session on another computer if it says which one it ended.
+    "endedSessionId": None,
+    # When this state last changed, in the cloud's time (see server_clock):
+    # whichever computer changed the running session last wins when two
+    # computers sync it (see sync_live). Stamped by _save(), not set by hand.
+    "syncUpdatedAt": None,
     # AppUserModelIDs (see enforcer.get_window_aumi) of Chrome/Edge profile
     # windows to block for just that one profile -- unlike processBlocklist,
     # which blocks chrome.exe/msedge.exe outright (every profile equally).
@@ -118,6 +126,19 @@ _state = {
     # (still paused) session.
     "parkedSessions": [],
 }
+
+_DEFAULT_STATE = copy.deepcopy(_state)
+
+# Facts about THIS computer's windows, never taken from another computer.
+_LOCAL_ONLY_KEYS = ("blockedBrowserProfiles", "lastAcceptableProcess")
+
+# Called (cheaply, from any thread) after every local change -- sync_live uses it
+# to push the new state within moments instead of at its next poll.
+_change_listeners = []
+
+
+def add_change_listener(listener):
+    _change_listeners.append(listener)
 
 # Chromium-based browsers where every open profile shares one OS process --
 # is_blocked_browser_profile() applies to windows from these, keyed by the
@@ -267,7 +288,22 @@ def is_exempt(process_name, pid=None):
     return False
 
 
-def _save():
+def _save(stamp=True, at_least=None):
+    """Writes session_state.json. `stamp` marks this as a change made here (the
+    default); a state copied in from another computer passes stamp=False so it
+    is not pushed straight back."""
+    if stamp:
+        _state["syncUpdatedAt"] = server_clock.next_stamp(at_least)
+    _write_state_file()
+    if stamp:
+        for listener in list(_change_listeners):
+            try:
+                listener()
+            except Exception:
+                pass
+
+
+def _write_state_file():
     # Write to a temp file and rename over the real one — _save() runs on
     # every violation and status tick, so a plain in-place write leaves a
     # wide window where killing the process mid-write truncates the file.
@@ -295,6 +331,8 @@ def _load():
         # time — fall back to the in-memory defaults instead.
         return
     _state.update(data)
+    if _state["isActive"] and not _state.get("sessionId"):
+        _state["sessionId"] = uuid.uuid4().hex   # a session from before sessions had ids
 
 
 _load()
@@ -381,6 +419,7 @@ def start_session(
         _state["reviewProblemId"] = review_problem_id
         _state["isBurnout"] = is_burnout
         _state["sessionId"] = uuid.uuid4().hex
+        _state["endedSessionId"] = None
         _state["blockedBrowserProfiles"] = _clean_entries(blocked_browser_profiles)
         _state["hideTaskbarBadges"] = bool(hide_taskbar_badges)
         _state["stopTaskbarFlashing"] = bool(stop_taskbar_flashing)
@@ -683,6 +722,8 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None, restore_pa
     _state["reviewProblemId"] = None
     _state["isBurnout"] = False
     _state["sessionId"] = None
+    if was_active:
+        _state["endedSessionId"] = session_id
     _state["blockedBrowserProfiles"] = []
     _state["hideTaskbarBadges"] = False
     _state["stopTaskbarFlashing"] = False
@@ -782,8 +823,122 @@ def _get_status_locked():
     }
 
 
+# --- sharing the running session with another computer (see sync_live.py) ---
+
+def local_stamp():
+    """When the state last changed here (cloud time), or None."""
+    with _lock:
+        return _state.get("syncUpdatedAt")
+
+
+def export_live_state():
+    """A copy of the whole state -- running session and every waiting one -- for
+    the other computer, minus what only makes sense on this one."""
+    with _lock:
+        if _state["isActive"] and not _state.get("sessionId"):
+            _state["sessionId"] = uuid.uuid4().hex
+            _save()
+        snapshot = copy.deepcopy(_state)
+    for holder in [snapshot] + list(snapshot.get("parkedSessions") or []):
+        for key in _LOCAL_ONLY_KEYS:
+            holder[key] = copy.deepcopy(_DEFAULT_STATE[key])
+    return snapshot
+
+
+def _clean_remote_session(data, allow_park_id=False):
+    """The fields of `data` that look like what a session holds, or None if it
+    is not a dict. Anything unknown or of the wrong type is dropped, so a
+    damaged or hand-edited cloud record cannot put junk into the live state."""
+    if not isinstance(data, dict):
+        return None
+    clean = {}
+    for key, default in _DEFAULT_STATE.items():
+        if key in ("syncUpdatedAt", "parkedSessions") or key in _LOCAL_ONLY_KEYS or key not in data:
+            continue
+        value = data[key]
+        if isinstance(default, bool):
+            ok = isinstance(value, bool)
+        elif isinstance(default, str):
+            ok = isinstance(value, str)
+        elif isinstance(default, int):
+            ok = isinstance(value, int) and not isinstance(value, bool)
+        elif isinstance(default, list):
+            ok = isinstance(value, list)
+        else:  # defaults of None: a time, a name, an id, or a small dict
+            ok = value is None or (isinstance(value, (str, int, float, dict)) and not isinstance(value, bool))
+        if not ok:
+            continue
+        if key in ("processBlocklist", "domainWhitelist", "domainWhitelistAdditions", "processBlocklistExceptions"):
+            value = _clean_entries(value) if all(isinstance(v, str) for v in value) else []
+        elif key == "violationLog":
+            value = [v for v in value if isinstance(v, dict)]
+        clean[key] = copy.deepcopy(value)
+    if allow_park_id:
+        clean["parkId"] = data["parkId"] if isinstance(data.get("parkId"), str) else uuid.uuid4().hex
+    return clean
+
+
+def _clean_remote_state(data):
+    clean = _clean_remote_session(data)
+    if clean is None:
+        return None
+    parked = []
+    for entry in (data.get("parkedSessions") if isinstance(data.get("parkedSessions"), list) else []):
+        cleaned = _clean_remote_session(entry, allow_park_id=True)
+        if cleaned is not None and cleaned.get("startTime"):
+            parked.append({**copy.deepcopy(_DEFAULT_STATE), **cleaned})
+            for key in ("parkedSessions", "syncUpdatedAt"):
+                parked[-1].pop(key, None)
+    clean["parkedSessions"] = parked
+    return clean
+
+
+def apply_remote_state(remote, remote_stamp):
+    """Takes the state another computer shared, if it is newer than ours.
+    Returns "applied", "ignored" (not newer, or unusable) or "kept-local".
+
+    Two computers can each start a different session while apart. A newer
+    remote session replaces ours (ours is filed as superseded, like any
+    session another one overrides). A newer remote "nothing running" does NOT
+    end a session the other computer never knew about: ours is kept and
+    re-stamped so it becomes the shared truth."""
+    clean = _clean_remote_state(remote)
+    if clean is None or server_clock.parse(remote_stamp) is None:
+        return "ignored"
+    with _lock:
+        if not server_clock.is_newer(remote_stamp, _state.get("syncUpdatedAt")):
+            return "ignored"
+        local_active = bool(_state["isActive"])
+        remote_active = bool(clean.get("isActive"))
+        local_id = _state.get("sessionId")
+        same_session = clean.get("sessionId") == local_id or (
+            not remote_active and clean.get("endedSessionId") == local_id
+        )
+        different_session = not same_session
+        if local_active and different_session and not remote_active:
+            _save(at_least=remote_stamp)
+            return "kept-local"
+        if local_active and different_session and remote_active:
+            _finalize_to_history_locked(
+                datetime.now(), end_type="superseded",
+                reason="Replaced by a session started on another computer.", restore_parked=False,
+            )
+        fresh = copy.deepcopy(_DEFAULT_STATE)
+        fresh.update(clean)
+        for key in _LOCAL_ONLY_KEYS:
+            fresh[key] = _state[key]
+        fresh["syncUpdatedAt"] = remote_stamp
+        _state.clear()
+        _state.update(fresh)
+        _open_violation_index["process"] = None
+        _open_violation_index["domain"] = None
+        _save(stamp=False)
+        state_events.bump()
+    return "applied"
+
+
 def _snapshot_current_locked():
-    return copy.deepcopy({k: v for k, v in _state.items() if k != "parkedSessions"})
+    return copy.deepcopy({k: v for k, v in _state.items() if k not in ("parkedSessions", "syncUpdatedAt")})
 
 
 def _park_current_locked(now):
