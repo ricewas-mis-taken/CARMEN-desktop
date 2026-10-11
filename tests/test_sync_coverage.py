@@ -57,7 +57,7 @@ LOCAL_ONLY_FILES = {
     "daily_summaries.json", "active_review.json", "device_id.txt", "last_sync.txt",
     "pull_cursor.txt", "sync_owner.txt", "uploaded_photos.json", "taskbar_quiet_saved.json",
     "live_cursor.txt", "live_history_pushed.txt", "live_state_pushed.txt",
-    "live_review_pushed.txt", "live_screentime_pushed.json", "screentime_remote.json",
+    "live_review_pushed.txt", "live_screentime_pushed.json", "live_settings_pushed.txt", "screentime_remote.json",
 }
 # Reference data that ships with the app, not something a user creates.
 SHIPPED_REFERENCE_FILES = {"screentime_domains.json", "screentime_domains_curated.json"}

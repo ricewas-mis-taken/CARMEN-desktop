@@ -143,6 +143,7 @@ def isolate_real_data_paths(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(sync_live, "LIVE_PUSHED_PATH", str(base / "live_state_pushed.txt"))
     monkeypatch.setattr(sync_live, "REVIEW_PUSHED_PATH", str(base / "live_review_pushed.txt"))
     monkeypatch.setattr(sync_live, "SCREENTIME_PUSHED_PATH", str(base / "live_screentime_pushed.json"))
+    monkeypatch.setattr(sync_live, "SETTINGS_PUSHED_PATH", str(base / "live_settings_pushed.txt"))
     monkeypatch.setattr(sync_live, "_last_screentime_push", 0.0)
     # A fixed fake project, so no test can ever reach the real Supabase URL
     # from private/.env even if it forgets to mock the transport.

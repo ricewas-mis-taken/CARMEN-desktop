@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
+import config
 import device_id
 import calendar_store
 import review_store
@@ -75,6 +76,8 @@ def device(tmp_path, monkeypatch):
         monkeypatch.setattr(screentime_store, "_remote", None)
         monkeypatch.setattr(sync_live, "SCREENTIME_PUSHED_PATH", str(base / "live_screentime_pushed.json"))
         monkeypatch.setattr(sync_live, "_last_screentime_push", 0.0)
+        monkeypatch.setattr(config, "CONFIG_PATH", str(base / "config.json"))
+        monkeypatch.setattr(sync_live, "SETTINGS_PUSHED_PATH", str(base / "live_settings_pushed.txt"))
         return states[name]
     return _switch
 
