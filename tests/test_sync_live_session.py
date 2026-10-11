@@ -10,6 +10,7 @@ import pytest
 
 import device_id
 import calendar_store
+import review_store
 import server_clock
 import session_history
 import session_manager as sm
@@ -50,6 +51,7 @@ def device(tmp_path, monkeypatch):
         monkeypatch.setattr(device_id, "_cached_id", None)
         monkeypatch.setattr(calendar_store, "DB_PATH", str(base / "calendar.db"))
         monkeypatch.setattr(calendar_store, "_conn", None)
+        monkeypatch.setattr(review_store, "_schema_ready", False)
         monkeypatch.setattr(tasks_store, "TASKS_PATH", str(base / "tasks.json"))
         monkeypatch.setattr(sync_cloud, "_verified", False)
         monkeypatch.setattr(server_clock, "_offset_seconds", 0.0)
