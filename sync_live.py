@@ -34,7 +34,8 @@ from calendar_log import logger
 HISTORY_TABLE = "session_history"
 LIVE_TABLE = "live_session"
 LIVE_SYNC_ID = "current"          # one row per account: the state of "what is running"
-LANE_TABLES = (HISTORY_TABLE, LIVE_TABLE)
+REVIEW_TABLE = "live_review"      # the review being timed with no task session under it
+LANE_TABLES = sync_cloud.FAST_LANE_TABLES
 POLL_SECONDS = 5
 MAX_BACKOFF_SECONDS = 60
 
@@ -42,6 +43,7 @@ _PRIVATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private")
 CURSOR_PATH = os.path.join(_PRIVATE, "live_cursor.txt")
 HISTORY_PUSHED_PATH = os.path.join(_PRIVATE, "live_history_pushed.txt")
 LIVE_PUSHED_PATH = os.path.join(_PRIVATE, "live_state_pushed.txt")
+REVIEW_PUSHED_PATH = os.path.join(_PRIVATE, "live_review_pushed.txt")
 
 _NAIVE_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$")
 _AWARE_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
@@ -225,6 +227,63 @@ def _apply_live(records):
             logger.exception("sync_live: could not apply the shared session state")
 
 
+# --- gather / apply: a review being timed on its own ---
+
+_pending_review = None     # a shared review whose problem has not reached this computer yet
+
+
+def _gather_review():
+    stamp = review_store.review_stamp()
+    if not stamp or not server_clock.is_newer(stamp, _read(REVIEW_PUSHED_PATH)):
+        return [], None
+    exported = review_store.export_active_review()
+    offset = server_clock.offset_seconds()
+    wire = {"endedToken": exported["endedToken"], "review": None}
+    review = exported["review"]
+    if review is not None:
+        problem_sync_id = _review_problem_sync_id(review["problemId"])
+        if not problem_sync_id:
+            return [], None          # the problem has not been synced yet: try again next pass
+        shifted = _convert(
+            {k: v for k, v in review.items() if k != "problemId"}, _NAIVE_ISO,
+            lambda value: _shift(sync_client._to_wire_ts(value), offset),
+        )
+        wire["review"] = {**shifted, "problemSyncId": problem_sync_id}
+    stamp = exported["stamp"] or stamp
+    return [{
+        "table_name": REVIEW_TABLE, "sync_id": LIVE_SYNC_ID, "data": wire,
+        "device_id": device_id.get_device_id(), "updated_at": stamp, "is_deleted": False,
+    }], stamp
+
+
+def _apply_review(records):
+    global _pending_review
+    for record in records:
+        if record.get("sync_id") != LIVE_SYNC_ID or not isinstance(record.get("data"), dict):
+            continue
+        try:
+            data = record["data"]
+            review = data.get("review")
+            if review is not None:
+                if not isinstance(review, dict):
+                    continue
+                offset = server_clock.offset_seconds()
+                local = _convert(
+                    review, _AWARE_ISO, lambda value: sync_client._from_wire_ts(_shift(value, -offset))
+                )
+                local["problemId"] = _review_problem_local_id(local.pop("problemSyncId", None))
+                if local["problemId"] is None:
+                    _pending_review = record      # wait for the problem to arrive
+                    continue
+                review = local
+            _pending_review = None
+            outcome = review_store.apply_remote_review(review, data.get("endedToken"), record.get("updated_at"))
+            if outcome == "applied":
+                _write(REVIEW_PUSHED_PATH, record["updated_at"])
+        except Exception:
+            logger.exception("sync_live: could not apply the shared review")
+
+
 # --- one pass ---
 
 def _apply(records):
@@ -233,6 +292,7 @@ def _apply(records):
         by_table.setdefault(record["table_name"], []).append(record)
     _apply_history(by_table.get(HISTORY_TABLE, []))
     _apply_live(by_table.get(LIVE_TABLE, []))
+    _apply_review(([_pending_review] if _pending_review else []) + by_table.get(REVIEW_TABLE, []))
 
 
 def tick():
@@ -247,6 +307,8 @@ def tick():
     push_records, history_watermark = _gather_history()
     live_records, live_stamp = _gather_live()
     push_records += live_records
+    review_records, review_stamp = _gather_review()
+    push_records += review_records
     refreshed = False
     while True:
         try:
@@ -270,6 +332,8 @@ def tick():
         _write(HISTORY_PUSHED_PATH, history_watermark)
     if live_stamp:
         _write(LIVE_PUSHED_PATH, live_stamp)
+    if review_stamp:
+        _write(REVIEW_PUSHED_PATH, review_stamp)
     _apply(records)
     if cursor:
         _write(CURSOR_PATH, cursor)
@@ -279,6 +343,7 @@ def tick():
 # --- the loop ---
 
 session_manager.add_change_listener(lambda: _wake.set())
+review_store.add_change_listener(lambda: _wake.set())
 
 
 def enable():

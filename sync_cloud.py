@@ -30,7 +30,7 @@ MAX_PHOTO_BYTES = 10 * 1024 * 1024
 
 # Table names handled by sync_live's fast lane; the slower lane in sync_client
 # leaves them out of its own pulls.
-FAST_LANE_TABLES = ("session_history",)
+FAST_LANE_TABLES = ("session_history", "live_session", "live_review", "screentime", "settings")
 
 RECORD_FIELDS = ("table_name", "sync_id", "data", "device_id", "updated_at", "is_deleted")
 
