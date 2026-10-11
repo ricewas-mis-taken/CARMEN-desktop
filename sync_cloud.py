@@ -15,6 +15,7 @@ import re
 from datetime import datetime, timedelta
 
 import auth_manager
+import server_clock
 
 TABLE_PATH = "/rest/v1/sync_records"
 PHOTO_BUCKET = "carmen-photos"
@@ -74,6 +75,7 @@ def ensure_ready(client, token):
         f"{base}{TABLE_PATH}", headers=_headers(token), params={"select": "server_updated_at", "limit": "1"}
     )
     resp.raise_for_status()
+    server_clock.note_response(resp)
     _verified = True
 
 
@@ -100,6 +102,7 @@ def push(client, token, user_id, records):
             json=payload,
         )
         resp.raise_for_status()
+        server_clock.note_response(resp)
         # The database's guard trigger drops a row that is not newer than the
         # stored one, so it simply isn't echoed back.
         accepted += len(resp.json())
@@ -130,6 +133,7 @@ def pull(client, token, cursor, tables=None, exclude=None):
             f"{base}{TABLE_PATH}", headers=_headers(token), params={**params, "offset": str(offset)}
         )
         resp.raise_for_status()
+        server_clock.note_response(resp)
         page = resp.json()
         if not page:
             break

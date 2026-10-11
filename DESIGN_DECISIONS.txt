@@ -414,3 +414,25 @@ Per session: stored on the task and on the custom-session dialog (last choice ke
 carried in session state so a waiting session brings its choice back with it.
 Not covered yet: calendar-event focus profiles (needs a DB column + sync).
 Desktop only; nothing in the extension reads these fields.
+
+2026-10-11 -- Two computers act as one: the running session and session history sync
+Choice: the whole session state (running session + every waiting one) is one
+cloud row, "live_session", and every finished session is one row,
+"session_history", keyed by a sessionId minted at start. Newest change wins by a
+stamp in the cloud's clock; each computer learns its own clock error from the
+cloud's Date header, so a wrong clock cannot shift when a session ends.
+Both computers enforce the shared session (so switching computers changes
+nothing); each one's own window facts (browser profile ids) stay local.
+Polling: a fast lane polls every ~5 s, always (the other computer cannot know a
+session started elsewhere unless it asks). Rejected: Supabase Realtime
+websockets -- real-time, but a second connection to keep alive and test, and
+5 s is invisible for starting a session; a 3-second session simply never shows
+up live on the other computer, only in its history.
+Duplicates: both computers may run out the same clock; the entry id is the
+sessionId, so history files it once. A newer "nothing running" from the other
+computer only ends our session if it names that session as the one it ended;
+otherwise ours is kept and re-stamped (two sessions started while apart).
+Not shared yet: independent reviews (active_review.json), browser-only
+extension sessions, per-computer screen time.
+Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-10-11] (nothing to
+change there: the extension reads whichever session its own desktop has).

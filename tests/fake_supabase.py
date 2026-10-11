@@ -3,6 +3,7 @@ talks to, including the database trigger from
 sync_server/migrations/001_direct_sync.sql (newer-wins, future clamp, server
 stamp). Used through httpx.MockTransport -- no network, no real account."""
 import json
+from email.utils import format_datetime
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -23,6 +24,7 @@ class FakeSupabase:
         # accepted with no newer-wins check, and anything naming the new column fails.
         self.migrated = True
         self.writes = 0
+        self.date_skew = timedelta(0)   # how far the Date header is from the server clock
 
     def tick(self):
         self.clock += timedelta(milliseconds=1)
@@ -48,6 +50,13 @@ class FakeSupabase:
         return row
 
     def handler(self, request):
+        response = self._dispatch(request)
+        # Every real HTTP answer carries the server's own time; sync_live learns
+        # this computer's clock error from it. date_skew lets a test move it.
+        response.headers["date"] = format_datetime(self.clock + self.date_skew, usegmt=True)
+        return response
+
+    def _dispatch(self, request):
         self.requests.append((request.method, request.url.path))
         if request.headers.get("authorization") != f"Bearer {self.token}":
             return httpx.Response(401, json={"message": "JWT expired"})

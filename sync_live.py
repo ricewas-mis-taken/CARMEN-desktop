@@ -1,6 +1,7 @@
 """The fast lane of sync: things that must reach the other computer within
 seconds, not minutes -- finished focus sessions (so a task's logged minutes
-match on every computer) and, see sync_live_session, the running session.
+match on every computer) and the running session itself (start, pause,
+resume, end, rule changes, waiting sessions), so two computers behave as one.
 
 Same cloud table and same rules as sync_client's slower lane (newest write
 wins, enforced by the database trigger), but its own loop, its own pull
@@ -15,24 +16,32 @@ every few seconds forever.
 import os
 import re
 import threading
+from datetime import datetime, timedelta
 
 import httpx
 
 import auth_manager
+import calendar_store
 import device_id
+import review_store
+import server_clock
 import session_history
+import session_manager
 import sync_client
 import sync_cloud
 from calendar_log import logger
 
 HISTORY_TABLE = "session_history"
-LANE_TABLES = (HISTORY_TABLE,)
+LIVE_TABLE = "live_session"
+LIVE_SYNC_ID = "current"          # one row per account: the state of "what is running"
+LANE_TABLES = (HISTORY_TABLE, LIVE_TABLE)
 POLL_SECONDS = 5
 MAX_BACKOFF_SECONDS = 60
 
 _PRIVATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private")
 CURSOR_PATH = os.path.join(_PRIVATE, "live_cursor.txt")
 HISTORY_PUSHED_PATH = os.path.join(_PRIVATE, "live_history_pushed.txt")
+LIVE_PUSHED_PATH = os.path.join(_PRIVATE, "live_state_pushed.txt")
 
 _NAIVE_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$")
 _AWARE_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
@@ -126,6 +135,96 @@ def _apply_history(records):
     return session_history.merge_remote(entries) or 0
 
 
+# --- gather / apply: the running session ---
+
+def _shift(iso, seconds):
+    return (datetime.fromisoformat(iso) + timedelta(seconds=seconds)).isoformat()
+
+
+def _review_problem_sync_id(local_id):
+    if local_id is None:
+        return None
+    with calendar_store._lock:
+        review_store._get_conn()
+        return sync_client._lookup_sync_id(calendar_store._get_conn(), "review_problems", local_id)
+
+
+def _review_problem_local_id(sync_id):
+    if not sync_id:
+        return None
+    with calendar_store._lock:
+        review_store._get_conn()
+        row = calendar_store._get_conn().execute(
+            "SELECT id FROM review_problems WHERE sync_id = ? AND is_deleted = 0", (sync_id,)
+        ).fetchone()
+    return row["id"] if row else None
+
+
+def _sessions_in(state):
+    return [state] + [p for p in state.get("parkedSessions") or [] if isinstance(p, dict)]
+
+
+def live_state_to_wire(snapshot):
+    """The running state as the other computer reads it: times in the cloud's
+    clock (so a computer with a wrong clock still agrees on when it ends), and
+    the one id that is just a row number on this computer replaced by the
+    row's shared id."""
+    offset = server_clock.offset_seconds()
+    wire = _convert(
+        {k: v for k, v in snapshot.items() if k != "syncUpdatedAt"}, _NAIVE_ISO,
+        lambda value: _shift(sync_client._to_wire_ts(value), offset),
+    )
+    for session in _sessions_in(wire):
+        session["reviewProblemSyncId"] = _review_problem_sync_id(session.get("reviewProblemId"))
+        session["reviewProblemId"] = None
+    return wire
+
+
+def live_state_from_wire(data):
+    if not isinstance(data, dict):
+        return None
+    offset = server_clock.offset_seconds()
+    state = _convert(
+        data, _AWARE_ISO, lambda value: sync_client._from_wire_ts(_shift(value, -offset))
+    )
+    for session in _sessions_in(state):
+        session["reviewProblemId"] = _review_problem_local_id(session.pop("reviewProblemSyncId", None))
+    return state
+
+
+def _gather_live():
+    """The running state, if it changed here since it was last sent."""
+    stamp = session_manager.local_stamp()
+    if not stamp or not server_clock.is_newer(stamp, _read(LIVE_PUSHED_PATH)):
+        return [], None
+    snapshot = session_manager.export_live_state()
+    stamp = snapshot.get("syncUpdatedAt") or stamp
+    return [{
+        "table_name": LIVE_TABLE,
+        "sync_id": LIVE_SYNC_ID,
+        "data": live_state_to_wire(snapshot),
+        "device_id": device_id.get_device_id(),
+        "updated_at": stamp,
+        "is_deleted": False,
+    }], stamp
+
+
+def _apply_live(records):
+    for record in records:
+        if record.get("sync_id") != LIVE_SYNC_ID:
+            continue
+        try:
+            state = live_state_from_wire(record.get("data"))
+            if state is None:
+                continue
+            outcome = session_manager.apply_remote_state(state, record.get("updated_at"))
+            if outcome == "applied":
+                # Already the cloud's version: nothing to send back.
+                _write(LIVE_PUSHED_PATH, record["updated_at"])
+        except Exception:
+            logger.exception("sync_live: could not apply the shared session state")
+
+
 # --- one pass ---
 
 def _apply(records):
@@ -133,6 +232,7 @@ def _apply(records):
     for record in records:
         by_table.setdefault(record["table_name"], []).append(record)
     _apply_history(by_table.get(HISTORY_TABLE, []))
+    _apply_live(by_table.get(LIVE_TABLE, []))
 
 
 def tick():
@@ -145,6 +245,8 @@ def tick():
         return "not signed in as this device's account"
 
     push_records, history_watermark = _gather_history()
+    live_records, live_stamp = _gather_live()
+    push_records += live_records
     refreshed = False
     while True:
         try:
@@ -166,6 +268,8 @@ def tick():
 
     if history_watermark:
         _write(HISTORY_PUSHED_PATH, history_watermark)
+    if live_stamp:
+        _write(LIVE_PUSHED_PATH, live_stamp)
     _apply(records)
     if cursor:
         _write(CURSOR_PATH, cursor)
@@ -173,6 +277,9 @@ def tick():
 
 
 # --- the loop ---
+
+session_manager.add_change_listener(lambda: _wake.set())
+
 
 def enable():
     global _enabled
