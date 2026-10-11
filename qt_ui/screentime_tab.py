@@ -148,6 +148,8 @@ class ScreenTimeTab(QWidget):
     def __init__(self):
         super().__init__()
         self._range = "day"  # "day" or "week"
+        self._device = "this"  # "this", "all", or another computer's id
+        self._device_keys = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(24, 16, 24, 20)
@@ -171,6 +173,16 @@ class ScreenTimeTab(QWidget):
         toggle_row.addStretch(1)
         self._day_btn.setChecked(True)
         outer.addLayout(toggle_row)
+
+        # One button per computer (this one, each other one, and all together);
+        # only shown once another computer has sent its screen time.
+        self._device_bar = QWidget()
+        self._device_layout = QHBoxLayout(self._device_bar)
+        self._device_layout.setContentsMargins(0, 0, 0, 0)
+        self._device_group = QButtonGroup(self)
+        self._device_group.setExclusive(True)
+        self._device_bar.setVisible(False)
+        outer.addWidget(self._device_bar)
 
         self._chart = _BarChart()
         outer.addWidget(self._chart)
@@ -208,15 +220,45 @@ class ScreenTimeTab(QWidget):
         self._range = key
         self.refresh()
 
+    def _set_device(self, key):
+        self._device = key
+        self.refresh()
+
+    def _sync_device_buttons(self):
+        """Rebuilds the computer buttons when the set of computers changed."""
+        others = screentime_store.remote_devices()
+        keys = tuple(d["id"] for d in others)
+        if self._device not in ("this", "all") and self._device not in keys:
+            self._device = "this"        # that computer is gone: back to this one
+        if keys == self._device_keys:
+            return
+        self._device_keys = keys
+        for button in list(self._device_group.buttons()):
+            self._device_group.removeButton(button)
+            button.deleteLater()
+        self._device_bar.setVisible(bool(others))
+        if not others:
+            return
+        entries = [("this", "This computer")] + [(d["id"], d["name"]) for d in others] + [("all", "All computers")]
+        for key, label in entries:
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setProperty("class", "SecondaryButton")
+            button.setChecked(key == self._device)
+            button.clicked.connect(lambda checked=False, k=key: self._set_device(k))
+            self._device_group.addButton(button)
+            self._device_layout.addWidget(button)
+
     def _current_data(self):
         today = date.today()
         if self._range == "day":
-            return screentime_store.get_day(today.isoformat())
+            return screentime_store.get_day(today.isoformat(), self._device)
         monday = today - timedelta(days=today.weekday())
         sunday = monday + timedelta(days=6)
-        return screentime_store.get_range(monday.isoformat(), sunday.isoformat())
+        return screentime_store.get_range(monday.isoformat(), sunday.isoformat(), self._device)
 
     def refresh(self):
+        self._sync_device_buttons()
         data = self._current_data()
 
         by_category = {cat: [] for cat in screentime_categories.CATEGORIES}
