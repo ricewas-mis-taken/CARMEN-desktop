@@ -28,6 +28,7 @@ import auth_manager
 import calendar_store
 import config
 import device_id
+import multi_device
 import review_store
 import screentime_store
 import server_clock
@@ -61,6 +62,14 @@ _AWARE_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{
 
 _wake = threading.Event()
 _enabled = True
+# How long to wait between passes. sync_realtime replaces this with a longer wait
+# while a live connection is doing the work.
+_interval_provider = lambda: POLL_SECONDS
+
+
+def set_interval_provider(provider):
+    global _interval_provider
+    _interval_provider = provider
 
 
 # --- small file helpers ---
@@ -383,6 +392,7 @@ def _apply_screentime(records):
 # --- one pass ---
 
 def _apply(records):
+    multi_device.note_records(records)
     by_table = {}
     for record in records:
         by_table.setdefault(record["table_name"], []).append(record)
@@ -489,6 +499,10 @@ def _run(stop_event):
         if problem != last_problem and problem and problem != "not logged in":
             logger.warning("sync_live: %s (will keep trying quietly)", problem)
         last_problem = problem
-        wait = min(MAX_BACKOFF_SECONDS, POLL_SECONDS * (2 ** min(failures, 4)))
+        try:
+            base_wait = _interval_provider()
+        except Exception:
+            base_wait = POLL_SECONDS
+        wait = min(MAX_BACKOFF_SECONDS, base_wait * (2 ** min(failures, 4)))
         _wake.wait(wait)
         _wake.clear()
