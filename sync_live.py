@@ -26,6 +26,7 @@ import httpx
 
 import auth_manager
 import calendar_store
+import config
 import device_id
 import review_store
 import screentime_store
@@ -49,6 +50,8 @@ CURSOR_PATH = os.path.join(_PRIVATE, "live_cursor.txt")
 HISTORY_PUSHED_PATH = os.path.join(_PRIVATE, "live_history_pushed.txt")
 LIVE_PUSHED_PATH = os.path.join(_PRIVATE, "live_state_pushed.txt")
 REVIEW_PUSHED_PATH = os.path.join(_PRIVATE, "live_review_pushed.txt")
+SETTINGS_TABLE = "settings"       # the saved block/allow lists and Start-dialog defaults
+SETTINGS_PUSHED_PATH = os.path.join(_PRIVATE, "live_settings_pushed.txt")
 SCREENTIME_PUSHED_PATH = os.path.join(_PRIVATE, "live_screentime_pushed.json")
 SCREENTIME_TABLE = "screentime"   # one row per computer per day; each computer writes only its own
 SCREENTIME_PUSH_SECONDS = 60      # it changes every second; once a minute is plenty
@@ -292,6 +295,31 @@ def _apply_review(records):
             logger.exception("sync_live: could not apply the shared review")
 
 
+# --- gather / apply: saved defaults ---
+
+def _gather_settings():
+    exported = config.export_shared_settings()
+    stamp = exported["stamp"]
+    if not stamp or not server_clock.is_newer(stamp, _read(SETTINGS_PUSHED_PATH)):
+        return [], None
+    return [{
+        "table_name": SETTINGS_TABLE, "sync_id": "defaults", "data": {"settings": exported["settings"]},
+        "device_id": device_id.get_device_id(), "updated_at": stamp, "is_deleted": False,
+    }], stamp
+
+
+def _apply_settings(records):
+    for record in records:
+        data = record.get("data")
+        if record.get("sync_id") != "defaults" or not isinstance(data, dict):
+            continue
+        try:
+            if config.apply_remote_settings(data.get("settings"), record.get("updated_at")):
+                _write(SETTINGS_PUSHED_PATH, record["updated_at"])
+        except Exception:
+            logger.exception("sync_live: could not apply the shared defaults")
+
+
 # --- gather / apply: screen time, one row per computer per day ---
 
 _last_screentime_push = 0.0
@@ -362,6 +390,7 @@ def _apply(records):
     _apply_live(by_table.get(LIVE_TABLE, []))
     _apply_review(([_pending_review] if _pending_review else []) + by_table.get(REVIEW_TABLE, []))
     _apply_screentime(by_table.get(SCREENTIME_TABLE, []))
+    _apply_settings(by_table.get(SETTINGS_TABLE, []))
 
 
 def tick():
@@ -378,6 +407,8 @@ def tick():
     push_records += live_records
     review_records, review_stamp = _gather_review()
     push_records += review_records
+    settings_records, settings_stamp = _gather_settings()
+    push_records += settings_records
     screentime_records, screentime_fingerprints = _gather_screentime()
     push_records += screentime_records
     refreshed = False
@@ -405,6 +436,8 @@ def tick():
         _write(LIVE_PUSHED_PATH, live_stamp)
     if review_stamp:
         _write(REVIEW_PUSHED_PATH, review_stamp)
+    if settings_stamp:
+        _write(SETTINGS_PUSHED_PATH, settings_stamp)
     _remember_screentime_sent(screentime_fingerprints)
     _apply(records)
     if cursor:
@@ -416,6 +449,7 @@ def tick():
 
 session_manager.add_change_listener(lambda: _wake.set())
 review_store.add_change_listener(lambda: _wake.set())
+config.add_change_listener(lambda: _wake.set())
 
 
 def enable():
