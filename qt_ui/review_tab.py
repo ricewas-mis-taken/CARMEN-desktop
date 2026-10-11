@@ -550,7 +550,7 @@ class _TopicView(QWidget):
 
     def _show_banner_for_linked_session(self):
         if not self._review_banner.is_running():
-            self._resume_linked_session()
+            self._resume_linked_session() or self._resume_independent_review()
 
     def _resume_linked_session(self):
         """Starts the banner for this topic's task session if one exists,
@@ -595,7 +595,12 @@ class _TopicView(QWidget):
         # still active and still enforcing.
         if self._resume_linked_session():
             return
+        self._resume_independent_review()
 
+    def _resume_independent_review(self):
+        """Starts the banner for the review being timed with no task session
+        under it (it may have been started on another computer). Returns True
+        if it did."""
         # Independent review -- one that was (or still is) running
         # alongside a completely different session, or with no session at
         # all, so it never touched session_manager (see _begin_review's
@@ -605,16 +610,17 @@ class _TopicView(QWidget):
         # real token and original start time are both recoverable here.
         active = review_store.get_active_review()
         if not active:
-            return
+            return False
         problem = review_store.get_problem(active["problemId"])
         if not problem or problem["topicId"] != self._topic_id:
-            return
+            return False
         if self._review_tab:
             self._review_tab.on_review_started()
         self._review_banner.start(
             problem, token=active["token"], end_session_on_finish=False,
             resumed_started_at=datetime.fromisoformat(active["startedAt"]),
         )
+        return True
 
     def _build_header(self):
         header = QHBoxLayout()
@@ -958,6 +964,7 @@ class _ReviewBanner(QWidget):
 
         outer.addWidget(card)
 
+        self._finishing = False
         self._tick_timer = QTimer(self)
         self._tick_timer.timeout.connect(self._tick)
 
@@ -1089,11 +1096,14 @@ class _ReviewBanner(QWidget):
         self._auto_paused = False
         self._was_on_break = False
         self._publish_first_attempt()
+        self._finishing = False
         self._tick_timer.start(1000)
         self.show()
 
     def is_running(self):
-        return self._tick_timer.isActive()
+        # While the "how did it go" dialog is open the banner is hidden but the
+        # review is not over yet -- it must not be brought back underneath it.
+        return self._tick_timer.isActive() or self._finishing
 
     def _currently_paused(self):
         # When a linked task session is driving this review, session_manager
@@ -1139,6 +1149,13 @@ class _ReviewBanner(QWidget):
             # again until the app was restarted.
             self._abandon_after_external_end()
             return
+        if self._is_independent_review():
+            # Finished, abandoned or replaced from another computer (or any
+            # other path): nothing left here to time.
+            active = review_store.get_active_review()
+            if active is None or active["token"] != self._session_token:
+                self._abandon_after_external_end()
+                return
         self._sync_first_attempt_with_pomodoro_break()
         is_paused = self._currently_paused()
         self._pause_btn.setText(self._pause_button_text(is_paused))
@@ -1239,6 +1256,7 @@ class _ReviewBanner(QWidget):
 
     def _finish(self):
         self._tick_timer.stop()
+        self._finishing = True
         review_store.clear_first_attempt()
         token = self._session_token
         end_session = self._end_session_on_finish
@@ -1289,6 +1307,7 @@ class _ReviewBanner(QWidget):
             )
         if end_session:
             _end_session_for_problem(problem)
+        self._finishing = False
         self._on_finished()
 
 
