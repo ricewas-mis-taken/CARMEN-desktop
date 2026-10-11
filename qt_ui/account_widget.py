@@ -38,6 +38,7 @@ import sync_scheduler
 import sync_trigger
 
 _STATUS_CLEAR_MS = 4000
+_RECONNECT_MS = 20000
 # Long enough to actually read a sentence and act on it.
 _ERROR_CLEAR_MS = 30000
 
@@ -110,6 +111,14 @@ class AccountArea(QWidget):
         self._status_timer.setSingleShot(True)
         self._status_timer.timeout.connect(lambda: self._status_label.setVisible(False))
 
+        # Signed in on this computer but unable to prove it right now (no
+        # internet at launch): keep trying quietly instead of waiting for the
+        # user to sign in again.
+        self._reconnect_timer = QTimer(self)
+        self._reconnect_timer.setInterval(_RECONNECT_MS)
+        self._reconnect_timer.timeout.connect(self._try_saved_login)
+        self._reconnecting = False
+
         self.refresh()
         if auth_manager.is_logged_in():
             # Startup sync: kicked off here (as the sidebar is being
@@ -132,10 +141,38 @@ class AccountArea(QWidget):
             sync_trigger.enable()
             sync_scheduler.enable()
             sync_live.enable()
+            self._reconnect_timer.stop()
         else:
-            self._status_label.setVisible(False)
             sync_trigger.disable()
             sync_scheduler.disable()
+            if auth_manager.has_saved_login():
+                self._set_status("Offline - signing back in automatically.")
+                self._reconnect_timer.start()
+            else:
+                self._status_label.setVisible(False)
+                self._reconnect_timer.stop()
+
+    def _try_saved_login(self):
+        """Off the Qt thread: a refresh is a network call."""
+        if self._reconnecting:
+            return
+        self._reconnecting = True
+
+        def work():
+            try:
+                ok = auth_manager.is_logged_in()
+            except Exception:
+                ok = False
+            qt_gui_thread.run_on_gui_thread(lambda: self._after_saved_login_try(ok))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _after_saved_login_try(self, ok):
+        self._reconnecting = False
+        if ok:
+            self._on_login_success()
+        elif not auth_manager.has_saved_login():
+            self.refresh()      # the saved sign-in was refused: back to a normal Sign In
 
     # --- sign in / sign up ---
 
