@@ -55,3 +55,11 @@ See `test_sync_manual.md` for a full manual test walkthrough.
 
 `schema.sql` is not applied automatically. Run it by hand in the
 Supabase SQL editor.
+
+## Live updates (Realtime)
+
+`migrations/002_realtime.sql` switches on Supabase Realtime for `sync_records`
+so a change made on one computer is pushed to the others at once instead of at
+their next poll. Run it by hand in the SQL editor, once, after 001. Without it
+the app still works: it polls every 5 seconds instead of holding a live
+connection (see `sync_realtime.py`).
