@@ -848,7 +848,7 @@ class _TopicView(QWidget):
                     source="review",
                     event_id=task["id"],
                     event_title=f"{task['name']} - first attempt",
-                    review_problem_name="First attempt",
+                    review_problem_name=session_manager.FIRST_ATTEMPT_NAME,
                     review_subject_name=None,
                     hide_taskbar_badges=bool(task.get("hideTaskbarBadges")),
                     stop_taskbar_flashing=bool(task.get("stopTaskbarFlashing")),
@@ -1078,7 +1078,10 @@ class _ReviewBanner(QWidget):
         self._start_time = resumed_started_at or datetime.now()
         self._accumulated_seconds = 0
         self._is_paused = False
-        label = "Timing first attempt" if first_attempt_callback is not None else f"Reviewing: {problem['name']}"
+        is_first_attempt = first_attempt_callback is not None or (
+            problem.get("id") is None and problem.get("name") == session_manager.FIRST_ATTEMPT_NAME
+        )
+        label = "Timing first attempt" if is_first_attempt else f"Reviewing: {problem['name']}"
         self._problem_label.setText(label)
         # Not hardcoded "00:00" -- when this is _resume_if_active() rebuilding
         # a fresh banner for a session that survived an app restart, real

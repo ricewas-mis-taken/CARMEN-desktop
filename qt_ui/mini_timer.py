@@ -52,7 +52,9 @@ def describe(status):
     (label, clock_text, ring_fraction_or_None, can_pause)."""
     if not status["isActive"]:
         return "No session", "--:--", None, False
-    if status.get("reviewProblemName"):
+    if session_manager.is_first_attempt(status):
+        label = "First attempt"
+    elif status.get("reviewProblemName"):
         label = f"Review: {status['reviewProblemName']}"
     else:
         label = status.get("eventTitle") or "Focus session"
