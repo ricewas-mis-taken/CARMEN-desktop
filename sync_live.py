@@ -29,6 +29,7 @@ import calendar_store
 import config
 import device_id
 import multi_device
+import quicknote_store
 import review_store
 import screentime_store
 import server_clock
@@ -52,6 +53,8 @@ HISTORY_PUSHED_PATH = os.path.join(_PRIVATE, "live_history_pushed.txt")
 LIVE_PUSHED_PATH = os.path.join(_PRIVATE, "live_state_pushed.txt")
 REVIEW_PUSHED_PATH = os.path.join(_PRIVATE, "live_review_pushed.txt")
 SETTINGS_TABLE = "settings"       # the saved block/allow lists and Start-dialog defaults
+QUICKNOTE_TABLE = "quicknote"     # the one shared bullet-point note
+QUICKNOTE_PUSHED_PATH = os.path.join(_PRIVATE, "live_quicknote_pushed.txt")
 SETTINGS_PUSHED_PATH = os.path.join(_PRIVATE, "live_settings_pushed.txt")
 SCREENTIME_PUSHED_PATH = os.path.join(_PRIVATE, "live_screentime_pushed.json")
 SCREENTIME_TABLE = "screentime"   # one row per computer per day; each computer writes only its own
@@ -304,6 +307,31 @@ def _apply_review(records):
             logger.exception("sync_live: could not apply the shared review")
 
 
+# --- gather / apply: the QuickNote ---
+
+def _gather_quicknote():
+    exported = quicknote_store.export()
+    stamp = exported["updatedAt"]
+    if not stamp or not server_clock.is_newer(stamp, _read(QUICKNOTE_PUSHED_PATH)):
+        return [], None
+    return [{
+        "table_name": QUICKNOTE_TABLE, "sync_id": "note", "data": {"items": exported["items"]},
+        "device_id": device_id.get_device_id(), "updated_at": stamp, "is_deleted": False,
+    }], stamp
+
+
+def _apply_quicknote(records):
+    for record in records:
+        data = record.get("data")
+        if record.get("sync_id") != "note" or not isinstance(data, dict):
+            continue
+        try:
+            if quicknote_store.apply_remote(data.get("items"), record.get("updated_at")):
+                _write(QUICKNOTE_PUSHED_PATH, record["updated_at"])
+        except Exception:
+            logger.exception("sync_live: could not apply the shared QuickNote")
+
+
 # --- gather / apply: saved defaults ---
 
 def _gather_settings():
@@ -401,6 +429,7 @@ def _apply(records):
     _apply_review(([_pending_review] if _pending_review else []) + by_table.get(REVIEW_TABLE, []))
     _apply_screentime(by_table.get(SCREENTIME_TABLE, []))
     _apply_settings(by_table.get(SETTINGS_TABLE, []))
+    _apply_quicknote(by_table.get(QUICKNOTE_TABLE, []))
 
 
 def tick():
@@ -419,6 +448,8 @@ def tick():
     push_records += review_records
     settings_records, settings_stamp = _gather_settings()
     push_records += settings_records
+    note_records, note_stamp = _gather_quicknote()
+    push_records += note_records
     screentime_records, screentime_fingerprints = _gather_screentime()
     push_records += screentime_records
     refreshed = False
@@ -448,6 +479,8 @@ def tick():
         _write(REVIEW_PUSHED_PATH, review_stamp)
     if settings_stamp:
         _write(SETTINGS_PUSHED_PATH, settings_stamp)
+    if note_stamp:
+        _write(QUICKNOTE_PUSHED_PATH, note_stamp)
     _remember_screentime_sent(screentime_fingerprints)
     _apply(records)
     if cursor:
@@ -460,6 +493,7 @@ def tick():
 session_manager.add_change_listener(lambda: _wake.set())
 review_store.add_change_listener(lambda: _wake.set())
 config.add_change_listener(lambda: _wake.set())
+quicknote_store.add_change_listener(lambda: _wake.set())
 
 
 def enable():
