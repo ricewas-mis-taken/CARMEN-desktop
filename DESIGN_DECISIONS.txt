@@ -464,3 +464,19 @@ Not verified against the real Supabase: the 1.0.0 message shapes follow the
 documented protocol and are covered by a local websocket server in the tests,
 but the first real run is the real test.
 Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-10-11] (no change there).
+
+2026-10-12 -- QuickNote: one shared bullet list, opened from the desktop menu or the mini timer
+Choice: a single note (a list of one-line bullets) kept in private/quicknote.json
+and shared like the saved defaults -- the whole list is one cloud row, newest
+edit wins. Rejected: merging line by line -- it is a scratchpad of a handful of
+lines, and a merge would need ids and tombstones per bullet for no real gain; the
+cost is that two computers edited in the same few seconds keep only the newer.
+Rejected: a shell extension (DLL) for the desktop right-click -- a per-user
+registry entry under DesktopBackground\Shell (desktop_menu.py, no admin rights,
+repaired on every start if the repo moves) gives the same menu item; it shows
+under "Show more options" on Windows 11. The entry runs quicknote_launcher.py,
+which asks the running app (token-gated POST /quicknote/open) and only starts the
+app (with --quicknote) if none answers.
+Clicking the time or the ring on the mini timer opens it too; a click only counts
+if the mouse did not travel more than a few pixels, so dragging the timer by its
+clock still just moves it. Not for the extension: nothing there reads it.
