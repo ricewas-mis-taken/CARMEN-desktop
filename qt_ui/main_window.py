@@ -30,6 +30,7 @@ from qt_ui.board_tab import BoardTab
 from qt_ui.calendar_page import CalendarPage
 from qt_ui.finished_tab import FinishedTab
 from qt_ui.focus_tab import FocusTab
+from qt_ui.history_viewer import HistoryTab
 from qt_ui.review_tab import ReviewTab
 from qt_ui.screentime_tab import ScreenTimeTab
 from qt_ui.tasks_tab import TasksTab
@@ -82,6 +83,12 @@ def open_main_window():
         return
     _win = _MainWindow()
     _win.show()
+
+
+def open_sign_in():
+    """Tray "Sign in": the main window with the sign-in dialog on top."""
+    open_main_window()
+    _win._account_area._open_auth_dialog()
 
 
 def refresh_calendar_views():
@@ -187,6 +194,7 @@ class _MainWindow(QWidget):
         self._add_page("review", ReviewTab())
         self._add_page("screentime", ScreenTimeTab())
         self._add_page("finished", FinishedTab())
+        self._add_page("history", HistoryTab())
 
         self._show_tab("calendar")
 
@@ -216,6 +224,7 @@ class _MainWindow(QWidget):
             ("review", "🔁  Review"),
             ("screentime", "⏱  Screen Time"),
             ("finished", "✅  Finished"),
+            ("history", "📜  Session History"),
         ]
         for key, label in nav_items:
             button = QPushButton(label)

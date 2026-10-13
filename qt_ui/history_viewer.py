@@ -18,36 +18,31 @@ import session_manager
 
 SEPARATOR = "─" * 72
 
-_open_windows = set()
+class HistoryTab(QWidget):
+    """The sidebar's Session History page: every completed session, newest first,
+    scrollable. Re-read each time the tab is shown (and whenever sessions sync in)."""
 
-
-def open_history_viewer():
-    win = _HistoryViewer()
-    _open_windows.add(win)
-    win.destroyed.connect(lambda: _open_windows.discard(win))
-    win.show()
-
-
-class _HistoryViewer(QWidget):
     def __init__(self):
         super().__init__()
-        self.setObjectName("PopupBg")
-        self.setWindowTitle("Carmen Focus — Session History")
-        self.resize(680, 540)
-
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(12, 12, 12, 12)
+        self._text = QTextEdit()
+        self._text.setReadOnly(True)
+        layout.addWidget(self._text)
+        self.refresh()
 
-        text = QTextEdit()
-        text.setReadOnly(True)
-        layout.addWidget(text)
+    def showEvent(self, event):
+        self.refresh()
+        super().showEvent(event)
 
+    def refresh(self):
         sessions = list(reversed(session_history.load_all()))  # newest first
         if not sessions:
-            text.setHtml(_wrap_html("No completed sessions yet — this fills in once a session ends."))
-        else:
-            body = "".join(format_session_html(s) for s in sessions)
-            text.setHtml(_wrap_html(body))
+            self._text.setHtml(_wrap_html("No completed sessions yet — this fills in once a session ends."))
+            return
+        scroll = self._text.verticalScrollBar().value()
+        self._text.setHtml(_wrap_html("".join(format_session_html(s) for s in sessions)))
+        self._text.verticalScrollBar().setValue(scroll)
 
 
 def _wrap_html(body):

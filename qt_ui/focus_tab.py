@@ -6,7 +6,6 @@ ones are separate tabs again.
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-import history_gui
 import picker_gui
 import session_manager
 import tasks_store
@@ -77,11 +76,6 @@ class FocusTab(QWidget):
         self._nuclear_button.setProperty("class", "SecondaryButton")
         self._nuclear_button.clicked.connect(self._open_nuclear_dialog)
         button_row.addWidget(self._nuclear_button)
-
-        history_button = QPushButton("Session History")
-        history_button.setProperty("class", "SecondaryButton")
-        history_button.clicked.connect(history_gui.open_history_viewer)
-        button_row.addWidget(history_button)
 
         button_row.addStretch(1)
         layout.addLayout(button_row)
