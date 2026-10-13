@@ -5,9 +5,10 @@ from PySide6.QtWidgets import QApplication
 
 import calendar_gui
 import config
-import history_gui
+import auth_manager
 import picker_gui
 import qt_gui_thread
+import qt_ui.main_window as main_window
 import qt_ui.mini_timer as mini_timer
 import qt_ui.quicknote as quicknote
 import qt_ui.nuclear_dialog as nuclear_dialog
@@ -116,16 +117,6 @@ def build_tray_icon(on_quit):
     def on_status(icon, item):
         icon.notify(_format_status_text(), title="Carmen Focus Status")
 
-    def on_end_session(icon, item):
-        # Nuclear-ending mid-session is a deliberate, disruptive act — ask
-        # why before it happens so the reason lands in session_history.json
-        # alongside it, instead of a bare "someone ended it early" with no
-        # context by the time anyone reviews the log.
-        qt_gui_thread.run_on_gui_thread(lambda: _open_nuclear_reason_dialog(icon))
-
-    def on_view_history(icon, item):
-        history_gui.open_history_viewer()
-
     def on_copy_api_token(icon, item):
         # Every state-changing endpoint in api_server.py now requires this
         # token (see _require_token) -- the browser extension needs it once,
@@ -141,27 +132,14 @@ def build_tray_icon(on_quit):
         on_quit()
         icon.stop()
 
-    def _session_active(item):
-        # Both "End Session (Nuclear)" and "Pause/Resume" only make sense
-        # while a session is actually running — pystray re-evaluates
-        # `visible` callables each time the menu is opened, so these items
-        # just disappear on their own once a session ends instead of sitting
-        # there as a dead no-op.
-        return session_manager.is_active()
+    def _signed_in(item):
+        return auth_manager.is_logged_in()
 
-    def _pause_resume_text(item):
-        return "Resume Session" if session_manager.get_status()["isPaused"] else "Pause Session"
+    def _signed_out(item):
+        return not auth_manager.is_logged_in()
 
-    def on_pause_resume(icon, item):
-        # pause_session()/resume_session() already log a "pause"/"resume"
-        # entry into violationLog (see session_manager.py), which
-        # history_gui.py renders inline in the session's timeline — nothing
-        # extra needed here to get that into the log.
-        if session_manager.get_status()["isPaused"]:
-            session_manager.resume_session()
-        else:
-            session_manager.pause_session()
-        icon.update_menu()
+    def on_sign_in(icon, item):
+        qt_gui_thread.run_on_gui_thread(main_window.open_sign_in)
 
     menu = pystray.Menu(
         # default=True makes a left-click on the icon itself fire this item
@@ -173,10 +151,10 @@ def build_tray_icon(on_quit):
         pystray.MenuItem("Mini Timer", on_mini_timer),
         pystray.MenuItem("QuickNote", on_quicknote),
         pystray.MenuItem("Status", on_status),
-        pystray.MenuItem("Session History", on_view_history),
-        pystray.MenuItem("Copy API Token (for browser extension)", on_copy_api_token),
-        pystray.MenuItem(_pause_resume_text, on_pause_resume, visible=_session_active),
-        pystray.MenuItem("End Session (Nuclear)", on_end_session, visible=_session_active),
+        # The extension's token is only handed out once signed in, so every user
+        # signs in first (and from then on syncs) before the extension is paired.
+        pystray.MenuItem("Sign in", on_sign_in, visible=_signed_out),
+        pystray.MenuItem("Copy API Token (for browser extension)", on_copy_api_token, visible=_signed_in),
         pystray.MenuItem("Quit", on_quit_clicked),
     )
 
