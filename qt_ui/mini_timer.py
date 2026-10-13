@@ -23,6 +23,7 @@ MUTED = QColor("#8A8F98")
 RESIZE_MARGIN = 8
 DEFAULT_SIZE = (220, 250)
 SAVE_DELAY_MS = 400
+CLICK_SLOP = 5     # pixels of movement that still count as a click, not a drag
 
 
 def format_clock(seconds):
@@ -90,6 +91,9 @@ class MiniTimer(QWidget):
         self.setMinimumSize(150, 170)
         self.setWindowTitle("Carmen Focus timer")
         self._drag_offset = None
+        self._press_point = QPointF()
+        self._press_on_clock = False
+        self._dragged = False
         self._label = ""
         self._clock = "--:--"
         self._fraction = None
@@ -186,9 +190,8 @@ class MiniTimer(QWidget):
 
         top = 8
         label_height = 26
-        bottom = self._button.y() - 6
-        side = min(self.width() - 28, bottom - top - label_height)
-        box = QRectF((self.width() - side) / 2, top + label_height, side, side)
+        box = self._clock_rect()
+        side = box.width()
 
         painter.setPen(MUTED)
         font = QFont(self.font())
@@ -212,6 +215,14 @@ class MiniTimer(QWidget):
         painter.setFont(font)
         painter.setPen(TEXT)
         painter.drawText(box, Qt.AlignCenter, self._clock)
+
+    def _clock_rect(self):
+        """The square holding the ring and the time (also what opens QuickNote)."""
+        top = 8
+        label_height = 26
+        bottom = self._button.y() - 6
+        side = max(1.0, min(self.width() - 28, bottom - top - label_height))
+        return QRectF((self.width() - side) / 2, top + label_height, side, side)
 
     # --- drag to move, drag an edge or corner to resize ---
 
@@ -248,15 +259,33 @@ class MiniTimer(QWidget):
             self.windowHandle().startSystemResize(edges)
             return
         self._drag_offset = event.globalPosition() - QPointF(self.frameGeometry().topLeft())
+        self._press_point = event.globalPosition()
+        self._press_on_clock = self._clock_rect().contains(event.position())
+        self._dragged = False
 
     def mouseMoveEvent(self, event):
         if self._drag_offset is not None and event.buttons() & Qt.LeftButton:
+            if (event.globalPosition() - self._press_point).manhattanLength() > CLICK_SLOP:
+                self._dragged = True
             self.move((event.globalPosition() - self._drag_offset).toPoint())
         elif not event.buttons():
-            self.setCursor(self._cursor_for(self._edges_at(event.position())))
+            edges = self._edges_at(event.position())
+            if edges:
+                self.setCursor(self._cursor_for(edges))
+            elif self._clock_rect().contains(event.position()):
+                self.setCursor(Qt.PointingHandCursor)      # click the time or the ring: QuickNote
+            else:
+                self.setCursor(Qt.ArrowCursor)
 
-    def mouseReleaseEvent(self, _event):
+    def mouseReleaseEvent(self, event):
+        clicked_clock = (
+            self._drag_offset is not None and self._press_on_clock and not self._dragged
+            and event.button() == Qt.LeftButton
+        )
         self._drag_offset = None
+        if clicked_clock:
+            import qt_ui.quicknote as quicknote
+            quicknote.open_quicknote()
 
 
 _win = None

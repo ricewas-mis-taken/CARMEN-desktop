@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 import api_server
 import auto_updater
 import autostart
+import desktop_menu
 import calendar_scheduler
 import calendar_toast
 import config
@@ -31,6 +32,8 @@ from api_server import run_server
 
 stop_event = threading.Event()
 DEV_MODE = "--dev" in sys.argv[1:]
+# Started by the desktop right-click "QuickNote" when the app was not running yet.
+OPEN_QUICKNOTE = "--quicknote" in sys.argv[1:]
 
 STYLESHEET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "styles.qss")
 
@@ -91,6 +94,7 @@ def main():
     config.load_config()
     calendar_toast.set_app_id()
     autostart.ensure_autostart_registered()
+    desktop_menu.ensure_registered()
 
     # QApplication must be constructed here, on what becomes "the Qt main
     # thread" (this thread), before qt_gui_thread.start() and before any
@@ -106,6 +110,10 @@ def main():
     _check_accessibility_trust()
 
     qt_gui_thread.start()
+
+    if OPEN_QUICKNOTE:
+        import qt_ui.quicknote as quicknote
+        qt_gui_thread.run_on_gui_thread(quicknote.open_quicknote)
 
     if DEV_MODE:
         # Opens the main window automatically on launch/dev-restart, purely

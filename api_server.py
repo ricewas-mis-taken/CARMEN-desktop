@@ -241,6 +241,16 @@ def internal_quit():
     return jsonify({"ok": True})
 
 
+@app.route("/quicknote/open", methods=["POST"])
+@_require_token
+def quicknote_open():
+    """Opens the QuickNote window (the desktop right-click entry calls this)."""
+    import qt_gui_thread
+    import qt_ui.quicknote as quicknote
+    qt_gui_thread.run_on_gui_thread(quicknote.open_quicknote)
+    return jsonify({"ok": True})
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"ok": True})
