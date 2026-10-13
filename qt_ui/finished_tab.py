@@ -30,7 +30,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-import history_gui
 import session_history
 import tasks_store
 from qt_ui.day_layout import contrasting_text_color, layout_day_blocks
@@ -230,11 +229,6 @@ class _FinishedMonthView(QWidget):
         self._search_edit.setFixedWidth(200)
         self._search_edit.textChanged.connect(self._render)
         header.addWidget(self._search_edit)
-
-        view_log_button = QPushButton("View Full Log…")
-        view_log_button.setProperty("class", "SecondaryButton")
-        view_log_button.clicked.connect(history_gui.open_history_viewer)
-        header.addWidget(view_log_button)
 
         return header
 
