@@ -106,5 +106,5 @@ def test_only_the_valid_part_of_a_partly_damaged_record_is_used(device, fake_log
 
 def test_every_table_the_fast_lane_handles_is_left_out_of_the_slow_lane():
     handled = {sync_live.HISTORY_TABLE, sync_live.LIVE_TABLE, sync_live.REVIEW_TABLE,
-               sync_live.SCREENTIME_TABLE, sync_live.SETTINGS_TABLE}
+               sync_live.SCREENTIME_TABLE, sync_live.SETTINGS_TABLE, sync_live.QUICKNOTE_TABLE}
     assert handled == set(sync_live.LANE_TABLES)

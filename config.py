@@ -24,6 +24,7 @@ DEFAULT_CONFIG = {
     "last_duration_minutes": 25,
     "last_lock_mode": "soft",
     "miniTimerGeometry": None,
+    "quickNoteGeometry": None,
     "last_hide_taskbar_badges": False,
     "last_stop_taskbar_flashing": False,
     # Bumped only by set_focus_rules() (the browser-extension cross-profile

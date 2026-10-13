@@ -105,7 +105,8 @@ skip it silently.
        computer per day, shown per computer in the Screen Time tab), and the
        saved block/allow lists and Start-dialog defaults (config.py's
        SHARED_SETTINGS -- a new setting is per-computer unless it is listed
-       there). Not shared: browser-only extension sessions.
+       there), and the QuickNote (one bullet list, newest edit wins). Not
+       shared: browser-only extension sessions.
    [ ] If unsure whether something needs sync, check how the nearest
        existing similar field is handled rather than guessing.
 
