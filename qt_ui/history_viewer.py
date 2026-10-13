@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTextEdit, QVBoxLayout, QWidget
 
 import session_history
+import session_manager
 
 SEPARATOR = "─" * 72
 
@@ -142,7 +143,7 @@ def _format_source_label(session):
     review_subject_name = session.get("reviewSubjectName")
 
     if source == "review":
-        label = f"Review: {review_problem_name or '?'}"
+        label = "First attempt" if session_manager.is_first_attempt(session) else f"Review: {review_problem_name or '?'}"
         if review_subject_name:
             label += f"  •  Subject: {review_subject_name}"
         if event_title:

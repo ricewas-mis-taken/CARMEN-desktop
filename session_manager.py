@@ -769,6 +769,22 @@ def get_status():
         return _get_status_locked()
 
 
+# The name a "first attempt" timer is filed under. A first attempt is the
+# first go at a brand-new problem, so there is nothing to "review" yet: every
+# screen and the extension call it just "First attempt".
+FIRST_ATTEMPT_NAME = "First attempt"
+
+
+def is_first_attempt(session):
+    """True for a session (live, waiting, or a history entry) that is timing the
+    first attempt at a new problem rather than reviewing an existing one."""
+    return bool(session) and (
+        session.get("source") == "review"
+        and session.get("reviewProblemName") == FIRST_ATTEMPT_NAME
+        and session.get("reviewProblemId") is None
+    )
+
+
 def _get_status_locked():
     """Body of get_status(), for callers (pause_session()/resume_session())
     that already hold _lock — _lock isn't reentrant, so get_status() itself
@@ -810,6 +826,7 @@ def _get_status_locked():
         "reviewProblemName": _state["reviewProblemName"],
         "reviewSubjectName": _state["reviewSubjectName"],
         "reviewProblemId": _state["reviewProblemId"],
+        "isFirstAttempt": is_first_attempt(_state),
         "isBurnout": _state["isBurnout"],
         "sessionId": _state.get("sessionId"),
         "blockedBrowserProfiles": list(_state["blockedBrowserProfiles"]),
@@ -1000,6 +1017,7 @@ def _parked_summaries_locked():
             "reviewProblemName": parked["reviewProblemName"],
             "reviewSubjectName": parked["reviewSubjectName"],
             "reviewProblemId": parked["reviewProblemId"],
+            "isFirstAttempt": is_first_attempt(parked),
             "isBurnout": parked["isBurnout"],
             "isBreak": parked["isBreak"],
             "pomodoro": dict(parked["pomodoro"]) if parked["pomodoro"] is not None else None,
