@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from qt_ui.wrap_edit import WrapEdit
 
 import config
 import installed_apps
@@ -70,7 +71,7 @@ class _TaskEditor(QWidget):
         layout = QVBoxLayout(self)
 
         layout.addWidget(_bold_label("Name"))
-        self._name_edit = QLineEdit((task or {}).get("name", ""))
+        self._name_edit = WrapEdit((task or {}).get("name", ""))
         layout.addWidget(self._name_edit)
 
         layout.addWidget(_bold_label("Color"))

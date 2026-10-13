@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from qt_ui.wrap_edit import WrapEdit
 
 import board_store
 from qt_ui.safe_link import make_link_label
@@ -788,7 +789,7 @@ class _AddTaskDialog(QWidget):
         layout = QVBoxLayout(self)
 
         layout.addWidget(_bold_label("Name"))
-        self._name_edit = QLineEdit()
+        self._name_edit = WrapEdit()
         layout.addWidget(self._name_edit)
 
         layout.addWidget(_bold_label("Importance"))
@@ -814,7 +815,7 @@ class _AddTaskDialog(QWidget):
         photo_row.addWidget(self._photo_preview, 1)
         layout.addLayout(photo_row)
 
-        self._link_edit = QLineEdit()
+        self._link_edit = WrapEdit()
         self._link_edit.setPlaceholderText("Link (optional)")
         layout.addWidget(self._link_edit)
 
@@ -926,7 +927,7 @@ class _EditTaskDialog(QWidget):
         layout = QVBoxLayout(self)
 
         layout.addWidget(_bold_label("Name"))
-        self._name_edit = QLineEdit(task.get("name") or "")
+        self._name_edit = WrapEdit(task.get("name") or "")
         layout.addWidget(self._name_edit)
 
         self._day_buttons, self._pattern_buttons = _build_recurrence_pickers(
@@ -964,7 +965,7 @@ class _EditTaskDialog(QWidget):
             remove_photo_button.clicked.connect(self._mark_remove_photo)
             layout.addWidget(remove_photo_button)
 
-        self._link_edit = QLineEdit(task.get("descriptionLink") or "")
+        self._link_edit = WrapEdit(task.get("descriptionLink") or "")
         self._link_edit.setPlaceholderText("Link (optional)")
         layout.addWidget(self._link_edit)
 

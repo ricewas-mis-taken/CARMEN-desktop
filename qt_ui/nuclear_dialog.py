@@ -2,7 +2,8 @@
 mid-session is a deliberate, disruptive act -- this asks why before it
 happens so the reason lands in session_history.json alongside it."""
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from qt_ui.wrap_edit import WrapEdit
 
 import session_manager
 
@@ -36,7 +37,7 @@ class _NuclearReasonDialog(QWidget):
         prompt.setAlignment(Qt.AlignCenter)
         layout.addWidget(prompt)
 
-        self._reason_edit = QLineEdit()
+        self._reason_edit = WrapEdit()
         layout.addWidget(self._reason_edit)
 
         self._status_label = QLabel()

@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from qt_ui.wrap_edit import WrapEdit
 
 import config
 import enforcer
@@ -293,7 +294,7 @@ class _ReasonDialog(QWidget):
             name_label = QLabel(process_name)
             name_label.setStyleSheet("font-weight: bold;")
             content_layout.addWidget(name_label)
-            edit = QLineEdit()
+            edit = WrapEdit()
             content_layout.addWidget(edit)
             self._reason_edits[process_name] = edit
         content_layout.addStretch(1)

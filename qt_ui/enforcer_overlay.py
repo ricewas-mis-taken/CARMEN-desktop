@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from qt_ui.wrap_edit import WrapEdit
 
 # _LockOverlay's own dark card styling -- deliberately not styles.qss (see
 # that file's #PopupBg comment: this overlay intentionally keeps its own look
@@ -430,7 +431,7 @@ class _UnblockReasonDialog(QWidget):
         prompt.setAlignment(Qt.AlignCenter)
         layout.addWidget(prompt)
 
-        self._reason_edit = QLineEdit()
+        self._reason_edit = WrapEdit()
         layout.addWidget(self._reason_edit)
 
         self._status_label = QLabel()

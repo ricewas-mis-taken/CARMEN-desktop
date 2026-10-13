@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from qt_ui.wrap_edit import WrapEdit
 
 import review_store
 import session_manager
@@ -461,7 +462,7 @@ class _AddTopicDialog(QWidget):
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Topic name"))
-        self._name_edit = QLineEdit()
+        self._name_edit = WrapEdit()
         self._name_edit.setPlaceholderText("e.g. Math")
         self._name_edit.returnPressed.connect(self._create)
         layout.addWidget(self._name_edit)
@@ -1600,7 +1601,7 @@ class _RenameTopicDialog(QWidget):
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("New name"))
-        self._name_edit = QLineEdit(current_name)
+        self._name_edit = WrapEdit(current_name)
         self._name_edit.selectAll()
         self._name_edit.returnPressed.connect(self._save)
         layout.addWidget(self._name_edit)
@@ -1755,7 +1756,7 @@ class _AddProblemDialog(QWidget):
             layout.addWidget(self._first_attempt_status)
 
         layout.addWidget(_bold_label("Name"))
-        self._name_edit = QLineEdit(problem["name"] if problem else "")
+        self._name_edit = WrapEdit(problem["name"] if problem else "")
         layout.addWidget(self._name_edit)
 
         layout.addWidget(_bold_label("Subject"))
@@ -1815,7 +1816,7 @@ class _AddProblemDialog(QWidget):
         photo_layout.addWidget(self._photo_preview)
         self._description_stack.addWidget(photo_page)
 
-        self._link_edit = QLineEdit(problem.get("descriptionLink") or "" if problem else "")
+        self._link_edit = WrapEdit(problem.get("descriptionLink") or "" if problem else "")
         self._link_edit.setPlaceholderText("https://example.com/problem")
         self._description_stack.addWidget(self._link_edit)
 
