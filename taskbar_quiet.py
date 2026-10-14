@@ -19,6 +19,9 @@ from calendar_log import logger
 
 SAVED_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "taskbar_quiet_saved.json")
 
+# What the user's own setting was the last time this module was not holding it off.
+USER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "taskbar_quiet_user.json")
+
 _KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
 _VALUE_NAMES = {"badges": "TaskbarBadges", "flashing": "TaskbarFlashing"}
 # What Windows treats as "on" when the value has never been written.
@@ -74,6 +77,43 @@ def _save_saved(saved):
         json.dump(saved, f)
 
 
+def _load_user():
+    try:
+        with open(USER_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _remember_user_values(saved):
+    """While nothing is being held off, note what the user's settings really are, so a
+    leftover "off" from a crash or kill can never be mistaken for their own choice."""
+    known = _load_user()
+    changed = False
+    for setting, name in _VALUE_NAMES.items():
+        if setting in saved:
+            continue
+        value = _read_value(name)
+        value = _DEFAULT_ON if value is None else value
+        if known.get(setting) != value:
+            known[setting] = value
+            changed = True
+    if changed:
+        os.makedirs(os.path.dirname(USER_PATH), exist_ok=True)
+        with open(USER_PATH, "w", encoding="utf-8") as f:
+            json.dump(known, f)
+
+
+def _value_to_put_back(setting, saved_original):
+    """The user's own value. An "off" we only found lying around (never seen while we
+    were not holding it) is ours from an earlier run, so it goes back to on."""
+    known = _load_user().get(setting)
+    if known is not None:
+        return known
+    return _DEFAULT_ON if not saved_original else saved_original
+
+
 def wanted(status):
     """Which settings this /status-shaped dict wants switched off right now."""
     quiet = bool(status.get("isActive")) and not status.get("isPaused") and not status.get("isBreak")
@@ -92,19 +132,22 @@ def reconcile(status):
     for setting, name in _VALUE_NAMES.items():
         try:
             if want[setting] and setting not in saved:
-                original = _read_value(name)
+                original = _value_to_put_back(setting, _read_value(name))
                 saved[setting] = original
                 _save_saved(saved)  # remembered before touching anything
                 _write_value(name, 0)
                 changed = True
             elif not want[setting] and setting in saved:
-                original = saved[setting]
-                _write_value(name, _DEFAULT_ON if original is None else original)
+                _write_value(name, _value_to_put_back(setting, saved[setting]))
                 del saved[setting]
                 _save_saved(saved)
                 changed = True
         except Exception:
             logger.exception("taskbar_quiet: could not update %s", name)
+    try:
+        _remember_user_values(saved)
+    except Exception:
+        logger.exception("taskbar_quiet: could not note the user's settings")
     if changed:
         try:
             _broadcast_change()

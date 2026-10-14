@@ -14,6 +14,7 @@ def registry(tmp_path, monkeypatch):
     values = {"TaskbarBadges": 1, "TaskbarFlashing": 1}
     log = []
     monkeypatch.setattr(taskbar_quiet, "SAVED_PATH", str(tmp_path / "saved.json"))
+    monkeypatch.setattr(taskbar_quiet, "USER_PATH", str(tmp_path / "user.json"))
     monkeypatch.setattr(taskbar_quiet, "_read_value", lambda name: values.get(name))
     monkeypatch.setattr(taskbar_quiet, "_write_value", lambda name, v: (values.__setitem__(name, v), log.append((name, v))))
     monkeypatch.setattr(taskbar_quiet, "_broadcast_change", lambda: log.append("broadcast"))
@@ -51,6 +52,7 @@ def test_values_come_back_when_the_session_ends_pauses_or_breaks(registry):
 
 def test_a_setting_the_user_already_had_off_stays_off(registry):
     registry["TaskbarBadges"] = 0
+    taskbar_quiet.reconcile(_status())                      # seen while nothing was held off
     taskbar_quiet.reconcile(_status(hideTaskbarBadges=True))
     taskbar_quiet.reconcile(_status(isActive=False))
     assert registry["TaskbarBadges"] == 0
@@ -60,6 +62,21 @@ def test_an_unset_value_is_restored_to_on(registry):
     del registry["TaskbarBadges"]
     taskbar_quiet.reconcile(_status(hideTaskbarBadges=True))
     taskbar_quiet.reconcile(_status(isActive=False))
+    assert registry["TaskbarBadges"] == 1
+
+
+def test_an_off_left_behind_by_a_crash_is_not_taken_for_the_users_choice(registry):
+    # the app was killed mid-session: the value is still 0 and the saved copy says 0 too
+    registry["TaskbarBadges"] = 0
+    taskbar_quiet._save_saved({"badges": 0})
+    taskbar_quiet.restore_all()
+    assert registry["TaskbarBadges"] == 1
+
+
+def test_a_value_read_while_already_held_off_by_us_is_not_kept_as_the_original(registry):
+    registry["TaskbarBadges"] = 0                            # never seen idle: assume on
+    taskbar_quiet.reconcile(_status(hideTaskbarBadges=True))
+    taskbar_quiet.reconcile(_status(isPaused=True, hideTaskbarBadges=True))
     assert registry["TaskbarBadges"] == 1
 
 
