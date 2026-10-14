@@ -34,7 +34,7 @@ def test_pause_button_pauses_and_resumes(qtbot, isolate_state):
     assert win._button.text() == "Pause"
     win._button.click()
     assert sm.get_status()["isPaused"] and win._button.text() == "Resume"
-    assert win._label.endswith("(paused)")
+    assert "paused" not in win._label
     win._button.click()
     assert not sm.get_status()["isPaused"] and win._button.text() == "Pause"
 

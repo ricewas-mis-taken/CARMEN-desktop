@@ -67,8 +67,6 @@ def describe(status):
     if pomo is not None:
         phase = "Break" if status.get("isBreak") else "Focus"
         label = f"{phase} {pomo['currentCycle']}/{pomo['totalCycles']} - {label}"
-    if status["isPaused"]:
-        label += " (paused)"
 
     counts_up = status.get("isBurnout") or status.get("reviewProblemName")
     if counts_up:
