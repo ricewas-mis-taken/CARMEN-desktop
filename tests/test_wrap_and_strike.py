@@ -58,3 +58,28 @@ def test_closing_removes_ticked_items_and_saves(qtbot, isolate_state):
     window.close()
     assert window._list.items() == ["a", "c"]
     assert quicknote_store.load()[0] == ["a", "c"]
+
+
+def test_opening_again_restores_a_minimised_note_in_place(qtbot, isolate_state):
+    quicknote._win = None
+    quicknote.open_quicknote()
+    win = quicknote._win
+    qtbot.addWidget(win)
+    win.move(120, 140)
+    pos = win.pos()
+    win.showMinimized()
+    assert win.isMinimized()
+    quicknote.open_quicknote()
+    assert not win.isMinimized() and win.isVisible() and win.pos() == pos
+    quicknote._win = None
+
+
+def test_ticked_box_is_green_with_a_white_tick(qtbot):
+    rows = _note(qtbot, ["a"])
+    box = rows._edits[0].checkbox
+    box.setChecked(True)
+    image = box.grab().toImage()
+    centre = image.pixelColor(image.width() // 2, image.height() // 2)
+    assert centre.green() > centre.red() and centre.green() > centre.blue() or centre.red() > 200
+    corner = image.pixelColor(int(image.width() * 0.2), int(image.height() * 0.8))
+    assert corner.green() > 150 and corner.red() < 100

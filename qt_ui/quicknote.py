@@ -6,8 +6,10 @@ Each item has a checkbox: ticking it greys the item out with a strikethrough
 (untick to undo); ticked items disappear when the window is closed. Everything is saved as you
 type to quicknote_store (and so is shared with your other computers).
 """
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFontMetrics, QGuiApplication, QTextCharFormat, QTextCursor
+from PySide6.QtCore import QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QColor, QFontMetrics, QGuiApplication, QPainter, QPainterPath, QPen, QTextCharFormat, QTextCursor,
+)
 from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QScrollArea, QVBoxLayout, QWidget
 
 import config
@@ -23,16 +25,40 @@ _STYLE = """
 QWidget#QuickNote { background: #111317; }
 QScrollArea { background: transparent; border: none; }
 QWidget#QuickNoteRows { background: transparent; }
-QCheckBox { spacing: 0px; }
-QCheckBox::indicator { border: 1.5px solid #6B7280; border-radius: 4px; background: transparent; }
-QCheckBox::indicator:hover { border-color: #5B8DEF; }
-QCheckBox::indicator:checked { background: #5B8DEF; border-color: #5B8DEF; }
 QPlainTextEdit#WrapEdit { background: transparent; border: none; color: #F2F4F7; padding: 0px 2px; }
 QPlainTextEdit#WrapEdit:focus { background: rgba(255, 255, 255, 0.05); border-radius: 4px; }
 """
 
 GREY = QColor("#6B7280")
 NORMAL = QColor("#F2F4F7")
+TICK_GREEN = QColor("#22C55E")
+
+
+class _Tick(QCheckBox):
+    """A square exactly one line of text tall: empty outline, or green with a white tick."""
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        side = min(self.width(), self.height()) - 3
+        box = QRectF((self.width() - side) / 2, (self.height() - side) / 2, side, side)
+        radius = side * 0.25
+        if self.isChecked():
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(TICK_GREEN)
+            painter.drawRoundedRect(box, radius, radius)
+            pen = QPen(QColor("#FFFFFF"), max(1.6, side * 0.13), Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            tick = QPainterPath()
+            tick.moveTo(box.left() + side * 0.24, box.top() + side * 0.54)
+            tick.lineTo(box.left() + side * 0.43, box.top() + side * 0.72)
+            tick.lineTo(box.left() + side * 0.78, box.top() + side * 0.30)
+            painter.drawPath(tick)
+        else:
+            painter.setPen(QPen(QColor("#5B8DEF") if self.underMouse() else GREY, 1.5))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(box, radius, radius)
 
 
 class _BulletEdit(WrapEdit):
@@ -129,9 +155,8 @@ class NoteList(QWidget):
         edit._fit_height()
         # The checkbox is exactly one line of text tall and wide, level with the first line.
         side = QFontMetrics(font).lineSpacing()
-        box = QCheckBox()
+        box = _Tick()
         box.setFixedSize(side, side)
-        box.setStyleSheet(f"QCheckBox::indicator {{ width: {side - 3}px; height: {side - 3}px; }}")
         edit.checkbox = box
         box.toggled.connect(edit.set_struck)
         edit.enter_pressed.connect(self._on_enter)
@@ -257,6 +282,15 @@ class QuickNoteWindow(QWidget):
             if had_focus:
                 self._list.focus_last()
 
+    def bring_forward(self):
+        """Shows the window on top, exactly where it was: a minimised or buried one
+        comes back without being moved or resized."""
+        if self.isMinimized():
+            self.setWindowState((self.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
     # --- remembered position ---
 
     def _restore_geometry(self):
@@ -295,7 +329,5 @@ def open_quicknote():
         _win = QuickNoteWindow()
     else:
         _win._pick_up_remote_change()
-    _win.show()
-    _win.raise_()
-    _win.activateWindow()
+    _win.bring_forward()
     _win._list.focus_last()
