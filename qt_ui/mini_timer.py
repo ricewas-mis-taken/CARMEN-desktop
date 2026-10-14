@@ -7,12 +7,14 @@ or corner to resize, the small x (top right) closes it. Position and size are
 remembered between launches.
 """
 import sys
+import traceback
 
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import QPushButton, QWidget
 
 import config
+from calendar_log import logger
 import session_manager
 import tasks_store
 
@@ -120,7 +122,7 @@ class MiniTimer(QWidget):
             "QPushButton { background: transparent; color: #8A8F98; border: none; font-size: 11px; }"
             "QPushButton:hover { color: #F2F4F7; }"
         )
-        self._close.clicked.connect(self.close)
+        self._close.clicked.connect(self._close_by_user)
 
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
@@ -154,6 +156,19 @@ class MiniTimer(QWidget):
         super().moveEvent(event)
         self._save_timer.start()
 
+    def _close_by_user(self):
+        self._closed_by_user = True
+        self.close()
+
+    def _on_a_screen(self):
+        screens = [screen.availableGeometry() for screen in QGuiApplication.screens()]
+        return any(screen.intersects(self.frameGeometry()) for screen in screens)
+
+    def hideEvent(self, event):
+        if not self._closed_by_user and not event.spontaneous():
+            logger.warning("mini timer hidden without the x: %s", "".join(traceback.format_stack(limit=8)))
+        super().hideEvent(event)
+
     def _keep_in_view(self):
         """A notification (or another topmost window) can push this window out of view:
         Windows drops it from the top or hides/minimises it. Unless the x was clicked,
@@ -164,6 +179,10 @@ class MiniTimer(QWidget):
             self.showNormal()
         elif not self.isVisible():
             self.show()
+        if not self._on_a_screen():
+            # A monitor was unplugged, slept or reconfigured and left it off every screen.
+            home = QGuiApplication.primaryScreen().availableGeometry()
+            self.move(home.right() - self.width() - 24, home.top() + 24)
         if sys.platform == "win32":
             try:
                 import ctypes
@@ -173,7 +192,8 @@ class MiniTimer(QWidget):
                 pass
 
     def closeEvent(self, event):
-        self._closed_by_user = True
+        if not self._closed_by_user:
+            logger.warning("mini timer closed without the x; it will reappear")
         self._save_timer.stop()
         self._save_geometry()
         super().closeEvent(event)
