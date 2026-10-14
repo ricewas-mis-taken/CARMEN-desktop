@@ -2,6 +2,7 @@
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 
+import quicknote_store
 import qt_ui.quicknote as quicknote
 from qt_ui.wrap_edit import WrapEdit
 
@@ -36,20 +37,24 @@ def _note(qtbot, items):
     return rows
 
 
-def test_a_click_strikes_a_bullet_and_closing_clears_it(qtbot):
+def test_ticking_strikes_unticking_restores_and_text_click_does_not_toggle(qtbot):
     rows = _note(qtbot, ["a", "b"])
-    rows._edits[1].setFocus()
-    QTest.mouseClick(rows._edits[0].viewport(), Qt.LeftButton, pos=rows._edits[0].viewport().rect().center())
-    assert rows._edits[0].struck and rows.items() == ["a", "b"]
-    rows.clear_struck()
-    assert not rows._edits[0].struck
+    first = rows._edits[0]
+    first.checkbox.setChecked(True)
+    assert first.struck
+    first.checkbox.setChecked(False)
+    assert not first.struck
+    QTest.mouseClick(first.viewport(), Qt.LeftButton)
+    assert not first.struck and not first.checkbox.isChecked()
 
 
-def test_the_window_clears_strikes_when_closed(qtbot, isolate_state):
+def test_closing_removes_ticked_items_and_saves(qtbot, isolate_state):
     window = quicknote.QuickNoteWindow()
     qtbot.addWidget(window)
     window.show()
-    window._list.set_items(["a", "b"])
-    window._list._edits[0].set_struck(True)
+    window._list.set_items(["a", "b", "c"])
+    window._list._edits[1].checkbox.setChecked(True)
+    assert window._list.items() == ["a", "b", "c"]          # still there until it is closed
     window.close()
-    assert not window._list._edits[0].struck
+    assert window._list.items() == ["a", "c"]
+    assert quicknote_store.load()[0] == ["a", "c"]
