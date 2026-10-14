@@ -27,6 +27,7 @@ import sync_realtime
 import sync_scheduler
 import taskbar_quiet
 import tray
+import ui_watchdog
 import window_tracker
 from api_server import run_server
 
@@ -110,6 +111,7 @@ def main():
     _check_accessibility_trust()
 
     qt_gui_thread.start()
+    ui_watchdog.start()
 
     if OPEN_QUICKNOTE:
         import qt_ui.quicknote as quicknote
