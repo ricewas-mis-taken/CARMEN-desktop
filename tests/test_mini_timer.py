@@ -118,6 +118,24 @@ def test_it_comes_back_if_pushed_out_of_view_but_not_after_the_x(qtbot, isolate_
     win.hide()                                  # what a notification can do to it
     win._keep_in_view()
     assert win.isVisible()
-    win.close()                                 # the x: the user wants it gone
+    win._close.click()                          # the x: the user wants it gone
     win._keep_in_view()
     assert not win.isVisible()
+
+
+def test_a_close_that_was_not_the_x_does_not_stick(qtbot, isolate_state):
+    win = mini_timer.MiniTimer()
+    qtbot.addWidget(win)
+    win.show()
+    win.close()                                 # e.g. closed by the system, not by the x
+    win._keep_in_view()
+    assert win.isVisible()
+
+
+def test_it_is_pulled_back_when_left_off_every_screen(qtbot, isolate_state):
+    win = mini_timer.MiniTimer()
+    qtbot.addWidget(win)
+    win.show()
+    win.move(-9000, -9000)
+    win._keep_in_view()
+    assert win._on_a_screen()
