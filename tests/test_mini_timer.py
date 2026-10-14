@@ -109,3 +109,15 @@ def test_a_saved_spot_on_a_missing_monitor_is_ignored():
     assert mini_timer.visible_geometry([100, 100, 10, 10], screens) is None
     for junk in (None, "x", [1, 2, 3], [1, 2, "a", 4], [True, 1, 200, 200]):
         assert mini_timer.visible_geometry(junk, screens) is None
+
+
+def test_it_comes_back_if_pushed_out_of_view_but_not_after_the_x(qtbot, isolate_state):
+    win = mini_timer.MiniTimer()
+    qtbot.addWidget(win)
+    win.show()
+    win.hide()                                  # what a notification can do to it
+    win._keep_in_view()
+    assert win.isVisible()
+    win.close()                                 # the x: the user wants it gone
+    win._keep_in_view()
+    assert not win.isVisible()

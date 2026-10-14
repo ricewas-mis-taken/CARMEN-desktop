@@ -6,6 +6,8 @@ Resume button, nothing else. Frameless: drag anywhere to move, drag any edge
 or corner to resize, the small x (top right) closes it. Position and size are
 remembered between launches.
 """
+import sys
+
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import QPushButton, QWidget
@@ -93,6 +95,7 @@ class MiniTimer(QWidget):
         self.setMinimumSize(150, 170)
         self.setWindowTitle("Carmen Focus timer")
         self._drag_offset = None
+        self._closed_by_user = False
         self._press_point = QPointF()
         self._press_on_clock = False
         self._dragged = False
@@ -128,6 +131,7 @@ class MiniTimer(QWidget):
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)
+        self._timer.timeout.connect(self._keep_in_view)
         self._timer.start(REFRESH_MS)
         self.refresh()
 
@@ -150,7 +154,26 @@ class MiniTimer(QWidget):
         super().moveEvent(event)
         self._save_timer.start()
 
+    def _keep_in_view(self):
+        """A notification (or another topmost window) can push this window out of view:
+        Windows drops it from the top or hides/minimises it. Unless the x was clicked,
+        bring it back and re-assert always-on-top, without taking focus."""
+        if self._closed_by_user:
+            return
+        if self.isMinimized():
+            self.showNormal()
+        elif not self.isVisible():
+            self.show()
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                HWND_TOPMOST, FLAGS = -1, 0x0001 | 0x0002 | 0x0010 | 0x0040   # nosize nomove noactivate showwindow
+                ctypes.windll.user32.SetWindowPos(int(self.winId()), HWND_TOPMOST, 0, 0, 0, 0, FLAGS)
+            except Exception:
+                pass
+
     def closeEvent(self, event):
+        self._closed_by_user = True
         self._save_timer.stop()
         self._save_geometry()
         super().closeEvent(event)
@@ -298,6 +321,7 @@ def open_mini_timer():
     global _win
     if _win is None:
         _win = MiniTimer()
+    _win._closed_by_user = False
     _win.refresh()
     _win.show()
     _win.raise_()

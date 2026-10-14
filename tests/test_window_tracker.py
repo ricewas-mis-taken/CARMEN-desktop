@@ -16,6 +16,17 @@ import session_manager
 import window_tracker
 
 
+def wait_for(condition, timeout=5.0):
+    """Waits until the polling thread has done what the test expects. Fixed sleeps made
+    these tests flaky on a busy machine; this is as fast as the thread is."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.01)
+    return False
+
+
 @pytest.fixture
 def fast_polling(monkeypatch):
     """Speeds up the loop's own pacing without touching the cooldown, so a
@@ -75,7 +86,7 @@ def test_soft_lock_rewarns_periodically_while_staying_on_the_same_app(isolate_st
     thread = threading.Thread(target=window_tracker.run_polling_loop, args=(stop_event,), daemon=True)
     thread.start()
     try:
-        time.sleep(0.5)
+        wait_for(lambda: len(warning_calls) >= 2)
     finally:
         stop_event.set()
         thread.join(timeout=2)
@@ -109,12 +120,12 @@ def test_soft_lock_rewarns_immediately_when_the_app_is_reopened(isolate_state, f
     thread = threading.Thread(target=window_tracker.run_polling_loop, args=(stop_event,), daemon=True)
     thread.start()
     try:
-        time.sleep(0.2)
+        assert wait_for(lambda: len(warning_calls) >= 1)
         assert len(warning_calls) == 1  # the first sighting, no rewarn cooldown elapsed yet
 
         # Simulate closing and reopening the same app -- a brand new hwnd.
         window_holder["hwnd"] = 222
-        time.sleep(0.2)
+        wait_for(lambda: len(warning_calls) >= 2)
     finally:
         stop_event.set()
         thread.join(timeout=2)
@@ -151,13 +162,13 @@ def test_lock_mode_switched_to_hard_mid_violation_takes_effect_without_leaving(
     thread = threading.Thread(target=window_tracker.run_polling_loop, args=(stop_event,), daemon=True)
     thread.start()
     try:
-        time.sleep(0.1)
+        wait_for(lambda: warning_calls)
         assert warning_calls, "expected at least one soft warning before switching modes"
         assert not redirect_calls
 
         # Switch to hard mode without the foreground ever leaving discord.exe.
         session_manager.update_blocklist(["discord.exe"], [], lock_mode="hard")
-        time.sleep(0.1)
+        wait_for(lambda: redirect_calls)
     finally:
         stop_event.set()
         thread.join(timeout=2)
@@ -182,7 +193,7 @@ def test_process_that_actually_leaves_still_gets_redirected_again(isolate_state,
     thread = threading.Thread(target=window_tracker.run_polling_loop, args=(stop_event,), daemon=True)
     thread.start()
     try:
-        time.sleep(0.5)
+        wait_for(lambda: len(redirect_calls) >= 2)
     finally:
         stop_event.set()
         thread.join(timeout=2)
@@ -218,12 +229,12 @@ def test_reopened_window_is_redirected_immediately_not_after_cooldown(isolate_st
     thread = threading.Thread(target=window_tracker.run_polling_loop, args=(stop_event,), daemon=True)
     thread.start()
     try:
-        time.sleep(0.1)
+        wait_for(lambda: len(redirect_calls) >= 1)
         assert len(redirect_calls) >= 1
         # Simulate the user reopening the app: a fresh window, well within
         # the (5s) cooldown window of the first redirect.
         current_hwnd["value"] = 222
-        time.sleep(0.1)
+        wait_for(lambda: len(redirect_calls) >= 2)
     finally:
         stop_event.set()
         thread.join(timeout=2)
@@ -257,7 +268,7 @@ def test_hard_lock_sweeps_background_windows_every_tick(isolate_state, fast_poll
     thread = threading.Thread(target=window_tracker.run_polling_loop, args=(stop_event,), daemon=True)
     thread.start()
     try:
-        time.sleep(0.1)
+        wait_for(lambda: len(sweep_calls) >= 2)
     finally:
         stop_event.set()
         thread.join(timeout=2)
@@ -289,7 +300,7 @@ def test_sweep_caught_window_shows_overlay_and_records_violation(isolate_state, 
     thread = threading.Thread(target=window_tracker.run_polling_loop, args=(stop_event,), daemon=True)
     thread.start()
     try:
-        time.sleep(0.1)
+        wait_for(lambda: notice_calls)
     finally:
         stop_event.set()
         thread.join(timeout=2)
@@ -331,7 +342,7 @@ def test_sweep_notice_not_suppressed_by_a_just_logged_violation(isolate_state, f
     try:
         # Let the foreground path log a violation for discord.exe first (its
         # own VIOLATION_COOLDOWN_SECONDS entry is now "fresh", real 5s value).
-        time.sleep(0.05)
+        wait_for(lambda: session_manager.get_status()["violationCount"] >= 1)
         status = session_manager.get_status()
         assert status["violationCount"] >= 1
 
@@ -343,7 +354,7 @@ def test_sweep_notice_not_suppressed_by_a_just_logged_violation(isolate_state, f
         foreground["name"] = "notepad.exe"
         foreground["hwnd"] = 222
         monkeypatch.setattr(enforcer, "sweep_minimize_blocked_windows", lambda: [("discord.exe", 333)])
-        time.sleep(0.05)
+        wait_for(lambda: notice_calls)
     finally:
         stop_event.set()
         thread.join(timeout=2)
@@ -373,7 +384,7 @@ def test_screen_time_is_tracked_even_with_no_session_active(
     thread = threading.Thread(target=window_tracker.run_polling_loop, args=(stop_event,), daemon=True)
     thread.start()
     try:
-        time.sleep(0.2)
+        wait_for(lambda: screentime_store.get_day(screentime_store._day_key())["apps"].get("code.exe", 0) > 0)
     finally:
         stop_event.set()
         thread.join(timeout=2)
@@ -450,7 +461,7 @@ def test_poll_loop_and_instant_hook_do_not_double_count_one_violation(
     try:
         # Let the poll loop's own foreground path log a violation for
         # discord.exe first.
-        time.sleep(0.05)
+        wait_for(lambda: session_manager.get_status()["violationCount"] >= 1)
         assert session_manager.get_status()["violationCount"] >= 1
 
         # The instant WinEvent hook now observes the exact same window --
