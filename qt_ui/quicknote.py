@@ -7,7 +7,7 @@ Each item has a checkbox: ticking it greys the item out with a strikethrough
 type to quicknote_store (and so is shared with your other computers).
 """
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QGuiApplication, QTextCharFormat, QTextCursor
+from PySide6.QtGui import QColor, QFontMetrics, QGuiApplication, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QScrollArea, QVBoxLayout, QWidget
 
 import config
@@ -15,6 +15,7 @@ import quicknote_store
 from qt_ui.wrap_edit import WrapEdit
 
 SAVE_DELAY_MS = 400
+TEXT_PX = 15
 REMOTE_CHECK_MS = 1000
 DEFAULT_SIZE = (320, 380)
 
@@ -23,10 +24,10 @@ QWidget#QuickNote { background: #111317; }
 QScrollArea { background: transparent; border: none; }
 QWidget#QuickNoteRows { background: transparent; }
 QCheckBox { spacing: 0px; }
-QCheckBox::indicator { width: 15px; height: 15px; border: 1.5px solid #6B7280; border-radius: 4px; background: transparent; }
+QCheckBox::indicator { border: 1.5px solid #6B7280; border-radius: 4px; background: transparent; }
 QCheckBox::indicator:hover { border-color: #5B8DEF; }
 QCheckBox::indicator:checked { background: #5B8DEF; border-color: #5B8DEF; }
-QPlainTextEdit#WrapEdit { background: transparent; border: none; color: #F2F4F7; font-size: 15px; padding: 0px 2px; }
+QPlainTextEdit#WrapEdit { background: transparent; border: none; color: #F2F4F7; padding: 0px 2px; }
 QPlainTextEdit#WrapEdit:focus { background: rgba(255, 255, 255, 0.05); border-radius: 4px; }
 """
 
@@ -120,8 +121,17 @@ class NoteList(QWidget):
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(6)
-        box = QCheckBox()
         edit = _BulletEdit(text)
+        font = edit.font()
+        font.setPixelSize(TEXT_PX)
+        edit.setFont(font)
+        edit.document().setDocumentMargin(0)               # the first line starts at the very top
+        edit._fit_height()
+        # The checkbox is exactly one line of text tall and wide, level with the first line.
+        side = QFontMetrics(font).lineSpacing()
+        box = QCheckBox()
+        box.setFixedSize(side, side)
+        box.setStyleSheet(f"QCheckBox::indicator {{ width: {side - 3}px; height: {side - 3}px; }}")
         edit.checkbox = box
         box.toggled.connect(edit.set_struck)
         edit.enter_pressed.connect(self._on_enter)
