@@ -138,14 +138,6 @@ class _TaskEditor(QWidget):
         lock_row.addStretch(1)
         layout.addLayout(lock_row)
 
-        layout.addWidget(_bold_label("Taskbar while this task runs"))
-        self._badges_check = QCheckBox("Hide unread-count badges on taskbar icons")
-        self._badges_check.setChecked(bool((task or {}).get("hideTaskbarBadges")))
-        layout.addWidget(self._badges_check)
-        self._flashing_check = QCheckBox("Stop taskbar icons from flashing")
-        self._flashing_check.setChecked(bool((task or {}).get("stopTaskbarFlashing")))
-        layout.addWidget(self._flashing_check)
-
         layout.addWidget(_bold_label("Blocklisted apps while this task runs"))
         apps = installed_apps.list_installed_apps()
         default_processes = (task or {}).get("processBlocklist") if task else config.load_config().get("processBlocklist", [])
@@ -269,8 +261,8 @@ class _TaskEditor(QWidget):
             "lockMode": "hard" if self._hard_radio.isChecked() else "soft",
             "processBlocklist": checklist.get_checked(self._process_checks),
             "domainWhitelist": checklist.get_checked(self._domain_checks),
-            "hideTaskbarBadges": self._badges_check.isChecked(),
-            "stopTaskbarFlashing": self._flashing_check.isChecked(),
+            "hideTaskbarBadges": False,
+            "stopTaskbarFlashing": False,
         }
 
         try:

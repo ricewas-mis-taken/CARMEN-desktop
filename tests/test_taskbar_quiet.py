@@ -35,6 +35,7 @@ def registry(tmp_path, monkeypatch):
     monkeypatch.setattr(taskbar_quiet, "_spawn", lambda fn: fn())
     monkeypatch.setattr(taskbar_quiet, "_next_attempt", 0.0)
     monkeypatch.setattr(taskbar_quiet, "_busy", False)
+    monkeypatch.setattr(taskbar_quiet, "ENABLED", True)
     state["_runs"] = runs
     return state
 
@@ -149,23 +150,8 @@ def test_new_tasks_default_to_off(tmp_path, monkeypatch):
     assert task["hideTaskbarBadges"] is False and task["stopTaskbarFlashing"] is False
 
 
-def test_task_editor_saves_the_checkboxes(qtbot, tmp_path, monkeypatch, isolate_state):
-    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
-    task = tasks_store.create_task({"name": "x", "targetMinutes": 30})
-    saved = []
-    editor = task_editor._TaskEditor(task, on_saved=saved.append)
-    qtbot.addWidget(editor)
-    assert not editor._badges_check.isChecked()
-    editor._badges_check.setChecked(True)
-    editor._flashing_check.setChecked(True)
-    editor._save()
-    stored = tasks_store.get_task(task["id"])
-    assert stored["hideTaskbarBadges"] and stored["stopTaskbarFlashing"]
-
-
-def test_custom_session_dialog_starts_with_the_checked_boxes(qtbot, isolate_state, isolate_config):
-    dialog = picker_dialogs._TimerDialog()
-    qtbot.addWidget(dialog)
-    dialog._badges_check.setChecked(True)
-    dialog._start()
-    assert sm.get_status()["hideTaskbarBadges"] and not sm.get_status()["stopTaskbarFlashing"]
+def test_parked_feature_never_touches_settings(monkeypatch):
+    calls = []
+    monkeypatch.setattr(taskbar_quiet, "_run_script", lambda want, save_path=None: calls.append(want))
+    taskbar_quiet.reconcile(_status(hideTaskbarBadges=True, stopTaskbarFlashing=True), wait=True)
+    assert taskbar_quiet.ENABLED is False and calls == []

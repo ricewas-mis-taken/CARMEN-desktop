@@ -494,3 +494,15 @@ the toggles themselves, written to a pending file before anything changes, then 
 private/taskbar_quiet_saved.json; startup and quit restore them. Cost: Settings
 opens briefly on every start/pause/end, and it depends on those AutomationIds.
 Desktop only; no extension counterpart.
+
+2026-10-14 -- Quiet taskbar PARKED (unfinished)
+Status: switched off (taskbar_quiet.ENABLED = False), checkboxes removed from the task
+editor and custom-session dialog. Carmen no longer touches the user's notification
+settings. Code kept (taskbar_quiet.py / .ps1, tests) so it can be resumed.
+Why parked: the registry values are ignored on Windows 11 build 26200, and the working
+route (driving Settings -> Personalization -> Taskbar through UI Automation) is not clean
+enough: the Settings window is briefly visible even when made see-through and moved
+off-screen, a taskbar button can blink, and an auto-hidden taskbar can pop up.
+Open ideas for another day: find a supported/undocumented API that the Settings page
+itself calls; or skip the feature on this build. Do not re-enable until the window and
+the auto-hide pop-up are both invisible.
