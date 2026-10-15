@@ -24,7 +24,8 @@ RING_TRACK = QColor(128, 128, 128, 45)
 BACKGROUND = QColor(0, 0, 0)
 TEXT = QColor("#F2F4F7")
 MUTED = QColor("#8A8F98")
-RESIZE_MARGIN = 8
+RESIZE_MARGIN = 6
+MAX_SIZE = (480, 540)     # a runaway drag can never make it huge
 DEFAULT_SIZE = (220, 250)
 SAVE_DELAY_MS = 400
 CLICK_SLOP = 5     # pixels of movement that still count as a click, not a drag
@@ -93,6 +94,9 @@ class MiniTimer(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setMouseTracking(True)
         self.setMinimumSize(150, 170)
+        self.setMaximumSize(*MAX_SIZE)
+        self._resize_edges = Qt.Edge(0)
+        self._resize_start = None
         self.setWindowTitle("Carmen Focus timer")
         self._drag_offset = None
         self._closed_by_user = False
@@ -298,15 +302,43 @@ class MiniTimer(QWidget):
         if event.button() != Qt.LeftButton:
             return
         edges = self._edges_at(event.position())
-        if edges and self.windowHandle() is not None:
-            self.windowHandle().startSystemResize(edges)
+        if edges:
+            # Resized by hand, not startSystemResize: that hands the mouse to a native loop
+            # that can run away (or hang the app) on a frameless translucent window.
+            self._resize_edges = edges
+            self._resize_start = (event.globalPosition(), QRect(self.geometry()))
             return
         self._drag_offset = event.globalPosition() - QPointF(self.frameGeometry().topLeft())
         self._press_point = event.globalPosition()
         self._press_on_clock = self._clock_rect().contains(event.position())
         self._dragged = False
 
+    def _resize_to(self, global_pos):
+        start_pos, start = self._resize_start
+        delta = (global_pos - start_pos).toPoint()
+        left, top, right, bottom = start.left(), start.top(), start.right(), start.bottom()
+        min_w, min_h = self.minimumWidth(), self.minimumHeight()
+        max_w, max_h = self.maximumWidth(), self.maximumHeight()
+        if self._resize_edges & Qt.RightEdge:
+            right = start.right() + delta.x()
+        if self._resize_edges & Qt.LeftEdge:
+            left = start.left() + delta.x()
+        if self._resize_edges & Qt.BottomEdge:
+            bottom = start.bottom() + delta.y()
+        if self._resize_edges & Qt.TopEdge:
+            top = start.top() + delta.y()
+        width = max(min_w, min(max_w, right - left + 1))
+        height = max(min_h, min(max_h, bottom - top + 1))
+        if self._resize_edges & Qt.LeftEdge:
+            left = start.right() + 1 - width
+        if self._resize_edges & Qt.TopEdge:
+            top = start.bottom() + 1 - height
+        self.setGeometry(left, top, width, height)
+
     def mouseMoveEvent(self, event):
+        if self._resize_start is not None and event.buttons() & Qt.LeftButton:
+            self._resize_to(event.globalPosition())
+            return
         if self._drag_offset is not None and event.buttons() & Qt.LeftButton:
             if (event.globalPosition() - self._press_point).manhattanLength() > CLICK_SLOP:
                 self._dragged = True
@@ -321,6 +353,11 @@ class MiniTimer(QWidget):
                 self.setCursor(Qt.ArrowCursor)
 
     def mouseReleaseEvent(self, event):
+        if self._resize_start is not None:
+            self._resize_start = None
+            self._resize_edges = Qt.Edge(0)
+            self._save_timer.start()
+            return
         clicked_clock = (
             self._drag_offset is not None and self._press_on_clock and not self._dragged
             and event.button() == Qt.LeftButton
