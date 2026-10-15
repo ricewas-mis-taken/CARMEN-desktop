@@ -149,6 +149,7 @@ def isolate_real_data_paths(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(sync_live, "QUICKNOTE_PUSHED_PATH", str(base / "live_quicknote_pushed.txt"))
     monkeypatch.setattr(quicknote_store, "PATH", str(base / "quicknote.json"))
     monkeypatch.setattr(taskbar_quiet, "SAVED_PATH", str(base / "taskbar_quiet_saved.json"))
+    monkeypatch.setattr(taskbar_quiet, "LEGACY_PATHS", [str(base / "taskbar_quiet_saved.json"), str(base / "taskbar_quiet_user.json")])
     monkeypatch.setattr(taskbar_quiet, "PENDING_PATH", str(base / "taskbar_quiet_pending.json"))
     monkeypatch.setattr(taskbar_quiet, "_run_script", lambda want, save_path=None: None)
     monkeypatch.setattr(taskbar_quiet, "_spawn", lambda fn: fn())

@@ -30,6 +30,7 @@ def registry(tmp_path, monkeypatch):
 
     monkeypatch.setattr(taskbar_quiet, "SAVED_PATH", str(tmp_path / "saved.json"))
     monkeypatch.setattr(taskbar_quiet, "PENDING_PATH", str(tmp_path / "pending.json"))
+    monkeypatch.setattr(taskbar_quiet, "LEGACY_PATHS", [str(tmp_path / "old_saved.json"), str(tmp_path / "old_user.json")])
     monkeypatch.setattr(taskbar_quiet, "_run_script", fake_script)
     monkeypatch.setattr(taskbar_quiet, "_spawn", lambda fn: fn())
     monkeypatch.setattr(taskbar_quiet, "_next_attempt", 0.0)
@@ -93,6 +94,15 @@ def test_originals_found_by_a_run_that_died_are_still_restored(registry, tmp_pat
     (tmp_path / "pending.json").write_text(json.dumps({"badges": True}), encoding="utf-8-sig")
     taskbar_quiet.restore_all()
     assert registry["badges"] is True
+
+
+def test_a_leftover_off_from_the_registry_version_is_put_back_on(registry, tmp_path):
+    registry["badges"] = False
+    registry["flashing"] = False
+    (tmp_path / "old_saved.json").write_text(json.dumps({"badges": 0, "flashing": 0}))   # the bad "original"
+    taskbar_quiet.restore_all()
+    assert registry["badges"] is True and registry["flashing"] is True
+    assert not (tmp_path / "old_saved.json").exists()
 
 
 def test_a_failed_run_is_retried_later_not_every_tick(registry, monkeypatch):
