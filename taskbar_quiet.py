@@ -31,6 +31,11 @@ LEGACY_PATHS = [os.path.join(_HERE, "private", "taskbar_quiet_saved.json"),
 PENDING_PATH = os.path.join(_HERE, "private", "taskbar_quiet_pending.json")  # written by the script before it changes anything
 SCRIPT_PATH = os.path.join(_HERE, "taskbar_quiet.ps1")
 
+# PARKED (2026-10-14): flipping the Settings toggles never got clean enough (the Settings
+# window shows for a moment, an auto-hidden taskbar can pop up). Carmen leaves the
+# user's notification settings alone. Flip to True to pick the work back up.
+ENABLED = False
+
 SETTINGS = ("badges", "flashing")
 RETRY_SECONDS = 30
 RUN_TIMEOUT_SECONDS = 40
@@ -146,7 +151,7 @@ def reconcile(status, wait=False):
     small file read), so the polling loop can call it every tick; the slow part (opening
     Settings for a couple of seconds) runs on its own thread. wait=True runs it here."""
     global _busy
-    if sys.platform != "win32":
+    if sys.platform != "win32" or not ENABLED:
         return
     want = wanted(status)
     saved = _load_saved()
