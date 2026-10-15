@@ -139,3 +139,28 @@ def test_it_is_pulled_back_when_left_off_every_screen(qtbot, isolate_state):
     win.move(-9000, -9000)
     win._keep_in_view()
     assert win._on_a_screen()
+
+
+def test_dragging_the_middle_moves_and_never_resizes(qtbot, isolate_state):
+    from PySide6.QtCore import QPointF, Qt
+    win = mini_timer.MiniTimer()
+    qtbot.addWidget(win)
+    win.resize(200, 240)
+    win.move(100, 100)
+    win._drag_offset = QPointF(50, 50)
+    assert win._edges_at(QPointF(100, 120)) == Qt.Edge(0)
+    assert win._resize_start is None
+    assert (win.width(), win.height()) == (200, 240)
+
+
+def test_edge_resize_is_clamped_and_cannot_get_huge(qtbot, isolate_state):
+    from PySide6.QtCore import QPointF, QRect, Qt
+    win = mini_timer.MiniTimer()
+    qtbot.addWidget(win)
+    win.setGeometry(100, 100, 200, 240)
+    win._resize_edges = Qt.RightEdge | Qt.BottomEdge
+    win._resize_start = (QPointF(300, 340), QRect(win.geometry()))
+    win._resize_to(QPointF(5000, 5000))
+    assert (win.width(), win.height()) == mini_timer.MAX_SIZE
+    win._resize_to(QPointF(-5000, -5000))
+    assert (win.width(), win.height()) == (150, 170)
