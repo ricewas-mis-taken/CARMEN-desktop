@@ -23,7 +23,11 @@ import time
 from calendar_log import logger
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-SAVED_PATH = os.path.join(_HERE, "private", "taskbar_quiet_saved.json")      # originals of what is held off
+SAVED_PATH = os.path.join(_HERE, "private", "taskbar_quiet_settings.json")   # originals of what is held off
+# Files of the registry-based version. Their "originals" can be a leftover off, so they are
+# never trusted: anything it was holding is put back to Windows' default (on).
+LEGACY_PATHS = [os.path.join(_HERE, "private", "taskbar_quiet_saved.json"),
+                os.path.join(_HERE, "private", "taskbar_quiet_user.json")]
 PENDING_PATH = os.path.join(_HERE, "private", "taskbar_quiet_pending.json")  # written by the script before it changes anything
 SCRIPT_PATH = os.path.join(_HERE, "taskbar_quiet.ps1")
 
@@ -163,6 +167,21 @@ def reconcile(status, wait=False):
         _spawn(lambda: _apply(to_off, to_restore))
 
 
+def _migrate_legacy():
+    held = _read_json(LEGACY_PATHS[0])
+    for path in LEGACY_PATHS:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    if held:
+        saved = _load_saved()
+        for name in held:
+            saved.setdefault(name, True)
+        _save_saved(saved)
+
+
 def restore_all():
     """Puts back everything this module switched off (startup and quit)."""
+    _migrate_legacy()
     reconcile({"isActive": False}, wait=True)

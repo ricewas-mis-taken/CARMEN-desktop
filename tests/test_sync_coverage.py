@@ -55,7 +55,7 @@ SYNCED_FILES = {"tasks.json", "board.json", "calendar.db", "session_history.json
 LOCAL_ONLY_FILES = {
     "config.json", "screentime.json",
     "daily_summaries.json", "active_review.json", "device_id.txt", "last_sync.txt",
-    "pull_cursor.txt", "sync_owner.txt", "uploaded_photos.json", "taskbar_quiet_saved.json",
+    "pull_cursor.txt", "sync_owner.txt", "uploaded_photos.json", "taskbar_quiet_settings.json", "taskbar_quiet_saved.json", "taskbar_quiet_user.json",
     "live_cursor.txt", "live_history_pushed.txt", "live_state_pushed.txt",
     "live_review_pushed.txt", "live_screentime_pushed.json", "live_settings_pushed.txt", "live_quicknote_pushed.txt", "hang_trace.txt", "taskbar_quiet_pending.json", "other_device_seen.txt", "screentime_remote.json",
 }
