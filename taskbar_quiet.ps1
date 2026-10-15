@@ -12,31 +12,75 @@ $toggle = [Windows.Automation.TogglePattern]::Pattern
 
 function Find-Box($id) {
     $cond = New-Object Windows.Automation.PropertyCondition($auto::AutomationIdProperty, $id)
-    $frames = $auto::RootElement.FindAll("Children", (New-Object Windows.Automation.PropertyCondition($auto::ClassNameProperty, "ApplicationFrameWindow")))
-    foreach ($f in $frames) {
-        $e = $f.FindFirst("Descendants", $cond)
-        if ($e) { return @{ box = $e; frame = $f } }
-    }
+    $e = $script:frame.FindFirst("Descendants", $cond)
+    if ($e) { return @{ box = $e } }
     return $null
 }
+
+Add-Type @"
+using System; using System.Text; using System.Runtime.InteropServices;
+public class SettingsWin {
+  delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc p, IntPtr l);
+  [DllImport("user32.dll")] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int w, int hh, uint f);
+  [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] static extern IntPtr GetLong(IntPtr h, int i);
+  [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")] static extern IntPtr SetLong(IntPtr h, int i, IntPtr v);
+  [DllImport("user32.dll")] static extern bool SetLayeredWindowAttributes(IntPtr h, uint key, byte alpha, uint flags);
+  // The Settings window, found by its frame class and title.
+  public static IntPtr Find() {
+    IntPtr found = IntPtr.Zero;
+    EnumWindows((h, l) => {
+      var c = new StringBuilder(256); GetClassName(h, c, 256);
+      if (c.ToString() == "ApplicationFrameWindow" && IsWindowVisible(h)) {
+        var t = new StringBuilder(256); GetWindowText(h, t, 256);
+        if (t.ToString() == "Settings") found = h;
+      }
+      return true;
+    }, IntPtr.Zero);
+    return found;
+  }
+  // Fully see-through and click-through (LAYERED | TRANSPARENT, alpha 0). Takes effect at once, far
+  // sooner than moving the window does, so it is never seen while it opens.
+  public static void Invisible(IntPtr h) {
+    long ex = (long)GetLong(h, -20);
+    SetLong(h, -20, (IntPtr)(ex | 0x80000 | 0x20));
+    SetLayeredWindowAttributes(h, 0, 0, 2);
+  }
+  // Far off every screen, without resizing or activating it (NOSIZE | NOZORDER | NOACTIVATE).
+  public static void MoveAway(IntPtr h) { SetWindowPos(h, IntPtr.Zero, -32000, -32000, 0, 0, 0x0001 | 0x0004 | 0x0010); }
+}
+"@
 
 Get-Process SystemSettings -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 300
 Start-Process "ms-settings:taskbar"
 
-$found = $null
-for ($i = 0; $i -lt 60; $i++) {
-    Start-Sleep -Milliseconds 250
-    $found = Find-Box $ids["badges"]
-    if ($found) { break }
+# Poll fast; make the window see-through, then move it away, the moment it exists.
+$handle = [IntPtr]::Zero
+$clock = [Diagnostics.Stopwatch]::StartNew()
+while ($clock.ElapsedMilliseconds -lt 15000) {
+    $handle = [SettingsWin]::Find()
+    if ($handle -ne [IntPtr]::Zero) { [SettingsWin]::Invisible($handle); [SettingsWin]::MoveAway($handle); break }
+    Start-Sleep -Milliseconds 4
 }
-if (-not $found) { Write-Output "{}"; exit 2 }
+if ($handle -eq [IntPtr]::Zero) { Write-Output "{}"; exit 2 }
+$frame = $auto::FromHandle($handle)
 
-# Out of sight while it is used.
-try {
-    $tp = $found.frame.GetCurrentPattern([Windows.Automation.TransformPattern]::Pattern)
-    $tp.Move(-20000, -20000)
-} catch {}
+# Settings puts itself back to its remembered spot as it finishes opening: keep pushing it away.
+for ($i = 0; $i -lt 120; $i++) { [SettingsWin]::MoveAway($handle); Start-Sleep -Milliseconds 5 }
+
+# The controls take a moment to load inside the (already hidden) window.
+$found = $null
+$cond = New-Object Windows.Automation.PropertyCondition($auto::AutomationIdProperty, $ids["badges"])
+for ($i = 0; $i -lt 80; $i++) {
+    [SettingsWin]::MoveAway($handle)
+    if ($frame.FindFirst("Descendants", $cond)) { $found = $true; break }
+    Start-Sleep -Milliseconds 100
+}
+if (-not $found) { Get-Process SystemSettings -ErrorAction SilentlyContinue | Stop-Process -Force; Write-Output "{}"; exit 2 }
 
 $before = @{}
 foreach ($k in $ids.Keys) {
