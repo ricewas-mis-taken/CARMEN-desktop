@@ -1,5 +1,7 @@
 """Taskbar badges / flashing are switched off for the sessions that ask for it
 and put back exactly as the user had them -- never touching the real registry."""
+import json
+
 import pytest
 
 import qt_ui.picker_dialogs as picker_dialogs
@@ -11,15 +13,29 @@ import tasks_store
 
 @pytest.fixture
 def registry(tmp_path, monkeypatch):
-    values = {"TaskbarBadges": 1, "TaskbarFlashing": 1}
-    log = []
+    """A fake Settings app: {"badges": on?, "flashing": on?} plus a log of script runs."""
+    state = {"badges": True, "flashing": True}
+    runs = []
+
+    def fake_script(want, save_path=None):
+        runs.append(dict(want))
+        before = dict(state)
+        if save_path:
+            changing = {k: before[k] for k, v in want.items() if before[k] != v}
+            if changing:
+                with open(save_path, "w", encoding="utf-8-sig") as f:
+                    json.dump(changing, f)
+        state.update(want)
+        return before
+
     monkeypatch.setattr(taskbar_quiet, "SAVED_PATH", str(tmp_path / "saved.json"))
-    monkeypatch.setattr(taskbar_quiet, "USER_PATH", str(tmp_path / "user.json"))
-    monkeypatch.setattr(taskbar_quiet, "_read_value", lambda name: values.get(name))
-    monkeypatch.setattr(taskbar_quiet, "_write_value", lambda name, v: (values.__setitem__(name, v), log.append((name, v))))
-    monkeypatch.setattr(taskbar_quiet, "_broadcast_change", lambda: log.append("broadcast"))
-    values["_log"] = log
-    return values
+    monkeypatch.setattr(taskbar_quiet, "PENDING_PATH", str(tmp_path / "pending.json"))
+    monkeypatch.setattr(taskbar_quiet, "_run_script", fake_script)
+    monkeypatch.setattr(taskbar_quiet, "_spawn", lambda fn: fn())
+    monkeypatch.setattr(taskbar_quiet, "_next_attempt", 0.0)
+    monkeypatch.setattr(taskbar_quiet, "_busy", False)
+    state["_runs"] = runs
+    return state
 
 
 def _status(**kw):
@@ -30,68 +46,61 @@ def _status(**kw):
 
 def test_nothing_is_touched_when_a_session_did_not_ask(registry):
     taskbar_quiet.reconcile(_status())
-    assert registry["TaskbarBadges"] == 1 and registry["TaskbarFlashing"] == 1
-    assert registry["_log"] == []
+    assert registry["badges"] and registry["flashing"]
+    assert registry["_runs"] == []
 
 
 def test_each_choice_switches_off_only_its_own_setting(registry):
     taskbar_quiet.reconcile(_status(hideTaskbarBadges=True))
-    assert (registry["TaskbarBadges"], registry["TaskbarFlashing"]) == (0, 1)
+    assert (registry["badges"], registry["flashing"]) == (False, True)
     taskbar_quiet.reconcile(_status(stopTaskbarFlashing=True))
-    assert (registry["TaskbarBadges"], registry["TaskbarFlashing"]) == (1, 0)
+    assert (registry["badges"], registry["flashing"]) == (True, False)
 
 
 def test_values_come_back_when_the_session_ends_pauses_or_breaks(registry):
     both = dict(hideTaskbarBadges=True, stopTaskbarFlashing=True)
     for end in ({"isActive": False}, {"isPaused": True}, {"isBreak": True}):
         taskbar_quiet.reconcile(_status(**both))
-        assert (registry["TaskbarBadges"], registry["TaskbarFlashing"]) == (0, 0)
+        assert (registry["badges"], registry["flashing"]) == (False, False)
         taskbar_quiet.reconcile(_status(**both, **end))
-        assert (registry["TaskbarBadges"], registry["TaskbarFlashing"]) == (1, 1)
+        assert (registry["badges"], registry["flashing"]) == (True, True)
 
 
 def test_a_setting_the_user_already_had_off_stays_off(registry):
-    registry["TaskbarBadges"] = 0
-    taskbar_quiet.reconcile(_status())                      # seen while nothing was held off
+    registry["badges"] = False
     taskbar_quiet.reconcile(_status(hideTaskbarBadges=True))
     taskbar_quiet.reconcile(_status(isActive=False))
-    assert registry["TaskbarBadges"] == 0
+    assert registry["badges"] is False
 
 
-def test_an_unset_value_is_restored_to_on(registry):
-    del registry["TaskbarBadges"]
+def test_steady_state_does_not_reopen_settings_every_tick(registry):
     taskbar_quiet.reconcile(_status(hideTaskbarBadges=True))
-    taskbar_quiet.reconcile(_status(isActive=False))
-    assert registry["TaskbarBadges"] == 1
-
-
-def test_an_off_left_behind_by_a_crash_is_not_taken_for_the_users_choice(registry):
-    # the app was killed mid-session: the value is still 0 and the saved copy says 0 too
-    registry["TaskbarBadges"] = 0
-    taskbar_quiet._save_saved({"badges": 0})
-    taskbar_quiet.restore_all()
-    assert registry["TaskbarBadges"] == 1
-
-
-def test_a_value_read_while_already_held_off_by_us_is_not_kept_as_the_original(registry):
-    registry["TaskbarBadges"] = 0                            # never seen idle: assume on
+    registry["_runs"].clear()
     taskbar_quiet.reconcile(_status(hideTaskbarBadges=True))
-    taskbar_quiet.reconcile(_status(isPaused=True, hideTaskbarBadges=True))
-    assert registry["TaskbarBadges"] == 1
-
-
-def test_steady_state_does_not_rewrite_every_tick(registry):
     taskbar_quiet.reconcile(_status(hideTaskbarBadges=True))
-    registry["_log"].clear()
-    taskbar_quiet.reconcile(_status(hideTaskbarBadges=True))
-    assert registry["_log"] == []
+    assert registry["_runs"] == []
 
 
 def test_restore_all_recovers_after_a_crash(registry):
     taskbar_quiet.reconcile(_status(hideTaskbarBadges=True, stopTaskbarFlashing=True))
     # a fresh process: nothing in memory, only the saved file
     taskbar_quiet.restore_all()
-    assert (registry["TaskbarBadges"], registry["TaskbarFlashing"]) == (1, 1)
+    assert (registry["badges"], registry["flashing"]) == (True, True)
+
+
+def test_originals_found_by_a_run_that_died_are_still_restored(registry, tmp_path):
+    registry["badges"] = False                    # the script switched it off, then the app died
+    (tmp_path / "pending.json").write_text(json.dumps({"badges": True}), encoding="utf-8-sig")
+    taskbar_quiet.restore_all()
+    assert registry["badges"] is True
+
+
+def test_a_failed_run_is_retried_later_not_every_tick(registry, monkeypatch):
+    calls = []
+    monkeypatch.setattr(taskbar_quiet, "_run_script", lambda want, save_path=None: calls.append(want))   # returns None
+    taskbar_quiet.reconcile(_status(hideTaskbarBadges=True))
+    taskbar_quiet.reconcile(_status(hideTaskbarBadges=True))
+    assert len(calls) == 1
 
 
 def test_session_carries_the_choices_and_clears_them_on_end(isolate_state):

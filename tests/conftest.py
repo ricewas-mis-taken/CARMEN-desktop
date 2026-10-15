@@ -149,7 +149,10 @@ def isolate_real_data_paths(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(sync_live, "QUICKNOTE_PUSHED_PATH", str(base / "live_quicknote_pushed.txt"))
     monkeypatch.setattr(quicknote_store, "PATH", str(base / "quicknote.json"))
     monkeypatch.setattr(taskbar_quiet, "SAVED_PATH", str(base / "taskbar_quiet_saved.json"))
-    monkeypatch.setattr(taskbar_quiet, "USER_PATH", str(base / "taskbar_quiet_user.json"))
+    monkeypatch.setattr(taskbar_quiet, "PENDING_PATH", str(base / "taskbar_quiet_pending.json"))
+    monkeypatch.setattr(taskbar_quiet, "_run_script", lambda want, save_path=None: None)
+    monkeypatch.setattr(taskbar_quiet, "_spawn", lambda fn: fn())
+    monkeypatch.setattr(taskbar_quiet, "_next_attempt", 0.0)
     monkeypatch.setattr(sync_live, "_last_screentime_push", 0.0)
     # A fixed fake project, so no test can ever reach the real Supabase URL
     # from private/.env even if it forgets to mock the transport.
