@@ -1,68 +1,77 @@
 """Keeps the Windows taskbar quiet while a focus session runs.
 
-Two per-session choices (session_manager's hideTaskbarBadges /
-stopTaskbarFlashing) map onto two Windows taskbar settings:
-  - "Show badges (unread messages counter) on taskbar apps"  -> TaskbarBadges
-  - "Show flashing on taskbar apps"                          -> TaskbarFlashing
+Two per-session choices (session_manager's hideTaskbarBadges / stopTaskbarFlashing) map
+onto the two toggles in Settings -> Personalization -> Taskbar:
+  - "Show badges on taskbar apps"
+  - "Show flashing on taskbar apps"
 
-While a session that asked for it is running (not paused, not on a pomodoro
-break) the setting is switched off; whenever that stops being true the value
-the user had before is put back. The originals are written to disk first, so
-a crash or a restart mid-session can't leave the taskbar permanently quiet:
-restore_all() runs at startup and at quit. Windows only; a no-op elsewhere.
+Windows 11 no longer reads these from the registry (the old TaskbarBadges /
+TaskbarFlashing values are ignored), so taskbar_quiet.ps1 flips the real toggles in the
+Settings app, out of sight, the way a person would. While a session that asked for it
+is running (not paused, not on a pomodoro break) the toggle is switched off; whenever
+that stops being true the value it had before is put back. The originals are written to
+disk first, so a crash or a restart mid-session can't leave the taskbar permanently
+quiet: restore_all() runs at startup and at quit. Windows only; a no-op elsewhere.
 """
 import json
 import os
+import subprocess
 import sys
+import threading
+import time
 
 from calendar_log import logger
 
-SAVED_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "taskbar_quiet_saved.json")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+SAVED_PATH = os.path.join(_HERE, "private", "taskbar_quiet_saved.json")      # originals of what is held off
+PENDING_PATH = os.path.join(_HERE, "private", "taskbar_quiet_pending.json")  # written by the script before it changes anything
+SCRIPT_PATH = os.path.join(_HERE, "taskbar_quiet.ps1")
 
-# What the user's own setting was the last time this module was not holding it off.
-USER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "taskbar_quiet_user.json")
+SETTINGS = ("badges", "flashing")
+RETRY_SECONDS = 30
+RUN_TIMEOUT_SECONDS = 40
 
-_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
-_VALUE_NAMES = {"badges": "TaskbarBadges", "flashing": "TaskbarFlashing"}
-# What Windows treats as "on" when the value has never been written.
-_DEFAULT_ON = 1
+_lock = threading.Lock()
+_busy = False
+_next_attempt = 0.0
 
 
-def _read_value(name):
-    """Current DWORD value, or None if it was never set (or not Windows)."""
+def _run_script(want, save_path=None):
+    """Runs the Settings script. `want` is {"badges": bool, ...} (True = on). Returns the
+    values found before changing anything, e.g. {"badges": True}, or None on failure."""
     if sys.platform != "win32":
         return None
-    import winreg
+    arg = ",".join(f"{name}={'on' if value else 'off'}" for name, value in want.items())
+    command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", SCRIPT_PATH, "-Want", arg]
+    if save_path:
+        command += ["-Save", save_path]
     try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _KEY_PATH) as key:
-            return int(winreg.QueryValueEx(key, name)[0])
-    except OSError:
+        done = subprocess.run(
+            command, capture_output=True, text=True, timeout=RUN_TIMEOUT_SECONDS,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if done.returncode != 0:
+            logger.warning("taskbar_quiet: the Settings script exited with %s", done.returncode)
+            return None
+        lines = [line for line in done.stdout.strip().splitlines() if line.strip()]
+        data = json.loads(lines[-1]) if lines else {}
+        return data if isinstance(data, dict) else None
+    except Exception:
+        logger.exception("taskbar_quiet: could not run the Settings script")
         return None
 
 
-def _write_value(name, value):
-    if sys.platform != "win32":
-        return
-    import winreg
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _KEY_PATH, 0, winreg.KEY_SET_VALUE) as key:
-        winreg.SetValueEx(key, name, 0, winreg.REG_DWORD, int(value))
-
-
-def _broadcast_change():
-    """Tells the shell its taskbar settings changed so it re-reads them now."""
-    if sys.platform != "win32":
-        return
-    import ctypes
-    ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "TraySettings", 0x0002, 1000, None)
+def _read_json(path):
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+        return {k: bool(v) for k, v in data.items() if k in SETTINGS} if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def _load_saved():
-    try:
-        with open(SAVED_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
+    return _read_json(SAVED_PATH)
 
 
 def _save_saved(saved):
@@ -77,41 +86,15 @@ def _save_saved(saved):
         json.dump(saved, f)
 
 
-def _load_user():
+def _fold_in_pending(saved):
+    """A run that died after reading the originals left them in the pending file."""
+    for name, value in _read_json(PENDING_PATH).items():
+        saved.setdefault(name, value)
     try:
-        with open(USER_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def _remember_user_values(saved):
-    """While nothing is being held off, note what the user's settings really are, so a
-    leftover "off" from a crash or kill can never be mistaken for their own choice."""
-    known = _load_user()
-    changed = False
-    for setting, name in _VALUE_NAMES.items():
-        if setting in saved:
-            continue
-        value = _read_value(name)
-        value = _DEFAULT_ON if value is None else value
-        if known.get(setting) != value:
-            known[setting] = value
-            changed = True
-    if changed:
-        os.makedirs(os.path.dirname(USER_PATH), exist_ok=True)
-        with open(USER_PATH, "w", encoding="utf-8") as f:
-            json.dump(known, f)
-
-
-def _value_to_put_back(setting, saved_original):
-    """The user's own value. An "off" we only found lying around (never seen while we
-    were not holding it) is ours from an earlier run, so it goes back to on."""
-    known = _load_user().get(setting)
-    if known is not None:
-        return known
-    return _DEFAULT_ON if not saved_original else saved_original
+        os.remove(PENDING_PATH)
+    except OSError:
+        pass
+    return saved
 
 
 def wanted(status):
@@ -123,38 +106,63 @@ def wanted(status):
     }
 
 
-def reconcile(status):
-    """Brings the Windows settings in line with `status`. Cheap when nothing
-    changed (a small file read), so the polling loop can call it every tick."""
+def _spawn(fn):
+    threading.Thread(target=fn, name="taskbar-quiet", daemon=True).start()
+
+
+def _apply(to_off, to_restore):
+    """One run of the script: switch `to_off` off and put `to_restore` back."""
+    global _busy, _next_attempt
+    try:
+        saved = _fold_in_pending(_load_saved())
+        want = {name: False for name in to_off}
+        want.update({name: saved[name] for name in to_restore if name in saved})
+        if not want:
+            return
+        before = _run_script(want, PENDING_PATH if to_off else None)
+        if before is None:
+            _next_attempt = time.monotonic() + RETRY_SECONDS
+            return
+        saved = _fold_in_pending(_load_saved())
+        for name in to_off:
+            saved[name] = before.get(name, saved.get(name, True))
+        for name in to_restore:
+            saved.pop(name, None)
+        _save_saved(saved)
+    except Exception:
+        logger.exception("taskbar_quiet: could not update the taskbar settings")
+        _next_attempt = time.monotonic() + RETRY_SECONDS
+    finally:
+        with _lock:
+            _busy = False
+
+
+def reconcile(status, wait=False):
+    """Brings the taskbar toggles in line with `status`. Cheap when nothing changed (one
+    small file read), so the polling loop can call it every tick; the slow part (opening
+    Settings for a couple of seconds) runs on its own thread. wait=True runs it here."""
+    global _busy
+    if sys.platform != "win32":
+        return
     want = wanted(status)
     saved = _load_saved()
-    changed = False
-    for setting, name in _VALUE_NAMES.items():
-        try:
-            if want[setting] and setting not in saved:
-                original = _value_to_put_back(setting, _read_value(name))
-                saved[setting] = original
-                _save_saved(saved)  # remembered before touching anything
-                _write_value(name, 0)
-                changed = True
-            elif not want[setting] and setting in saved:
-                _write_value(name, _value_to_put_back(setting, saved[setting]))
-                del saved[setting]
-                _save_saved(saved)
-                changed = True
-        except Exception:
-            logger.exception("taskbar_quiet: could not update %s", name)
-    try:
-        _remember_user_values(saved)
-    except Exception:
-        logger.exception("taskbar_quiet: could not note the user's settings")
-    if changed:
-        try:
-            _broadcast_change()
-        except Exception:
-            logger.exception("taskbar_quiet: could not notify the shell")
+    if os.path.exists(PENDING_PATH) and not _busy:
+        saved = _fold_in_pending(saved)
+        _save_saved(saved)
+    to_off = [name for name in SETTINGS if want[name] and name not in saved]
+    to_restore = [name for name in saved if not want.get(name)]
+    if not to_off and not to_restore:
+        return
+    with _lock:
+        if _busy or (not wait and time.monotonic() < _next_attempt):
+            return
+        _busy = True
+    if wait:
+        _apply(to_off, to_restore)
+    else:
+        _spawn(lambda: _apply(to_off, to_restore))
 
 
 def restore_all():
     """Puts back everything this module switched off (startup and quit)."""
-    reconcile({"isActive": False})
+    reconcile({"isActive": False}, wait=True)
