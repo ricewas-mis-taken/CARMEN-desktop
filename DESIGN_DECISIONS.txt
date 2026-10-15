@@ -480,3 +480,17 @@ app (with --quicknote) if none answers.
 Clicking the time or the ring on the mini timer opens it too; a click only counts
 if the mouse did not travel more than a few pixels, so dragging the timer by its
 clock still just moves it. Not for the extension: nothing there reads it.
+
+2026-10-14 -- Quiet taskbar: drive the real Settings toggles, not the registry
+Fork: keep writing the TaskbarBadges / TaskbarFlashing registry values (plus a shell
+broadcast), or flip the toggles in Settings -> Personalization -> Taskbar.
+Found on Windows 11 build 26200: the registry values are ignored. Toggling Settings
+never changed them (a full HKCU export diff showed no change), and Settings showed
+"off" while the registry said 1. The broadcast only made an auto-hidden taskbar pop
+up. Chose UI Automation (taskbar_quiet.ps1, found by AutomationId so it is not
+language dependent): open Settings off-screen, flip the toggle, close it (~2.5 s, on a
+background thread, retried every 30 s on failure). The user's originals are read from
+the toggles themselves, written to a pending file before anything changes, then to
+private/taskbar_quiet_saved.json; startup and quit restore them. Cost: Settings
+opens briefly on every start/pause/end, and it depends on those AutomationIds.
+Desktop only; no extension counterpart.
