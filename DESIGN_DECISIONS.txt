@@ -506,3 +506,6 @@ off-screen, a taskbar button can blink, and an auto-hidden taskbar can pop up.
 Open ideas for another day: find a supported/undocumented API that the Settings page
 itself calls; or skip the feature on this build. Do not re-enable until the window and
 the auto-hide pop-up are both invisible.
+
+[2026-10-21] Late "session complete" after pause-then-end: extension-only fix, no desktop change
+The desktop ended the paused session correctly; the stray notification came from the browser extension's leftover end alarm (see carmen-extension DESIGN_DECISIONS.txt [2026-10-21]). Recorded here so the symptom isn't hunted in session_manager.py again.
