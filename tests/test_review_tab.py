@@ -807,3 +807,49 @@ def test_rebuilt_view_gives_a_resumed_first_attempt_its_add_problem_dialog(
     assert popups
     for popup in popups:
         popup.close()
+
+
+def _start_buttons(view):
+    return [view._table.cellWidget(row, review_tab.COLUMN_START).findChild(review_tab.QPushButton)
+            for row in range(view._table.rowCount())]
+
+
+def test_review_banner_sits_above_the_topic_tabs_and_is_shared(qtbot, isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    other = review_store.create_topic("Physics")
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    tab.resize(900, 700)
+    tab.show()
+    problem = review_store.create_problem(
+        topic["id"], subject["id"], "Solve it", stars=5, description_type="text", description_text="x")
+    tab._topic_views[topic["id"]]._begin_review(problem)
+    assert tab.banner.isVisible()
+    assert tab.banner.mapTo(tab, tab.banner.rect().topLeft()).y() < tab._tabs.y()
+    assert all(v._review_banner is tab.banner for v in tab._topic_views.values())
+    # Switching to another topic's tab, or rebuilding the tabs, keeps the review.
+    tab._select_topic(other["id"])
+    tab.refresh()
+    assert tab.banner.isVisible() and tab.banner.is_running()
+    assert tab.banner.current_problem_id() == problem["id"]
+
+
+def test_start_button_of_the_review_in_progress_is_greyed_out(qtbot, isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    first = review_store.create_problem(
+        topic["id"], subject["id"], "First", stars=5, description_type="text", description_text="x")
+    review_store.create_problem(
+        topic["id"], subject["id"], "Second", stars=5, description_type="text", description_text="y")
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    view = tab._topic_views[topic["id"]]
+    view._set_due_only(False)
+    assert all(b.isEnabled() for b in _start_buttons(view))
+
+    view._begin_review(first)
+    names = [p["name"] for p in view._problems]
+    enabled = {name: b.isEnabled() for name, b in zip(names, _start_buttons(view))}
+    assert enabled == {"First": False, "Second": True}
+
+    tab.banner._end_early()
+    assert all(b.isEnabled() for b in _start_buttons(view))
