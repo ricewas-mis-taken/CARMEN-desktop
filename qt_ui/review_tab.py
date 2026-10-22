@@ -569,6 +569,23 @@ class _TopicView(QWidget):
                 problem_name = session.get("reviewProblemName") or "this review"
                 if self._review_tab:
                     self._review_tab.on_review_started()
+                if session_manager.is_first_attempt(session):
+                    # The banner that was timing this first attempt is gone
+                    # (app restart, or this view rebuilt), and with it the
+                    # callback that hands the result to the Add Problem
+                    # dialog -- without one, Finish > Submit saved nothing.
+                    # A fresh, still-hidden dialog takes its place.
+                    dialog = _register_popup(_AddProblemDialog(
+                        self._topic_id, on_added=lambda _p: self.refresh(),
+                        on_start_first_attempt=self._start_first_attempt,
+                    ))
+                    done, cancelled = self._first_attempt_callbacks(dialog)
+                    self._review_banner.start(
+                        {"name": problem_name, "topicId": self._topic_id, "eventId": session.get("eventId")},
+                        token=None, end_session_on_finish=True,
+                        first_attempt_callback=done, first_attempt_cancelled_callback=cancelled,
+                    )
+                    return True
                 # token=None: review_store's own active-session tracking
                 # (_active_sessions) is in-memory only and did not survive
                 # whatever took this session_manager session and this
@@ -837,6 +854,7 @@ class _TopicView(QWidget):
         add_problem_dialog.hide()
 
         end_session_on_finish = False
+        event_id = None
         topic = review_store.get_topic(self._topic_id)
         if topic and topic.get("linkedTaskId") and not session_manager.is_active():
             task = tasks_store.get_task(topic["linkedTaskId"])
@@ -855,10 +873,23 @@ class _TopicView(QWidget):
                     stop_taskbar_flashing=bool(task.get("stopTaskbarFlashing")),
                 )
                 end_session_on_finish = True
+                event_id = task["id"]
 
         if self._review_tab:
             self._review_tab.on_review_started()
 
+        done, cancelled = self._first_attempt_callbacks(add_problem_dialog)
+        # eventId lets the banner tell its own session from another task's
+        # when this one is paused and waiting behind it (a first attempt has
+        # no problem id to go by -- see _session_belongs_to()).
+        self._review_banner.start(
+            {"name": "your new problem", "topicId": self._topic_id, "eventId": event_id}, token=None,
+            end_session_on_finish=end_session_on_finish,
+            first_attempt_callback=done,
+            first_attempt_cancelled_callback=cancelled,
+        )
+
+    def _first_attempt_callbacks(self, add_problem_dialog):
         def _on_first_attempt_done(elapsed_seconds, self_solved, shakiness):
             add_problem_dialog.apply_first_attempt(elapsed_seconds, self_solved, shakiness)
             add_problem_dialog.show()
@@ -870,12 +901,7 @@ class _TopicView(QWidget):
             # with no way to fill in details and save it.
             add_problem_dialog.show()
 
-        self._review_banner.start(
-            {"name": "your new problem", "topicId": self._topic_id}, token=None,
-            end_session_on_finish=end_session_on_finish,
-            first_attempt_callback=_on_first_attempt_done,
-            first_attempt_cancelled_callback=_on_first_attempt_cancelled,
-        )
+        return _on_first_attempt_done, _on_first_attempt_cancelled
 
 
 class _ReviewBanner(QWidget):
@@ -1029,13 +1055,13 @@ class _ReviewBanner(QWidget):
         session is gone: {"isActive": False}. Without this the banner would read
         -- and its buttons would pause, resume or end -- the OTHER task."""
         status = session_manager.get_status()
-        problem_id = (self._problem or {}).get("id")
-        if not self._end_session_on_finish or problem_id is None:
+        problem = self._problem or {}
+        if not self._end_session_on_finish or (problem.get("id") is None and problem.get("eventId") is None):
             return status, False
-        if status.get("isActive") and status.get("reviewProblemId") == problem_id:
+        if status.get("isActive") and _session_belongs_to(problem, status):
             return status, False
         for parked in status.get("parkedSessions") or []:
-            if parked.get("reviewProblemId") == problem_id:
+            if _session_belongs_to(problem, parked):
                 return {**parked, "isActive": True, "isPaused": True}, True
         return {"isActive": False}, False
 
@@ -1318,14 +1344,28 @@ class _ReviewBanner(QWidget):
 def _end_session_for_problem(problem):
     """Ends the task session a review rode on -- which may be one of the
     waiting sessions rather than the running one."""
-    problem_id = (problem or {}).get("id")
+    problem = problem or {}
     status = session_manager.get_status()
-    if problem_id is not None and status.get("reviewProblemId") != problem_id:
+    if (problem.get("id") is not None or problem.get("eventId") is not None)             and not _session_belongs_to(problem, status):
         for parked in status.get("parkedSessions") or []:
-            if parked.get("reviewProblemId") == problem_id:
+            if _session_belongs_to(problem, parked):
                 session_manager.end_parked_session(park_id=parked.get("parkId"))
                 return
     session_manager.end_session()
+
+
+def _session_belongs_to(problem, session):
+    """True if `session` (the running one or a waiting one) is the task session
+    this review banner rides on. A review is matched by its problem id; a first
+    attempt has no problem yet, so it is matched by being a first-attempt
+    session of the same linked task."""
+    if problem.get("id") is not None:
+        return session.get("reviewProblemId") == problem["id"]
+    return (
+        problem.get("eventId") is not None
+        and session_manager.is_first_attempt(session)
+        and session.get("eventId") == problem["eventId"]
+    )
 
 
 class _ShakinessPicker(QWidget):
