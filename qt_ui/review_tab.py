@@ -304,6 +304,14 @@ class ReviewTab(QWidget):
         title.setContentsMargins(24, 22, 24, 8)
         layout.addWidget(title)
 
+        # The one review banner for every topic, above the tab strip: a review
+        # of one topic stays in view while another topic's tab is open.
+        self.banner = _ReviewBanner(on_finished=self._banner_finished, on_changed=self._rerender_start_cells)
+        banner_holder = QVBoxLayout()
+        banner_holder.setContentsMargins(24, 0, 24, 8)
+        banner_holder.addWidget(self.banner)
+        layout.addLayout(banner_holder)
+
         self._tabs = QTabWidget()
         self._tabs.setDocumentMode(True)
         self._tabs.tabBarClicked.connect(self._on_tab_bar_clicked)
@@ -316,6 +324,29 @@ class ReviewTab(QWidget):
         self._topic_names = {}
         self._plus_index = None
         self.refresh()
+        # A review's session can come back while this tab is already open
+        # (switched to from the Tasks tab or the extension, or restored when
+        # the task running over it ended) -- nothing else tells the banner, so
+        # it looks again while it is hidden.
+        self._follow_timer = QTimer(self)
+        self._follow_timer.timeout.connect(self._follow_active_review)
+        self._follow_timer.start(1000)
+
+    def _follow_active_review(self):
+        if self.banner.is_running():
+            return
+        for view in self._topic_views.values():
+            if view._resume_linked_session() or view._resume_independent_review():
+                return
+
+    def _banner_finished(self):
+        self.on_review_finished()
+        for view in self._topic_views.values():
+            view.refresh()
+
+    def _rerender_start_cells(self):
+        for view in self._topic_views.values():
+            view._render_table()
 
     def refresh(self):
         previous_topic_id = self._current_topic_id()
@@ -341,6 +372,8 @@ class ReviewTab(QWidget):
             self._select_topic(previous_topic_id)
         elif topics:
             self._tabs.setCurrentIndex(0)
+        # What was running before a rebuild: a no-op when the banner already is.
+        self._follow_active_review()
 
     def _current_topic_id(self):
         widget = self._tabs.currentWidget()
@@ -515,16 +548,21 @@ class _TopicView(QWidget):
 
         layout.addLayout(self._build_header())
 
-        self._review_banner = _ReviewBanner(on_finished=self._banner_finished)
-        layout.addWidget(self._review_banner)
-        self._resume_if_active()
-        # A review's session can come back while this view is already open
-        # (switched to from the Tasks tab or the extension, or restored when
-        # the task running over it ended) -- nothing else tells this view, so
-        # it looks again while its banner is hidden.
-        self._follow_timer = QTimer(self)
-        self._follow_timer.timeout.connect(self._show_banner_for_linked_session)
-        self._follow_timer.start(1000)
+        if review_tab is not None:
+            # The banner lives above the tabs, owned by the ReviewTab, which
+            # also does the looking-for-a-session-to-follow.
+            self._review_banner = review_tab.banner
+        else:
+            self._review_banner = _ReviewBanner(on_finished=self._banner_finished)
+            layout.addWidget(self._review_banner)
+            self._resume_if_active()
+            # A review's session can come back while this view is already open
+            # (switched to from the Tasks tab or the extension, or restored when
+            # the task running over it ended) -- nothing else tells this view,
+            # so it looks again while its banner is hidden.
+            self._follow_timer = QTimer(self)
+            self._follow_timer.timeout.connect(self._show_banner_for_linked_session)
+            self._follow_timer.start(1000)
 
         self._table = QTableWidget(0, len(COLUMN_HEADERS))
         self._table.setHorizontalHeaderLabels(COLUMN_HEADERS)
@@ -743,6 +781,9 @@ class _TopicView(QWidget):
         start_button = QPushButton("Start")
         start_button.setObjectName("reviewStartButton")
         start_button.clicked.connect(lambda: self._start_problem(problem))
+        if problem["id"] == self._review_banner.current_problem_id():
+            start_button.setEnabled(False)
+            start_button.setToolTip("You are reviewing this one right now")
         layout.addWidget(start_button)
         return container
 
@@ -905,9 +946,10 @@ class _TopicView(QWidget):
 
 
 class _ReviewBanner(QWidget):
-    def __init__(self, on_finished):
+    def __init__(self, on_finished, on_changed=None):
         super().__init__()
         self._on_finished = on_finished
+        self._on_changed = on_changed
         self._session_token = None
         self._end_session_on_finish = False
         self._problem = None
@@ -1129,6 +1171,18 @@ class _ReviewBanner(QWidget):
         self._finishing = False
         self._tick_timer.start(1000)
         self.show()
+        self._changed()
+
+    def current_problem_id(self):
+        """The id of the problem being reviewed right now, or None (nothing
+        running, or a first attempt, which has no problem yet)."""
+        if not self.is_running():
+            return None
+        return (self._problem or {}).get("id")
+
+    def _changed(self):
+        if self._on_changed is not None:
+            self._on_changed()
 
     def is_running(self):
         # While the "how did it go" dialog is open the banner is hidden but the
