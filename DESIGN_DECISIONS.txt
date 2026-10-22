@@ -509,3 +509,17 @@ the auto-hide pop-up are both invisible.
 
 [2026-10-21] Late "session complete" after pause-then-end: extension-only fix, no desktop change
 The desktop ended the paused session correctly; the stray notification came from the browser extension's leftover end alarm (see carmen-extension DESIGN_DECISIONS.txt [2026-10-21]). Recorded here so the symptom isn't hunted in session_manager.py again.
+
+[2026-10-21] Review tab: switching reviews, collapsed rows, banner above the tabs (desktop only)
+Decision: Start on another problem while one is being reviewed asks Yes/No, then pauses the running
+review and collapses it into a row under the banner (Resume / End); the new one starts. One shared
+banner now lives above the tab strip (owned by ReviewTab), the current problem's Start is greyed out.
+Forks: (1) Reviews timed on their own are set aside in a SEPARATE store (review_store._parked_reviews,
+private/parked_reviews.json, local-only) instead of a "parked" flag inside _active_sessions -- sync_live treats
+that dict as THE one running review (export/apply_remote_review/ended-token), so a flagged entry would be
+exported as running or wiped by an incoming one. (2) The collapsed rows are rebuilt from the stores
+(session_manager's waiting sessions, review_store's parked reviews) rather than extra banner widgets holding
+copies of state; only a first attempt's Add Problem callbacks have no store, so those are kept in memory in
+ReviewTab (a restart loses an unlinked first attempt, as it already did). (3) The running review is paused
+only after the start dialog is confirmed, so cancelling it leaves everything as it was.
+No extension change: /status still reports the single running review; collapsed ones are not shown there.
