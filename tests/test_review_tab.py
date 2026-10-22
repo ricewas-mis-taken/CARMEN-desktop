@@ -744,3 +744,66 @@ def test_first_attempt_manual_pause_is_not_auto_resumed_after_break(qtbot, isola
     banner._tick()
     assert banner._is_paused
     banner._end_early()
+
+
+def _parked_first_attempt(qtbot, isolate_review_db, isolate_state, monkeypatch, tmp_path):
+    """A first attempt on a linked task that was paused and then pushed back
+    by a different session -- returns (view, banner, dialog)."""
+    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
+    task = tasks_store.create_task({"name": "Study"})
+    topic, _subject = _make_topic_and_subject()
+    review_store.update_topic_link(topic["id"], task["id"])
+    view = review_tab._TopicView(topic["id"])
+    qtbot.addWidget(view)
+    dialog = review_tab._AddProblemDialog(
+        topic["id"], on_added=lambda _p: None, on_start_first_attempt=view._start_first_attempt,
+    )
+    qtbot.addWidget(dialog)
+    view._start_first_attempt(dialog)
+    banner = view._review_banner
+    banner._pause_resume()
+    session_manager.start_session(
+        duration_minutes=30, lock_mode="soft", process_blocklist=[], domain_whitelist=[],
+    )
+    return view, banner, dialog
+
+
+def test_parked_first_attempt_banner_follows_its_own_session(
+        qtbot, isolate_review_db, isolate_state, monkeypatch, tmp_path):
+    """Regression test: with the first attempt paused and a different session
+    started over it, the banner (a first attempt has no problem id) read the
+    OTHER session -- so when that one ended the banner abandoned itself, lost
+    its Add Problem callback, and a later Finish > Submit saved nothing."""
+    _view, banner, dialog = _parked_first_attempt(qtbot, isolate_review_db, isolate_state, monkeypatch, tmp_path)
+    status, parked = banner._linked_view()
+    assert parked and session_manager.is_first_attempt(status)
+
+    banner._tick()
+    assert banner.is_running() and banner._first_attempt_callback is not None
+
+    session_manager.end_session()  # the other session ends; the first attempt comes back
+    banner._tick()
+    assert banner.is_running() and banner._first_attempt_callback is not None
+    assert not banner._linked_view()[1]
+
+    banner._complete_finish(None, True, True, 3, 120, banner._first_attempt_callback, banner._problem, None)
+    assert dialog.isVisible()
+
+
+def test_rebuilt_view_gives_a_resumed_first_attempt_its_add_problem_dialog(
+        qtbot, isolate_review_db, isolate_state, monkeypatch, tmp_path):
+    """The banner can be rebuilt around a still-running first attempt (app
+    restart); finishing it must still reach an Add Problem dialog."""
+    view, _banner, _dialog = _parked_first_attempt(qtbot, isolate_review_db, isolate_state, monkeypatch, tmp_path)
+    session_manager.end_session()  # first attempt restored as the live session
+    fresh = review_tab._TopicView(view._topic_id)
+    qtbot.addWidget(fresh)
+    banner = fresh._review_banner
+    assert banner.is_running() and banner._first_attempt_callback is not None
+
+    done = banner._first_attempt_callback
+    done(90, True, 3)
+    popups = [p for p in review_tab._popup_refs if isinstance(p, review_tab._AddProblemDialog) and p.isVisible()]
+    assert popups
+    for popup in popups:
+        popup.close()
