@@ -1,5 +1,6 @@
 import os
 import re
+import uuid
 from datetime import date, datetime
 
 from PySide6.QtCore import Qt, QTimer, QUrl
@@ -310,7 +311,13 @@ class ReviewTab(QWidget):
         banner_holder = QVBoxLayout()
         banner_holder.setContentsMargins(24, 0, 24, 8)
         banner_holder.addWidget(self.banner)
+        # Reviews paused and set aside to make room for another: collapsed rows.
+        self._strip = _ParkedStrip(on_resume=self._resume_row, on_end=self._end_row)
+        banner_holder.addWidget(self._strip)
         layout.addLayout(banner_holder)
+        # Banner state of set-aside first attempts (their callbacks into the Add
+        # Problem dialog can't be rebuilt from any store).
+        self._stash = []
 
         self._tabs = QTabWidget()
         self._tabs.setDocumentMode(True)
@@ -333,18 +340,146 @@ class ReviewTab(QWidget):
         self._follow_timer.start(1000)
 
     def _follow_active_review(self):
+        self._refresh_strip()
         if self.banner.is_running():
             return
         for view in self._topic_views.values():
             if view._resume_linked_session() or view._resume_independent_review():
+                self._refresh_strip()
                 return
+
+    # ---- reviews set aside while another one runs --------------------------
+    def park_current_review(self):
+        """Pauses the review in the banner and collapses it into the strip."""
+        snapshot = self.banner.park_current()
+        if snapshot is None:
+            return
+        if snapshot["first_attempt_callback"] is not None:
+            self._stash.append(snapshot)
+        self._is_reviewing = False
+        self._refresh_strip()
+
+    def take_first_attempt_stash(self, event_id=None, stash_id=None):
+        """Removes and returns a set-aside first attempt's banner state: the
+        one with this stash id, or the session-backed one for this task."""
+        for snapshot in self._stash:
+            if (stash_id is not None and snapshot["id"] == stash_id) or (
+                    stash_id is None and event_id is not None
+                    and snapshot["problem"].get("eventId") == event_id
+                    and snapshot["end_session_on_finish"]):
+                self._stash.remove(snapshot)
+                return snapshot
+        return None
+
+    def _parked_rows(self):
+        rows = []
+        status = session_manager.get_status()
+        shown = self.banner._problem if self.banner.is_running() else None
+        sessions = []
+        if status.get("isActive") and status.get("isPaused"):
+            sessions.append({**status, "parkId": None})
+        sessions.extend(status.get("parkedSessions") or [])
+        for session in sessions:
+            if session.get("source") != "review":
+                continue
+            if shown is not None and _session_belongs_to(shown, session):
+                continue
+            first = session_manager.is_first_attempt(session)
+            rows.append({
+                "kind": "session", "key": session.get("parkId") or "active", "session": session,
+                "name": "First attempt" if first else (session.get("reviewProblemName") or "Review"),
+                "problemId": session.get("reviewProblemId"),
+                "seconds": tasks_store.worked_seconds(session["startTime"], None, session.get("violationLog"))
+                if session.get("startTime") else 0,
+            })
+        for parked in review_store.list_parked_reviews():
+            rows.append({
+                "kind": "independent", "key": parked["token"], "parked": parked,
+                "name": parked["problemName"], "problemId": parked["problemId"],
+                "seconds": parked["elapsedSeconds"],
+            })
+        for snapshot in self._stash:
+            if not snapshot["end_session_on_finish"]:
+                rows.append({
+                    "kind": "stash", "key": snapshot["id"], "snapshot": snapshot, "name": "First attempt",
+                    "problemId": None, "seconds": snapshot["accumulated_seconds"],
+                })
+        return rows
+
+    def _refresh_strip(self):
+        self._strip.set_rows(self._parked_rows())
+
+    def parked_row_for_problem(self, problem_id):
+        return next((r for r in self._parked_rows() if r["problemId"] == problem_id), None)
+
+    def confirm_switch(self, verb, target_name):
+        """Yes/No before pausing the running review for another one."""
+        current = self.banner.current_label()
+        return _confirm(
+            self, "Switch review",
+            f'Pause "{current}" and {verb} "{target_name}"? '
+            "The one you are in will wait, collapsed, until you resume it.")
+
+    def _resume_row(self, row):
+        if self.banner.is_running() and not self.confirm_switch("resume", row["name"]):
+            return
+        self.park_current_review()
+        kind = row["kind"]
+        if kind == "session":
+            session = row["session"]
+            if session.get("parkId"):
+                session_manager.swap_with_parked(session["parkId"])
+            else:
+                session_manager.resume_session()
+            self._follow_active_review()
+        elif kind == "independent":
+            review_store.unpark_review(row["key"])
+            self._follow_active_review()
+        else:
+            snapshot = row["snapshot"]
+            self._stash.remove(snapshot)
+            self.on_review_started()
+            self.banner.start(
+                snapshot["problem"], None, end_session_on_finish=False,
+                first_attempt_callback=snapshot["first_attempt_callback"],
+                first_attempt_cancelled_callback=snapshot["first_attempt_cancelled_callback"],
+                accumulated_seconds=snapshot["accumulated_seconds"],
+            )
+        self._refresh_strip()
+
+    def _end_row(self, row):
+        if not _confirm(self, "End review", f'End "{row["name"]}" without saving it?'):
+            return
+        kind = row["kind"]
+        cancelled = None
+        if kind == "session":
+            session = row["session"]
+            if session.get("parkId"):
+                session_manager.end_parked_session(park_id=session["parkId"])
+            else:
+                session_manager.end_session()
+            snapshot = self.take_first_attempt_stash(event_id=session.get("eventId"))
+            cancelled = snapshot["first_attempt_cancelled_callback"] if snapshot else None
+        elif kind == "independent":
+            review_store.abandon_parked_review(row["key"])
+        else:
+            snapshot = row["snapshot"]
+            self._stash.remove(snapshot)
+            cancelled = snapshot["first_attempt_cancelled_callback"]
+        if cancelled is not None:
+            cancelled()  # a first attempt: its Add Problem dialog comes back
+        self._refresh_strip()
+        self._rerender_start_cells()
 
     def _banner_finished(self):
         self.on_review_finished()
         for view in self._topic_views.values():
             view.refresh()
+        # A review set aside earlier may now be the live one again.
+        self._follow_active_review()
 
     def _rerender_start_cells(self):
+        self._refresh_strip()
         for view in self._topic_views.values():
             view._render_table()
 
@@ -607,6 +742,16 @@ class _TopicView(QWidget):
                 problem_name = session.get("reviewProblemName") or "this review"
                 if self._review_tab:
                     self._review_tab.on_review_started()
+                stashed = (
+                    self._review_tab.take_first_attempt_stash(event_id=session.get("eventId"))
+                    if self._review_tab and session_manager.is_first_attempt(session) else None)
+                if stashed is not None:
+                    self._review_banner.start(
+                        stashed["problem"], token=None, end_session_on_finish=True,
+                        first_attempt_callback=stashed["first_attempt_callback"],
+                        first_attempt_cancelled_callback=stashed["first_attempt_cancelled_callback"],
+                    )
+                    return True
                 if session_manager.is_first_attempt(session):
                     # The banner that was timing this first attempt is gone
                     # (app restart, or this view rebuilt), and with it the
@@ -808,9 +953,30 @@ class _TopicView(QWidget):
         _register_popup(_AddProblemDialog(self._topic_id, on_added=lambda _p: self.refresh(), problem=problem))
 
     def _start_problem(self, problem):
-        if self._review_tab and not self._review_tab.can_start_review():
+        tab = self._review_tab
+        if tab is None:
+            if not self._review_banner.is_running():
+                _ReviewStartDialog(problem, on_start=self._begin_review)
             return
-        _ReviewStartDialog(problem, on_start=self._begin_review)
+        if tab.banner.current_problem_id() == problem["id"]:
+            return
+        parked = tab.parked_row_for_problem(problem["id"])
+        if parked is not None:
+            # Already started and set aside: pick that one up, don't begin a second.
+            tab._resume_row(parked)
+            return
+        if tab.banner.is_running():
+            if not tab.confirm_switch("start", problem["name"]):
+                return
+            _ReviewStartDialog(problem, on_start=self._switch_to_review)
+        else:
+            _ReviewStartDialog(problem, on_start=self._begin_review)
+
+    def _switch_to_review(self, problem):
+        # Only now (the start dialog confirmed) does the running review step
+        # aside -- cancelling that dialog must leave everything as it was.
+        self._review_tab.park_current_review()
+        self._begin_review(problem)
 
     def _begin_review(self, problem):
         # Whether this review is about to drive its own session_manager
@@ -828,7 +994,12 @@ class _TopicView(QWidget):
         # (see _elapsed_seconds_now()'s end_session_on_finish branch).
         end_session_on_finish = False
         topic = review_store.get_topic(self._topic_id)
-        if topic and topic.get("linkedTaskId") and not session_manager.is_active():
+        status = session_manager.get_status()
+        # A paused review session may be driven over: start_session() sets it
+        # aside (that is how a review is pushed back behind another).
+        can_drive_session = not status.get("isActive") or (
+            status.get("isPaused") and status.get("source") == "review")
+        if topic and topic.get("linkedTaskId") and can_drive_session:
             task = tasks_store.get_task(topic["linkedTaskId"])
             if task:
                 session_manager.start_session(
@@ -1132,7 +1303,7 @@ class _ReviewBanner(QWidget):
     def start(
         self, problem, token, end_session_on_finish=False,
         first_attempt_callback=None, first_attempt_cancelled_callback=None,
-        resumed_started_at=None,
+        resumed_started_at=None, accumulated_seconds=0,
     ):
         self._problem = problem
         self._session_token = token
@@ -1145,7 +1316,7 @@ class _ReviewBanner(QWidget):
         # original start time, not reset elapsed to zero just because this
         # widget instance is new.
         self._start_time = resumed_started_at or datetime.now()
-        self._accumulated_seconds = 0
+        self._accumulated_seconds = accumulated_seconds
         self._is_paused = False
         is_first_attempt = first_attempt_callback is not None or (
             problem.get("id") is None and problem.get("name") == session_manager.FIRST_ATTEMPT_NAME
@@ -1172,6 +1343,46 @@ class _ReviewBanner(QWidget):
         self._tick_timer.start(1000)
         self.show()
         self._changed()
+
+    def current_label(self):
+        problem = self._problem or {}
+        if problem.get("id") is None and (
+                self._first_attempt_callback is not None or problem.get("name") == session_manager.FIRST_ATTEMPT_NAME):
+            return "your first attempt"
+        return problem.get("name") or "this review"
+
+    def park_current(self):
+        """Pauses whatever this banner is timing and stops showing it. Returns
+        what is needed to bring it back (the Add Problem callbacks of a first
+        attempt live only here), or None if nothing is being timed."""
+        if not self.is_running() or self._finishing:
+            return None
+        snapshot = {
+            "id": uuid.uuid4().hex,
+            "problem": self._problem,
+            "end_session_on_finish": self._end_session_on_finish,
+            "first_attempt_callback": self._first_attempt_callback,
+            "first_attempt_cancelled_callback": self._first_attempt_cancelled_callback,
+            "accumulated_seconds": 0,
+        }
+        if self._end_session_on_finish:
+            status, is_parked = self._linked_view()
+            if status.get("isActive") and not is_parked and not status.get("isPaused"):
+                session_manager.pause_session()
+        elif self._is_independent_review():
+            review_store.park_active_review()
+        else:
+            snapshot["accumulated_seconds"] = self._elapsed_seconds_now()
+        self._tick_timer.stop()
+        review_store.clear_first_attempt()
+        self._session_token = None
+        self._end_session_on_finish = False
+        self._start_time = None
+        self._first_attempt_callback = None
+        self._first_attempt_cancelled_callback = None
+        self.hide()
+        self._changed()
+        return snapshot
 
     def current_problem_id(self):
         """The id of the problem being reviewed right now, or None (nothing
@@ -1393,6 +1604,58 @@ class _ReviewBanner(QWidget):
             _end_session_for_problem(problem)
         self._finishing = False
         self._on_finished()
+
+
+def _confirm(parent, title, text):
+    return QMessageBox.question(
+        parent, title, text, QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes
+
+
+class _ParkedStrip(QWidget):
+    """Collapsed rows, one per review that was paused and set aside to make room
+    for another: name, frozen time, Resume and End."""
+
+    def __init__(self, on_resume, on_end):
+        super().__init__()
+        self._on_resume = on_resume
+        self._on_end = on_end
+        self._signature = None
+        self._rows_layout = QVBoxLayout(self)
+        self._rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._rows_layout.setSpacing(4)
+        self.hide()
+
+    def set_rows(self, rows):
+        signature = [(r["kind"], r["key"], r["name"], r["seconds"]) for r in rows]
+        if signature == self._signature:
+            return
+        self._signature = signature
+        while self._rows_layout.count():
+            widget = self._rows_layout.takeAt(0).widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        for row in rows:
+            frame = QFrame()
+            frame.setStyleSheet(
+                "QFrame { background: #F1F3F6; border: 1px solid #DDE1E7; border-radius: 8px; }"
+                "QLabel { border: none; background: transparent; color: #4A5159; font-weight: 600; }"
+                "QPushButton { background: #FFFFFF; color: #1F2328; border: 1px solid #CBD2DA; "
+                "border-radius: 6px; padding: 3px 10px; }"
+                "QPushButton:hover { background: #E8EEF7; }"
+            )
+            line = QHBoxLayout(frame)
+            line.setContentsMargins(10, 4, 10, 4)
+            line.addWidget(QLabel(f"⏸  {row['name']}  ·  {_format_mmss(row['seconds'])}  ·  paused"), 1)
+            resume = QPushButton("Resume")
+            resume.clicked.connect(lambda checked=False, r=row: self._on_resume(r))
+            end = QPushButton("End")
+            end.clicked.connect(lambda checked=False, r=row: self._on_end(r))
+            line.addWidget(resume)
+            line.addWidget(end)
+            self._rows_layout.addWidget(frame)
+            frame.show()  # added to an already-visible parent: not shown by itself
+        self.setVisible(bool(rows))
 
 
 def _end_session_for_problem(problem):

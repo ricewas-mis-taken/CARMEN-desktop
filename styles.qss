@@ -363,6 +363,11 @@ QPushButton#reviewStartButton:hover {
     background: rgba(91, 141, 239, 0.12);
 }
 
+QPushButton#reviewStartButton:disabled {
+    background: transparent;
+    color: #A8AEB7;
+}
+
 /* Review tab's topic tabs (qt_ui/review_tab.py) -- browser/chrome-style tab
    strip, including the trailing "+" tab (styled the same as any other tab;
    review_tab.py intercepts clicks on it rather than actually showing it as
