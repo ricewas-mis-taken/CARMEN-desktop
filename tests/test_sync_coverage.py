@@ -58,6 +58,7 @@ LOCAL_ONLY_FILES = {
     "pull_cursor.txt", "sync_owner.txt", "uploaded_photos.json", "taskbar_quiet_settings.json", "taskbar_quiet_saved.json", "taskbar_quiet_user.json",
     "live_cursor.txt", "live_history_pushed.txt", "live_state_pushed.txt",
     "live_review_pushed.txt", "live_screentime_pushed.json", "live_settings_pushed.txt", "live_quicknote_pushed.txt", "hang_trace.txt", "taskbar_quiet_pending.json", "other_device_seen.txt", "screentime_remote.json",
+    "scribe.json",  # the Scribe board: local on purpose, it can hold large attached images
 }
 # Reference data that ships with the app, not something a user creates.
 SHIPPED_REFERENCE_FILES = {"screentime_domains.json", "screentime_domains_curated.json"}
