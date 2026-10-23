@@ -76,3 +76,26 @@ def test_hide_tags_button_label_reflects_active_count(qtbot, isolate_board):
 
     tab._toggle_hidden_tag("shopping", True)
     assert tab._hide_tags_button.text() == "Hide Tags (2)"
+
+
+def test_timer_tick_keeps_open_card_when_nothing_changed(qtbot, isolate_board):
+    board_store.create_task("Open me", importance=5)
+    tab = board_tab.BoardTab()
+    qtbot.addWidget(tab)
+    card = tab._list_layout.itemAt(0).widget()
+    card._expand()
+    assert card._expanded
+
+    tab._refresh_if_changed()
+    assert tab._list_layout.itemAt(0).widget() is card
+    assert card._expanded
+
+
+def test_timer_tick_rebuilds_when_a_task_appears(qtbot, isolate_board):
+    board_store.create_task("First", importance=5)
+    tab = board_tab.BoardTab()
+    qtbot.addWidget(tab)
+    board_store.create_task("Second", importance=6)
+
+    tab._refresh_if_changed()
+    assert tab._list_layout.count() == 2
