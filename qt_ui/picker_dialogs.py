@@ -11,6 +11,7 @@ All three windows are non-modal (.show(), not .exec()) -- same as the
 original Tk versions, which never used grab_set().
 """
 import os
+import math
 import subprocess
 import sys
 
@@ -400,7 +401,10 @@ class _TimerDialog(QWidget):
     def _start(self):
         try:
             duration_minutes = float(self._duration_edit.text())
-            if duration_minutes <= 0:
+            # float() accepts "nan" and "inf", and a huge number is a valid float
+            # that session_manager then cannot turn into a time -- the slot raised
+            # and the dialog just sat there. Same ceiling as POST /session/start.
+            if not math.isfinite(duration_minutes) or not 0 < duration_minutes <= 1_000_000:
                 raise ValueError
         except ValueError:
             self._status_label.setText("Enter a valid duration.")
