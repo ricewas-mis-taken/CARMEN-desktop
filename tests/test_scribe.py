@@ -244,3 +244,21 @@ def test_a_run_of_width_changes_is_one_undo_step(qtbot):
     assert len(canvas._undo) == before + 1
     canvas.undo()
     assert canvas._active_items()[0]["width"] == 4
+
+
+def test_scribe_styling_does_not_leak_into_its_dialogs(qtbot):
+    """Regression: the tab's stylesheet gave every label under it dark text, so
+    the New-board confirm (parented to the tab) was blank on a dark dialog."""
+    from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtWidgets import QLabel, QMessageBox
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    box = QMessageBox(QMessageBox.Question, "New board", "Clear everything?", QMessageBox.Yes | QMessageBox.No, tab)
+    qtbot.addWidget(box)
+    label = box.findChild(QLabel, "qt_msgbox_label")
+    label.ensurePolished()
+    assert label.palette().color(QPalette.WindowText) != QColor("#1F2328")
+    # ...while the tab's own panel labels keep the dark text on their light panels.
+    tab.show()
+    tab._zoom_label.ensurePolished()
+    assert tab._zoom_label.palette().color(QPalette.WindowText) == QColor("#1F2328")
