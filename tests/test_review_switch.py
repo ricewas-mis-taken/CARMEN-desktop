@@ -190,3 +190,28 @@ def test_ending_a_collapsed_first_attempt_reopens_its_dialog(world):
     tab._end_row(tab._parked_rows()[0])
     assert dialog.isVisible() and _names(tab) == []
     dialog.close()
+
+
+def test_resuming_an_independent_row_beats_a_paused_linked_session(world):
+    topic_a, problem_a = world.make_topic("A", True)
+    topic_b, problem_b = world.make_topic("B", False)
+    topic_c, problem_c = world.make_topic("C", False)
+    tab = _tab(world)
+    tab._topic_views[topic_a["id"]]._begin_review(problem_a)   # linked, later paused-active
+    tab._topic_views[topic_b["id"]]._start_problem(problem_b)  # independent
+    tab._topic_views[topic_c["id"]]._start_problem(problem_c)  # B parked in the review store
+    row = next(r for r in tab._parked_rows() if r["name"] == "P-B")
+    tab._resume_row(row)
+    assert tab.banner.current_problem_id() == problem_b["id"]
+    assert review_store.get_active_review()["problemId"] == problem_b["id"]
+    assert sorted(_names(tab)) == ["P-A", "P-C"]
+
+
+def test_start_is_ignored_while_the_finish_dialog_is_open(world):
+    topic_a, problem_a = world.make_topic("A", False)
+    topic_b, problem_b = world.make_topic("B", False)
+    tab = _tab(world)
+    tab._topic_views[topic_a["id"]]._begin_review(problem_a)
+    tab.banner._finishing = True
+    tab._topic_views[topic_b["id"]]._start_problem(problem_b)
+    assert tab.banner.current_problem_id() == problem_a["id"] and world.answers["asked"] == []
