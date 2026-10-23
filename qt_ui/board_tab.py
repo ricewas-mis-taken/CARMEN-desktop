@@ -901,8 +901,12 @@ class _AddTaskDialog(QWidget):
         photo_bytes = None
         photo_filename = None
         if self._photo_path:
-            with open(self._photo_path, "rb") as f:
-                photo_bytes = f.read()
+            try:
+                with open(self._photo_path, "rb") as f:
+                    photo_bytes = f.read()
+            except OSError:
+                self._status_label.setText("Could not read the chosen photo -- choose it again.")
+                return
             photo_filename = os.path.basename(self._photo_path)
 
         tags = [tag_id for tag_id, btn in self._tag_buttons.items() if btn.isChecked()]
@@ -1034,8 +1038,12 @@ class _EditTaskDialog(QWidget):
         photo_bytes = None
         photo_filename = None
         if self._photo_path:
-            with open(self._photo_path, "rb") as f:
-                photo_bytes = f.read()
+            try:
+                with open(self._photo_path, "rb") as f:
+                    photo_bytes = f.read()
+            except OSError:
+                self._status_label.setText("Could not read the chosen photo -- choose it again.")
+                return
             photo_filename = os.path.basename(self._photo_path)
 
         tags = [tag_id for tag_id, btn in self._tag_buttons.items() if btn.isChecked()]

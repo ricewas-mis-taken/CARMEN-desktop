@@ -2327,8 +2327,12 @@ class _AddProblemDialog(QWidget):
             description_type = "photo"
             has_existing_photo = self._editing and self._problem.get("descriptionPhotoPath")
             if self._photo_path:
-                with open(self._photo_path, "rb") as f:
-                    photo_bytes = f.read()
+                try:
+                    with open(self._photo_path, "rb") as f:
+                        photo_bytes = f.read()
+                except OSError:
+                    self._status_label.setText("Could not read the chosen image -- choose it again.")
+                    return None
                 photo_filename = os.path.basename(self._photo_path)
             elif not has_existing_photo:
                 self._status_label.setText("Choose an image.")
