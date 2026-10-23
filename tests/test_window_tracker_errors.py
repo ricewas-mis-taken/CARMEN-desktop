@@ -1,7 +1,7 @@
 """A failing polling tick must be logged (once per distinct error), not swallowed."""
 import threading
+import types
 
-import session_manager
 import window_tracker
 
 
@@ -17,7 +17,9 @@ def test_a_failing_tick_is_logged_once_not_swallowed_or_spammed(monkeypatch):
 
     monkeypatch.setattr(window_tracker, "logger", FakeLogger())
     monkeypatch.setattr(window_tracker, "POLL_INTERVAL_SECONDS", 0.01)
-    monkeypatch.setattr(session_manager, "get_status", boom)
+    # Only the tracker's own reference is replaced: live Qt widgets from other tests
+    # call the real session_manager from the main thread and must not see this.
+    monkeypatch.setattr(window_tracker, "session_manager", types.SimpleNamespace(get_status=boom))
     stop = threading.Event()
     thread = threading.Thread(target=window_tracker.run_polling_loop, args=(stop,), daemon=True)
     thread.start()
