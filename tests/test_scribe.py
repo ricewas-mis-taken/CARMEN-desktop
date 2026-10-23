@@ -262,3 +262,27 @@ def test_scribe_styling_does_not_leak_into_its_dialogs(qtbot):
     tab.show()
     tab._zoom_label.ensurePolished()
     assert tab._zoom_label.palette().color(QPalette.WindowText) == QColor("#1F2328")
+
+
+def test_freehand_preview_matches_what_is_saved(qtbot):
+    """Regression: the stroke was only smoothed on release, so the writing
+    visibly shifted when the pen lifted. The preview must use the same points."""
+    import math
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab.resize(900, 700)
+    tab.show()
+    canvas = tab.canvas
+    canvas.set_tool("freehand")
+    QTest.mousePress(canvas, Qt.LeftButton, Qt.NoModifier, QPoint(100, 300))
+    for i in range(1, 80):
+        QTest.mouseMove(canvas, QPoint(100 + i * 5, int(300 + 40 * math.sin(i / 5))))
+    shown = canvas._smoothed(canvas._draft["pts"])
+    painted = []
+    real_paint = canvas._paint_item
+    canvas._paint_item = lambda p, item, zoom: (painted.append(item), real_paint(p, item, zoom))[1]
+    canvas.grab()  # a repaint while the pen is still down
+    assert [i["pts"] for i in painted if i is not canvas._draft and i.get("pts") == shown]
+    QTest.mouseRelease(canvas, Qt.LeftButton, Qt.NoModifier, QPoint(495, 300))
+    saved = canvas._active_items()[0]["pts"]
+    assert saved == shown and len(saved) < 79  # smoothed, and identical to the preview
