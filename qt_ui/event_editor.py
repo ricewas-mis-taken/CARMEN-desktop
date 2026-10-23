@@ -535,6 +535,11 @@ class _EventEditor(QWidget):
             rrule_str = recurrence.build_rrule(base_kind, interval=interval)
         elif kind == "weekly_days":
             selected_days = [code for code, chk in self._weekday_checks.items() if chk.isChecked()]
+            if not selected_days:
+                # build_rrule() quietly falls back to Monday for an empty list, so an
+                # event with no day ticked used to repeat every Monday.
+                self._status_label.setText("Pick at least one weekday.")
+                return
             rrule_str = recurrence.build_rrule("weekly_days", interval=1, weekdays=selected_days)
         elif kind == "none":
             rrule_str = None
@@ -547,6 +552,10 @@ class _EventEditor(QWidget):
                 warn_minutes = int(self._warn_minutes_edit.text()) if self._warn_check.isChecked() else None
             except ValueError:
                 warn_minutes = None
+            if warn_minutes is not None and warn_minutes < 0:
+                # A negative lead made the "starting soon" warning fire after the event began.
+                self._status_label.setText("Warning minutes can't be negative.")
+                return
             focus_profile = {
                 "enabled": True,
                 "lockMode": "hard" if self._hard_radio.isChecked() else "soft",
