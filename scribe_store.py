@@ -93,10 +93,44 @@ def _clean_prefs(raw):
     return prefs
 
 
+def _is_point(value):
+    return (isinstance(value, (list, tuple)) and len(value) == 2
+            and all(isinstance(n, (int, float)) and not isinstance(n, bool) and n == n for n in value))
+
+
+def _valid_item(item):
+    """True if the item has what painting and hit-testing index straight into.
+    A hand-edited or damaged file must lose a bad shape, not crash the board."""
+    kind = item.get("type")
+    if kind == "stroke":
+        pts = item.get("pts")
+        ok = isinstance(pts, list) and bool(pts) and all(_is_point(p) for p in pts)
+    elif kind in ("line", "arrow", "rect", "circle"):
+        ok = _is_point(item.get("a")) and _is_point(item.get("b"))
+    elif kind == "curve":
+        ok = all(_is_point(item.get(k)) for k in ("a", "b", "c"))
+    elif kind == "text":
+        ok = (_is_point(item.get("a")) and isinstance(item.get("text"), str)
+              and all(isinstance(item.get(k), (int, float)) for k in ("w", "h", "size")))
+    elif kind == "image":
+        ok = (_is_point(item.get("a")) and isinstance(item.get("file"), str)
+              and all(isinstance(item.get(k), (int, float)) for k in ("w", "h")))
+    else:
+        return False
+    if not ok:
+        return False
+    if kind not in ("text", "image"):
+        item["width"] = _num(item.get("width"), 4, 1, 200)
+    item["stroke"] = _color(item.get("stroke"), "#000000")
+    if item.get("fill") is not None:
+        item["fill"] = _color(item.get("fill"), None)
+    return True
+
+
 def _clean_layer(raw, index):
     if not isinstance(raw, dict):
         return None
-    items = [i for i in raw.get("items", []) if isinstance(i, dict) and isinstance(i.get("type"), str)] \
+    items = [i for i in raw.get("items", []) if isinstance(i, dict) and _valid_item(i)] \
         if isinstance(raw.get("items"), list) else []
     layer_id = raw.get("id") if isinstance(raw.get("id"), str) and raw.get("id") else uuid.uuid4().hex[:8]
     name = raw.get("name") if isinstance(raw.get("name"), str) and raw.get("name") else f"Layer {index + 1}"

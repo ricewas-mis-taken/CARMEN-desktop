@@ -216,6 +216,54 @@ def test_layers_background_and_export(qtbot, tmp_path):
     assert len(canvas.doc["layers"]) == 1
 
 
+def test_damaged_shapes_are_dropped_not_crashed_on():
+    doc = scribe_store.clean_doc({"layers": [{"items": [
+        {"type": "rect"},                                   # no corners
+        {"type": "stroke", "pts": []},                      # empty
+        {"type": "line", "a": [0, 0], "b": ["x", 1]},       # bad point
+        {"type": "text", "a": [1, 2]},                      # no text
+        {"type": "rect", "a": [0, 0], "b": [5, 5], "width": "fat", "stroke": "red"},
+    ]}]})
+    items = doc["layers"][0]["items"]
+    assert len(items) == 1 and items[0]["width"] == 4 and items[0]["stroke"] == "#000000"
+
+
+def test_a_run_of_width_changes_is_one_undo_step(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab.resize(900, 700)
+    tab.show()
+    canvas = tab.canvas
+    canvas.set_tool("rect")
+    _drag(canvas, (100, 100), (220, 180))
+    canvas.set_tool("select")
+    canvas._sel = list(canvas._active_items())
+    before = len(canvas._undo)
+    for width in (5, 6, 7, 8):
+        canvas.set_width(width)
+    assert len(canvas._undo) == before + 1
+    canvas.undo()
+    assert canvas._active_items()[0]["width"] == 4
+
+
+def test_scribe_styling_does_not_leak_into_its_dialogs(qtbot):
+    """Regression: the tab's stylesheet gave every label under it dark text, so
+    the New-board confirm (parented to the tab) was blank on a dark dialog."""
+    from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtWidgets import QLabel, QMessageBox
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    box = QMessageBox(QMessageBox.Question, "New board", "Clear everything?", QMessageBox.Yes | QMessageBox.No, tab)
+    qtbot.addWidget(box)
+    label = box.findChild(QLabel, "qt_msgbox_label")
+    label.ensurePolished()
+    assert label.palette().color(QPalette.WindowText) != QColor("#1F2328")
+    # ...while the tab's own panel labels keep the dark text on their light panels.
+    tab.show()
+    tab._zoom_label.ensurePolished()
+    assert tab._zoom_label.palette().color(QPalette.WindowText) == QColor("#1F2328")
+
+
 def test_freehand_preview_matches_what_is_saved(qtbot):
     """Regression: the stroke was only smoothed on release, so the writing
     visibly shifted when the pen lifted. The preview must use the same points."""

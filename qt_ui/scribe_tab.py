@@ -8,6 +8,7 @@ is hidden or the app quits. Shape maths lives in scribe_geometry.py.
 """
 import copy
 import math
+import time
 
 from PySide6.QtCore import QBuffer, QByteArray, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
@@ -95,6 +96,7 @@ class ScribeCanvas(QWidget):
         self._band = None
         self._cursor_world = None
         self._images = {}
+        self._last_edit = None
         self._update_cursor()
 
     # ---- shortcuts to the document -------------------------------------
@@ -169,36 +171,42 @@ class ScribeCanvas(QWidget):
         self.pan_mode = on
         self._update_cursor()
 
-    def _apply_to_selection(self, fn):
+    def _apply_to_selection(self, fn, key):
         if not self._sel:
             return
-        self._push_undo()
+        # One undo step for a run of the same edit (a spinner ticking through
+        # widths, a colour dialog) rather than one per tick.
+        now = time.monotonic()
+        marker = (key, tuple(id(i) for i in self._sel))
+        if not (self._last_edit and self._last_edit[0] == marker and now - self._last_edit[1] < 1.5):
+            self._push_undo()
+        self._last_edit = (marker, now)
         for item in self._sel:
             fn(item)
         self.update()
 
     def set_stroke(self, color):
         self.prefs["stroke"] = color
-        self._apply_to_selection(lambda i: i.__setitem__("stroke", color))
+        self._apply_to_selection(lambda i: i.__setitem__("stroke", color), "stroke")
         self.changed.emit()
         self.update()
 
     def set_fill(self, color):
         self.prefs["fill"] = color
         self._apply_to_selection(
-            lambda i: i.__setitem__("fill", color) if i["type"] in geo.CLOSED_TYPES else None)
+            lambda i: i.__setitem__("fill", color) if i["type"] in geo.CLOSED_TYPES else None, "fill")
         self.changed.emit()
 
     def set_width(self, width):
         self.prefs["width"] = width
         self._apply_to_selection(
-            lambda i: i.__setitem__("width", width) if i["type"] not in ("text", "image") else None)
+            lambda i: i.__setitem__("width", width) if i["type"] not in ("text", "image") else None, "width")
         self.changed.emit()
 
     def set_flag(self, key, value):
         self.prefs[key] = value
         if key in _ITEM_FLAGS:
-            self._apply_to_selection(lambda i: i.__setitem__(_ITEM_FLAGS[key], value))
+            self._apply_to_selection(lambda i: i.__setitem__(_ITEM_FLAGS[key], value), key)
         self.changed.emit()
         self.update()
 
@@ -846,7 +854,6 @@ QListWidget::item:selected { background: #CFE3FF; color: #1F2328; }
 class ScribeTab(QWidget):
     def __init__(self):
         super().__init__()
-        self.setStyleSheet(_STYLE)
         self._dirty = False
         self.canvas = ScribeCanvas(scribe_store.load())
         self._save_timer = QTimer(self)
@@ -859,7 +866,7 @@ class ScribeTab(QWidget):
         layout.setSpacing(8)
         layout.addWidget(self._build_left())
         center = QVBoxLayout()
-        center.addLayout(self._build_topbar())
+        center.addWidget(self._build_topbar())
         center.addWidget(self.canvas, 1)
         layout.addLayout(center, 1)
         layout.addWidget(self._build_right())
@@ -917,6 +924,10 @@ class ScribeTab(QWidget):
 
     def _build_left(self):
         column = QWidget()
+        # Styled on the columns and top bar only, never on the whole tab: dialogs
+        # parented to the tab (New, Text, colour picker) would inherit the dark
+        # label colour and show blank on a dark dialog background.
+        column.setStyleSheet(_STYLE)
         column.setFixedWidth(178)
         box = QVBoxLayout(column)
         box.setContentsMargins(0, 0, 0, 0)
@@ -986,7 +997,10 @@ class ScribeTab(QWidget):
         return column
 
     def _build_topbar(self):
-        bar = QHBoxLayout()
+        holder = QWidget()
+        holder.setStyleSheet(_STYLE)
+        bar = QHBoxLayout(holder)
+        bar.setContentsMargins(0, 0, 0, 0)
         bar.setSpacing(6)
         minus = QPushButton("−")
         plus = QPushButton("+")
@@ -1010,7 +1024,7 @@ class ScribeTab(QWidget):
         hint.setStyleSheet("color: #8A9099; font-size: 11px;")
         bar.addWidget(hint)
         bar.addStretch(1)
-        return bar
+        return holder
 
     def _swatch(self, color):
         button = QPushButton()
@@ -1029,6 +1043,10 @@ class ScribeTab(QWidget):
 
     def _build_right(self):
         column = QWidget()
+        # Styled on the columns and top bar only, never on the whole tab: dialogs
+        # parented to the tab (New, Text, colour picker) would inherit the dark
+        # label colour and show blank on a dark dialog background.
+        column.setStyleSheet(_STYLE)
         column.setFixedWidth(168)
         box = QVBoxLayout(column)
         box.setContentsMargins(0, 0, 0, 0)
