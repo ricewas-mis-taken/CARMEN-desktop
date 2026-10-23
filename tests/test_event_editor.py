@@ -118,3 +118,31 @@ def test_recurrence_prefill_weekly_days_round_trip(qtbot):
     assert checks["MO"].isChecked()
     assert checks["WE"].isChecked()
     assert checks["FR"].isChecked()
+
+
+def _valid_event_window(qtbot):
+    win = event_editor._EventEditor(existing=None, initial_date=date(2026, 1, 15))
+    qtbot.addWidget(win)
+    win._title_edit.setText("Study")
+    _set_datetime(win._start_date_edit, win._start_time_slider, "2026-01-15", "09:00")
+    _set_datetime(win._end_date_edit, win._end_time_slider, "2026-01-15", "10:00")
+    return win
+
+
+def test_selected_weekdays_repeat_requires_a_weekday(qtbot, isolate_calendar_db):
+    """Regression: with no day ticked the event silently repeated every Monday."""
+    win = _valid_event_window(qtbot)
+    win._recur_kind = "weekly_days"
+    win._save()
+    assert "weekday" in win._status_label.text().lower()
+    assert store.list_events() == []
+
+
+def test_negative_focus_warning_minutes_are_refused(qtbot, isolate_calendar_db):
+    win = _valid_event_window(qtbot)
+    win._focus_enabled_check.setChecked(True)
+    win._warn_check.setChecked(True)
+    win._warn_minutes_edit.setText("-5")
+    win._save()
+    assert "negative" in win._status_label.text().lower()
+    assert store.list_events() == []
