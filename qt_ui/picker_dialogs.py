@@ -400,7 +400,10 @@ class _TimerDialog(QWidget):
     def _start(self):
         try:
             duration_minutes = float(self._duration_edit.text())
-            if duration_minutes <= 0:
+            # float() accepts "nan" and "inf", and a huge number is a valid float
+            # that session_manager then cannot turn into a time -- the slot raised
+            # and the dialog just sat there.
+            if not session_manager.is_valid_duration(duration_minutes):
                 raise ValueError
         except ValueError:
             self._status_label.setText("Enter a valid duration.")
