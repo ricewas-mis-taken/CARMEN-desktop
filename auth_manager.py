@@ -257,7 +257,8 @@ def get_current_user():
     """Returns {"id": ..., "email": ...} if logged in, else None."""
     if not is_logged_in():
         return None
-    return dict(_current_user)
+    user = _current_user  # a logout() on another thread may clear it right after the check above
+    return dict(user) if user else None
 
 
 def get_access_token():
