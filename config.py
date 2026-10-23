@@ -301,6 +301,7 @@ def set_focus_rules(domain_whitelist, base_version=None):
     """
     with _config_lock:
         cfg = _load_for_update()
+        before = shared_settings(cfg)
         current_version = int(cfg.get("focusRulesVersion") or 0)
         conflict = base_version is not None and int(base_version) != current_version
 
@@ -311,5 +312,17 @@ def set_focus_rules(domain_whitelist, base_version=None):
 
         cfg["focusRulesVersion"] = current_version + 1
         cfg["focusRulesUpdatedAt"] = datetime.now(timezone.utc).isoformat()
+        # The domain list is one of the shared defaults, and this is the path the
+        # extension's popup edits it through: without a new stamp (and the wake-up)
+        # the other computer never heard about the change.
+        changed = shared_settings(cfg) != before
+        if changed:
+            cfg["settingsUpdatedAt"] = server_clock.next_stamp()
         save_config(cfg)
-        return cfg, conflict
+    if changed:
+        for listener in list(_change_listeners):
+            try:
+                listener()
+            except Exception:
+                pass
+    return cfg, conflict
