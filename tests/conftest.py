@@ -132,6 +132,8 @@ def isolate_real_data_paths(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(review_store, "_ended_token", None)
     monkeypatch.setattr(review_store, "_last_saved_tokens", set())
     monkeypatch.setattr(review_store, "ACTIVE_SESSION_PATH", str(base / "active_review.json"))
+    monkeypatch.setattr(review_store, "_parked_reviews", {})
+    monkeypatch.setattr(review_store, "_parked_loaded", True)
     monkeypatch.setattr(review_store, "PHOTOS_DIR", str(base / "review_photos"))
     # sync_client's account-owner marker and watermark: a test that calls
     # sync_now() without isolating them used to write a fake user id into the
@@ -270,5 +272,7 @@ def isolate_review_db(isolate_calendar_db, tmp_path, monkeypatch):
     monkeypatch.setattr(review_store, "_ended_token", None)
     monkeypatch.setattr(review_store, "_last_saved_tokens", set())
     monkeypatch.setattr(review_store, "ACTIVE_SESSION_PATH", str(tmp_path / "active_review.json"))
+    monkeypatch.setattr(review_store, "_parked_reviews", {})
+    monkeypatch.setattr(review_store, "_parked_loaded", True)
     monkeypatch.setattr(review_store, "PHOTOS_DIR", str(tmp_path / "review_photos"))
     yield

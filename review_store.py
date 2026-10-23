@@ -60,6 +60,16 @@ _schema_ready = False
 _active_sessions = {}
 _active_sessions_loaded = False
 
+# Reviews set aside while another one is being timed (qt_ui/review_tab.py's
+# collapsed "paused" rows): paused, local to this computer, never shared. They
+# live apart from _active_sessions on purpose -- everything in sync_live treats
+# that dict as THE one running review (get/export/apply_remote_review, the
+# ended-token bookkeeping), so a parked entry in it would be exported as the
+# running review or wiped by an incoming one. Persisted next to
+# ACTIVE_SESSION_PATH (parked_reviews.json) so a restart keeps them.
+_parked_reviews = {}
+_parked_loaded = False
+
 # Sharing the running review with another computer (see sync_live.py): when it
 # last changed here (cloud time, see server_clock), which review ended most
 # recently here (a shared "nothing running" only ends a review it names), and
@@ -126,6 +136,53 @@ def _ensure_active_sessions_loaded():
                 changed = True
         if changed:
             _save_active_sessions()
+
+
+def _parked_path():
+    return os.path.join(os.path.dirname(ACTIVE_SESSION_PATH), "parked_reviews.json")
+
+
+def _ensure_parked_loaded():
+    global _parked_loaded
+    with _lock:
+        if _parked_loaded:
+            return
+        _parked_loaded = True
+        try:
+            with open(_parked_path(), "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            for token, entry in raw.items():
+                _parked_reviews[token] = {
+                    "problem_id": entry["problem_id"],
+                    "started_at": datetime.fromisoformat(entry["started_at"]),
+                    "accumulated_seconds": entry.get("accumulated_seconds", 0),
+                    "resumed_at": None,
+                    "auto_paused": False,
+                }
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, KeyError, AttributeError):
+            logger.exception("review_store._ensure_parked_loaded failed")
+
+
+def _save_parked():
+    """Must be called with _lock held."""
+    state_events.bump()
+    try:
+        os.makedirs(os.path.dirname(_parked_path()), exist_ok=True)
+        tmp_path = _parked_path() + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump({
+                token: {
+                    "problem_id": entry["problem_id"],
+                    "started_at": entry["started_at"].isoformat(),
+                    "accumulated_seconds": entry.get("accumulated_seconds", 0),
+                }
+                for token, entry in _parked_reviews.items()
+            }, f)
+        os.replace(tmp_path, _parked_path())
+    except OSError:
+        logger.exception("review_store._save_parked failed")
 
 
 def _save_active_sessions(stamp=True, at_least=None):
@@ -604,6 +661,14 @@ def delete_topic(topic_id):
                     _active_sessions.pop(token, None)
                 if dead_tokens:
                     _save_active_sessions()
+                dead_parked = [
+                    token for token, entry in _parked_reviews.items()
+                    if entry["problem_id"] in problem_ids
+                ]
+                for token in dead_parked:
+                    _parked_reviews.pop(token, None)
+                if dead_parked:
+                    _save_parked()
         except Exception:
             logger.exception("review_store.delete_topic failed for %s", topic_id)
             return
@@ -951,6 +1016,76 @@ def start_review(problem_id):
         }
         _save_active_sessions()
     return token
+
+
+def park_active_review():
+    """Sets the review being timed aside, paused and out of the running slot,
+    so a different review can start. Returns its token (pass it to
+    unpark_review()), or None if nothing is being timed."""
+    _ensure_active_sessions_loaded()
+    _ensure_parked_loaded()
+    with _lock:
+        token, entry = _only_active_entry_locked()
+        if entry is None:
+            return None
+        entry["accumulated_seconds"] = _elapsed_seconds_locked(entry)
+        entry["resumed_at"] = None
+        entry["auto_paused"] = False
+        _parked_reviews[token] = _active_sessions.pop(token)
+        _save_active_sessions()
+        _save_parked()
+        return token
+
+
+def unpark_review(token):
+    """Brings a set-aside review back as the running one (it resumes timing,
+    or starts paused if a pomodoro is on its break, like start_review()).
+    False if there is no such review or another one is already running."""
+    _ensure_active_sessions_loaded()
+    _ensure_parked_loaded()
+    import session_manager
+    status = session_manager.get_status()
+    start_paused = bool(status["isActive"] and status["isBreak"])
+    with _lock:
+        if _active_sessions or token not in _parked_reviews:
+            return False
+        entry = _parked_reviews.pop(token)
+        entry["resumed_at"] = None if start_paused else datetime.now()
+        entry["auto_paused"] = start_paused
+        _active_sessions[token] = entry
+        _save_active_sessions()
+        _save_parked()
+        return True
+
+
+def list_parked_reviews():
+    """The set-aside reviews, oldest first, each with its frozen elapsed time.
+    One whose problem has been deleted is left out."""
+    _ensure_parked_loaded()
+    with _lock:
+        items = [(token, dict(entry)) for token, entry in _parked_reviews.items()]
+    result = []
+    for token, entry in items:
+        problem = get_problem(entry["problem_id"])
+        if problem is None:
+            continue
+        result.append({
+            "token": token,
+            "problemId": problem["id"],
+            "problemName": problem["name"],
+            "subjectName": problem["subjectName"],
+            "startedAt": entry["started_at"].isoformat(),
+            "elapsedSeconds": entry.get("accumulated_seconds", 0),
+        })
+    return result
+
+
+def abandon_parked_review(token):
+    """Throws a set-aside review away without logging anything."""
+    _ensure_parked_loaded()
+    with _lock:
+        if _parked_reviews.pop(token, None) is not None:
+            _save_parked()
 
 
 def abandon_review(session_token):
