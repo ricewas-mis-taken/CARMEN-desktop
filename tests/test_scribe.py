@@ -214,3 +214,33 @@ def test_layers_background_and_export(qtbot, tmp_path):
     assert canvas.export_png(str(out)) and out.exists()
     canvas.remove_layer()
     assert len(canvas.doc["layers"]) == 1
+
+
+def test_damaged_shapes_are_dropped_not_crashed_on():
+    doc = scribe_store.clean_doc({"layers": [{"items": [
+        {"type": "rect"},                                   # no corners
+        {"type": "stroke", "pts": []},                      # empty
+        {"type": "line", "a": [0, 0], "b": ["x", 1]},       # bad point
+        {"type": "text", "a": [1, 2]},                      # no text
+        {"type": "rect", "a": [0, 0], "b": [5, 5], "width": "fat", "stroke": "red"},
+    ]}]})
+    items = doc["layers"][0]["items"]
+    assert len(items) == 1 and items[0]["width"] == 4 and items[0]["stroke"] == "#000000"
+
+
+def test_a_run_of_width_changes_is_one_undo_step(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab.resize(900, 700)
+    tab.show()
+    canvas = tab.canvas
+    canvas.set_tool("rect")
+    _drag(canvas, (100, 100), (220, 180))
+    canvas.set_tool("select")
+    canvas._sel = list(canvas._active_items())
+    before = len(canvas._undo)
+    for width in (5, 6, 7, 8):
+        canvas.set_width(width)
+    assert len(canvas._undo) == before + 1
+    canvas.undo()
+    assert canvas._active_items()[0]["width"] == 4
