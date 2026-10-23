@@ -846,7 +846,6 @@ QListWidget::item:selected { background: #CFE3FF; color: #1F2328; }
 class ScribeTab(QWidget):
     def __init__(self):
         super().__init__()
-        self.setStyleSheet(_STYLE)
         self._dirty = False
         self.canvas = ScribeCanvas(scribe_store.load())
         self._save_timer = QTimer(self)
@@ -859,7 +858,7 @@ class ScribeTab(QWidget):
         layout.setSpacing(8)
         layout.addWidget(self._build_left())
         center = QVBoxLayout()
-        center.addLayout(self._build_topbar())
+        center.addWidget(self._build_topbar())
         center.addWidget(self.canvas, 1)
         layout.addLayout(center, 1)
         layout.addWidget(self._build_right())
@@ -917,6 +916,10 @@ class ScribeTab(QWidget):
 
     def _build_left(self):
         column = QWidget()
+        # Styled on the columns and top bar only, never on the whole tab: dialogs
+        # parented to the tab (New, Text, colour picker) would inherit the dark
+        # label colour and show blank on a dark dialog background.
+        column.setStyleSheet(_STYLE)
         column.setFixedWidth(178)
         box = QVBoxLayout(column)
         box.setContentsMargins(0, 0, 0, 0)
@@ -986,7 +989,10 @@ class ScribeTab(QWidget):
         return column
 
     def _build_topbar(self):
-        bar = QHBoxLayout()
+        holder = QWidget()
+        holder.setStyleSheet(_STYLE)
+        bar = QHBoxLayout(holder)
+        bar.setContentsMargins(0, 0, 0, 0)
         bar.setSpacing(6)
         minus = QPushButton("−")
         plus = QPushButton("+")
@@ -1010,7 +1016,7 @@ class ScribeTab(QWidget):
         hint.setStyleSheet("color: #8A9099; font-size: 11px;")
         bar.addWidget(hint)
         bar.addStretch(1)
-        return bar
+        return holder
 
     def _swatch(self, color):
         button = QPushButton()
@@ -1029,6 +1035,10 @@ class ScribeTab(QWidget):
 
     def _build_right(self):
         column = QWidget()
+        # Styled on the columns and top bar only, never on the whole tab: dialogs
+        # parented to the tab (New, Text, colour picker) would inherit the dark
+        # label colour and show blank on a dark dialog background.
+        column.setStyleSheet(_STYLE)
         column.setFixedWidth(168)
         box = QVBoxLayout(column)
         box.setContentsMargins(0, 0, 0, 0)
