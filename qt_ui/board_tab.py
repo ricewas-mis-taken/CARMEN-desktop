@@ -155,8 +155,22 @@ class BoardTab(QWidget):
         # this periodic refresh is what notices that without requiring the
         # user to switch tabs and back.
         self._reactivate_timer = QTimer(self)
-        self._reactivate_timer.timeout.connect(self.refresh)
+        self._reactivate_timer.timeout.connect(self._refresh_if_changed)
         self._reactivate_timer.start(REACTIVATE_CHECK_MS)
+
+    def _board_signature(self):
+        return (
+            tuple(t["id"] for t in board_store.list_active_tasks()),
+            len(board_store.list_finished_tasks()),
+            len(board_store.list_upcoming_tasks()),
+        )
+
+    def _refresh_if_changed(self):
+        # A blind rebuild every minute collapsed whatever card the user had
+        # open (details, difficulty editor) mid-read, so only rebuild when a
+        # task actually reactivated or moved.
+        if self._board_signature() != self._rendered_signature:
+            self.refresh()
 
     def _build_header(self):
         header = QHBoxLayout()
@@ -226,6 +240,7 @@ class BoardTab(QWidget):
         return any(tag_id in self._hidden_tags for tag_id in tags)
 
     def refresh(self):
+        self._rendered_signature = self._board_signature()
         while self._list_layout.count():
             item = self._list_layout.takeAt(0)
             widget = item.widget()
