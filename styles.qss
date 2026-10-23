@@ -19,6 +19,13 @@ QWidget#ContentArea QLabel {
     font-size: 13px;
 }
 
+/* Dialogs opened from a tab (message boxes, input/colour dialogs) are children of
+   ContentArea too, so the rule above gave their text the same dark colour -- invisible
+   on a dark-mode dialog. Put them back on the dialog's own text colour. */
+QWidget#ContentArea QDialog QLabel {
+    color: palette(window-text);
+}
+
 /* Standalone popup windows (dialogs, pickers, viewers) that aren't part of
    the main window's ContentArea -- the enforcer overlay and the delete-undo
    toast intentionally keep their own dark styling (always-on-top over
