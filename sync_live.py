@@ -522,6 +522,9 @@ def _run(stop_event):
     failures = 0
     last_problem = None
     while not stop_event.is_set():
+        # Cleared before the pass, not after the wait: a change made while the pass
+        # runs (or right as the wait ends) must still cut the next wait short.
+        _wake.clear()
         problem = None
         if _enabled:
             try:
@@ -539,4 +542,3 @@ def _run(stop_event):
             base_wait = POLL_SECONDS
         wait = min(MAX_BACKOFF_SECONDS, base_wait * (2 ** min(failures, 4)))
         _wake.wait(wait)
-        _wake.clear()
