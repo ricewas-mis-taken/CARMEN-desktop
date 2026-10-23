@@ -99,3 +99,17 @@ def test_timer_tick_rebuilds_when_a_task_appears(qtbot, isolate_board):
 
     tab._refresh_if_changed()
     assert tab._list_layout.count() == 2
+
+
+def test_add_dialog_survives_photo_deleted_before_save(qtbot, isolate_board, tmp_path):
+    photo = tmp_path / "gone.png"
+    photo.write_bytes(b"x")
+    dialog = board_tab._AddTaskDialog(on_added=lambda _t: None)
+    qtbot.addWidget(dialog)
+    dialog._name_edit.setText("Has photo")
+    dialog._photo_path = str(photo)
+    photo.unlink()
+
+    dialog._submit()
+    assert "Could not read" in dialog._status_label.text()
+    assert board_store.list_active_tasks() == []
