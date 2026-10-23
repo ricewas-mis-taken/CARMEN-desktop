@@ -14,6 +14,7 @@ import enforcer
 import screentime_store
 import session_manager
 import taskbar_quiet
+from calendar_log import logger
 
 if sys.platform == "darwin":
     import os as _os
@@ -213,6 +214,7 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
     last_menu_state = None
     last_hard_redirect = {"process": None, "hwnd": None, "time": 0.0}
     last_soft_warning = {}  # process_name -> {"hwnd": hwnd, "time": time.time()} of last soft-lock overlay shown
+    last_error = None       # (repr, time) of the last tick failure that was logged -- see the bottom of the loop
     # No process_name -> time cooldown tracker of this loop's own here
     # anymore -- both violation-logging call sites below go through
     # enforcer.record_violation_deduped() instead of calling
@@ -379,7 +381,15 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
                 # Reset dedupe state when paused or idle so the first process
                 # seen after resuming is always evaluated fresh.
                 last_flagged_process = None
-        except Exception:
-            pass
+        except Exception as exc:
+            # A tick that raises used to vanish without a trace, and the loop just
+            # retried it forever -- one bad status field silently switched off all
+            # enforcement and screen time. Logged now, but only when the error is a
+            # new one or a minute has passed, so a persistent failure can't flood
+            # the log at one line per tick.
+            now_t = time.time()
+            if last_error is None or last_error[0] != repr(exc) or now_t - last_error[1] > 60:
+                logger.exception("window_tracker: polling tick failed (will keep trying)")
+                last_error = (repr(exc), now_t)
 
         stop_event.wait(POLL_INTERVAL_SECONDS)
