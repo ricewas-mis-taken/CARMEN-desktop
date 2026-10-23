@@ -32,17 +32,24 @@ def _format_status_text():
     status = session_manager.get_status()
     if not status["isActive"]:
         return "Carmen Focus — no active session"
-    if status.get("isBurnout"):
-        # "Until I burnout" has no fixed duration to count down to -- same
-        # stopwatch treatment as the Focus/Tasks tabs, pause-aware elapsed
-        # time instead of secondsRemaining counting down from the internal
-        # 8-hour ceiling.
+    is_review = status.get("source") == "review" and status.get("reviewProblemName")
+    if status.get("isBurnout") or is_review:
+        # "Until I burnout" and a review have no fixed duration to count down
+        # to -- same stopwatch treatment as the Focus/Tasks tabs, pause-aware
+        # elapsed time instead of secondsRemaining counting down from the
+        # internal 8-hour ceiling (a review used to read "479m remaining").
         elapsed_seconds = tasks_store.worked_seconds(
             status.get("startTime"), None, status.get("violationLog")
         ) if status.get("startTime") else 0
         minutes, seconds = divmod(elapsed_seconds, 60)
+        if not is_review:
+            what = "Until burnout"
+        elif session_manager.is_first_attempt(status):
+            what = "First attempt"
+        else:
+            what = f"Review: {status['reviewProblemName']}"
         return (
-            f"Carmen Focus — Until burnout, {minutes}m {seconds}s elapsed\n"
+            f"Carmen Focus — {what}, {minutes}m {seconds}s elapsed\n"
             f"Lock mode: {status['lockMode']}\n"
             f"Violations: {status['violationCount']}"
         )
