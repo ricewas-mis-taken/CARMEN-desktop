@@ -523,3 +523,15 @@ copies of state; only a first attempt's Add Problem callbacks have no store, so 
 ReviewTab (a restart loses an unlinked first attempt, as it already did). (3) The running review is paused
 only after the start dialog is confirmed, so cancelling it leaves everything as it was.
 No extension change: /status still reports the single running review; collapsed ones are not shown there.
+2026-10-21 -- Scribe: an always-saved infinite drawing board (desktop only)
+Decision: new Scribe tab (qt_ui/scribe_tab.py) laid out like virtual-graph-paper.com. One local document,
+private/scribe.json: layers of shapes, the last view (zoom + the world point at the board's centre) and the
+last-used options, written ~0.6 s after any change and again on tab hide / app quit. It reopens exactly as left.
+Forks: (1) our own QPainter canvas with shapes as plain dicts, not QGraphicsScene -- the board is infinite and must
+serialize to a tiny json, and hit-testing/smoothing then live in a Qt-free module (scribe_geometry.py) that tests can
+call directly. (2) Not synced: attached images can be large and the cloud rows here are small by design; listed in
+test_sync_coverage's LOCAL_ONLY_FILES. Images are copied into private/scribe_images/ and referenced by name. (3) The view
+is stored as the centre point, not the top-left, so it reopens right whatever the window size. (4) Pure black ink is
+*drawn* white on dark backgrounds (stored colour untouched) so the default pen never vanishes when the background changes.
+(5) Undo is in-memory snapshots (100 deep); the document itself is saved continuously.
+Skipped from the reference site: Login/VGP+/Share/Print (no meaning here); the extension has no counterpart.

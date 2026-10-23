@@ -22,6 +22,7 @@ import sync_cloud
 import sync_live
 import sync_photos
 import quicknote_store
+import scribe_store
 import screentime_store
 import session_history
 import session_manager
@@ -150,6 +151,8 @@ def isolate_real_data_paths(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(sync_live, "SETTINGS_PUSHED_PATH", str(base / "live_settings_pushed.txt"))
     monkeypatch.setattr(sync_live, "QUICKNOTE_PUSHED_PATH", str(base / "live_quicknote_pushed.txt"))
     monkeypatch.setattr(quicknote_store, "PATH", str(base / "quicknote.json"))
+    monkeypatch.setattr(scribe_store, "PATH", str(base / "scribe.json"))
+    monkeypatch.setattr(scribe_store, "IMAGES_DIR", str(base / "scribe_images"))
     monkeypatch.setattr(taskbar_quiet, "SAVED_PATH", str(base / "taskbar_quiet_saved.json"))
     monkeypatch.setattr(taskbar_quiet, "LEGACY_PATHS", [str(base / "taskbar_quiet_saved.json"), str(base / "taskbar_quiet_user.json")])
     monkeypatch.setattr(taskbar_quiet, "PENDING_PATH", str(base / "taskbar_quiet_pending.json"))
