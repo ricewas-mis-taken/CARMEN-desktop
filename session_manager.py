@@ -338,6 +338,23 @@ def _load():
 _load()
 
 
+# The longest block a session (or a pomodoro's break) may be -- the same ceiling
+# POST /session/start enforces. Anything bigger is a typo, and an absurd value
+# overflows datetime arithmetic later (for a pomodoro break, in the middle of a
+# status poll, long after the dialog that accepted it is gone).
+MAX_DURATION_MINUTES = 1_000_000
+
+
+def is_valid_duration(minutes):
+    """True for a finite number of minutes in (0, MAX_DURATION_MINUTES]."""
+    return (
+        isinstance(minutes, (int, float))
+        and not isinstance(minutes, bool)
+        and math.isfinite(minutes)
+        and 0 < minutes <= MAX_DURATION_MINUTES
+    )
+
+
 def start_session(
     duration_minutes,
     lock_mode,
@@ -361,13 +378,9 @@ def start_session(
     # actual point the crash would happen (timedelta can't represent NaN
     # -- ValueError -- or Infinity/an enormous value -- OverflowError),
     # rather than relying on every caller to have already checked.
-    if (
-        not isinstance(duration_minutes, (int, float))
-        or isinstance(duration_minutes, bool)
-        or not math.isfinite(duration_minutes)
-        or duration_minutes <= 0
-    ):
-        raise ValueError(f"duration_minutes must be a finite positive number, got {duration_minutes!r}")
+    if not is_valid_duration(duration_minutes):
+        raise ValueError(
+            f"duration_minutes must be a finite number from 0 to {MAX_DURATION_MINUTES}, got {duration_minutes!r}")
 
     with _lock:
         now = datetime.now()
@@ -462,13 +475,9 @@ def start_pomodoro_session(
     duplicating that logic, then layers the pomodoro bookkeeping on top."""
     if not isinstance(cycles, int) or isinstance(cycles, bool) or cycles <= 0:
         raise ValueError(f"cycles must be a positive int, got {cycles!r}")
-    if (
-        not isinstance(break_minutes, (int, float))
-        or isinstance(break_minutes, bool)
-        or not math.isfinite(break_minutes)
-        or break_minutes <= 0
-    ):
-        raise ValueError(f"break_minutes must be a finite positive number, got {break_minutes!r}")
+    if not is_valid_duration(break_minutes):
+        raise ValueError(
+            f"break_minutes must be a finite number from 0 to {MAX_DURATION_MINUTES}, got {break_minutes!r}")
 
     start_session(
         focus_minutes,

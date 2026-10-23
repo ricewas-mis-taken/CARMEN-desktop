@@ -257,7 +257,8 @@ class _PomodoroDialog(QDialog):
             focus_minutes = float(self._focus_edit.text())
             break_minutes = float(self._break_edit.text())
             cycles = int(self._cycles_edit.text())
-            if focus_minutes <= 0 or break_minutes <= 0 or cycles <= 0:
+            if (not session_manager.is_valid_duration(focus_minutes)
+                    or not session_manager.is_valid_duration(break_minutes) or cycles <= 0):
                 raise ValueError
         except ValueError:
             self._status_label.setText("Enter valid positive numbers.")
@@ -671,7 +672,7 @@ class _TaskCard(QFrame):
     def _start_task(self):
         try:
             duration_minutes = float(self._duration_edit.text())
-            if duration_minutes <= 0:
+            if not session_manager.is_valid_duration(duration_minutes):
                 raise ValueError
         except ValueError:
             return
