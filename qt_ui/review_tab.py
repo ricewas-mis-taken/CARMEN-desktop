@@ -339,8 +339,14 @@ class ReviewTab(QWidget):
         self._follow_timer.timeout.connect(self._follow_active_review)
         self._follow_timer.start(1000)
 
-    def _follow_active_review(self):
+    def showEvent(self, event):
         self._refresh_strip()
+        super().showEvent(event)
+
+    def _follow_active_review(self):
+        # The strip only matters while it can be seen (showEvent catches up).
+        if self.isVisible():
+            self._refresh_strip()
         if self.banner.is_running():
             return
         for view in self._topic_views.values():
@@ -434,7 +440,11 @@ class ReviewTab(QWidget):
             self._follow_active_review()
         elif kind == "independent":
             review_store.unpark_review(row["key"])
-            self._follow_active_review()
+            # Straight onto the banner: _follow_active_review() would pick a
+            # paused linked session (another collapsed row) ahead of it.
+            for view in self._topic_views.values():
+                if view._resume_independent_review():
+                    break
         else:
             snapshot = row["snapshot"]
             self._stash.remove(snapshot)
@@ -958,7 +968,7 @@ class _TopicView(QWidget):
             if not self._review_banner.is_running():
                 _ReviewStartDialog(problem, on_start=self._begin_review)
             return
-        if tab.banner.current_problem_id() == problem["id"]:
+        if tab.banner.current_problem_id() == problem["id"] or tab.banner.is_finishing():
             return
         parked = tab.parked_row_for_problem(problem["id"])
         if parked is not None:
@@ -1343,6 +1353,10 @@ class _ReviewBanner(QWidget):
         self._tick_timer.start(1000)
         self.show()
         self._changed()
+
+    def is_finishing(self):
+        """True while the how-did-it-go dialog is open for the review just finished."""
+        return self._finishing
 
     def current_label(self):
         problem = self._problem or {}
