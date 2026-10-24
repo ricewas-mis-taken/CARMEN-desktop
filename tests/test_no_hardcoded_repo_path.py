@@ -11,6 +11,6 @@ def test_no_test_file_hardcodes_a_real_user_path():
         if path.name == pathlib.Path(__file__).name:
             continue
         text = path.read_text(encoding="utf-8")
-        if "Users\Lucas" in text or "Users/Lucas" in text:
+        if "Users\\Lucas" in text or "Users/Lucas" in text:
             offenders.append(str(path.relative_to(ROOT)))
     assert offenders == []
