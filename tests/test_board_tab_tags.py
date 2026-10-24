@@ -113,3 +113,14 @@ def test_add_dialog_survives_photo_deleted_before_save(qtbot, isolate_board, tmp
     dialog._submit()
     assert "Could not read" in dialog._status_label.text()
     assert board_store.list_active_tasks() == []
+
+
+def test_panel_background_does_not_cascade_to_buttons(qtbot, isolate_board):
+    task = board_store.create_task("Panel", importance=5)
+    card = board_tab._BoardCard(task, on_changed=lambda: None)
+    qtbot.addWidget(card)
+    card._expand()
+    edit = next(b for b in card._details_panel.findChildren(board_tab.QPushButton) if b.text() == "Edit Details")
+    assert "background" not in edit.styleSheet()
+    sheet = card._details_panel.styleSheet()
+    assert "QFrame#BoardPanel" in sheet
