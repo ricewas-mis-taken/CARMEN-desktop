@@ -469,7 +469,10 @@ class _ImportanceBadge(QLabel):
 
 def _build_importance_editor(current, on_save, on_cancel):
     panel = QFrame()
-    panel.setStyleSheet("background: #F7F8FA; border-radius: 8px;")
+    panel.setObjectName("BoardPanel")
+    # Scoped: a bare "background:" rule cascaded to every child and painted the
+    # Edit Details / Cancel buttons the same colour as the panel (invisible).
+    panel.setStyleSheet("QFrame#BoardPanel { background: #F7F8FA; border-radius: 8px; }")
     layout = QVBoxLayout(panel)
     layout.setContentsMargins(14, 10, 14, 10)
     layout.setSpacing(8)
@@ -519,7 +522,10 @@ def _make_confirm_button(label, confirm_label, style, on_confirmed):
 
 def _build_details_panel(task, on_deleted, on_deleted_all, on_marked_done, on_edit):
     panel = QFrame()
-    panel.setStyleSheet("background: #F7F8FA; border-radius: 8px;")
+    panel.setObjectName("BoardPanel")
+    # Scoped: a bare "background:" rule cascaded to every child and painted the
+    # Edit Details / Cancel buttons the same colour as the panel (invisible).
+    panel.setStyleSheet("QFrame#BoardPanel { background: #F7F8FA; border-radius: 8px; }")
     layout = QVBoxLayout(panel)
     layout.setContentsMargins(14, 12, 14, 12)
     layout.setSpacing(8)
