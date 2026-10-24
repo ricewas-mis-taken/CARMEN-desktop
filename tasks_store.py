@@ -410,6 +410,23 @@ def _worked_seconds_on_day(start_iso, end_iso, violation_log, day):
     return max(0, upto_end - before_day)
 
 
+def _logged_seconds_by_day(entries, days):
+    """{day: worked seconds} for just `days`, summed over history `entries` in one
+    pass -- the same numbers logged_seconds_for_date() gives day by day."""
+    totals = {}
+    for entry in entries:
+        start = datetime.fromisoformat(entry["startTime"]).date()
+        end_iso = entry.get("endTime")
+        end = datetime.fromisoformat(end_iso).date() if end_iso else date.today()
+        day = start
+        while day <= end:
+            if day in days:
+                totals[day] = totals.get(day, 0) + _worked_seconds_on_day(
+                    entry["startTime"], end_iso, entry.get("violationLog"), day)
+            day += timedelta(days=1)
+    return totals
+
+
 def logged_seconds_for_date(task, day, sessions, live_status=None):
     """Total seconds worked on `task` on date `day`, from finished
     session_history entries plus (if a live session for this task is running
@@ -441,15 +458,20 @@ def vacation_balance_minutes(task, sessions, today=None):
     today = today or date.today()
     cashed_in_dates = task.get("cashedInDates") or {}
 
+    entries = _task_history_entries(task["id"], sessions)
+    start_days = set()
+    for entry in entries:
+        day = datetime.fromisoformat(entry["startTime"]).date()
+        if day < today and is_scheduled_on(task, day):
+            start_days.add(day)
+    # One pass over the history. Asking logged_seconds_for_date() once per day
+    # re-walked every session each time (quadratic): this runs for every task card
+    # every second on the window thread, and a year of sessions made it freeze.
+    logged_by_day = _logged_seconds_by_day(entries, start_days)
+
     total_earned = 0.0
-    seen_days = set()
-    for entry in _task_history_entries(task["id"], sessions):
-        start = datetime.fromisoformat(entry["startTime"])
-        day = start.date()
-        if day >= today or day in seen_days or not is_scheduled_on(task, day):
-            continue
-        seen_days.add(day)
-        logged_minutes = logged_seconds_for_date(task, day, sessions) / 60
+    for day in start_days:
+        logged_minutes = logged_by_day.get(day, 0) / 60
         required = required_minutes_for_date(task, day)
         total_earned += max(0, logged_minutes - required)
 
