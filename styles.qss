@@ -153,55 +153,6 @@ QPushButton.SecondaryButton:checked {
     font-weight: 600;
 }
 
-/* "Until I burnout" button on a task's Start overlay -- immediately starts a
-   burnout-duration session on click (not a toggle), styled with a black
-   label and a red box so it reads as a distinct, deliberate action. A task's
-   own card can itself be a red pastel fill (task color picked as red), which
-   made a borderless red button blend straight into the card background --
-   the border guarantees an edge against any card color, not just the ones
-   that happen to contrast with red. */
-QPushButton#burnoutButton {
-    background: #A93226;
-    color: #FFFFFF;
-    border: 2px solid #A93226;
-    font-weight: 600;
-}
-
-QPushButton#burnoutButton:hover {
-    background: #8F2A20;
-}
-
-/* "Pomodoro" button on a task's Start overlay -- same solid-fill/white-text/
-   colored-border treatment as #burnoutButton right next to it (so a task
-   card of any color can't swallow either button), but a distinct purple
-   fill so the two are never confused for the same action at a glance. */
-QPushButton#pomodoroButton {
-    background: #6C3FA8;
-    color: #FFFFFF;
-    border: 2px solid #6C3FA8;
-    font-weight: 600;
-}
-
-QPushButton#pomodoroButton:hover {
-    background: #5A3389;
-}
-
-/* Start Task button on a task's Start overlay -- black text on a green
-   outline (not filled), since the shared .AccentButton fill made the white
-   text unreadable against this card's own background. */
-QPushButton#startTaskButton {
-    background: #FFFFFF;
-    color: #1F2328;
-    border: 2px solid #2E8B57;
-    border-radius: 8px;
-    padding: 6px 13px;
-    font-weight: 600;
-}
-
-QPushButton#startTaskButton:hover {
-    background: #EAF6EF;
-}
-
 QPushButton.AccentButton {
     background: #5B8DEF;
     color: white;
@@ -307,28 +258,6 @@ QSplitter::handle:vertical {
     height: 6px;
 }
 
-QFrame.TaskCard {
-    /* Background is set per-card in tasks_tab.py (tinted with the task's
-       own color) via an instance stylesheet, which takes precedence over
-       this rule -- this is just the fallback/border. */
-    background: #FFFFFF;
-    border: 1px solid #ECEEF1;
-    border-radius: 12px;
-}
-
-QFrame.TaskCard:hover {
-    border: 1px solid #5B8DEF;
-}
-
-QFrame.TaskCard[locked="true"] {
-    background: #FAFBFC;
-    border: 1px solid #ECEEF1;
-}
-
-QWidget#TasksGridBg {
-    background: #FFFFFF;
-}
-
 QPushButton.TaskDescriptionButton {
     text-align: left;
     border: none;
@@ -341,16 +270,6 @@ QPushButton.TaskDescriptionButton {
 QPushButton.TaskDescriptionButton:hover {
     color: #1F2328;
     text-decoration: underline;
-}
-
-QProgressBar.TaskProgressBar {
-    background: #F1F3F6;
-    border: none;
-    border-radius: 5px;
-}
-
-QProgressBar.TaskProgressBar::chunk {
-    border-radius: 5px;
 }
 
 /* Start button in the Review tab's problem table -- flat blue text, no
