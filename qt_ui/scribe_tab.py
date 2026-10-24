@@ -36,7 +36,6 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
-    QSlider,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -387,12 +386,7 @@ class ScribeCanvas(QWidget):
         p.setOpacity(1)
         if ui:
             if self._draft:
-                draft = self._draft
-                if draft["type"] == "stroke":
-                    # Previewed already smoothed, exactly as it will be saved, so
-                    # lifting the pen doesn't make the writing shift.
-                    draft = dict(draft, pts=self._smoothed(draft["pts"]))
-                self._paint_item(p, draft, zoom)
+                self._paint_item(p, self._draft, zoom)
             pen = QPen(QColor("#3B82F6"), 1 / zoom, Qt.DashLine)
             p.setPen(pen)
             p.setBrush(Qt.NoBrush)
@@ -518,9 +512,6 @@ class ScribeCanvas(QWidget):
             if kind == "curve":
                 item["c"] = list(a)
         return item
-
-    def _smoothed(self, pts):
-        return geo.smooth_stroke(pts, self.prefs["smoothness"], self.zoom)
 
     def _grid_step(self):
         if self.prefs["snapAroundGrid"]:
@@ -760,7 +751,6 @@ class ScribeCanvas(QWidget):
         if d is not None:
             kind = d["type"]
             if kind == "stroke":
-                d["pts"] = self._smoothed(d["pts"])
                 self._commit(d)
             elif kind == "curve":
                 if d["a"] == d["b"]:
@@ -1053,15 +1043,6 @@ class ScribeTab(QWidget):
         box.setSpacing(8)
         prefs = self.canvas.prefs
 
-        free, body = self._panel("Freehand")
-        body.addWidget(QLabel("Smoothness"))
-        self._smooth = QSlider(Qt.Horizontal)
-        self._smooth.setRange(0, 10)
-        self._smooth.setValue(prefs["smoothness"])
-        self._smooth.valueChanged.connect(self._smoothness_changed)
-        body.addWidget(self._smooth)
-        box.addWidget(free)
-
         colors, body = self._panel("Colors")
         row = QHBoxLayout()
         row.addWidget(QLabel("Stroke:"), 1)
@@ -1128,10 +1109,6 @@ class ScribeTab(QWidget):
             button.setChecked(True)
         if self._pan_button.isChecked():
             self._pan_button.setChecked(False)
-
-    def _smoothness_changed(self, value):
-        self.canvas.prefs["smoothness"] = value
-        self.canvas.changed.emit()
 
     def _pick_stroke(self):
         color = QColorDialog.getColor(QColor(self.canvas.prefs["stroke"]), self, "Stroke color")
