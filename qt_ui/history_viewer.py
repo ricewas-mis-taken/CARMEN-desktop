@@ -29,6 +29,7 @@ class HistoryTab(QWidget):
         self._text = QTextEdit()
         self._text.setReadOnly(True)
         layout.addWidget(self._text)
+        self._rendered = None   # what the page currently shows (see refresh())
         self.refresh()
 
     def showEvent(self, event):
@@ -37,6 +38,12 @@ class HistoryTab(QWidget):
 
     def refresh(self):
         sessions = list(reversed(session_history.load_all()))  # newest first
+        # Re-laying out every session as HTML takes ~40 ms per 300 sessions, and this
+        # runs each time the tab is shown; history only changes when a session ends.
+        signature = (len(sessions), session_history.entry_id(sessions[0]) if sessions else None)
+        if signature == self._rendered:
+            return
+        self._rendered = signature
         if not sessions:
             self._text.setHtml(_wrap_html("No completed sessions yet — this fills in once a session ends."))
             return
