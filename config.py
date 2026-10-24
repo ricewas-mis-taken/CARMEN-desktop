@@ -85,6 +85,10 @@ def _load_config_locked():
         # instead, same as session_manager's state file handling.
         return copy.deepcopy(DEFAULT_CONFIG)
 
+    if not isinstance(data, dict):
+        # Valid JSON that is not an object (null, a list, a number): update()
+        # would raise, and every caller of load_config() with it.
+        return copy.deepcopy(DEFAULT_CONFIG)
     merged = copy.deepcopy(DEFAULT_CONFIG)
     merged.update(data)
     return merged
@@ -108,6 +112,8 @@ def _load_for_update():
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            if not isinstance(data, dict):
+                raise json.JSONDecodeError("config is not an object", "", 0)   # backed up below like a corrupt file
             merged = copy.deepcopy(DEFAULT_CONFIG)
             merged.update(data)
             return merged
