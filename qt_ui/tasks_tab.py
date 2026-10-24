@@ -126,7 +126,7 @@ class TasksTab(QWidget):
         self.refresh()
 
         self._status_timer = QTimer(self)
-        self._status_timer.timeout.connect(self._tick)
+        self._status_timer.timeout.connect(self._tick_if_visible)
         self._status_timer.start(STATUS_REFRESH_MS)
 
     def _build_header(self):
@@ -176,6 +176,16 @@ class TasksTab(QWidget):
             self._grid.addWidget(divider, last_row, 0, 1, CARDS_PER_ROW)
 
         self._tick()
+
+    def _tick_if_visible(self):
+        # Reloading the history and restyling every card each second is pure
+        # waste while another tab is showing (showEvent catches up on return).
+        if self.isVisible():
+            self._tick()
+
+    def showEvent(self, event):
+        self._tick()
+        super().showEvent(event)
 
     def _tick(self):
         status = session_manager.get_status()
@@ -922,9 +932,12 @@ class _TaskCard(QFrame):
             if self._armed and locked_by_other:
                 self._disarm()
 
-        self.setProperty("locked", locked_by_other)
-        self.style().unpolish(self)
-        self.style().polish(self)
+        if self.property("locked") != locked_by_other:
+            # Re-styling a card and all its children is not cheap, and this runs
+            # every second for every card -- only do it when the state flips.
+            self.setProperty("locked", locked_by_other)
+            self.style().unpolish(self)
+            self.style().polish(self)
 
     def _is_running(self):
         status = session_manager.get_status()
