@@ -103,9 +103,20 @@ def load_all():
         return _load_all_locked()
 
 
+# The parsed file, with the (path, mtime, size) it was read at. The Tasks tab
+# reloads the history every second on the window thread, and the file only grows
+# (it is written with indent=2), so re-parsing it each time got slower with use.
+_cache = {"key": None, "data": []}
+
+
 def _load_all_locked():
-    if not os.path.exists(HISTORY_PATH):
+    try:
+        stat = os.stat(HISTORY_PATH)
+    except OSError:
         return []
+    key = (HISTORY_PATH, stat.st_mtime_ns, stat.st_size)
+    if _cache["key"] == key:
+        return list(_cache["data"])   # a copy of the list; the entries are shared, read-only
     try:
         with open(HISTORY_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -114,7 +125,9 @@ def _load_all_locked():
         # as an empty history rather than propagating the error up through
         # session_manager.end_session() (which runs on every session end).
         return []
-    return data if isinstance(data, list) else []
+    data = data if isinstance(data, list) else []
+    _cache["key"], _cache["data"] = key, data
+    return list(data)
 
 
 def _save_all_locked(history):
@@ -125,3 +138,4 @@ def _save_all_locked(history):
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(history, f, indent=2)
     os.replace(tmp_path, HISTORY_PATH)
+    _cache["key"] = None
