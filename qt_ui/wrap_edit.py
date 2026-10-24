@@ -9,9 +9,19 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFontMetrics, QTextCursor, QTextOption
 from PySide6.QtWidgets import QFrame, QPlainTextEdit, QSizePolicy
 
-BOXED_STYLE = """
+DARK_STYLE = """
 QPlainTextEdit#WrapEdit {
     background: #2C2F37; color: #F2F3F5; border: 1px solid #3F444D;
+    border-radius: 8px; padding: 4px 8px;
+}
+QPlainTextEdit#WrapEdit:focus { border: 1px solid #5B8DEF; }
+QPlainTextEdit#WrapEdit:disabled { color: #8A8F98; }
+"""
+
+# Matches the light popups' QLineEdit/QTextEdit boxes (styles.qss, #PopupBg).
+LIGHT_STYLE = """
+QPlainTextEdit#WrapEdit {
+    background: #FAFBFC; color: #1F2328; border: 1px solid #E3E5E9;
     border-radius: 8px; padding: 4px 8px;
 }
 QPlainTextEdit#WrapEdit:focus { border: 1px solid #5B8DEF; }
@@ -22,7 +32,7 @@ QPlainTextEdit#WrapEdit:disabled { color: #8A8F98; }
 class WrapEdit(QPlainTextEdit):
     returnPressed = Signal()
 
-    def __init__(self, text="", max_rows=6, boxed=True):
+    def __init__(self, text="", max_rows=6, boxed=True, dark=False):
         super().__init__()
         self.setObjectName("WrapEdit")
         self._max_rows = max_rows
@@ -32,7 +42,7 @@ class WrapEdit(QPlainTextEdit):
         self.setTabChangesFocus(True)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         if boxed:
-            self.setStyleSheet(BOXED_STYLE)
+            self.setStyleSheet(DARK_STYLE if dark else LIGHT_STYLE)
         else:
             self.setFrameShape(QFrame.NoFrame)
         self.document().documentLayout().documentSizeChanged.connect(lambda _size: self._fit_height())

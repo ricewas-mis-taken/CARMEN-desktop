@@ -194,7 +194,7 @@ class _EventEditor(QWidget):
             default_end = datetime.fromisoformat(existing["end"])
 
         layout.addWidget(_bold_label("Title"))
-        self._title_edit = WrapEdit(existing["title"] if existing else "")
+        self._title_edit = WrapEdit(existing["title"] if existing else "", dark=True)
         layout.addWidget(self._title_edit)
 
         self._all_day_check = QCheckBox("All day")
