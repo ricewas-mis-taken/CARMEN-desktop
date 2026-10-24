@@ -8,8 +8,9 @@ just a random UUID minted once per install and cached to disk.
 import os
 import threading
 import uuid
+import paths
 
-DEVICE_ID_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "device_id.txt")
+DEVICE_ID_PATH = paths.private_path("device_id.txt")
 
 _cached_id = None
 # Guards the whole check-exists / generate / write / cache sequence below --

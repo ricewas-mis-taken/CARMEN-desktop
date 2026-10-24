@@ -29,13 +29,14 @@ from datetime import date, datetime, timedelta
 import device_id
 import sync_trigger
 from tasks_store import WEEKDAY_CODES
+import paths
 
-BOARD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "board.json")
+BOARD_PATH = paths.private_path("board.json")
 
 # Guards every read-modify-write sequence below against a lost-update race --
 # the Flask API thread and the Qt thread can both call into this module.
 _lock = threading.Lock()
-PHOTOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "data", "board_photos")
+PHOTOS_DIR = paths.private_path("data", "board_photos")
 
 RECURRENCE_PATTERNS = ("days", "weekly", "monthly", "yearly")
 
