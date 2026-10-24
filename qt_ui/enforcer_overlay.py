@@ -431,7 +431,7 @@ class _UnblockReasonDialog(QWidget):
         prompt.setAlignment(Qt.AlignCenter)
         layout.addWidget(prompt)
 
-        self._reason_edit = WrapEdit()
+        self._reason_edit = WrapEdit(dark=True)
         layout.addWidget(self._reason_edit)
 
         self._status_label = QLabel()

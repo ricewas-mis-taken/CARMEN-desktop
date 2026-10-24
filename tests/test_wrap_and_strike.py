@@ -83,3 +83,19 @@ def test_ticked_box_is_green_with_a_white_tick(qtbot):
     assert centre.green() > centre.red() and centre.green() > centre.blue() or centre.red() > 200
     corner = image.pixelColor(int(image.width() * 0.2), int(image.height() * 0.8))
     assert corner.green() > 150 and corner.red() < 100
+
+
+def test_wrap_edit_is_light_by_default_and_dark_when_asked(qtbot):
+    light, dark = WrapEdit(), WrapEdit(dark=True)
+    qtbot.addWidget(light)
+    qtbot.addWidget(dark)
+    assert "#FAFBFC" in light.styleSheet()
+    assert "#2C2F37" in dark.styleSheet()
+
+
+def test_dark_dialogs_ask_for_the_dark_box():
+    import inspect
+    import qt_ui.enforcer_overlay as overlay
+    import qt_ui.event_editor as editor
+    assert "dark=True" in inspect.getsource(overlay)
+    assert "dark=True" in inspect.getsource(editor)
