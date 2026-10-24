@@ -1005,10 +1005,11 @@ class _TopicView(QWidget):
         end_session_on_finish = False
         topic = review_store.get_topic(self._topic_id)
         status = session_manager.get_status()
-        # A paused review session may be driven over: start_session() sets it
-        # aside (that is how a review is pushed back behind another).
-        can_drive_session = not status.get("isActive") or (
-            status.get("isPaused") and status.get("source") == "review")
+        # Any paused session may be driven over: start_session() sets it aside
+        # (that is how a review is pushed back behind another, and how a review
+        # started while a task's timer is paused still gets blocking). Only a
+        # RUNNING session keeps its own enforcement and the review rides beside it.
+        can_drive_session = _can_drive_over(status)
         if topic and topic.get("linkedTaskId") and can_drive_session:
             task = tasks_store.get_task(topic["linkedTaskId"])
             if task:
@@ -1078,7 +1079,7 @@ class _TopicView(QWidget):
         end_session_on_finish = False
         event_id = None
         topic = review_store.get_topic(self._topic_id)
-        if topic and topic.get("linkedTaskId") and not session_manager.is_active():
+        if topic and topic.get("linkedTaskId") and _can_drive_over(session_manager.get_status()):
             task = tasks_store.get_task(topic["linkedTaskId"])
             if task:
                 session_manager.start_session(
@@ -1618,6 +1619,12 @@ class _ReviewBanner(QWidget):
             _end_session_for_problem(problem)
         self._finishing = False
         self._on_finished()
+
+
+def _can_drive_over(status):
+    """True when a review may start its own blocking session: nothing is running, or
+    what is running is paused (it is set aside and comes back when the review ends)."""
+    return not status.get("isActive") or bool(status.get("isPaused"))
 
 
 def _confirm(parent, title, text):
