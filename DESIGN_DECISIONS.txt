@@ -535,3 +535,20 @@ is stored as the centre point, not the top-left, so it reopens right whatever th
 *drawn* white on dark backgrounds (stored colour untouched) so the default pen never vanishes when the background changes.
 (5) Undo is in-memory snapshots (100 deep); the document itself is saved continuously.
 Skipped from the reference site: Login/VGP+/Share/Print (no meaning here); the extension has no counterpart.
+
+[2026-10-24] Tasks tab: redesigned cards, one ring per task, grid that reflows (desktop only)
+Decision: each task card is a white card on a light page with the task's colour used in three places only (dot, ring,
+Start button). The progress ring is the focal element: today's progress at rest, the live session's own progress (with its
+clock inside) while running. Start is a real button; it opens Until burnout / Custom time and a long Pomodoro bar (Pomodoro
+keeps its own window). Banked vacation is quiet text with a hover-only "Use" tag that opens a window. The grid shows as many
+330-470px cards per row as fit and reflows on resize.
+Forks: (1) Colour-filled cards (old look) vs white cards with a colour accent: filled cards forced every text colour to be
+chosen per task colour and clashed with the Start button; white cards keep contrast fixed and let the colour carry meaning.
+(2) Click-anywhere-to-arm was dropped for an explicit Start button -- the card now holds buttons and hover text that a
+whole-card click target fought with. (3) A review of the task's linked topic that is timed beside its session is listed IN the
+card (read from review_store), but only the running one can be paused from there; set-aside reviews are resumed in the Review
+tab, which owns that flow. (4) Vacation "Use" became a window (balance, quick amounts, minutes) instead of an inline editor.
+(5) The card reads session state each tick; nothing new is stored. update_dynamic() gained an optional `reviews` argument so
+the tab queries review_store once per tick, not once per card.
+Supersedes the open "tasks cards fit window width" and "tasks tab does less work" changes (both folded in: responsive columns,
+tick only while visible, restyle only when the look changes). Old TaskCard/burnout/pomodoro/startTask rules removed from styles.qss.
