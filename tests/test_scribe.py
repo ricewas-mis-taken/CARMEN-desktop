@@ -285,3 +285,62 @@ def test_freehand_stroke_never_moves_after_drawing(qtbot):
     drawn = [list(p) for p in canvas._draft["pts"]]
     QTest.mouseRelease(canvas, Qt.LeftButton, Qt.NoModifier, QPoint(495, 300))
     assert canvas._active_items()[0]["pts"] == drawn
+
+
+def _stroke(x, y, n=6, width=4):
+    return {"type": "stroke", "stroke": "#000000", "fill": None, "width": width, "dashed": False,
+            "round": True, "scale": True, "pts": [[x + i * 7.0, y + (i % 3) * 5.0] for i in range(n)]}
+
+
+def test_painting_skips_items_far_off_screen_but_not_edge_ones(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab.resize(900, 700)
+    tab.show()
+    canvas = tab.canvas
+    canvas.view["x"], canvas.view["y"], canvas.view["zoom"] = 0.0, 0.0, 1.0
+    near, edge, far = _stroke(0, 0), _stroke(330, 0), _stroke(50000, 50000)
+    canvas.doc["layers"][0]["items"] = [near, edge, far]
+    painted = []
+    real_paint = canvas._paint_item
+    canvas._paint_item = lambda p, item, zoom: (painted.append(item), real_paint(p, item, zoom))[1]
+    canvas.grab()
+    assert near in painted and edge in painted and far not in painted
+
+
+def test_culled_painting_looks_exactly_like_painting_everything(qtbot):
+    import random
+    rng = random.Random(3)
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab.resize(800, 600)
+    tab.show()
+    canvas = tab.canvas
+    canvas.view["x"], canvas.view["y"], canvas.view["zoom"] = 100.0, 50.0, 1.5
+    canvas.doc["layers"][0]["items"] = [
+        _stroke(rng.uniform(-900, 900), rng.uniform(-700, 700), n=rng.randint(1, 30), width=rng.choice([1, 4, 30]))
+        for _ in range(300)
+    ]
+    culled = canvas.grab().toImage()
+    canvas._in_view = lambda *args: True
+    everything = canvas.grab().toImage()
+    assert culled == everything
+
+
+def test_moved_stroke_gets_a_fresh_bounding_box(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab.resize(900, 700)
+    tab.show()
+    canvas = tab.canvas
+    canvas.view["x"], canvas.view["y"], canvas.view["zoom"] = 0.0, 0.0, 1.0
+    item = _stroke(50000, 50000)
+    canvas.doc["layers"][0]["items"] = [item]
+    painted = []
+    real_paint = canvas._paint_item
+    canvas._paint_item = lambda p, it, zoom: (painted.append(it), real_paint(p, it, zoom))[1]
+    canvas.grab()
+    assert item not in painted
+    geo.translate(item, -50000, -50000)
+    canvas.grab()
+    assert item in painted
