@@ -215,3 +215,59 @@ def test_start_is_ignored_while_the_finish_dialog_is_open(world):
     tab.banner._finishing = True
     tab._topic_views[topic_b["id"]]._start_problem(problem_b)
     assert tab.banner.current_problem_id() == problem_a["id"] and world.answers["asked"] == []
+
+
+def _pause_a_pomodoro(task_name="Pomodoro task"):
+    import session_manager
+    session_manager.start_pomodoro_session(25, 5, 4, "hard", ["game.exe"], ["ok.com"],
+                                           source="task", event_id="other-task", event_title=task_name)
+    session_manager.pause_session()
+
+
+@pytest.mark.parametrize("first_attempt", [False, True])
+def test_review_started_while_a_pomodoro_is_paused_is_blocking(world, first_attempt):
+    """Regression: with a task's pomodoro paused, a review in a task-linked topic only
+    ran its own timer -- nothing was blocked. It now starts a blocking session and the
+    paused pomodoro waits behind it."""
+    import session_manager
+    topic, problem = world.make_topic("Linked", linked=True)
+    tab = _tab(world)
+    _pause_a_pomodoro()
+
+    _start_current(world, tab, first_attempt, topic, problem)
+
+    status = session_manager.get_status()
+    assert status["isActive"] and not status["isPaused"]
+    assert status["source"] == "review"
+    assert status["lockMode"] == "soft"                    # the linked task's rules
+    assert len(status["parkedSessions"]) == 1
+    assert status["parkedSessions"][0]["pomodoro"] is not None   # the pomodoro, set aside
+
+
+def test_finishing_that_review_brings_the_paused_pomodoro_back(world):
+    import session_manager
+    topic, problem = world.make_topic("Linked", linked=True)
+    tab = _tab(world)
+    _pause_a_pomodoro()
+    _start_current(world, tab, False, topic, problem)
+
+    session_manager.end_session()
+
+    status = session_manager.get_status()
+    assert status["isActive"] and status["isPaused"] and status["pomodoro"] is not None
+    assert status["parkedSessions"] == []
+
+
+def test_a_running_session_still_keeps_its_own_enforcement(world):
+    """Only a PAUSED session is driven over: a running one carries on and the review
+    rides beside it, as before."""
+    import session_manager
+    topic, problem = world.make_topic("Linked", linked=True)
+    tab = _tab(world)
+    session_manager.start_session(30, "hard", ["game.exe"], [], source="task", event_id="other-task")
+
+    _start_current(world, tab, False, topic, problem)
+
+    status = session_manager.get_status()
+    assert status["source"] == "task" and status["lockMode"] == "hard"
+    assert status["parkedSessions"] == []
