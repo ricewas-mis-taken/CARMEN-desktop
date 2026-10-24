@@ -535,3 +535,20 @@ is stored as the centre point, not the top-left, so it reopens right whatever th
 *drawn* white on dark backgrounds (stored colour untouched) so the default pen never vanishes when the background changes.
 (5) Undo is in-memory snapshots (100 deep); the document itself is saved continuously.
 Skipped from the reference site: Login/VGP+/Share/Print (no meaning here); the extension has no counterpart.
+
+[2026-10-24] Audit: one paths module, caches, and cheaper Scribe undo (desktop only)
+Decision: every data path is built by paths.py (paths.private_path(...)); CARMEN_PRIVATE_DIR moves the whole app, and the
+test suite's root conftest.py sets it to a throwaway folder before anything is imported.
+Forks: (1) Per-test monkeypatching of each *_PATH constant (the old way) fails open: a constant nobody patched silently used
+the owner's real files -- a full suite run had rewritten the real other_device_seen.txt and calendar_errors.log. One
+environment variable fails closed. The old autouse patches stay as a second layer, plus tests/test_no_real_private_paths.py.
+(2) The constants keep their names, so every existing monkeypatch and every `from x import PATH` still works.
+Performance fixes share one rule: nothing the 1-second Tasks tick (or a tab's show event) runs may grow with the history.
+session_history.load_all() keeps the parsed file until (path, mtime, size) changes (dropped on every save) and hands out a copy
+of the list; vacation_balance_minutes() sums sessions per day in one pass instead of one pass per day; the Tasks tab ticks only
+while visible and restyles a card only when its locked flag flips. Scribe: painting skips items outside the view (stroke bounding
+boxes cached by identity and rebuilt every paint, so moved/deleted items cannot go stale) and an undo step copies each item dict
+but SHARES the point lists, which is safe only because moving a shape builds new lists and never edits one in place -- keep it
+that way (a test pins it).
+Not changed on purpose: session times are naive local datetimes (a session spanning a DST change drifts by an hour); fixing that
+means a stored-format change the extension also reads.
