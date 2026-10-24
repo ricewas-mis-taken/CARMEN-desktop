@@ -30,7 +30,7 @@ while some session -- task or otherwise -- is active.
 """
 from datetime import date
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QDialog,
@@ -111,8 +111,11 @@ class TasksTab(QWidget):
         layout.addLayout(self._build_header())
 
         scroll = QScrollArea()
+        self._scroll = scroll
+        scroll.viewport().installEventFilter(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setStyleSheet("background: #FFFFFF; border: none;")
         self._grid_container = QWidget()
         self._grid_container.setObjectName("TasksGridBg")
@@ -153,29 +156,58 @@ class TasksTab(QWidget):
         self._cards = {}
 
         tasks = [t for t in tasks_store.load_tasks() if not t.get("archived")]
+        self._empty_label = None
+        self._divider = None
+        self._card_order = []
         if not tasks:
-            empty_label = QLabel("No tasks yet -- click “+ Add Recurring Task” to create one.")
-            empty_label.setStyleSheet("color: #8A8F98; font-size: 14px;")
-            self._grid.addWidget(empty_label, 0, 0)
-        for index, task in enumerate(tasks):
-            row, col = divmod(index, CARDS_PER_ROW)
+            self._empty_label = QLabel("No tasks yet -- click “+ Add Recurring Task” to create one.")
+            self._empty_label.setStyleSheet("color: #8A8F98; font-size: 14px;")
+            self._grid.addWidget(self._empty_label, 0, 0)
+        for task in tasks:
             card = _TaskCard(task, on_changed=self.refresh)
-            self._grid.addWidget(card, row, col, Qt.AlignLeft | Qt.AlignTop)
             self._cards[task["id"]] = card
+            self._card_order.append(card)
 
-        # A divider that always sits directly under the last row of cards --
-        # placed one grid row past whatever row the last card landed in, so
-        # it shifts down on its own as more cards are added instead of
-        # needing to be repositioned by hand.
         if tasks:
-            last_row = -(-len(tasks) // CARDS_PER_ROW)  # ceil division
-            divider = QFrame()
-            divider.setFrameShape(QFrame.HLine)
-            divider.setFixedHeight(1)
-            divider.setStyleSheet("background: rgba(0,0,0,0.12); border: none;")
-            self._grid.addWidget(divider, last_row, 0, 1, CARDS_PER_ROW)
+            self._divider = QFrame()
+            self._divider.setFrameShape(QFrame.HLine)
+            self._divider.setFixedHeight(1)
+            self._divider.setStyleSheet("background: rgba(0,0,0,0.12); border: none;")
+        self._place_cards()
 
         self._tick()
+
+    def _columns(self):
+        """How many fixed-width cards fit across the visible area (at least one)
+        -- a fixed three per row forced a sideways scrollbar and cut cards off
+        at the default window size."""
+        spacing = self._grid.spacing()
+        width = self._scroll.viewport().width()
+        return max(1, min(CARDS_PER_ROW, (width + spacing) // (CARD_WIDTH + spacing)))
+
+    def _place_cards(self):
+        """(Re)seats the cards in the grid for the current width. A divider
+        always sits directly under the last row."""
+        for card in self._card_order:
+            self._grid.removeWidget(card)
+        if self._divider is not None:
+            self._grid.removeWidget(self._divider)
+        columns = self._columns()
+        self._placed_columns = columns
+        for index, card in enumerate(self._card_order):
+            row, col = divmod(index, columns)
+            self._grid.addWidget(card, row, col, Qt.AlignLeft | Qt.AlignTop)
+        if self._divider is not None:
+            last_row = -(-len(self._card_order) // columns)  # ceil division
+            self._grid.addWidget(self._divider, last_row, 0, 1, columns)
+
+    def eventFilter(self, obj, event):
+        # The viewport's own width is what decides the column count, and it is
+        # only final after the tab's resize has been laid out.
+        if obj is self._scroll.viewport() and event.type() == QEvent.Resize:
+            if self._card_order and self._columns() != getattr(self, "_placed_columns", None):
+                self._place_cards()
+        return super().eventFilter(obj, event)
 
     def _tick(self):
         status = session_manager.get_status()
