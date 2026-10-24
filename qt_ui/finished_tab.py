@@ -71,6 +71,11 @@ SESSION_END_COLORS = {
     "manual": "#5B8DEF",
     "nuclear": "#e53935",
     "timeout": "#fb8c00",
+    # What session_manager actually writes when the clock runs out: "natural".
+    # Only "timeout" was keyed here, a name nothing ever produces, so the orange
+    # never appeared. A session another one overwrote reads grey.
+    "natural": "#fb8c00",
+    "superseded": "#9AA0A8",
 }
 
 
