@@ -10,8 +10,9 @@ import time
 from datetime import datetime, timezone
 
 import server_clock
+import paths
 
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "config.json")
+CONFIG_PATH = paths.private_path("config.json")
 
 DEFAULT_CONFIG = {
     "processBlocklist": [],

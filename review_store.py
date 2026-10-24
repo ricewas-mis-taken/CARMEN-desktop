@@ -26,9 +26,10 @@ import server_clock
 import state_events
 import sync_trigger
 from calendar_log import logger
+import paths
 
-PHOTOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "data", "review_photos")
-ACTIVE_SESSION_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "data", "active_review.json")
+PHOTOS_DIR = paths.private_path("data", "review_photos")
+ACTIVE_SESSION_PATH = paths.private_path("data", "active_review.json")
 
 
 # The same lock calendar_store.py serializes its own writes through, not a

@@ -24,8 +24,9 @@ from datetime import datetime
 import device_id
 import sync_trigger
 from calendar_log import logger
+import paths
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "calendar.db")
+DB_PATH = paths.private_path("calendar.db")
 
 # How long a soft-deleted event stays recoverable via undo_delete_event()
 # before being purged for good. The UI's undo toast is shown for 10s; this

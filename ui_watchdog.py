@@ -13,8 +13,9 @@ import time
 from PySide6.QtCore import QTimer
 
 from calendar_log import logger
+import paths
 
-TRACE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "hang_trace.txt")
+TRACE_PATH = paths.private_path("hang_trace.txt")
 BEAT_MS = 1000
 STALE_SECONDS = 6
 CHECK_SECONDS = 2

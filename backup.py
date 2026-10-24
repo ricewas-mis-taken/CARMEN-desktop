@@ -8,8 +8,9 @@ import shutil
 from datetime import datetime, timedelta
 
 import calendar_store
+import paths
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private")
+DATA_DIR = paths.PRIVATE
 BACKUP_ROOT = os.path.join(os.path.expanduser("~"), "CarmenBackups")
 KEEP_DAYS = 30
 

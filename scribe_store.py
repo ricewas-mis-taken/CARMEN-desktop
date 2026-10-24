@@ -13,10 +13,10 @@ import os
 import shutil
 import threading
 import uuid
+import paths
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-PATH = os.path.join(HERE, "private", "scribe.json")
-IMAGES_DIR = os.path.join(HERE, "private", "scribe_images")
+PATH = paths.private_path("scribe.json")
+IMAGES_DIR = paths.private_path("scribe_images")
 
 TOOLS = ("line", "curve", "fill", "text", "rect", "circle", "select", "arrow", "freehand")
 BACKGROUNDS = ("white", "black", "grid", "darkgrid", "dots", "lined", "paper")

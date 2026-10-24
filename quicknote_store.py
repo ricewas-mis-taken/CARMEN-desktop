@@ -10,8 +10,9 @@ import os
 import threading
 
 import server_clock
+import paths
 
-PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "quicknote.json")
+PATH = paths.private_path("quicknote.json")
 MAX_ITEMS = 500
 MAX_ITEM_CHARS = 2000
 

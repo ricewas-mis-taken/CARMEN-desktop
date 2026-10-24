@@ -21,10 +21,9 @@ import os
 import shutil
 import time
 from datetime import date, datetime
+import paths
 
-SUMMARY_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "private", "data", "daily_summaries.json"
-)
+SUMMARY_PATH = paths.private_path("data", "daily_summaries.json")
 
 logger = logging.getLogger(__name__)
 

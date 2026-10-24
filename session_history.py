@@ -14,8 +14,9 @@ import os
 import shutil
 import threading
 import time
+import paths
 
-HISTORY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "session_history.json")
+HISTORY_PATH = paths.private_path("session_history.json")
 
 _lock = threading.Lock()
 

@@ -25,10 +25,11 @@ import keyring
 import keyring.errors
 from dotenv import load_dotenv
 from supabase import create_client
+import paths
 
 logger = logging.getLogger("carmen_auth")
 
-ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", ".env")
+ENV_PATH = paths.private_path(".env")
 load_dotenv(ENV_PATH)
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")

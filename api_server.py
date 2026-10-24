@@ -64,6 +64,7 @@ import session_manager
 import state_events
 import tasks_store
 import window_tracker
+import paths
 
 app = Flask(__name__)
 
@@ -115,7 +116,7 @@ API_PORT = 5847
 # process, which isn't something this app does. If it wedges again, the
 # tail of this log is the first thing to check: any START line with no
 # matching END is the culprit.
-_request_log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "api_requests.log")
+_request_log_path = paths.private_path("api_requests.log")
 _request_logger = logging.getLogger("carmen_api_requests")
 _request_logger.setLevel(logging.INFO)
 if not _request_logger.handlers:

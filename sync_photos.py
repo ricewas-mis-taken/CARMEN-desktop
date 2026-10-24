@@ -20,13 +20,14 @@ import board_store
 import review_store
 import sync_cloud
 from calendar_log import logger
+import paths
 
 KINDS = ("board", "review")
 
 # Photos known to be in the cloud bucket (remembered across restarts so a
 # photo is uploaded once, however old its record is), and photos the server
 # said it doesn't have (not retried for a while instead of on every sync).
-UPLOADED_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "uploaded_photos.json")
+UPLOADED_PATH = paths.private_path("uploaded_photos.json")
 _uploaded = None
 _missing_until = {}
 MISSING_RETRY_SECONDS = 3600
