@@ -216,3 +216,16 @@ def test_open_violation_of_the_running_session_is_untouched_by_ending_the_parked
     sm.record_acceptable("notepad.exe")
     resolved = sm.get_status()["violationLog"][-1]
     assert resolved["process"] == "b.exe" and resolved["resolvedAt"] is not None
+
+
+def test_status_when_running_session_expires_reports_restored_session_time():
+    """The poll that notices the running session ran out used to report 0 seconds
+    for the paused session that came back in its place."""
+    _start("a", [], minutes=30)
+    sm.pause_session()
+    _start("b", [], minutes=1)
+    sm._state["endTime"] = (datetime.now() - timedelta(seconds=5)).isoformat()
+
+    status = sm.get_status()
+    assert status["isPaused"] and status["eventId"] == "a"
+    assert status["secondsRemaining"] > 25 * 60
