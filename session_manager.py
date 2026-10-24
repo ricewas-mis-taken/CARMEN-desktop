@@ -816,6 +816,10 @@ def _get_status_locked():
                     seconds_remaining = max(0, int((new_end_time - datetime.now()).total_seconds()))
             else:
                 _pending_natural_end["value"] = _finalize_to_history_locked(end_time, end_type="natural")
+                if _state["isActive"] and _state["isPaused"]:
+                    # A waiting session just came back (paused): report its
+                    # frozen time, not the 0 the expired one ran out at.
+                    seconds_remaining = _state["frozenSecondsRemaining"] or 0
     return {
         "isActive": _state["isActive"],
         "isPaused": _state["isPaused"],
