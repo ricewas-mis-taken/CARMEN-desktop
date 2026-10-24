@@ -1,4 +1,4 @@
-"""Daily backup of all Carmen Focus data files.
+r"""Daily backup of all Carmen Focus data files.
 
 Run directly (`python backup.py`) or via Windows Task Scheduler.
 Keeps the last 30 daily snapshots in %USERPROFILE%\CarmenBackups\.
