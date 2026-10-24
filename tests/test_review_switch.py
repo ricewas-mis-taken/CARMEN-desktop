@@ -258,16 +258,72 @@ def test_finishing_that_review_brings_the_paused_pomodoro_back(world):
     assert status["parkedSessions"] == []
 
 
-def test_a_running_session_still_keeps_its_own_enforcement(world):
-    """Only a PAUSED session is driven over: a running one carries on and the review
-    rides beside it, as before."""
+def _linked_task_id(topic):
+    return review_store.get_topic(topic["id"])["linkedTaskId"]
+
+
+def test_review_pauses_a_running_session_of_a_different_task(world):
+    """A task's pomodoro running, then a review of ANOTHER task starts: the pomodoro
+    pauses (set aside) and the review's own task rules take over."""
     import session_manager
     topic, problem = world.make_topic("Linked", linked=True)
     tab = _tab(world)
-    session_manager.start_session(30, "hard", ["game.exe"], [], source="task", event_id="other-task")
+    session_manager.start_pomodoro_session(25, 5, 4, "hard", ["game.exe"], [],
+                                           source="task", event_id="some-other-task", event_title="Other")
 
     _start_current(world, tab, False, topic, problem)
 
     status = session_manager.get_status()
-    assert status["source"] == "task" and status["lockMode"] == "hard"
-    assert status["parkedSessions"] == []
+    assert status["source"] == "review" and status["eventId"] == _linked_task_id(topic)
+    assert not status["isPaused"]
+    waiting = status["parkedSessions"]
+    assert len(waiting) == 1 and waiting[0]["eventId"] == "some-other-task" and waiting[0]["pomodoro"] is not None
+
+
+def test_review_of_the_same_task_runs_beside_its_pomodoro_and_pauses_on_the_break(world):
+    """Same task: no new session -- the pomodoro keeps its rules and the review is
+    paused by the break and resumed when the break is over."""
+    import session_manager
+    topic, problem = world.make_topic("Linked", linked=True)
+    tab = _tab(world)
+    task_id = _linked_task_id(topic)
+    session_manager.start_pomodoro_session(25, 5, 4, "hard", ["game.exe"], [],
+                                           source="task", event_id=task_id, event_title="Same")
+
+    _start_current(world, tab, False, topic, problem)
+
+    status = session_manager.get_status()
+    assert status["source"] == "task" and status["parkedSessions"] == []      # beside, not over
+    assert review_store.get_active_review()["isPaused"] is False
+
+    review_store.auto_pause_for_break()          # what the pomodoro does when its break starts
+    assert review_store.get_active_review()["isPaused"] is True
+    review_store.auto_resume_from_break()        # ...and when the break ends
+    assert review_store.get_active_review()["isPaused"] is False
+
+
+def test_a_running_manual_session_is_left_alone(world):
+    import session_manager
+    topic, problem = world.make_topic("Linked", linked=True)
+    tab = _tab(world)
+    session_manager.start_session(30, "hard", ["game.exe"], [])
+
+    _start_current(world, tab, False, topic, problem)
+
+    status = session_manager.get_status()
+    assert status["source"] == "manual" and status["lockMode"] == "hard"
+    assert status["parkedSessions"] == [] and not status["isPaused"]
+
+
+def test_first_attempt_also_pauses_a_running_session_of_a_different_task(world):
+    import session_manager
+    topic, problem = world.make_topic("Linked", linked=True)
+    tab = _tab(world)
+    session_manager.start_pomodoro_session(25, 5, 4, "hard", ["game.exe"], [],
+                                           source="task", event_id="some-other-task", event_title="Other")
+
+    _start_current(world, tab, True, topic, problem)
+
+    status = session_manager.get_status()
+    assert status["source"] == "review" and not status["isPaused"]
+    assert [p["eventId"] for p in status["parkedSessions"]] == ["some-other-task"]
