@@ -285,3 +285,54 @@ def test_freehand_stroke_never_moves_after_drawing(qtbot):
     drawn = [list(p) for p in canvas._draft["pts"]]
     QTest.mouseRelease(canvas, Qt.LeftButton, Qt.NoModifier, QPoint(495, 300))
     assert canvas._active_items()[0]["pts"] == drawn
+
+
+def _undo_stroke(x, y, n=6):
+    return {"type": "stroke", "stroke": "#000000", "fill": None, "width": 4, "dashed": False,
+            "round": True, "scale": True, "pts": [[x + i * 7.0, y + (i % 3) * 5.0] for i in range(n)]}
+
+
+def test_undo_snapshot_is_isolated_from_later_edits(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    canvas = tab.canvas
+    item = _undo_stroke(10, 10)
+    canvas.doc["layers"][0]["items"] = [item]
+    canvas._push_undo()
+    original_pts = [list(p) for p in item["pts"]]
+    original_color = item["stroke"]
+
+    geo.translate(item, 500, 500)           # moving a shape
+    item["stroke"] = "#ff0000"              # restyling it
+    canvas.doc["layers"][0]["items"].append(_undo_stroke(0, 0))
+    canvas.undo()
+
+    restored = canvas.doc["layers"][0]["items"]
+    assert len(restored) == 1
+    assert restored[0]["pts"] == original_pts and restored[0]["stroke"] == original_color
+
+
+def test_redo_after_undo_restores_the_edit(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    canvas = tab.canvas
+    item = _undo_stroke(10, 10)
+    canvas.doc["layers"][0]["items"] = [item]
+    canvas._push_undo()
+    geo.translate(item, 100, 0)
+    moved = [list(p) for p in item["pts"]]
+    canvas.undo()
+    canvas.redo()
+    assert canvas.doc["layers"][0]["items"][0]["pts"] == moved
+
+
+def test_snapshot_is_cheap_on_a_big_board(qtbot):
+    import time
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    canvas = tab.canvas
+    canvas.doc["layers"][0]["items"] = [_undo_stroke(i * 3.0, i * 2.0, n=20) for i in range(3000)]
+    started = time.perf_counter()
+    for _ in range(10):
+        canvas._snapshot()
+    assert (time.perf_counter() - started) / 10 < 0.02
