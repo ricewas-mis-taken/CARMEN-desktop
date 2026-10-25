@@ -81,6 +81,20 @@ def _format_minutes(total_minutes):
     return f"{minutes}m"
 
 
+def _format_amount(total_minutes):
+    """Like _format_minutes, but a whole number of hours has no "0m" ("10h", not "10h 0m")."""
+    total_minutes = int(round(total_minutes))
+    hours, minutes = divmod(total_minutes, 60)
+    if hours and not minutes:
+        return f"{hours}h"
+    return _format_minutes(total_minutes)
+
+
+def _ring_phrase(phrase):
+    # The ring's caption is small: "these 2 weeks" becomes "/ 2 weeks".
+    return "/ 2 weeks" if phrase == "these 2 weeks" else phrase
+
+
 def _days_text(days, tail):
     return f"{days} day{'s' if days != 1 else ''} {tail}"
 
@@ -1386,10 +1400,10 @@ class _TaskCard(QFrame):
                 detail = _days_text(snap["daysLeft"], "left in the period")
         else:
             self._ring.set_state(
-                ring_color, fraction, _format_minutes(logged), f"of {_format_minutes(required)} {phrase}",
+                ring_color, fraction, _format_minutes(logged), f"of {_format_amount(required)} {_ring_phrase(phrase)}",
                 dim=locked_by_other)
             left = max(0, int(round(required - logged)))
-            headline = f"{_format_minutes(left)} to go" if period else f"{left} min to go"
+            headline = f"{_format_amount(left)} to go" if period else f"{left} min to go"
             if period:
                 days = max(1, snap["daysLeft"])
                 pace = _format_minutes(math.ceil(left / days))
@@ -1455,7 +1469,7 @@ class _TaskCard(QFrame):
         self._ring.set_state(ring_color, ring_fraction, big, small, dim=paused or is_waiting)
 
         phrase = self._snap["phrase"] if self._snap else "today"
-        detail = (f"{_format_minutes(logged)} of {_format_minutes(required)} {phrase}" if required > 0
+        detail = (f"{_format_minutes(logged)} of {_format_amount(required)} {phrase}" if required > 0
                   else f"{_format_minutes(logged)} logged {phrase}")
         if is_waiting:
             detail = "Time is frozen. Nothing is blocked for this task."

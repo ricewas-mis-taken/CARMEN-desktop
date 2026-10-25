@@ -425,8 +425,8 @@ def _weekly_task(minutes=600, **extra):
 
 def test_weekly_goal_card_shows_the_week_not_today(qtbot, world):
     card = _card(qtbot, _weekly_task())
-    assert card._ring._small == "of 10h 0m this week"
-    assert card._countdown_label.text() == "10h 0m to go"
+    assert card._ring._small == "of 10h this week"
+    assert card._countdown_label.text() == "10h to go"
     detail = card._detail_label.text()
     assert detail == "Due today" or ("left" in detail and "a day" in detail)  # Sunday is the last day
     assert card.goal_state == "open"
