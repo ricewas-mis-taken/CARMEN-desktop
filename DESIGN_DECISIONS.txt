@@ -559,3 +559,14 @@ tick only while visible, restyle only when the look changes). Old TaskCard/burno
   Kept on purpose: calendar_store / calendar_recurrence / calendar_toast and the calendar sync, backup and API paths, so existing events are not lost and the session-complete toast keeps working. day_layout.py (Tasks tab) and history_viewer.py (Session History tab) were never calendar-only.
   Stopped: calendar_scheduler is no longer started in main.py. With the tab gone, a leftover event would still pop reminders and start a session out of nowhere, with no way to see or edit it.
   Extension: no change; it never had a calendar tab. A "calendar-event" session from an older event simply no longer starts.
+
+[2026-10-25] Task goals per week / 2 weeks / month, due at the end of the period
+  Fork 1: a new kind of task, or more values of the existing recurrence field.
+  Chose more values ("weekly_total", "biweekly_total", "monthly_total" beside "daily" and "weekly_days") with targetMinutes meaning "per period". One field keeps sync, the editor and every existing task as they were. "Specific days" already existed as weekly_days, so it was not duplicated.
+  Fork 2: how a period is measured.
+  Chose one function, tasks_store.period_bounds(task, day) -> (first, last): a per-day goal's period is the day itself, a week is Monday to Sunday, a two-week stretch counts from periodAnchor (a Monday, set the first time a task becomes two-weekly), a month is the calendar month. goal_snapshot() hands the card required / logged / cashed for that stretch, so the card has no per-kind branches beyond wording.
+  Fork 3: which target applies. A period uses the target in effect on its last day (or today, for the running one), so raising the target on Wednesday applies to the whole week, not only to Thursday on.
+  Fork 4: vacation. Only finished periods bank surplus (same rule as "today never banks"); cashing in is recorded against a day inside the current period and lowers that period's requirement. Per-day goals are untouched.
+  Not done: a weekday filter on top of a period total ("10 hours a week, but only Mon/Wed/Fri"). Every day counts toward the total.
+  Sync / old devices: a computer that has not been updated treats an unknown recurrence as daily, so a 600-minute weekly goal would read as 600 minutes a day there. Update both computers together. sync_client._normalize_task now sanitises periodAnchor.
+  Extension: no change; it never reads task goals, only the running session.
