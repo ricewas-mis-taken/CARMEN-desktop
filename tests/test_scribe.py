@@ -285,3 +285,61 @@ def test_freehand_stroke_never_moves_after_drawing(qtbot):
     drawn = [list(p) for p in canvas._draft["pts"]]
     QTest.mouseRelease(canvas, Qt.LeftButton, Qt.NoModifier, QPoint(495, 300))
     assert canvas._active_items()[0]["pts"] == drawn
+
+
+# ------------------------------------------------------ redesigned chrome ----
+
+def test_every_tool_has_an_icon_and_a_tooltip_with_its_key(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    assert set(tab._tool_buttons) == {"select", "freehand", "line", "curve", "arrow", "rect", "circle", "text", "fill"}
+    for key, button in tab._tool_buttons.items():
+        assert not button.icon().isNull(), key
+        assert button.toolTip()
+    assert "(1)" in tab._tool_buttons["line"].toolTip() and "(7)" in tab._tool_buttons["select"].toolTip()
+
+
+def test_clicking_a_tool_on_the_rail_selects_it(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab._tool_buttons["circle"].click()
+    assert tab.canvas.tool == "circle" and tab._tool_buttons["circle"].isChecked()
+
+
+def test_the_saved_indicator_follows_the_save(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    assert tab._saved_label.text() == "Saved"
+    tab.resize(900, 700)
+    tab.show()
+    tab.canvas.set_tool("rect")
+    _drag(tab.canvas, (100, 100), (220, 180))
+    assert tab._saved_label.text() == "Saving…"
+    tab.flush()
+    assert tab._saved_label.text() == "Saved"
+
+
+def test_a_quick_colour_sets_the_stroke(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab._quick_stroke("#E03131")
+    assert tab.canvas.prefs["stroke"] == "#E03131"
+    assert "#E03131" in tab._stroke_swatch.styleSheet()
+
+
+def test_width_slider_and_box_stay_in_step(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab._width_slider.setValue(17)
+    assert tab._width.value() == 17 and tab.canvas.prefs["width"] == 17
+    tab._width.setValue(120)  # beyond the slider's range: the slider pins at its end
+    assert tab._width_slider.value() == 60 and tab.canvas.prefs["width"] == 120
+
+
+def test_the_snap_menu_drives_the_view_options(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    action = tab._pref_checks["showRulers"]
+    before = tab.canvas.prefs["showRulers"]
+    action.setChecked(not before)
+    assert tab.canvas.prefs["showRulers"] is (not before)
