@@ -3,8 +3,8 @@ import re
 import uuid
 from datetime import date, datetime
 
-from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QPalette, QPixmap
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, QUrl
+from PySide6.QtGui import QColor, QDesktopServices, QFontMetrics, QPainter, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -325,6 +325,65 @@ def _build_description_content(layout, problem):
         link_label = make_link_label(link)
         link_label.setWordWrap(True)
         layout.addWidget(link_label, 1)
+
+
+SORT_CHOICES = (("due", "Due first"), ("hardest", "Hardest first"), ("newest", "Newest first"), ("name", "A to Z"))
+
+
+class _CategoryRow(QPushButton):
+    """A category in the sidebar: colour dot, name, how many problems. The chosen one is filled."""
+
+    def __init__(self, name, color, count, checked=False):
+        super().__init__()
+        self._name, self._color, self._count = name, color, count
+        self.setCheckable(True)
+        self.setChecked(checked)
+        self.setFixedHeight(34)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip(f"Show {name.lower() if color is None else name}: {count} problem{'s' if count != 1 else ''}")
+        self.setAccessibleName(name)
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(0, 1, 0, -1)
+        if self.isChecked():
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(INK))
+            p.drawRoundedRect(rect, 10, 10)
+        elif self.underMouse():
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor("#F2F4F7"))
+            p.drawRoundedRect(rect, 10, 10)
+        ink = QColor("#FFFFFF") if self.isChecked() else QColor(INK)
+        muted = QColor("#C9CED8") if self.isChecked() else QColor(MUTED)
+        if self._color:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(self._color))
+            p.drawEllipse(QPointF(18, rect.center().y()), 5, 5)
+        text_left = 32 if self._color else 14
+        font = p.font()
+        font.setPixelSize(13)
+        font.setBold(self.isChecked() or self._color is None)
+        p.setFont(font)
+        p.setPen(ink)
+        count_w = 34
+        name = QFontMetrics(font).elidedText(self._name, Qt.ElideRight, int(rect.width() - text_left - count_w - 8))
+        p.drawText(QRectF(text_left, rect.top(), rect.width() - text_left - count_w, rect.height()),
+                   Qt.AlignVCenter | Qt.AlignLeft, name)
+        font.setBold(False)
+        p.setFont(font)
+        p.setPen(muted)
+        p.drawText(QRectF(rect.right() - count_w - 8, rect.top(), count_w, rect.height()),
+                   Qt.AlignVCenter | Qt.AlignRight, str(self._count))
+
+    def enterEvent(self, event):
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.update()
+        super().leaveEvent(event)
 
 
 def _next_review_pill(problem):
@@ -827,9 +886,16 @@ class _TopicView(QWidget):
         self._problems = []
         self._review_tab = review_tab
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 6, 28, 20)
+        root = QHBoxLayout(self)
+        root.setContentsMargins(28, 6, 28, 20)
+        root.setSpacing(16)
+        layout = QVBoxLayout()
         layout.setSpacing(10)
+        root.addLayout(layout, 1)
+        self._subject_filter = None   # a subject id, or None for every category
+        self._search = ""
+        self._sort = "due"
+        self._category_buttons = {}
 
         layout.addLayout(self._build_header())
         self._summary_label = QLabel()
@@ -866,6 +932,8 @@ class _TopicView(QWidget):
         self._list_layout.setAlignment(Qt.AlignTop)
         scroll.setWidget(self._list_container)
         layout.addWidget(scroll, 1)
+
+        root.addWidget(self._build_sidebar())
 
         self.refresh()
 
@@ -1001,21 +1069,118 @@ class _TopicView(QWidget):
         self._due_only = due_only
         self.refresh()
 
+    # ---- the right-hand side: find, category, sort ----------------------------------
+
+    def _build_sidebar(self):
+        card = QFrame()
+        card.setObjectName("ReviewSide")
+        card.setFixedWidth(232)
+        card.setStyleSheet("QFrame#ReviewSide { background: #FFFFFF; border: 1px solid #E6E9EF; border-radius: 16px; }")
+        _soft_shadow(card, 18, 12)
+        box = QVBoxLayout(card)
+        box.setContentsMargins(14, 14, 14, 14)
+        box.setSpacing(8)
+
+        def heading(text):
+            label = QLabel(text)
+            label.setStyleSheet(f"font-size: 12px; font-weight: 700; color: {MUTED}; background: transparent;")
+            return label
+
+        box.addWidget(heading("Find"))
+        self._search_edit = QLineEdit()
+        self._search_edit.setPlaceholderText("Search name, subject or notes")
+        self._search_edit.setClearButtonEnabled(True)
+        self._search_edit.setToolTip("Type to filter the list. Matches a problem's name, subject and notes.")
+        self._search_edit.setStyleSheet(
+            "QLineEdit { background: #F7F8FA; border: 1px solid #E6E9EF; border-radius: 10px; padding: 7px 10px; "
+            f"font-size: 13px; color: {INK}; }} QLineEdit:focus {{ border: 1.5px solid {INK}; background: #FFFFFF; }}")
+        self._search_edit.textChanged.connect(self._set_search)
+        box.addWidget(self._search_edit)
+
+        box.addSpacing(6)
+        box.addWidget(heading("Category"))
+        self._category_box = QVBoxLayout()
+        self._category_box.setSpacing(2)
+        box.addLayout(self._category_box)
+
+        box.addSpacing(6)
+        box.addWidget(heading("Sort by"))
+        self._sort_combo = QComboBox()
+        for key, label in SORT_CHOICES:
+            self._sort_combo.addItem(label, key)
+        self._sort_combo.setToolTip("How the list is ordered")
+        self._sort_combo.currentIndexChanged.connect(self._set_sort)
+        box.addWidget(self._sort_combo)
+        box.addStretch(1)
+        return card
+
+    def _set_search(self, text):
+        self._search = text.strip().lower()
+        self.refresh()
+
+    def _set_sort(self, _index):
+        self._sort = self._sort_combo.currentData()
+        self.refresh()
+
+    def _set_subject_filter(self, subject_id):
+        self._subject_filter = subject_id
+        self.refresh()
+
+    def _rebuild_categories(self, base):
+        """One row per subject (plus "All"), each with how many problems it holds in this view."""
+        while self._category_box.count():
+            widget = self._category_box.takeAt(0).widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        self._category_buttons = {}
+        counts = {}
+        for problem in base:
+            counts[problem["subjectId"]] = counts.get(problem["subjectId"], 0) + 1
+        subjects = review_store.list_subjects(self._topic_id)
+        if self._subject_filter is not None and not any(sub["id"] == self._subject_filter for sub in subjects):
+            self._subject_filter = None
+        entries = [(None, "All categories", None, len(base))] + [
+            (sub["id"], sub["name"], sub["color"], counts.get(sub["id"], 0)) for sub in subjects]
+        for subject_id, name, color, count in entries:
+            row = _CategoryRow(name, color, count, checked=subject_id == self._subject_filter)
+            row.clicked.connect(lambda _c=False, sid=subject_id: self._set_subject_filter(sid))
+            self._category_buttons[subject_id] = row
+            self._category_box.addWidget(row)
+
+    def _matches_search(self, problem):
+        if not self._search:
+            return True
+        haystack = " ".join(str(problem.get(k) or "") for k in ("name", "subjectName", "descriptionText")).lower()
+        return all(word in haystack for word in self._search.split())
+
+    def _sorted(self, problems):
+        if self._sort == "hardest":
+            return sorted(problems, key=lambda p: -p["stars"])
+        if self._sort == "newest":
+            return sorted(problems, key=lambda p: p.get("dateAdded") or "", reverse=True)
+        if self._sort == "name":
+            return sorted(problems, key=lambda p: p["name"].lower())
+        # "due": the store's own next-review / stars order, with overdue ones pinned on top
+        # (stable sort keeps that ordering within each group).
+        return sorted(problems, key=lambda p: not _is_overdue(p.get("nextReviewDate")))
+
     def refresh(self):
-        self._problems = review_store.list_problems(self._topic_id, due_only=self._due_only)
-        if self._due_only:
-            # Overdue problems are the most urgent -- pin them above ones
-            # merely due today, on top of the store's next_review_date/stars
-            # ordering (stable sort keeps that ordering within each group).
-            self._problems.sort(key=lambda p: not _is_overdue(p.get("nextReviewDate")))
-        self._update_summary()
+        base = review_store.list_problems(self._topic_id, due_only=self._due_only)
+        self._rebuild_categories(base)
+        shown = [p for p in base if self._subject_filter in (None, p["subjectId"]) and self._matches_search(p)]
+        self._problems = self._sorted(shown)
+        self._update_summary(len(base))
         self._render_table()
 
-    def _update_summary(self):
+    def _update_summary(self, in_view=None):
         everything = len(review_store.list_problems(self._topic_id, due_only=False))
-        due = len(self._problems) if self._due_only else len(review_store.list_problems(self._topic_id, due_only=True))
+        due = len(review_store.list_problems(self._topic_id, due_only=True))
         lead = f"{due} due" if due else "Nothing due"
-        self._summary_label.setText(f"{lead} · {everything} problem{'s' if everything != 1 else ''}")
+        text = f"{lead} · {everything} problem{'s' if everything != 1 else ''}"
+        if in_view is not None and len(self._problems) != in_view:
+            text += f" · showing {len(self._problems)}"
+        self._summary_label.setText(text)
 
     def _render_table(self):
         """(Kept under its old name: ReviewTab asks every view to redraw.) One row per
@@ -1034,8 +1199,12 @@ class _TopicView(QWidget):
             self._rows.append(row)
             self._list_layout.addWidget(row)
         if not self._rows:
-            text = ("Nothing to review today. Switch to All to see every problem."
-                    if self._due_only else "No problems yet. Add one to start building the list.")
+            if self._search or self._subject_filter is not None:
+                text = "Nothing matches. Clear the search or pick All categories."
+            elif self._due_only:
+                text = "Nothing to review today. Switch to All to see every problem."
+            else:
+                text = "No problems yet. Add one to start building the list."
             empty = QLabel(text)
             empty.setAlignment(Qt.AlignCenter)
             empty.setWordWrap(True)
