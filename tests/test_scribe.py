@@ -398,3 +398,39 @@ def test_paper_thumbnails_set_the_background_and_show_the_current_one(qtbot):
     assert set(tab._paper_chips) == set(scribe_store.BACKGROUNDS)
     for chip in tab._paper_chips.values():
         chip.grab()   # every paper paints
+
+
+# ------------------------------------------------------------------ hover help ----
+
+def _every_control(tab):
+    from PySide6.QtWidgets import QCheckBox, QComboBox, QListWidget, QPushButton, QSlider, QSpinBox, QToolButton
+    return [w for kind in (QPushButton, QCheckBox, QComboBox, QSlider, QSpinBox, QListWidget, QToolButton)
+            for w in tab.findChildren(kind)]
+
+
+def test_every_control_explains_itself_on_hover(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    missing = []
+    for widget in _every_control(tab):
+        if widget is tab._background:      # hidden: the paper thumbnails speak for it
+            continue
+        if not widget.toolTip().strip():
+            missing.append((type(widget).__name__, widget.text() if hasattr(widget, "text") else ""))
+    assert missing == []
+
+
+def test_tool_tooltips_say_what_the_tool_does(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    from qt_ui.scribe_tab import TOOL_HELP
+    for key, button in tab._tool_buttons.items():
+        assert TOOL_HELP[key] in button.toolTip()
+    assert "Click and drag" in tab._tool_buttons["line"].toolTip()
+
+
+def test_the_snap_menu_items_explain_themselves(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    for key in ("snapToGrid", "snapAroundGrid", "snapTo15", "showGuides", "showRulers"):
+        assert tab._pref_checks[key].toolTip()
