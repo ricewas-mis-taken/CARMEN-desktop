@@ -552,3 +552,10 @@ tab, which owns that flow. (4) Vacation "Use" became a window (balance, quick am
 the tab queries review_store once per tick, not once per card.
 Supersedes the open "tasks cards fit window width" and "tasks tab does less work" changes (both folded in: responsive columns,
 tick only while visible, restyle only when the look changes). Old TaskCard/burnout/pomodoro/startTask rules removed from styles.qss.
+
+[2026-10-25] Calendar and Finished tabs archived, not deleted
+  Fork: delete the code, hide the tabs and leave the files, or move the tab UI to archive/.
+  Chose archive/ (git mv, so history follows): the tabs' UI modules and their tests leave the importable tree, the data layer stays. Deleting loses a working feature the user may want back; hiding only leaves dead code that still gets imported and tested.
+  Kept on purpose: calendar_store / calendar_recurrence / calendar_toast and the calendar sync, backup and API paths, so existing events are not lost and the session-complete toast keeps working. day_layout.py (Tasks tab) and history_viewer.py (Session History tab) were never calendar-only.
+  Stopped: calendar_scheduler is no longer started in main.py. With the tab gone, a leftover event would still pop reminders and start a session out of nowhere, with no way to see or edit it.
+  Extension: no change; it never had a calendar tab. A "calendar-event" session from an older event simply no longer starts.
