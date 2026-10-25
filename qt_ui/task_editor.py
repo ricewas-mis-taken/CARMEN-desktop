@@ -32,6 +32,7 @@ import installed_apps
 import session_manager
 import tasks_store
 import qt_ui.checklist as checklist
+from qt_ui.ui_kit import accent, danger, dialog_title, field_label, role_label
 
 COLOR_PALETTE = [
     "#5B8DEF", "#e53935", "#43a047", "#fb8c00", "#8e24aa",
@@ -97,9 +98,8 @@ def format_target(minutes, long_period):
 
 
 def _bold_label(text):
-    label = QLabel(text)
-    label.setStyleSheet("font-weight: 700;")
-    return label
+    """The small grey label above a field (the name is older than the look)."""
+    return field_label(text)
 
 
 class _TaskEditor(QWidget):
@@ -111,9 +111,14 @@ class _TaskEditor(QWidget):
         self._color = (task or {}).get("color", COLOR_PALETTE[0])
 
         self.setWindowTitle("Carmen Focus — Edit Task" if task else "Carmen Focus — New Task")
-        self.resize(440, 620)
+        self.resize(480, 760)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(8)
+        layout.addWidget(dialog_title(
+            "Edit task" if task else "New task",
+            "How much time it asks for, how it repeats, and what it blocks while it runs."))
 
         layout.addWidget(_bold_label("Name"))
         self._name_edit = WrapEdit((task or {}).get("name", ""))
@@ -124,7 +129,8 @@ class _TaskEditor(QWidget):
         self._swatch_buttons = {}
         for hexval in COLOR_PALETTE:
             btn = QPushButton()
-            btn.setFixedSize(24, 24)
+            btn.setFixedSize(28, 28)
+            btn.setCursor(Qt.PointingHandCursor)
             btn.clicked.connect(lambda checked=False, h=hexval: self._pick_color(h))
             self._swatch_buttons[hexval] = btn
             self._swatch_row.addWidget(btn)
@@ -161,9 +167,7 @@ class _TaskEditor(QWidget):
             format_target((task or {}).get("targetMinutes", 30), saved_kind in tasks_store.PERIOD_RECURRENCES))
         self._target_edit.setPlaceholderText("minutes, or 10h / 1h 30m")
         layout.addWidget(self._target_edit)
-        self._repeat_hint = QLabel()
-        self._repeat_hint.setWordWrap(True)
-        self._repeat_hint.setStyleSheet("color: #667085; font-size: 12px;")
+        self._repeat_hint = role_label("", "hint", wrap=True)
         layout.addWidget(self._repeat_hint)
         self._repeat_combo.currentIndexChanged.connect(self._on_repeat_changed)
         self._on_repeat_changed()
@@ -221,21 +225,19 @@ class _TaskEditor(QWidget):
         domain_manual_row.addWidget(domain_manual_add)
         layout.addLayout(domain_manual_row)
 
-        self._status_label = QLabel()
-        self._status_label.setStyleSheet("color: #c62828;")
+        self._status_label = role_label("", "error")
         layout.addWidget(self._status_label)
 
         button_row = QHBoxLayout()
         if task:
-            delete_button = QPushButton("Delete Task")
+            delete_button = danger(QPushButton("Delete task"))
             delete_button.clicked.connect(self._delete)
             button_row.addWidget(delete_button)
         button_row.addStretch(1)
         cancel_button = QPushButton("Cancel")
         cancel_button.clicked.connect(self.close)
         button_row.addWidget(cancel_button)
-        save_button = QPushButton("Save Task")
-        save_button.setProperty("class", "AccentButton")
+        save_button = accent(QPushButton("Save task"))
         save_button.clicked.connect(self._save)
         button_row.addWidget(save_button)
         layout.addLayout(button_row)
@@ -254,8 +256,8 @@ class _TaskEditor(QWidget):
     def _pick_color(self, hexval):
         self._color = hexval
         for h, btn in self._swatch_buttons.items():
-            border = "2px solid #1F2328" if h == hexval else "1px solid #0002"
-            btn.setStyleSheet(f"background: {h}; border-radius: 4px; border: {border};")
+            border = "3px solid #1B2230" if h == hexval else "1px solid #0002"
+            btn.setStyleSheet(f"background: {h}; border-radius: 14px; border: {border}; padding: 0;")
 
     def _add_manual_process(self, add_row_fn):
         name = os.path.basename(self._process_manual_edit.text().strip())

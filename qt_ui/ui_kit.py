@@ -261,3 +261,45 @@ def check_icon_path():
 def with_check_icon(stylesheet):
     """The stylesheet with its @CHECK@ placeholder pointing at the tick picture."""
     return stylesheet.replace("@CHECK@", check_icon_path())
+
+
+# --- popups -----------------------------------------------------------------------------
+#
+# Every popup shares one look (styles.qss, "QWidget#PopupBg"). Labels pick their style from a
+# "role" property, set here so a dialog never has to carry its own colours.
+
+def role_label(text, role, wrap=False):
+    label = QLabel(text)
+    label.setProperty("role", role)
+    label.setWordWrap(wrap)
+    return label
+
+
+def dialog_title(title, subtitle=None):
+    """The heading block at the top of a popup: a title, and a quieter line saying what it is for."""
+    from PySide6.QtWidgets import QVBoxLayout
+    holder = QWidget()
+    holder.setObjectName("DialogHeader")
+    box = QVBoxLayout(holder)
+    box.setContentsMargins(0, 0, 0, 4)
+    box.setSpacing(3)
+    box.addWidget(role_label(title, "title"))
+    if subtitle:
+        box.addWidget(role_label(subtitle, "subtitle", wrap=True))
+    return holder
+
+
+def field_label(text, hint=None):
+    """The small grey label above a field (and, if given, a quieter hint after it)."""
+    return role_label(text if not hint else f"{text}  ·  {hint}", "field")
+
+
+def accent(button_):
+    """Marks a button as the popup's main action (ink fill)."""
+    button_.setProperty("class", "AccentButton")
+    return button_
+
+
+def danger(button_):
+    button_.setProperty("class", "DangerButton")
+    return button_

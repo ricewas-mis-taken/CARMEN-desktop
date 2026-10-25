@@ -37,6 +37,7 @@ import sync_live
 import sync_realtime
 import sync_scheduler
 import sync_trigger
+from qt_ui.ui_kit import dialog_title, field_label
 
 _STATUS_CLEAR_MS = 4000
 _RECONNECT_MS = 20000
@@ -235,10 +236,14 @@ class _AuthDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle("Carmen Focus — Sign In")
-        self.resize(360, 260)
+        self.resize(400, 400)
         self._on_success = on_success
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(10)
+        layout.addWidget(dialog_title(
+            "Sign in to Carmen Focus", "One account keeps your tasks, reviews and settings in step across computers."))
 
         self._tabs = QTabWidget()
         self._login_tab = _AuthTab(
@@ -325,12 +330,15 @@ class _AuthTab(QWidget):
         self._on_submit = on_submit
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(2, 4, 2, 2)
+        layout.setSpacing(8)
 
-        layout.addWidget(QLabel("Email"))
+        layout.addWidget(field_label("Email"))
         self._email_edit = QLineEdit()
+        self._email_edit.setPlaceholderText("you@example.com")
         layout.addWidget(self._email_edit)
 
-        layout.addWidget(QLabel("Password"))
+        layout.addWidget(field_label("Password"))
         self._password_edit = QLineEdit()
         self._password_edit.setEchoMode(QLineEdit.Password)
         layout.addWidget(self._password_edit)
@@ -350,6 +358,7 @@ class _AuthTab(QWidget):
 
         self._submit_button = QPushButton(submit_label)
         self._submit_button.setProperty("class", "AccentButton")
+        self._submit_button.setMinimumHeight(40)
         self._submit_button.clicked.connect(self._submit)
         layout.addWidget(self._submit_button)
 
@@ -366,12 +375,12 @@ class _AuthTab(QWidget):
         self._submit_button.setEnabled(not busy)
 
     def show_error(self, text):
-        self._message_label.setStyleSheet("color: #c62828; font-size: 12px;")
+        self._message_label.setStyleSheet("color: #B42318; font-size: 12.5px;")
         self._message_label.setText(text)
         self._message_label.setVisible(True)
 
     def show_info(self, text):
-        self._message_label.setStyleSheet("color: #1F2328; font-size: 12px;")
+        self._message_label.setStyleSheet("color: #1B2230; font-size: 12.5px;")
         self._message_label.setText(text)
         self._message_label.setVisible(True)
 

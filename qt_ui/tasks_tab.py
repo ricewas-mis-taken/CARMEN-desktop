@@ -305,7 +305,7 @@ _DIALOG_STYLE = (
     f"QDialog#PopupBg QLabel{{color:{INK};font-size:13px;background:transparent;}} "
     "QDialog#PopupBg QLineEdit{background:#FFFFFF;border:1px solid #D5DAE2;border-radius:10px;"
     f"padding:0 12px;color:{INK};font-size:15px;font-weight:600;min-height:40px;}} "
-    "QDialog#PopupBg QLineEdit:focus{border:1.5px solid #5B8DEF;}")
+    "QDialog#PopupBg QLineEdit:focus{border:1.5px solid #1B2230;}")
 
 
 class _PomodoroDialog(QDialog):
@@ -358,7 +358,7 @@ class _PomodoroDialog(QDialog):
         cancel = _button("Cancel", _SECONDARY_STYLE)
         cancel.clicked.connect(self.reject)
         buttons.addWidget(cancel)
-        start = _button("Start Pomodoro", _primary_style("#5B8DEF"))
+        start = _button("Start Pomodoro", _primary_style(INK))
         start.clicked.connect(self._on_start)
         buttons.addWidget(start)
         layout.addLayout(buttons)

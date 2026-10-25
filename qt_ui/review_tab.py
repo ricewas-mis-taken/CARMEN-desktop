@@ -34,6 +34,11 @@ import session_manager
 import tasks_store
 from qt_ui.safe_link import make_link_label
 from qt_ui.ui_kit import (
+    accent,
+    danger,
+    dialog_title,
+    field_label,
+    role_label,
     AMBER,
     DANGER_STYLE,
     GREY,
@@ -835,17 +840,20 @@ class _AddTopicDialog(QWidget):
         self.setObjectName("PopupBg")
         self.setWindowTitle("Carmen Focus — New Review Topic")
         self._on_added = on_added
-        self.resize(320, 130)
+        self.resize(440, 300)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Topic name"))
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(8)
+        layout.addWidget(dialog_title("New topic", "A topic is a tab on the Review page: one subject you study."))
+        layout.addWidget(field_label("Name"))
         self._name_edit = WrapEdit()
         self._name_edit.setPlaceholderText("e.g. Math")
         self._name_edit.returnPressed.connect(self._create)
         layout.addWidget(self._name_edit)
 
-        self._status_label = QLabel()
-        self._status_label.setStyleSheet("color: #c62828;")
+        layout.addStretch(1)
+        self._status_label = role_label("", "error")
         layout.addWidget(self._status_label)
 
         button_row = QHBoxLayout()
@@ -853,8 +861,7 @@ class _AddTopicDialog(QWidget):
         cancel_button = QPushButton("Cancel")
         cancel_button.clicked.connect(self.close)
         button_row.addWidget(cancel_button)
-        create_button = QPushButton("Create")
-        create_button.setProperty("class", "AccentButton")
+        create_button = accent(QPushButton("Create topic"))
         create_button.clicked.connect(self._create)
         button_row.addWidget(create_button)
         layout.addLayout(button_row)
@@ -1962,12 +1969,13 @@ class _ShakinessPicker(QWidget):
         layout.addStretch(1)
         for n in range(1, 6):
             btn = QPushButton(str(n))
-            btn.setFixedSize(36, 36)
+            btn.setFixedSize(40, 40)
             btn.setCheckable(True)
             btn.setStyleSheet(
-                "QPushButton { border-radius: 18px; font-size: 14px; font-weight: 600; "
-                "background: #E5E8EF; color: #1F2328; border: none; padding: 0; }"
-                "QPushButton:checked { background: #4A90E2; color: white; }"
+                "QPushButton { border-radius: 20px; font-size: 14px; font-weight: 600; "
+                "background: #F2F4F7; color: #1B2230; border: none; padding: 0; }"
+                "QPushButton:hover { background: #E7EAF0; }"
+                "QPushButton:checked { background: #1B2230; color: white; }"
             )
             btn.clicked.connect(lambda checked=False, n=n: self._set_value(n))
             layout.addWidget(btn)
@@ -1987,9 +1995,10 @@ class _ShakinessPicker(QWidget):
 
 
 _METHOD_BTN_STYLE = (
-    "QPushButton { padding: 8px 12px; border-radius: 6px; font-size: 13px; "
-    "background: #E5E8EF; color: #5A6070; border: none; }"
-    "QPushButton:checked { background: #4A90E2; color: white; font-weight: 600; }"
+    "QPushButton { padding: 14px 12px; border-radius: 12px; font-size: 14px; font-weight: 600; "
+    "background: #F2F4F7; color: #1B2230; border: none; }"
+    "QPushButton:hover { background: #E7EAF0; }"
+    "QPushButton:checked { background: #1B2230; color: white; }"
 )
 
 
@@ -1998,7 +2007,7 @@ class _PostReviewDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle("Carmen Focus — Review complete")
-        self.resize(360, 250)
+        self.resize(440, 400)
         self._on_submit = on_submit
         self._self_solved = None
         self._method_chosen = False
@@ -2006,18 +2015,9 @@ class _PostReviewDialog(QWidget):
         self._submitted = False
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(12)
-
-        header = QLabel("How did it go?")
-        header.setStyleSheet("font-size: 14px; font-weight: 700;")
-        header.setAlignment(Qt.AlignCenter)
-        layout.addWidget(header)
-
-        name_lbl = QLabel(problem_name)
-        name_lbl.setStyleSheet("font-size: 12px; color: #5A6070;")
-        name_lbl.setAlignment(Qt.AlignCenter)
-        name_lbl.setWordWrap(True)
-        layout.addWidget(name_lbl)
+        layout.addWidget(dialog_title("How did it go?", problem_name))
 
         method_row = QHBoxLayout()
         self._solved_btn = QPushButton("Solved it!")
@@ -2040,26 +2040,22 @@ class _PostReviewDialog(QWidget):
         shak_layout = QVBoxLayout(self._shak_section)
         shak_layout.setContentsMargins(0, 0, 0, 0)
         shak_layout.setSpacing(4)
-        shak_label = QLabel("Shakiness (1 solid → 5 very shaky):")
-        shak_label.setStyleSheet("font-size: 12px;")
-        shak_label.setAlignment(Qt.AlignCenter)
-        shak_layout.addWidget(shak_label)
+        shak_layout.addWidget(field_label("How shaky was it?", "1 solid, 5 very shaky"))
         self._shak_picker = _ShakinessPicker(initial=3, on_changed=self._set_shakiness)
         shak_layout.addWidget(self._shak_picker)
         self._shak_section.setVisible(False)
         layout.addWidget(self._shak_section)
 
-        submit_btn = QPushButton("Submit")
-        submit_btn.setProperty("class", "AccentButton")
+        layout.addStretch(1)
+        submit_btn = accent(QPushButton("Save result"))
+        submit_btn.setMinimumHeight(42)
         submit_btn.setEnabled(False)
         submit_btn.clicked.connect(self._submit)
         layout.addWidget(submit_btn)
         self._submit_btn = submit_btn
 
-        self._hint_label = QLabel('Choose "Solved it!" or "Checked the answer" first.')
-        self._hint_label.setStyleSheet("color: #c62828; font-size: 11px;")
+        self._hint_label = role_label('Choose "Solved it!" or "Checked the answer" first.', "error", wrap=True)
         self._hint_label.setAlignment(Qt.AlignCenter)
-        self._hint_label.setWordWrap(True)
         self._hint_label.setVisible(False)
         layout.addWidget(self._hint_label)
 
@@ -2107,50 +2103,41 @@ class _ReviewStartDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle(problem["name"])
-        self.resize(380, 460)
+        self.resize(480, 600)
         self._problem = problem
         self._on_start = on_start
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(8)
 
         header_row = QHBoxLayout()
-        name_label = QLabel(problem["name"])
-        name_label.setStyleSheet("font-size: 22px; font-weight: 700;")
+        name_label = role_label(problem["name"], "title", wrap=True)
         header_row.addWidget(name_label, 1)
         stars_label = QLabel(_star_text(problem["stars"]))
-        stars_label.setStyleSheet("color: #F5A623; font-size: 22px;")
-        header_row.addWidget(stars_label)
+        stars_label.setStyleSheet("color: #F5A623; font-size: 18px;")
+        header_row.addWidget(stars_label, 0, Qt.AlignTop)
         layout.addLayout(header_row)
 
-        subject_task_label = QLabel(_subject_and_task_text(problem))
-        subject_task_label.setStyleSheet("font-size: 13px; color: #5A6070;")
-        layout.addWidget(subject_task_label)
+        layout.addWidget(role_label(_subject_and_task_text(problem), "subtitle"))
 
         stats_row = QHBoxLayout()
-        fastest_label = QLabel(f"Fastest: {_fastest_display(problem)}")
-        fastest_label.setStyleSheet("font-size: 12px; color: #5A6070;")
-        stats_row.addWidget(fastest_label)
+        stats_row.addWidget(role_label(f"Fastest {_fastest_display(problem)}", "hint"))
         stats_row.addStretch(1)
-        attempts_label = QLabel(f"Attempts: {problem['reviewCount']}")
-        attempts_label.setStyleSheet("font-size: 12px; color: #5A6070;")
-        stats_row.addWidget(attempts_label)
+        stats_row.addWidget(role_label(
+            f"{problem['reviewCount']} attempt{'s' if problem['reviewCount'] != 1 else ''}", "hint"))
         layout.addLayout(stats_row)
 
         first_attempt_text = _first_attempt_text(problem)
         if first_attempt_text:
-            first_attempt_label = QLabel(first_attempt_text)
-            first_attempt_label.setStyleSheet("font-size: 12px; color: #5A6070;")
-            layout.addWidget(first_attempt_label)
+            layout.addWidget(role_label(first_attempt_text, "hint"))
 
         _build_review_timeline(layout, problem)
 
         _build_description_content(layout, problem)
 
-        start_button = QPushButton("Start")
-        start_button.setStyleSheet(
-            "background: #28a745; color: white; font-weight: 600; "
-            "border-radius: 8px; padding: 8px 20px; font-size: 13px;"
-        )
+        start_button = accent(QPushButton("Start review"))
+        start_button.setMinimumHeight(42)
         start_button.clicked.connect(self._do_start)
         layout.addWidget(start_button)
 
@@ -2167,12 +2154,16 @@ class _TopicTaskLinkDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle(f"Link tab — {topic['name']}")
-        self.resize(320, 180)
+        self.resize(440, 300)
         self._topic = topic
         self._on_saved = on_saved
 
         layout = QVBoxLayout(self)
-        layout.addWidget(_bold_label(f"Link \"{topic['name']}\" to a task"))
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(8)
+        layout.addWidget(dialog_title(
+            "Link this tab to a task", f"Reviews in \"{topic['name']}\" count toward that task's time."))
+        layout.addWidget(field_label("Task"))
 
         self._task_combo = QComboBox()
         self._task_combo.addItem("No link", None)
@@ -2186,18 +2177,13 @@ class _TopicTaskLinkDialog(QWidget):
                 self._task_combo.setCurrentIndex(idx)
         layout.addWidget(self._task_combo)
 
-        hint = QLabel("Review time will count toward the linked task's session.")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: #5A6070; font-size: 12px;")
-        layout.addWidget(hint)
-
+        layout.addStretch(1)
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
         cancel = QPushButton("Cancel")
         cancel.clicked.connect(self.close)
         btn_row.addWidget(cancel)
-        save = QPushButton("Save")
-        save.setProperty("class", "AccentButton")
+        save = accent(QPushButton("Save link"))
         save.clicked.connect(self._save)
         btn_row.addWidget(save)
         layout.addLayout(btn_row)
@@ -2217,20 +2203,22 @@ class _RenameTopicDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle("Rename tab")
-        self.resize(300, 120)
+        self.resize(440, 280)
         self._topic_id = topic_id
         self._on_renamed = on_renamed
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("New name"))
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(8)
+        layout.addWidget(dialog_title("Rename tab"))
+        layout.addWidget(field_label("New name"))
         self._name_edit = WrapEdit(current_name)
         self._name_edit.selectAll()
         self._name_edit.returnPressed.connect(self._save)
         layout.addWidget(self._name_edit)
 
-        self._status_label = QLabel()
-        self._status_label.setStyleSheet("color: #c62828;")
-        self._status_label.setWordWrap(True)
+        layout.addStretch(1)
+        self._status_label = role_label("", "error", wrap=True)
         layout.addWidget(self._status_label)
 
         btn_row = QHBoxLayout()
@@ -2238,8 +2226,7 @@ class _RenameTopicDialog(QWidget):
         cancel = QPushButton("Cancel")
         cancel.clicked.connect(self.close)
         btn_row.addWidget(cancel)
-        save = QPushButton("Rename")
-        save.setProperty("class", "AccentButton")
+        save = accent(QPushButton("Rename"))
         save.clicked.connect(self._save)
         btn_row.addWidget(save)
         layout.addLayout(btn_row)
@@ -2264,23 +2251,23 @@ class _DescriptionPopup(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle(problem["name"])
-        self.resize(480, 400)
+        self.resize(520, 520)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(8)
 
-        name_label = QLabel(problem["name"])
-        name_label.setStyleSheet("font-size: 16px; font-weight: 700;")
-        layout.addWidget(name_label)
-
+        header_row = QHBoxLayout()
+        header_row.addWidget(role_label(problem["name"], "title", wrap=True), 1)
         stars_label = QLabel(_star_text(problem["stars"]))
-        stars_label.setStyleSheet("color: #F5A623; font-size: 14px;")
-        layout.addWidget(stars_label)
+        stars_label.setStyleSheet("color: #F5A623; font-size: 18px;")
+        header_row.addWidget(stars_label, 0, Qt.AlignTop)
+        layout.addLayout(header_row)
+        layout.addWidget(role_label(_subject_and_task_text(problem), "subtitle"))
 
         first_attempt_text = _first_attempt_text(problem)
         if first_attempt_text:
-            first_attempt_label = QLabel(first_attempt_text)
-            first_attempt_label.setStyleSheet("font-size: 12px; color: #5A6070;")
-            layout.addWidget(first_attempt_label)
+            layout.addWidget(role_label(first_attempt_text, "hint"))
 
         _build_review_timeline(layout, problem)
 
@@ -2345,7 +2332,7 @@ class _AddProblemDialog(QWidget):
         self.setObjectName("PopupBg")
         self._editing = problem is not None
         self.setWindowTitle(f"Carmen Focus — {'Edit' if self._editing else 'Add'} Problem")
-        self.resize(420, 620)
+        self.resize(500, 760)
         self._topic_id = topic_id
         self._on_added = on_added
         self._on_start_first_attempt = on_start_first_attempt
@@ -2354,6 +2341,12 @@ class _AddProblemDialog(QWidget):
         self._pending_first_attempt = None
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(8)
+        layout.addWidget(dialog_title(
+            "Edit problem" if self._editing else "Add a problem",
+            "Its history and schedule are not touched." if self._editing
+            else "It joins the list and comes back for review on a spaced schedule."))
 
         # Only offered when adding (not editing) and the caller wired up a
         # handler -- editing an existing problem has nothing to "attempt"
@@ -2363,16 +2356,14 @@ class _AddProblemDialog(QWidget):
             # starts immediately, on the same embedded review banner every
             # other review uses, and the form gets filled in afterward, once
             # there's actually something to fill in about.
-            first_attempt_button = QPushButton("Start First Attempt")
-            first_attempt_button.setStyleSheet(
-                "background: #28a745; color: white; font-weight: 600; "
-                "border-radius: 8px; padding: 8px 12px; font-size: 13px;"
-            )
+            first_attempt_button = accent(QPushButton("Start first attempt now"))
+            first_attempt_button.setMinimumHeight(40)
+            first_attempt_button.setToolTip("Start the timer straight away and fill the form in afterwards.")
             first_attempt_button.clicked.connect(self._start_first_attempt)
             layout.addWidget(first_attempt_button)
 
             self._first_attempt_status = QLabel()
-            self._first_attempt_status.setStyleSheet("color: #2e7d32; font-size: 12px;")
+            self._first_attempt_status.setStyleSheet("color: #157F3B; font-size: 12.5px;")
             self._first_attempt_status.setWordWrap(True)
             self._first_attempt_status.setVisible(False)
             layout.addWidget(self._first_attempt_status)
@@ -2385,7 +2376,7 @@ class _AddProblemDialog(QWidget):
         subject_row = QHBoxLayout()
         self._subject_combo = QComboBox()
         subject_row.addWidget(self._subject_combo, 1)
-        add_subject_button = QPushButton("+ Add Subject")
+        add_subject_button = QPushButton("+ New subject")
         add_subject_button.setProperty("class", "SecondaryButton")
         add_subject_button.clicked.connect(self._toggle_add_subject)
         subject_row.addWidget(add_subject_button)
@@ -2451,8 +2442,7 @@ class _AddProblemDialog(QWidget):
         initial_type = problem["descriptionType"] if problem else "text"
         {"text": self._text_button, "photo": self._photo_button, "link": self._link_button}[initial_type].setChecked(True)
 
-        self._status_label = QLabel()
-        self._status_label.setStyleSheet("color: #c62828;")
+        self._status_label = role_label("", "error")
         layout.addWidget(self._status_label)
 
         button_row = QHBoxLayout()
@@ -2460,8 +2450,7 @@ class _AddProblemDialog(QWidget):
         cancel_button = QPushButton("Cancel")
         cancel_button.clicked.connect(self.close)
         button_row.addWidget(cancel_button)
-        submit_button = QPushButton("Save" if self._editing else "Add")
-        submit_button.setProperty("class", "AccentButton")
+        submit_button = accent(QPushButton("Save changes" if self._editing else "Add problem"))
         submit_button.clicked.connect(self._submit)
         button_row.addWidget(submit_button)
         layout.addLayout(button_row)
@@ -2482,11 +2471,11 @@ class _AddProblemDialog(QWidget):
         form.setProperty("class", "InlineForm")
         layout = QVBoxLayout(form)
 
-        layout.addWidget(QLabel("New subject name"))
+        layout.addWidget(field_label("New subject name"))
         self._new_subject_name = QLineEdit()
         layout.addWidget(self._new_subject_name)
 
-        layout.addWidget(QLabel("Color"))
+        layout.addWidget(field_label("Colour"))
         swatch_row = QHBoxLayout()
         self._new_subject_color = COLOR_PALETTE[0]
         self._swatch_buttons = {}
@@ -2502,8 +2491,7 @@ class _AddProblemDialog(QWidget):
 
         save_row = QHBoxLayout()
         save_row.addStretch(1)
-        save_button = QPushButton("Save Subject")
-        save_button.setProperty("class", "AccentButton")
+        save_button = accent(QPushButton("Save subject"))
         save_button.clicked.connect(self._save_new_subject)
         save_row.addWidget(save_button)
         layout.addLayout(save_row)
@@ -2654,6 +2642,5 @@ class _AddProblemDialog(QWidget):
 
 
 def _bold_label(text):
-    label = QLabel(text)
-    label.setStyleSheet("font-weight: 700;")
-    return label
+    """The small grey label above a field (the name is older than the look)."""
+    return field_label(text)

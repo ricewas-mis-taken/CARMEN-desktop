@@ -39,6 +39,7 @@ import session_history
 import session_manager
 import window_tracker
 import qt_ui.checklist as checklist
+from qt_ui.ui_kit import accent, danger, dialog_title, field_label, role_label
 
 _open_windows = set()
 
@@ -124,23 +125,21 @@ class _BlocklistPicker(QWidget):
             self._saved = {name.lower() for name in config.load_config().get("processBlocklist", [])}
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(10)
 
         if self._session_active:
-            instructions = (
-                "A session is active — these apps are currently blocked.\n"
-                "Check any you want to unblock. You'll be asked to explain each\n"
-                "one before it's let through."
-            )
+            layout.addWidget(dialog_title(
+                "Unblock apps",
+                "These are blocked right now. Tick the ones to let through. You will say why for each."))
+        elif for_next_session:
+            layout.addWidget(dialog_title(
+                "Session rules",
+                "Choose what the next session blocks: apps and browser profiles. "
+                "Then list the websites that stay allowed. Saved picks are already ticked."))
         else:
-            instructions = (
-                "Pick what the next focus session blocks: apps and browser profiles,\n"
-                "and which websites stay allowed. Saved picks are pre-checked."
-                if for_next_session else
-                "Check the apps to block during a focus session.\nPreviously saved picks are pre-checked."
-            )
-        instructions_label = QLabel(instructions)
-        instructions_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(instructions_label)
+            layout.addWidget(dialog_title(
+                "Apps to block", "Tick the apps to block during a focus session. Saved picks are already ticked."))
 
         self._checklist = _Checklist()
         layout.addWidget(self._checklist.widget)
@@ -165,8 +164,7 @@ class _BlocklistPicker(QWidget):
 
             self._add_browser_profile_rows()
 
-            manual_label = QLabel("Not listed? Add by name or file:")
-            layout.addWidget(manual_label)
+            layout.addWidget(field_label("Not listed?", "add an app by its .exe name, or browse for it"))
 
             manual_row = QHBoxLayout()
             self._manual_edit = QLineEdit()
@@ -180,28 +178,32 @@ class _BlocklistPicker(QWidget):
             manual_row.addWidget(add_button)
             layout.addLayout(manual_row)
 
-            self._manual_status = QLabel()
-            self._manual_status.setStyleSheet("color: #c62828;")
+            self._manual_status = role_label("", "error")
             layout.addWidget(self._manual_status)
 
             if for_next_session:
                 self._build_websites_section(layout)
 
         self._status_label = QLabel()
-        self._status_label.setStyleSheet("color: #2e7d32;")
+        self._status_label.setStyleSheet("color: #157F3B; font-size: 12.5px;")
         layout.addWidget(self._status_label)
 
-        button_label = "Unblock Selected" if self._session_active else "Save Blocklist"
-        save_button = QPushButton(button_label)
+        button_label = "Unblock selected" if self._session_active else "Save rules" if for_next_session else "Save blocklist"
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.close)
+        save_button = accent(QPushButton(button_label))
         save_button.clicked.connect(self._save)
-        layout.addWidget(save_button, alignment=Qt.AlignCenter)
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        footer.addWidget(close_button)
+        footer.addWidget(save_button)
+        layout.addLayout(footer)
 
     def _build_websites_section(self, layout):
         """The websites that stay allowed (everything else in a browser is off-limits),
         saved as the default domain list the browser extension also uses."""
-        title = QLabel("Allowed websites:")
-        title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(title)
+        layout.addSpacing(6)
+        layout.addWidget(field_label("Allowed websites", "everything else in a browser is off-limits"))
         saved = list(config.load_config().get("domainWhitelist", []))
         self._domains_checklist = _Checklist(height=150)
         if not saved:
@@ -331,15 +333,14 @@ class _ReasonDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle("Carmen Focus — Explain Unblocks")
-        self.resize(440, 480)
+        self.resize(460, 500)
         self._process_names = process_names
 
         layout = QVBoxLayout(self)
-
-        prompt = QLabel("Why does each of these need to be unblocked for this session?")
-        prompt.setWordWrap(True)
-        prompt.setAlignment(Qt.AlignCenter)
-        layout.addWidget(prompt)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(10)
+        layout.addWidget(dialog_title(
+            "Why unblock?", "Each app needs a reason. It is saved with the session."))
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -348,11 +349,11 @@ class _ReasonDialog(QWidget):
         content = QWidget()
         content.setObjectName("PopupBg")
         content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 8, 0)
+        content_layout.setSpacing(6)
         self._reason_edits = {}
         for process_name in process_names:
-            name_label = QLabel(process_name)
-            name_label.setStyleSheet("font-weight: bold;")
-            content_layout.addWidget(name_label)
+            content_layout.addWidget(field_label(process_name))
             edit = WrapEdit()
             content_layout.addWidget(edit)
             self._reason_edits[process_name] = edit
@@ -360,19 +361,17 @@ class _ReasonDialog(QWidget):
         scroll.setWidget(content)
         layout.addWidget(scroll)
 
-        self._status_label = QLabel()
-        self._status_label.setStyleSheet("color: #c62828;")
+        self._status_label = role_label("", "error")
         layout.addWidget(self._status_label)
 
         button_row = QHBoxLayout()
-        confirm_button = QPushButton("Confirm")
+        confirm_button = accent(QPushButton("Unblock"))
         cancel_button = QPushButton("Cancel")
         confirm_button.clicked.connect(self._confirm)
         cancel_button.clicked.connect(self.close)
         button_row.addStretch(1)
-        button_row.addWidget(confirm_button)
         button_row.addWidget(cancel_button)
-        button_row.addStretch(1)
+        button_row.addWidget(confirm_button)
         layout.addLayout(button_row)
 
     def _confirm(self):
@@ -414,20 +413,23 @@ class _TimerDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle("Carmen Focus — Start Session")
-        self.resize(300, 320)
+        self.resize(380, 380)
 
         cfg = config.load_config()
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(10)
+        layout.addWidget(dialog_title("Start a focus session", "Blocks your saved apps until the time is up."))
 
-        layout.addWidget(QLabel("Duration (minutes)"))
+        layout.addWidget(field_label("Minutes"))
         self._duration_edit = QLineEdit(str(cfg.get("last_duration_minutes", 25)))
-        self._duration_edit.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._duration_edit)
 
-        layout.addWidget(QLabel("Lock mode"))
+        layout.addWidget(field_label("Lock mode"))
         mode_row = QHBoxLayout()
-        self._soft_radio = QRadioButton("Soft")
-        self._hard_radio = QRadioButton("Hard")
+        mode_row.setSpacing(18)
+        self._soft_radio = QRadioButton("Soft: warn me, then let me stay")
+        self._hard_radio = QRadioButton("Hard: send me straight back")
         mode_group = QButtonGroup(self)
         mode_group.addButton(self._soft_radio)
         mode_group.addButton(self._hard_radio)
@@ -435,26 +437,32 @@ class _TimerDialog(QWidget):
             self._hard_radio.setChecked(True)
         else:
             self._soft_radio.setChecked(True)
-        mode_row.addWidget(self._soft_radio)
-        mode_row.addWidget(self._hard_radio)
-        layout.addLayout(mode_row)
+        mode_box = QVBoxLayout()
+        mode_box.setSpacing(6)
+        mode_box.addWidget(self._soft_radio)
+        mode_box.addWidget(self._hard_radio)
+        layout.addLayout(mode_box)
 
         process_count = len(cfg.get("processBlocklist", []))
         profile_count = len(cfg.get("browserProfileBlocklist", []))
-        count_text = f"Using saved blocklist: {process_count} app(s)"
+        count_text = f"Using your saved blocklist: {process_count} app{'s' if process_count != 1 else ''}"
         if profile_count:
-            count_text += f", {profile_count} browser profile(s)"
-        count_label = QLabel(count_text)
-        count_label.setStyleSheet("color: #888;")
-        layout.addWidget(count_label)
+            count_text += f", {profile_count} browser profile{'s' if profile_count != 1 else ''}"
+        layout.addWidget(role_label(count_text, "hint"))
 
-        self._status_label = QLabel()
-        self._status_label.setStyleSheet("color: #c62828;")
+        layout.addStretch(1)
+        self._status_label = role_label("", "error")
         layout.addWidget(self._status_label)
 
-        start_button = QPushButton("Start Session")
+        start_button = accent(QPushButton("Start session"))
         start_button.clicked.connect(self._start)
-        layout.addWidget(start_button, alignment=Qt.AlignCenter)
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(self.close)
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        footer.addWidget(cancel_button)
+        footer.addWidget(start_button)
+        layout.addLayout(footer)
 
     def _start(self):
         try:
@@ -565,27 +573,32 @@ class _EditSessionRulesDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle("Carmen Focus — Edit Session Rules")
-        self.resize(420, 460)
+        self.resize(460, 520)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(10)
 
         status = session_manager.get_status()
+        layout.addWidget(dialog_title(
+            "Edit this session's rules", "Changes apply right away, to the session that is running."))
         if not status["isActive"]:
-            layout.addWidget(QLabel("No active session to edit."))
+            layout.addWidget(role_label("No active session to edit.", "hint"))
             return
 
-        layout.addWidget(QLabel("Blocked apps (one per line or comma-separated)"))
+        layout.addWidget(field_label("Blocked apps", "one per line, or separated by commas"))
         self._process_edit = QTextEdit()
         self._process_edit.setPlainText(", ".join(status["processBlocklist"]))
         layout.addWidget(self._process_edit)
 
-        layout.addWidget(QLabel("Allowed domains (one per line or comma-separated)"))
+        layout.addWidget(field_label("Allowed websites", "one per line, or separated by commas"))
         self._domain_edit = QTextEdit()
         self._domain_edit.setPlainText(", ".join(status["domainWhitelist"]))
         layout.addWidget(self._domain_edit)
 
-        layout.addWidget(QLabel("Lock mode"))
+        layout.addWidget(field_label("Lock mode"))
         mode_row = QHBoxLayout()
+        mode_row.setSpacing(18)
         self._soft_radio = QRadioButton("Soft")
         self._hard_radio = QRadioButton("Hard")
         mode_group = QButtonGroup(self)
@@ -597,15 +610,21 @@ class _EditSessionRulesDialog(QWidget):
             self._soft_radio.setChecked(True)
         mode_row.addWidget(self._soft_radio)
         mode_row.addWidget(self._hard_radio)
+        mode_row.addStretch(1)
         layout.addLayout(mode_row)
 
-        self._status_label = QLabel()
-        self._status_label.setStyleSheet("color: #c62828;")
+        self._status_label = role_label("", "error")
         layout.addWidget(self._status_label)
 
-        save_button = QPushButton("Save Changes")
+        save_button = accent(QPushButton("Save changes"))
         save_button.clicked.connect(self._save)
-        layout.addWidget(save_button, alignment=Qt.AlignCenter)
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.close)
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        footer.addWidget(close_button)
+        footer.addWidget(save_button)
+        layout.addLayout(footer)
 
     @staticmethod
     def _parse_list(text):
@@ -628,5 +647,5 @@ class _EditSessionRulesDialog(QWidget):
         domain_whitelist = self._parse_list(self._domain_edit.toPlainText())
         lock_mode = "hard" if self._hard_radio.isChecked() else "soft"
         session_manager.update_blocklist(process_blocklist, domain_whitelist, lock_mode=lock_mode)
-        self._status_label.setStyleSheet("color: #2e7d32;")
+        self._status_label.setStyleSheet("color: #157F3B; font-size: 12.5px;")
         self._status_label.setText("Session rules updated.")

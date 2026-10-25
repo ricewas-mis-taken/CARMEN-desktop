@@ -36,7 +36,10 @@ from qt_ui.wrap_edit import WrapEdit
 
 import board_store
 from qt_ui.safe_link import make_link_label
-from qt_ui.ui_kit import DANGER_STYLE, INK, MUTED, NUM_FONTS, SECONDARY_STYLE, button, link_button
+from qt_ui.ui_kit import (
+    DANGER_STYLE, INK, MUTED, NUM_FONTS, SECONDARY_STYLE, accent, button, dialog_title, field_label, link_button,
+    role_label,
+)
 
 # Not a real preset tag -- board_store.PRESET_TAGS only holds tags a task can
 # actually be assigned, and this one can't be (a task either has tags or it
@@ -124,7 +127,7 @@ def _build_info_content(layout, task):
 
     if not any_content:
         empty_label = QLabel("No extra info added.")
-        empty_label.setStyleSheet("color: #8A8F98;")
+        empty_label.setStyleSheet("color: #667085; font-size: 13.5px;")
         layout.addWidget(empty_label)
 
 
@@ -692,18 +695,24 @@ class _FinishedListDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle("Finished Tasks")
-        self.resize(480, 560)
+        self.resize(540, 620)
         self._on_changed = on_changed
 
         layout = QVBoxLayout(self)
-        layout.addWidget(_bold_label("Finished Tasks"))
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(10)
+        layout.addWidget(dialog_title("Finished tasks", "Done and kept here. Open one to see it again or delete it."))
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
         self._list_container = QWidget()
+        self._list_container.setObjectName("PopupList")
+        self._list_container.setStyleSheet("QWidget#PopupList { background: transparent; }")
         self._list_layout = QVBoxLayout(self._list_container)
-        self._list_layout.setSpacing(12)
+        self._list_layout.setContentsMargins(2, 2, 8, 8)
+        self._list_layout.setSpacing(10)
         self._list_layout.setAlignment(Qt.AlignTop)
         scroll.setWidget(self._list_container)
         layout.addWidget(scroll, 1)
@@ -726,7 +735,7 @@ class _FinishedListDialog(QWidget):
         finished = board_store.list_finished_tasks()
         if not finished:
             empty_label = QLabel("Nothing finished yet.")
-            empty_label.setStyleSheet("color: #8A8F98;")
+            empty_label.setStyleSheet("color: #667085; font-size: 13.5px;")
             self._list_layout.addWidget(empty_label)
         for task in finished:
             self._list_layout.addWidget(_BoardCard(task, on_changed=self._handle_changed))
@@ -746,18 +755,24 @@ class _UpcomingListDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle("Upcoming Tasks")
-        self.resize(480, 560)
+        self.resize(540, 620)
         self._on_changed = on_changed
 
         layout = QVBoxLayout(self)
-        layout.addWidget(_bold_label("Upcoming Tasks"))
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(10)
+        layout.addWidget(dialog_title("Upcoming tasks", "Repeating tasks that are resting until their next day."))
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
         self._list_container = QWidget()
+        self._list_container.setObjectName("PopupList")
+        self._list_container.setStyleSheet("QWidget#PopupList { background: transparent; }")
         self._list_layout = QVBoxLayout(self._list_container)
-        self._list_layout.setSpacing(12)
+        self._list_layout.setContentsMargins(2, 2, 8, 8)
+        self._list_layout.setSpacing(10)
         self._list_layout.setAlignment(Qt.AlignTop)
         scroll.setWidget(self._list_container)
         layout.addWidget(scroll, 1)
@@ -780,7 +795,7 @@ class _UpcomingListDialog(QWidget):
         upcoming = board_store.list_upcoming_tasks()
         if not upcoming:
             empty_label = QLabel("Nothing recurring waiting to come back yet.")
-            empty_label.setStyleSheet("color: #8A8F98;")
+            empty_label.setStyleSheet("color: #667085; font-size: 13.5px;")
             self._list_layout.addWidget(empty_label)
         for task in upcoming:
             self._list_layout.addWidget(_BoardCard(task, on_changed=self._handle_changed))
@@ -871,12 +886,15 @@ class _AddTaskDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle("Carmen Focus — Add Board Task")
-        self.resize(440, 620)
+        self.resize(500, 780)
         self._on_added = on_added
         self._photo_path = None
         self._importance = 5
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(8)
+        layout.addWidget(dialog_title("Add a task", "Goes on the board, most important first."))
 
         layout.addWidget(_bold_label("Name"))
         self._name_edit = WrapEdit()
@@ -909,8 +927,7 @@ class _AddTaskDialog(QWidget):
         self._link_edit.setPlaceholderText("Link (optional)")
         layout.addWidget(self._link_edit)
 
-        self._status_label = QLabel()
-        self._status_label.setStyleSheet("color: #c62828;")
+        self._status_label = role_label("", "error")
         layout.addWidget(self._status_label)
 
         button_row = QHBoxLayout()
@@ -918,8 +935,7 @@ class _AddTaskDialog(QWidget):
         cancel_button = QPushButton("Cancel")
         cancel_button.clicked.connect(self.close)
         button_row.addWidget(cancel_button)
-        finish_button = QPushButton("Finish")
-        finish_button.setProperty("class", "AccentButton")
+        finish_button = accent(QPushButton("Add task"))
         finish_button.clicked.connect(self._submit)
         button_row.addWidget(finish_button)
         layout.addLayout(button_row)
@@ -1008,13 +1024,16 @@ class _EditTaskDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle("Carmen Focus — Edit Board Task")
-        self.resize(440, 620)
+        self.resize(500, 740)
         self._task_id = task["id"]
         self._on_saved = on_saved
         self._photo_path = None
         self._remove_photo = False
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(8)
+        layout.addWidget(dialog_title("Edit task", "Name, repeats, tags and notes. Importance is changed on the card."))
 
         layout.addWidget(_bold_label("Name"))
         self._name_edit = WrapEdit(task.get("name") or "")
@@ -1059,8 +1078,7 @@ class _EditTaskDialog(QWidget):
         self._link_edit.setPlaceholderText("Link (optional)")
         layout.addWidget(self._link_edit)
 
-        self._status_label = QLabel()
-        self._status_label.setStyleSheet("color: #c62828;")
+        self._status_label = role_label("", "error")
         layout.addWidget(self._status_label)
 
         button_row = QHBoxLayout()
@@ -1068,8 +1086,7 @@ class _EditTaskDialog(QWidget):
         cancel_button = QPushButton("Cancel")
         cancel_button.clicked.connect(self.close)
         button_row.addWidget(cancel_button)
-        save_button = QPushButton("Save Changes")
-        save_button.setProperty("class", "AccentButton")
+        save_button = accent(QPushButton("Save changes"))
         save_button.clicked.connect(self._submit)
         button_row.addWidget(save_button)
         layout.addLayout(button_row)
@@ -1146,6 +1163,5 @@ def _register_popup(popup):
 
 
 def _bold_label(text):
-    label = QLabel(text)
-    label.setStyleSheet("font-weight: 700;")
-    return label
+    """The small grey label above a field (the name is older than the look)."""
+    return field_label(text)

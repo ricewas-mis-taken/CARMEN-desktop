@@ -305,3 +305,42 @@ def test_a_blank_or_spaced_website_is_ignored(qtbot, isolate_state, monkeypatch)
         picker._domain_edit.setText(bad)
         picker._add_domain()
     assert picker._domains_checklist.checked_keys() == []
+
+
+# ----------------------------------------------------------------- popup look ----
+
+def test_every_popup_is_a_white_sheet_with_a_title(qtbot, isolate_state, isolate_review_db, tmp_path, monkeypatch):
+    """The popups share one look: the PopupBg sheet and a title block at the top."""
+    import board_store
+    import tasks_store
+    import qt_ui.board_tab as bt
+    import qt_ui.nuclear_dialog as nd
+    import qt_ui.review_tab as rt
+    import qt_ui.task_editor as te
+    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
+    monkeypatch.setattr(board_store, "BOARD_PATH", str(tmp_path / "board.json"))
+    topic = rt.review_store.create_topic("T")
+    subject = rt.review_store.create_subject(topic["id"], "S", "#4A90D9")
+    problem = rt.review_store.create_problem(topic["id"], subject["id"], "P", stars=3, description_type="text",
+                                             description_text="x")
+    windows = [
+        picker_dialogs._BlocklistPicker(for_next_session=True), picker_dialogs._TimerDialog(),
+        picker_dialogs._EditSessionRulesDialog(), picker_dialogs._ReasonDialog(["a.exe"]),
+        nd._NuclearReasonDialog(None, lambda s: ""), te._TaskEditor(None, on_saved=None),
+        bt._AddTaskDialog(on_added=lambda t: None), rt._AddTopicDialog(on_added=lambda t: None),
+        rt._DescriptionPopup(problem), rt._PostReviewDialog("P", on_submit=lambda *a: None),
+        rt._RenameTopicDialog(topic["id"], "T", on_renamed=lambda *a: None), rt._ReviewStartDialog(problem, lambda p: None),
+        rt._TopicTaskLinkDialog(topic, on_saved=lambda: None), rt._AddProblemDialog(topic["id"], on_added=lambda p: None),
+    ]
+    for window in windows:
+        qtbot.addWidget(window)
+        assert window.objectName() == "PopupBg", type(window).__name__
+        roles = [label.property("role") for label in window.findChildren(picker_dialogs.QLabel)]
+        assert "title" in roles, f"{type(window).__name__} has no title"
+
+
+def test_the_primary_button_of_a_popup_is_marked_as_the_main_action(qtbot, isolate_state):
+    win = picker_dialogs._TimerDialog()
+    qtbot.addWidget(win)
+    accents = [b.text() for b in win.findChildren(picker_dialogs.QPushButton) if b.property("class") == "AccentButton"]
+    assert accents == ["Start session"]
