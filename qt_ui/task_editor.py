@@ -1,5 +1,6 @@
-"""Add/edit dialog for a Tasks-tab task -- name, color, daily target minutes,
-recurrence (every day / specific weekdays), soft/hard lock mode, and the
+"""Add/edit dialog for a Tasks-tab task -- name, color, target, how it repeats
+(every day / specific weekdays / a total per week, 2 weeks or month),
+soft/hard lock mode, and the
 process block list / domain allow list to apply while it's running. Mirrors
 the shape of qt_ui/event_editor.py's focus-integration section (same
 checklist component, same list defaulting from config.load_config()) but
@@ -8,11 +9,13 @@ without any of the calendar-event scheduling fields this doesn't need.
 Non-modal (.show()), same convention as the rest of this app's dialogs.
 """
 import os
+import re
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -51,6 +54,48 @@ def open_task_editor(task=None, on_saved=None):
     _track(_TaskEditor(task, on_saved)).show()
 
 
+# How a task repeats: (recurrence stored on the task, menu text, what the target is, hint).
+REPEAT_CHOICES = [
+    ("daily", "Every day", "Target per day", "Counts each day on its own."),
+    ("weekly_days", "On specific days", "Target on each of those days",
+     "Only the days you tick have a target; the other days are free."),
+    ("weekly_total", "A total each week", "Target per week",
+     "Work any day, Monday to Sunday. It is only due by the end of Sunday."),
+    ("biweekly_total", "A total every 2 weeks", "Target per 2 weeks",
+     "Work any day. It is due at the end of every second week."),
+    ("monthly_total", "A total each month", "Target per month",
+     "Work any day. It is due on the last day of the month."),
+]
+
+_DURATION = re.compile(
+    r"^\s*(?:(?P<h>\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hour|hours)\s*(?:(?P<hm>\d+)\s*(?:m|min|mins|minute|minutes)?)?"
+    r"|(?P<m>\d+)\s*(?:m|min|mins|minute|minutes)?)\s*$", re.IGNORECASE)
+
+
+def parse_minutes(text):
+    """Whole minutes from "90", "90m", "10h", "1.5h" or "1h 30m"; None if it isn't one
+    or it isn't positive."""
+    match = _DURATION.match(text or "")
+    if not match:
+        return None
+    if match.group("h") is not None:
+        minutes = float(match.group("h")) * 60 + int(match.group("hm") or 0)
+    else:
+        minutes = int(match.group("m"))
+    minutes = int(round(minutes))
+    return minutes if minutes > 0 else None
+
+
+def format_target(minutes, long_period):
+    """What the target box starts with: hours for a week/month total ("10h"), plain
+    minutes for a per-day target as it always was."""
+    minutes = int(minutes)
+    if long_period and minutes >= 60:
+        hours, rest = divmod(minutes, 60)
+        return f"{hours}h" if not rest else f"{hours}h {rest}m"
+    return str(minutes)
+
+
 def _bold_label(text):
     label = QLabel(text)
     label.setStyleSheet("font-weight: 700;")
@@ -87,27 +132,16 @@ class _TaskEditor(QWidget):
         layout.addLayout(self._swatch_row)
         self._pick_color(self._color)
 
-        layout.addWidget(_bold_label("Target minutes per active day"))
-        self._target_edit = QLineEdit(str((task or {}).get("targetMinutes", 30)))
-        layout.addWidget(self._target_edit)
+        saved_kind = (task or {}).get("recurrence", "daily")
+        if saved_kind not in {c[0] for c in REPEAT_CHOICES}:
+            saved_kind = "daily"
 
         layout.addWidget(_bold_label("Repeats"))
-        recur_row = QHBoxLayout()
-        self._every_day_radio = QRadioButton("Every day")
-        self._specific_days_radio = QRadioButton("Specific weekdays")
-        recur_group = QButtonGroup(self)
-        recur_group.addButton(self._every_day_radio)
-        recur_group.addButton(self._specific_days_radio)
-        recurrence = (task or {}).get("recurrence", "daily")
-        if recurrence == "weekly_days":
-            self._specific_days_radio.setChecked(True)
-        else:
-            self._every_day_radio.setChecked(True)
-        self._every_day_radio.toggled.connect(self._toggle_weekday_row)
-        recur_row.addWidget(self._every_day_radio)
-        recur_row.addWidget(self._specific_days_radio)
-        recur_row.addStretch(1)
-        layout.addLayout(recur_row)
+        self._repeat_combo = QComboBox()
+        for kind, text, _label, _hint in REPEAT_CHOICES:
+            self._repeat_combo.addItem(text, kind)
+        self._repeat_combo.setCurrentIndex(self._repeat_combo.findData(saved_kind))
+        layout.addWidget(self._repeat_combo)
 
         self._weekday_row = QWidget()
         weekday_layout = QHBoxLayout(self._weekday_row)
@@ -120,7 +154,19 @@ class _TaskEditor(QWidget):
             self._weekday_checks[code] = check
             weekday_layout.addWidget(check)
         layout.addWidget(self._weekday_row)
-        self._toggle_weekday_row(self._every_day_radio.isChecked())
+
+        self._target_label = _bold_label("Target")
+        layout.addWidget(self._target_label)
+        self._target_edit = QLineEdit(
+            format_target((task or {}).get("targetMinutes", 30), saved_kind in tasks_store.PERIOD_RECURRENCES))
+        self._target_edit.setPlaceholderText("minutes, or 10h / 1h 30m")
+        layout.addWidget(self._target_edit)
+        self._repeat_hint = QLabel()
+        self._repeat_hint.setWordWrap(True)
+        self._repeat_hint.setStyleSheet("color: #667085; font-size: 12px;")
+        layout.addWidget(self._repeat_hint)
+        self._repeat_combo.currentIndexChanged.connect(self._on_repeat_changed)
+        self._on_repeat_changed()
 
         layout.addWidget(_bold_label("Lock mode"))
         lock_row = QHBoxLayout()
@@ -194,8 +240,16 @@ class _TaskEditor(QWidget):
         button_row.addWidget(save_button)
         layout.addLayout(button_row)
 
-    def _toggle_weekday_row(self, every_day_checked):
-        self._weekday_row.setVisible(not every_day_checked)
+    def _repeat_kind(self):
+        return self._repeat_combo.currentData()
+
+    def _on_repeat_changed(self, _index=None):
+        kind = self._repeat_kind()
+        _kind, _text, label, hint = next(c for c in REPEAT_CHOICES if c[0] == kind)
+        self._target_label.setText(label)
+        self._repeat_hint.setText(hint)
+        # "isHidden", not isVisible: the editor may not be shown yet.
+        self._weekday_row.setVisible(kind == "weekly_days")
 
     def _pick_color(self, hexval):
         self._color = hexval
@@ -234,23 +288,18 @@ class _TaskEditor(QWidget):
         if not name:
             self._status_label.setText("Name is required.")
             return
-        try:
-            target_minutes = int(self._target_edit.text().strip())
-            if target_minutes <= 0:
-                raise ValueError
-        except ValueError:
-            self._status_label.setText("Target minutes must be a positive whole number.")
+        target_minutes = parse_minutes(self._target_edit.text())
+        if target_minutes is None:
+            self._status_label.setText('Target must be a positive time, like 45, 90m, 10h or 1h 30m.')
             return
 
-        if self._specific_days_radio.isChecked():
-            recurrence_kind = "weekly_days"
+        recurrence_kind = self._repeat_kind()
+        weekdays = []
+        if recurrence_kind == "weekly_days":
             weekdays = [code for code, chk in self._weekday_checks.items() if chk.isChecked()]
             if not weekdays:
                 self._status_label.setText("Pick at least one weekday.")
                 return
-        else:
-            recurrence_kind = "daily"
-            weekdays = []
 
         data = {
             "name": name,
