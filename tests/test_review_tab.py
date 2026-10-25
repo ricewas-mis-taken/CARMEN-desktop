@@ -940,3 +940,75 @@ def test_a_request_for_the_state_it_is_already_in_changes_nothing(qtbot, isolate
     review_store.request_first_attempt("resume")   # already running
     banner._tick()
     assert not banner._currently_paused()
+
+
+# ---------------------------------------------- find / category / sort sidebar ----
+
+def _view_with_problems(qtbot):
+    topic = review_store.create_topic("Calculus")
+    integrals = review_store.create_subject(topic["id"], "Integrals", "#4A90D9")
+    limits = review_store.create_subject(topic["id"], "Limits", "#e53935")
+    for name, subject, stars in (("Parts drill", integrals, 4), ("Trig sub", integrals, 2), ("Epsilon proof", limits, 5)):
+        review_store.create_problem(topic["id"], subject["id"], name, stars=stars, description_type="text",
+                                    description_text=f"notes about {name.lower()} and a secret word zebra" if name == "Trig sub" else "x")
+    view = review_tab._TopicView(topic["id"])
+    qtbot.addWidget(view)
+    view._set_due_only(False)
+    return view, integrals, limits
+
+
+def _names(view):
+    return [row.name_label.text() for row in view._rows]
+
+
+def test_the_sidebar_lists_every_category_with_its_count(qtbot, isolate_review_db):
+    view, integrals, limits = _view_with_problems(qtbot)
+    buttons = view._category_buttons
+    assert list(buttons) == [None, integrals["id"], limits["id"]] or set(buttons) == {None, integrals["id"], limits["id"]}
+    assert buttons[None]._count == 3 and buttons[integrals["id"]]._count == 2 and buttons[limits["id"]]._count == 1
+    assert buttons[None].isChecked()
+
+
+def test_picking_a_category_shows_only_its_problems_and_all_brings_the_rest_back(qtbot, isolate_review_db):
+    view, integrals, limits = _view_with_problems(qtbot)
+    view._category_buttons[limits["id"]].click()
+    assert _names(view) == ["Epsilon proof"] and view._category_buttons[limits["id"]].isChecked()
+    assert "showing 1" in view._summary_label.text()
+    view._category_buttons[None].click()
+    assert len(view._rows) == 3
+
+
+def test_search_matches_names_subjects_and_notes(qtbot, isolate_review_db):
+    view, _integrals, _limits = _view_with_problems(qtbot)
+    view._search_edit.setText("parts")
+    assert _names(view) == ["Parts drill"]
+    view._search_edit.setText("limits")        # a subject name
+    assert _names(view) == ["Epsilon proof"]
+    view._search_edit.setText("zebra")         # only in the notes
+    assert _names(view) == ["Trig sub"]
+    view._search_edit.setText("")
+    assert len(view._rows) == 3
+
+
+def test_search_and_category_work_together_and_an_empty_result_explains_itself(qtbot, isolate_review_db):
+    view, integrals, limits = _view_with_problems(qtbot)
+    view._category_buttons[integrals["id"]].click()
+    view._search_edit.setText("epsilon")
+    assert view._rows == []
+    assert any("Nothing matches" in label.text() for label in view.findChildren(review_tab.QLabel))
+
+
+def test_sorting(qtbot, isolate_review_db):
+    view, _i, _l = _view_with_problems(qtbot)
+    for key, expected in (("hardest", ["Epsilon proof", "Parts drill", "Trig sub"]),
+                          ("name", ["Epsilon proof", "Parts drill", "Trig sub"])):
+        view._sort_combo.setCurrentIndex(view._sort_combo.findData(key))
+        assert _names(view) == expected
+    view._sort_combo.setCurrentIndex(view._sort_combo.findData("newest"))
+    assert len(_names(view)) == 3
+
+
+def test_counts_follow_the_due_or_all_view(qtbot, isolate_review_db):
+    view, _i, _l = _view_with_problems(qtbot)
+    view._set_due_only(True)
+    assert view._category_buttons[None]._count == len(view._problems)
