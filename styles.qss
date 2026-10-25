@@ -359,17 +359,17 @@ QPushButton.SecondaryButton:checked {
 }
 
 QPushButton.AccentButton {
-    background: #5B8DEF;
+    background: #1B2230;
     color: white;
     border: none;
-    border-radius: 8px;
-    padding: 7px 16px;
-    font-size: 12px;
+    border-radius: 10px;
+    padding: 8px 16px;
+    font-size: 13px;
     font-weight: 600;
 }
 
 QPushButton.AccentButton:hover {
-    background: #4A7CDE;
+    background: #2B3445;
 }
 
 QLabel#MonthLabel {
