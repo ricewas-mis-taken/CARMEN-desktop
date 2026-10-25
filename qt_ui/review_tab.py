@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFrame,
+    QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -31,6 +33,19 @@ import review_store
 import session_manager
 import tasks_store
 from qt_ui.safe_link import make_link_label
+from qt_ui.ui_kit import (
+    AMBER,
+    DANGER_STYLE,
+    GREY,
+    INK,
+    MUTED,
+    NUM_CSS,
+    RED,
+    SECONDARY_STYLE,
+    ElidedLabel,
+    button,
+    chip,
+)
 
 COLOR_PALETTE = [
     "#5B8DEF", "#e53935", "#43a047", "#fb8c00", "#8e24aa",
@@ -49,6 +64,27 @@ COLUMN_HEADERS = [
 ]
 
 _URL_RE = re.compile(r"^https?://[^\s]+\.[^\s]+$", re.IGNORECASE)
+
+
+_SEGMENT_STYLE = (
+    f"QPushButton{{background:#FFFFFF;color:{INK};border:1px solid #E1E5EC;border-radius:13px;"
+    "font-size:12.5px;font-weight:600;padding:0 14px;}"
+    "QPushButton:hover{background:#F6F7FA;}"
+    f"QPushButton:checked{{background:{INK};color:#FFFFFF;border:1px solid {INK};}}")
+
+_PRIMARY_INK = (
+    f"QPushButton{{background:{INK};color:#FFFFFF;border:none;border-radius:12px;"
+    "font-size:13.5px;font-weight:600;padding:0 18px;}"
+    "QPushButton:hover{background:#2B3445;}"
+    "QPushButton:disabled{background:#EEF0F4;color:#A3ABB8;}")
+
+
+def _soft_shadow(widget, blur=22, alpha=18):
+    shadow = QGraphicsDropShadowEffect(widget)
+    shadow.setBlurRadius(blur)
+    shadow.setOffset(0, 5)
+    shadow.setColor(QColor(16, 24, 40, alpha))
+    widget.setGraphicsEffect(shadow)
 
 
 def _lighten(hex_color, mix=0.78):
@@ -291,6 +327,101 @@ def _build_description_content(layout, problem):
         layout.addWidget(link_label, 1)
 
 
+def _next_review_pill(problem):
+    """(text, tone) for the "when is it due" pill on a problem's row."""
+    when = problem.get("nextReviewDate")
+    if not when:
+        return "Not scheduled", GREY
+    display = _next_review_display(when)
+    if _is_overdue(when):
+        return f"Overdue · {display}", RED
+    if display == "Today":
+        return "Due today", AMBER
+    return f"Next · {display}", GREY
+
+
+def _problem_meta(problem):
+    reviews = problem["reviewCount"]
+    last = problem["lastReviewedAt"]
+    solved = _first_solved_display(problem)
+    parts = [f"{reviews} review{'s' if reviews != 1 else ''}",
+             f"last reviewed {_relative_time(last).lower()}" if last else "never reviewed",
+             "not solved yet" if solved == "Never" else f"first solved {solved}"]
+    fastest = _fastest_display(problem)
+    if fastest != "--:--":
+        parts.append(f"fastest {fastest}")
+    return " · ".join(parts)
+
+
+class _ProblemRow(QFrame):
+    """One problem: what it is, how hard, which subject, when it is due, its history in
+    one quiet line, and the Start button. Click anywhere else to read its description;
+    right-click to edit."""
+
+    def __init__(self, problem, is_current, on_start, on_open, on_edit):
+        super().__init__()
+        self.problem = problem
+        self._on_open = on_open
+        self._on_edit = on_edit
+        self.setObjectName("ProblemRow")
+        self.setStyleSheet(
+            "QFrame#ProblemRow{background:#FFFFFF;border:1px solid #E6E9EF;border-radius:14px;}"
+            "QFrame#ProblemRow:hover{border:1px solid #C9CED8;}")
+        _soft_shadow(self, 16, 14)
+        color = problem["subjectColor"]
+        self.first_solved_text = _first_solved_display(problem)
+
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(14, 12, 14, 12)
+        outer.setSpacing(14)
+        bar = QFrame()
+        bar.setFixedWidth(5)
+        bar.setStyleSheet(f"background:{color};border:none;border-radius:2px;")
+        outer.addWidget(bar)
+
+        text = QVBoxLayout()
+        text.setSpacing(5)
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        self.name_label = QLabel(problem["name"])
+        self.name_label.setStyleSheet(f"font-size:15px;font-weight:650;color:{INK};background:transparent;")
+        top.addWidget(self.name_label)
+        self.stars_label = QLabel(_star_text(problem["stars"]))
+        self.stars_label.setStyleSheet("font-size:12px;color:#F5A623;background:transparent;")
+        top.addWidget(self.stars_label)
+        top.addWidget(chip(problem["subjectName"], color))
+        top.addStretch(1)
+        text.addLayout(top)
+        self.meta_label = ElidedLabel(_problem_meta(problem))
+        self.meta_label.setStyleSheet(f"font-size:12px;color:{MUTED};background:transparent;")
+        text.addWidget(self.meta_label)
+        outer.addLayout(text, 1)
+
+        pill_text, tone = _next_review_pill(problem)
+        self.next_pill = chip(pill_text, tone=tone)
+        outer.addWidget(self.next_pill, 0, Qt.AlignVCenter)
+
+        self.start_button = button("Start", _PRIMARY_INK, height=36)
+        self.start_button.setObjectName("reviewStartButton")
+        self.start_button.setMinimumWidth(78)
+        self.start_button.clicked.connect(lambda: on_start(problem))
+        if is_current:
+            self.start_button.setEnabled(False)
+            self.start_button.setToolTip("You are reviewing this one right now")
+        outer.addWidget(self.start_button, 0, Qt.AlignVCenter)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self.childAt(event.position().toPoint()) is not self.start_button:
+            self._on_open(self.problem)
+        super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        edit_action = menu.addAction("Edit Problem")
+        if menu.exec(event.globalPos()) == edit_action:
+            self._on_edit(self.problem)
+
+
 class ReviewTab(QWidget):
     def __init__(self):
         super().__init__()
@@ -301,15 +432,15 @@ class ReviewTab(QWidget):
         layout.setSpacing(0)
 
         title = QLabel("Review")
-        title.setStyleSheet("font-size: 20px; font-weight: 700;")
-        title.setContentsMargins(24, 22, 24, 8)
+        title.setStyleSheet(f"font-size: 26px; font-weight: 700; color: {INK}; background: transparent;")
+        title.setContentsMargins(28, 24, 28, 10)
         layout.addWidget(title)
 
         # The one review banner for every topic, above the tab strip: a review
         # of one topic stays in view while another topic's tab is open.
         self.banner = _ReviewBanner(on_finished=self._banner_finished, on_changed=self._rerender_start_cells)
         banner_holder = QVBoxLayout()
-        banner_holder.setContentsMargins(24, 0, 24, 8)
+        banner_holder.setContentsMargins(28, 0, 28, 10)
         banner_holder.addWidget(self.banner)
         # Reviews paused and set aside to make room for another: collapsed rows.
         self._strip = _ParkedStrip(on_resume=self._resume_row, on_end=self._end_row)
@@ -321,6 +452,15 @@ class ReviewTab(QWidget):
 
         self._tabs = QTabWidget()
         self._tabs.setDocumentMode(True)
+        # Only tab-bar selectors, so nothing leaks into the topic views inside.
+        self._tabs.setStyleSheet(
+            "QTabWidget::pane { border: none; background: transparent; }"
+            "QTabWidget::tab-bar { left: 28px; }"
+            "QTabBar { background: transparent; }"
+            f"QTabBar::tab {{ background: #FFFFFF; color: {INK}; border: 1px solid #E1E5EC; border-radius: 14px;"
+            " padding: 6px 16px; margin: 0 6px 8px 0; font-size: 13px; font-weight: 600; }"
+            "QTabBar::tab:hover:!selected { background: #F6F7FA; }"
+            f"QTabBar::tab:selected {{ background: {INK}; color: #FFFFFF; border-color: {INK}; }}")
         self._tabs.tabBarClicked.connect(self._on_tab_bar_clicked)
         self._tabs.tabBar().setContextMenuPolicy(Qt.CustomContextMenu)
         self._tabs.tabBar().customContextMenuRequested.connect(self._on_tab_context_menu)
@@ -688,10 +828,14 @@ class _TopicView(QWidget):
         self._review_tab = review_tab
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 16, 24, 20)
+        layout.setContentsMargins(28, 6, 28, 20)
         layout.setSpacing(10)
 
         layout.addLayout(self._build_header())
+        self._summary_label = QLabel()
+        self._summary_label.setStyleSheet(f"font-size: 13px; color: {MUTED}; background: transparent;")
+        layout.addWidget(self._summary_label)
+        self._rows = []
 
         if review_tab is not None:
             # The banner lives above the tabs, owned by the ReviewTab, which
@@ -709,26 +853,19 @@ class _TopicView(QWidget):
             self._follow_timer.timeout.connect(self._show_banner_for_linked_session)
             self._follow_timer.start(1000)
 
-        self._table = QTableWidget(0, len(COLUMN_HEADERS))
-        self._table.setHorizontalHeaderLabels(COLUMN_HEADERS)
-        self._table.verticalHeader().setVisible(False)
-        self._table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self._table.setSelectionMode(QTableWidget.NoSelection)
-        self._table.horizontalHeader().setStretchLastSection(False)
-        self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self._table.setColumnWidth(COLUMN_START, 90)
-        self._table.setColumnWidth(COLUMN_NAME, 220)
-        self._table.setColumnWidth(COLUMN_SUBJECT, 120)
-        self._table.setColumnWidth(COLUMN_STARS, 90)
-        self._table.setColumnWidth(COLUMN_REVIEWS, 70)
-        self._table.setColumnWidth(COLUMN_LAST_REVIEWED, 120)
-        self._table.setColumnWidth(COLUMN_NEXT_REVIEW, 110)
-        self._table.setColumnWidth(COLUMN_FIRST_SOLVED, 100)
-        self._table.setColumnWidth(COLUMN_FASTEST, 100)
-        self._table.cellClicked.connect(self._on_cell_clicked)
-        self._table.setContextMenuPolicy(Qt.CustomContextMenu)
-        self._table.customContextMenuRequested.connect(self._on_table_context_menu)
-        layout.addWidget(self._table, 1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        self._list_container = QWidget()
+        self._list_container.setObjectName("ProblemList")
+        self._list_container.setStyleSheet("QWidget#ProblemList { background: transparent; }")
+        self._list_layout = QVBoxLayout(self._list_container)
+        self._list_layout.setContentsMargins(2, 2, 8, 16)
+        self._list_layout.setSpacing(10)
+        self._list_layout.setAlignment(Qt.AlignTop)
+        scroll.setWidget(self._list_container)
+        layout.addWidget(scroll, 1)
 
         self.refresh()
 
@@ -835,27 +972,26 @@ class _TopicView(QWidget):
 
     def _build_header(self):
         header = QHBoxLayout()
+        header.setSpacing(6)
 
         self._due_button = QPushButton("Due")
-        self._due_button.setCheckable(True)
-        self._due_button.setChecked(True)
-        self._due_button.setProperty("class", "SecondaryButton")
         self._all_button = QPushButton("All")
-        self._all_button.setCheckable(True)
-        self._all_button.setProperty("class", "SecondaryButton")
         toggle_group = QButtonGroup(self)
         toggle_group.setExclusive(True)
-        toggle_group.addButton(self._due_button)
-        toggle_group.addButton(self._all_button)
+        for pill in (self._due_button, self._all_button):
+            pill.setCheckable(True)
+            pill.setCursor(Qt.PointingHandCursor)
+            pill.setFixedHeight(30)
+            pill.setStyleSheet(_SEGMENT_STYLE)
+            toggle_group.addButton(pill)
+            header.addWidget(pill)
+        self._due_button.setChecked(True)
         self._due_button.toggled.connect(lambda checked: checked and self._set_due_only(True))
         self._all_button.toggled.connect(lambda checked: checked and self._set_due_only(False))
-        header.addWidget(self._due_button)
-        header.addWidget(self._all_button)
 
         header.addStretch(1)
 
-        add_button = QPushButton("+ Add Problem")
-        add_button.setProperty("class", "AccentButton")
+        add_button = button("+ Add problem", _PRIMARY_INK, height=36)
         add_button.clicked.connect(self._open_add_problem)
         header.addWidget(add_button)
 
@@ -872,92 +1008,41 @@ class _TopicView(QWidget):
             # merely due today, on top of the store's next_review_date/stars
             # ordering (stable sort keeps that ordering within each group).
             self._problems.sort(key=lambda p: not _is_overdue(p.get("nextReviewDate")))
+        self._update_summary()
         self._render_table()
 
+    def _update_summary(self):
+        everything = len(review_store.list_problems(self._topic_id, due_only=False))
+        due = len(self._problems) if self._due_only else len(review_store.list_problems(self._topic_id, due_only=True))
+        lead = f"{due} due" if due else "Nothing due"
+        self._summary_label.setText(f"{lead} · {everything} problem{'s' if everything != 1 else ''}")
+
     def _render_table(self):
-        self._table.setRowCount(len(self._problems))
-        for row, problem in enumerate(self._problems):
-            tint = _lighten(problem["subjectColor"])
-
-            name_item = QTableWidgetItem(problem["name"])
-            self._table.setItem(row, COLUMN_NAME, name_item)
-
-            reviews_item = QTableWidgetItem(str(problem["reviewCount"]))
-            reviews_item.setTextAlignment(Qt.AlignCenter)
-            self._table.setItem(row, COLUMN_REVIEWS, reviews_item)
-
-            last_item = QTableWidgetItem(_relative_time(problem["lastReviewedAt"]))
-            self._table.setItem(row, COLUMN_LAST_REVIEWED, last_item)
-
-            next_review_item = QTableWidgetItem(_next_review_display(problem.get("nextReviewDate")))
-            next_review_item.setTextAlignment(Qt.AlignCenter)
-            self._table.setItem(row, COLUMN_NEXT_REVIEW, next_review_item)
-
-            first_item = QTableWidgetItem(_first_solved_display(problem))
-            self._table.setItem(row, COLUMN_FIRST_SOLVED, first_item)
-
-            fastest_item = QTableWidgetItem(_fastest_display(problem))
-            fastest_item.setTextAlignment(Qt.AlignCenter)
-            self._table.setItem(row, COLUMN_FASTEST, fastest_item)
-
-            stars_item = QTableWidgetItem(_star_text(problem["stars"]))
-            stars_item.setTextAlignment(Qt.AlignCenter)
-            stars_item.setForeground(QColor("#F5A623"))
-            self._table.setItem(row, COLUMN_STARS, stars_item)
-
-            subject_item = QTableWidgetItem(problem["subjectName"])
-            subject_item.setForeground(QColor("#1F2328"))
-            subject_item.setBackground(QColor(tint))
-            self._table.setItem(row, COLUMN_SUBJECT, subject_item)
-
-            text_cols = (COLUMN_NAME, COLUMN_REVIEWS, COLUMN_LAST_REVIEWED, COLUMN_NEXT_REVIEW, COLUMN_FIRST_SOLVED, COLUMN_FASTEST)
-            for col in text_cols:
-                self._table.item(row, col).setForeground(QColor("#1F2328"))
-            for col in text_cols + (COLUMN_STARS,):
-                self._table.item(row, col).setBackground(QColor(tint))
-
-            if _is_overdue(problem.get("nextReviewDate")):
-                for col in text_cols:
-                    item = self._table.item(row, col)
-                    item.setForeground(QColor("#c62828"))
-                    font = item.font()
-                    font.setBold(True)
-                    item.setFont(font)
-
-            self._table.setCellWidget(row, COLUMN_START, self._build_start_cell(problem, tint))
-
-        self._table.resizeRowsToContents()
-
-    def _build_start_cell(self, problem, tint):
-        container = QWidget()
-        container.setStyleSheet(f"background: {tint};")
-        layout = QHBoxLayout(container)
-        layout.setContentsMargins(6, 4, 6, 4)
-        start_button = QPushButton("Start")
-        start_button.setObjectName("reviewStartButton")
-        start_button.clicked.connect(lambda: self._start_problem(problem))
-        if problem["id"] == self._review_banner.current_problem_id():
-            start_button.setEnabled(False)
-            start_button.setToolTip("You are reviewing this one right now")
-        layout.addWidget(start_button)
-        return container
-
-    def _on_cell_clicked(self, row, column):
-        if column == COLUMN_START:
-            return
-        _DescriptionPopup(self._problems[row])
-
-    def _on_table_context_menu(self, pos):
-        row = self._table.rowAt(pos.y())
-        if row < 0 or row >= len(self._problems):
-            return
-        problem = self._problems[row]
-
-        menu = QMenu(self)
-        edit_action = menu.addAction("Edit Problem")
-        action = menu.exec(self._table.viewport().mapToGlobal(pos))
-        if action == edit_action:
-            self._open_edit_problem(problem)
+        """(Kept under its old name: ReviewTab asks every view to redraw.) One row per
+        problem, rebuilt from scratch."""
+        while self._list_layout.count():
+            widget = self._list_layout.takeAt(0).widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        self._rows = []
+        current_id = self._review_banner.current_problem_id()
+        for problem in self._problems:
+            row = _ProblemRow(
+                problem, is_current=problem["id"] == current_id, on_start=self._start_problem,
+                on_open=lambda p: _DescriptionPopup(p), on_edit=self._open_edit_problem)
+            self._rows.append(row)
+            self._list_layout.addWidget(row)
+        if not self._rows:
+            text = ("Nothing to review today. Switch to All to see every problem."
+                    if self._due_only else "No problems yet. Add one to start building the list.")
+            empty = QLabel(text)
+            empty.setAlignment(Qt.AlignCenter)
+            empty.setWordWrap(True)
+            empty.setStyleSheet(
+                f"color: {MUTED}; font-size: 14px; background: #FFFFFF; border: 1px dashed #D0D5DD;"
+                "border-radius: 16px; padding: 32px 24px;")
+            self._list_layout.addWidget(empty)
 
     def _open_edit_problem(self, problem):
         _register_popup(_AddProblemDialog(self._topic_id, on_added=lambda _p: self.refresh(), problem=problem))
@@ -1148,48 +1233,39 @@ class _ReviewBanner(QWidget):
         outer.setSpacing(0)
 
         card = QFrame()
+        card.setObjectName("ReviewCard")
         card.setStyleSheet(
-            "QFrame { background: #EAF2FF; border: 1px solid #BDD4F7; border-radius: 10px; }"
-        )
+            "QFrame#ReviewCard { background: #FFFFFF; border: 1px solid #E6E9EF; border-radius: 18px; }")
+        _soft_shadow(card)
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(12, 10, 12, 10)
-        card_layout.setSpacing(4)
+        card_layout.setContentsMargins(20, 16, 20, 16)
+        card_layout.setSpacing(2)
 
         self._problem_label = QLabel()
         self._problem_label.setAlignment(Qt.AlignCenter)
         self._problem_label.setStyleSheet(
-            "font-size: 13px; font-weight: 600; color: #1F2328; background: transparent; border: none;"
+            f"font-size: 14px; font-weight: 650; color: {MUTED}; background: transparent; border: none;"
         )
         card_layout.addWidget(self._problem_label)
 
         self._timer_label = QLabel("00:00")
         self._timer_label.setAlignment(Qt.AlignCenter)
         self._timer_label.setStyleSheet(
-            "font-size: 48px; font-weight: 700; color: #1F2328; "
-            "letter-spacing: 4px; background: transparent; border: none;"
+            f"font-size: 60px; {NUM_CSS} color: {INK}; background: transparent; border: none;"
         )
         card_layout.addWidget(self._timer_label)
 
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
         btn_row.addStretch(1)
 
-        self._pause_btn = QPushButton("Pause")
-        self._pause_btn.setFixedWidth(80)
-        # Explicit styling rather than relying on bare OS-default QPushButton
-        # look (there's no unclassed QPushButton rule in styles.qss outside
-        # #PopupBg) -- unstyled, it was easy to miss against this card's
-        # light #EAF2FF background.
-        self._pause_btn.setStyleSheet(
-            "QPushButton { background: #FFFFFF; color: #1F2328; "
-            "border: 1px solid #BDD4F7; border-radius: 6px; font-weight: 600; padding: 6px 0; }"
-            "QPushButton:hover { background: #DCE9FF; }"
-        )
+        self._pause_btn = button("Pause", SECONDARY_STYLE, height=40)
+        self._pause_btn.setFixedWidth(96)
         self._pause_btn.clicked.connect(self._pause_resume)
         btn_row.addWidget(self._pause_btn)
 
-        finish_btn = QPushButton("Finish")
-        finish_btn.setProperty("class", "AccentButton")
-        finish_btn.setFixedWidth(120)
+        finish_btn = button("Finish", _PRIMARY_INK, height=40)
+        finish_btn.setFixedWidth(130)
         finish_btn.clicked.connect(self._finish)
         btn_row.addWidget(finish_btn)
 
@@ -1200,13 +1276,8 @@ class _ReviewBanner(QWidget):
         # normal way" the way it did sitting between Pause and Finish.
         btn_row.addStretch(1)
 
-        end_btn = QPushButton("End")
-        end_btn.setFixedWidth(80)
-        end_btn.setStyleSheet(
-            "QPushButton { background: #e53935; color: white; border: none; "
-            "border-radius: 6px; font-weight: 600; padding: 6px 0; }"
-            "QPushButton:hover { background: #c62828; }"
-        )
+        end_btn = button("End", DANGER_STYLE, height=40)
+        end_btn.setFixedWidth(84)
         end_btn.clicked.connect(self._end_early)
         btn_row.addWidget(end_btn)
 
@@ -1651,19 +1722,18 @@ class _ParkedStrip(QWidget):
                 widget.deleteLater()
         for row in rows:
             frame = QFrame()
+            frame.setObjectName("ParkedRow")
             frame.setStyleSheet(
-                "QFrame { background: #F1F3F6; border: 1px solid #DDE1E7; border-radius: 8px; }"
-                "QLabel { border: none; background: transparent; color: #4A5159; font-weight: 600; }"
-                "QPushButton { background: #FFFFFF; color: #1F2328; border: 1px solid #CBD2DA; "
-                "border-radius: 6px; padding: 3px 10px; }"
-                "QPushButton:hover { background: #E8EEF7; }"
+                "QFrame#ParkedRow { background: #FFFFFF; border: 1px dashed #C9CED8; border-radius: 12px; }"
+                f"QLabel {{ border: none; background: transparent; color: {MUTED}; font-weight: 600; }}"
             )
             line = QHBoxLayout(frame)
-            line.setContentsMargins(10, 4, 10, 4)
+            line.setContentsMargins(14, 6, 8, 6)
+            line.setSpacing(8)
             line.addWidget(QLabel(f"⏸  {row['name']}  ·  {_format_mmss(row['seconds'])}  ·  paused"), 1)
-            resume = QPushButton("Resume")
+            resume = button("Resume", SECONDARY_STYLE, height=30)
             resume.clicked.connect(lambda checked=False, r=row: self._on_resume(r))
-            end = QPushButton("End")
+            end = button("End", DANGER_STYLE, height=30)
             end.clicked.connect(lambda checked=False, r=row: self._on_end(r))
             line.addWidget(resume)
             line.addWidget(end)
