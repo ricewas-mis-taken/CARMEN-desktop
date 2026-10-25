@@ -400,80 +400,97 @@ class _TimerDialog(QWidget):
     def _start(self):
         try:
             duration_minutes = float(self._duration_edit.text())
-            # float() accepts "nan" and "inf", and a huge number is a valid float
-            # that session_manager then cannot turn into a time -- the slot raised
-            # and the dialog just sat there.
-            if not session_manager.is_valid_duration(duration_minutes):
-                raise ValueError
         except ValueError:
             self._status_label.setText("Enter a valid duration.")
             return
-
-        # macOS-only: hard/soft lock can't do anything at all without
-        # Accessibility permission (see mac_os/enforcer_mac.py's module
-        # docstring) -- gating the interactive "Start Session" button is the
-        # stricter of the two options PORT_SPEC.md's Subsystem 2 allows (the
-        # weaker one, a persistent warning at app launch, is already handled
-        # by main.py._check_accessibility_trust()). Automatic session starts
-        # (calendar-triggered, review-triggered) are deliberately NOT gated
-        # here -- refusing one of those silently, with no dialog to show an
-        # error in, would be worse than letting it start with enforcement
-        # degraded, so this only covers the one flow with a UI to refuse in.
-        if sys.platform == "darwin" and not enforcer.is_accessibility_trusted():
-            self._status_label.setText(
-                "Carmen Focus needs Accessibility permission to enforce a session on macOS."
-            )
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Warning)
-            box.setWindowTitle("Accessibility permission needed")
-            box.setText(
-                "Carmen Focus can't enforce hard/soft lock on macOS without "
-                "Accessibility permission. Grant it in System Settings, then "
-                "try starting the session again."
-            )
-            open_settings_button = box.addButton("Open System Settings", QMessageBox.ActionRole)
-            box.addButton("Cancel", QMessageBox.RejectRole)
-            box.exec()
-            if box.clickedButton() is open_settings_button:
-                try:
-                    subprocess.run(
-                        ["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"],
-                        check=False,
-                    )
-                except Exception:
-                    pass
-            return
-
         lock_mode = "hard" if self._hard_radio.isChecked() else "soft"
-        current_cfg = config.load_config()
-        process_blocklist = current_cfg.get("processBlocklist", [])
-        domain_whitelist = current_cfg.get("domainWhitelist", [])
-        blocked_browser_profiles = current_cfg.get("browserProfileBlocklist", [])
-
-        # Calls the same function POST /session/start uses, so this session
-        # is immediately visible to the browser extension via GET /status.
-        session_manager.start_session(
-            duration_minutes, lock_mode, process_blocklist, domain_whitelist,
-            blocked_browser_profiles=blocked_browser_profiles,
-            hide_taskbar_badges=False,
-            stop_taskbar_flashing=False,
-        )
-
-        # Mutates a freshly-loaded config inside update_config()'s lock
-        # rather than saving the current_cfg read above wholesale -- that
-        # would silently clobber any processBlocklist/domainWhitelist
-        # change made concurrently (e.g. a whitelist push from the browser
-        # extension) during the window between reading current_cfg and
-        # this save, since it was the entire stale dict being written
-        # back, not just these two fields.
-        config.update_config(lambda cfg: cfg.update({
-            "last_duration_minutes": duration_minutes,
-            "last_lock_mode": lock_mode,
-            "last_hide_taskbar_badges": False,
-            "last_stop_taskbar_flashing": False,
-        }))
-
+        error = start_manual_session(duration_minutes, lock_mode, parent=self)
+        if error:
+            self._status_label.setText(error)
+            return
         self.close()
+
+
+def start_manual_session(duration_minutes, lock_mode, parent=None):
+    """Starts an a-la-carte focus session with the saved blocklist. Returns None once it
+    has started, or the reason it did not (also shown to the user where a dialog helps).
+
+    A session that is already running is paused first, so it waits (frozen, nothing
+    enforced for it) and comes back when this one ends -- instead of being replaced
+    for good, which is what start_session() does to a running one."""
+    try:
+        # float() accepts "nan" and "inf", and a huge number is a valid float
+        # that session_manager then cannot turn into a time -- the slot raised
+        # and the dialog just sat there.
+        if not session_manager.is_valid_duration(duration_minutes):
+            raise ValueError
+    except (TypeError, ValueError):
+        return "Enter a valid duration."
+
+    # macOS-only: hard/soft lock can't do anything at all without
+    # Accessibility permission (see mac_os/enforcer_mac.py's module
+    # docstring) -- gating the interactive "Start Session" button is the
+    # stricter of the two options PORT_SPEC.md's Subsystem 2 allows (the
+    # weaker one, a persistent warning at app launch, is already handled
+    # by main.py._check_accessibility_trust()). Automatic session starts
+    # (calendar-triggered, review-triggered) are deliberately NOT gated
+    # here -- refusing one of those silently, with no dialog to show an
+    # error in, would be worse than letting it start with enforcement
+    # degraded, so this only covers the one flow with a UI to refuse in.
+    if sys.platform == "darwin" and not enforcer.is_accessibility_trusted():
+        box = QMessageBox(parent)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Accessibility permission needed")
+        box.setText(
+            "Carmen Focus can't enforce hard/soft lock on macOS without "
+            "Accessibility permission. Grant it in System Settings, then "
+            "try starting the session again."
+        )
+        open_settings_button = box.addButton("Open System Settings", QMessageBox.ActionRole)
+        box.addButton("Cancel", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is open_settings_button:
+            try:
+                subprocess.run(
+                    ["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"],
+                    check=False,
+                )
+            except Exception:
+                pass
+        return "Carmen Focus needs Accessibility permission to enforce a session on macOS."
+
+    current_cfg = config.load_config()
+    process_blocklist = current_cfg.get("processBlocklist", [])
+    domain_whitelist = current_cfg.get("domainWhitelist", [])
+    blocked_browser_profiles = current_cfg.get("browserProfileBlocklist", [])
+
+    running = session_manager.get_status()
+    if running["isActive"] and not running["isPaused"]:
+        session_manager.pause_session()
+
+    # Calls the same function POST /session/start uses, so this session
+    # is immediately visible to the browser extension via GET /status.
+    session_manager.start_session(
+        duration_minutes, lock_mode, process_blocklist, domain_whitelist,
+        blocked_browser_profiles=blocked_browser_profiles,
+        hide_taskbar_badges=False,
+        stop_taskbar_flashing=False,
+    )
+
+    # Mutates a freshly-loaded config inside update_config()'s lock
+    # rather than saving the current_cfg read above wholesale -- that
+    # would silently clobber any processBlocklist/domainWhitelist
+    # change made concurrently (e.g. a whitelist push from the browser
+    # extension) during the window between reading current_cfg and
+    # this save, since it was the entire stale dict being written
+    # back, not just these two fields.
+    config.update_config(lambda cfg: cfg.update({
+        "last_duration_minutes": duration_minutes,
+        "last_lock_mode": lock_mode,
+        "last_hide_taskbar_badges": False,
+        "last_stop_taskbar_flashing": False,
+    }))
+    return None
 
 
 class _EditSessionRulesDialog(QWidget):
