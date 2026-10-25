@@ -132,7 +132,10 @@ def main():
     api_thread = threading.Thread(target=run_server, daemon=True)
     api_thread.start()
 
-    calendar_scheduler.start(stop_event)
+    # The calendar's reminders and auto-start-at-event-time are parked with the
+    # Calendar tab (see archive/README.md): with no way to see or edit events,
+    # a leftover one would still start a session out of nowhere.
+    # calendar_scheduler.start(stop_event)
     sync_scheduler.start(stop_event)
     sync_live.start(stop_event)
     sync_realtime.start(stop_event)

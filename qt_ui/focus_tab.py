@@ -10,7 +10,6 @@ import picker_gui
 import session_manager
 import tasks_store
 import qt_ui.nuclear_dialog as nuclear_dialog
-from qt_ui.next_up_widget import NextUpLabel
 
 STATUS_REFRESH_MS = 1000
 
@@ -25,8 +24,6 @@ class FocusTab(QWidget):
         title = QLabel("Focus")
         title.setStyleSheet("font-size: 20px; font-weight: 700;")
         layout.addWidget(title)
-
-        layout.addWidget(NextUpLabel())
 
         self._status_label = QLabel()
         self._status_label.setWordWrap(True)
@@ -116,12 +113,6 @@ class FocusTab(QWidget):
     def _refresh_status(self):
         status = session_manager.get_status()
         active = status["isActive"]
-        if self._was_active and not active:
-            # Lazy import: qt_ui/main_window.py imports this module to build
-            # the "focus" page, so a top-level import here would be circular.
-            import qt_ui.main_window as main_window
-
-            main_window.refresh_calendar_views()
         self._was_active = active
         self._pause_button.setVisible(active)
         self._nuclear_button.setVisible(active)

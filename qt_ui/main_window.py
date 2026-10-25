@@ -1,6 +1,7 @@
-"""The real Qt main window: sidebar nav (Calendar / Focus / Tasks /
-Finished) + QStackedWidget content, replacing calendar_gui.py's Tk
-`.tkraise()` frame switching and Stage 1's placeholder stand-in.
+"""The real Qt main window: sidebar nav (Focus / Tasks / The Board / ...) +
+QStackedWidget content, replacing calendar_gui.py's Tk `.tkraise()` frame
+switching and Stage 1's placeholder stand-in. The Calendar and Finished tabs
+now live in archive/ (see archive/README.md).
 """
 import ctypes
 import sys
@@ -27,8 +28,6 @@ from PySide6.QtWidgets import (
 
 from qt_ui.account_widget import AccountArea
 from qt_ui.board_tab import BoardTab
-from qt_ui.calendar_page import CalendarPage
-from qt_ui.finished_tab import FinishedTab
 from qt_ui.focus_tab import FocusTab
 from qt_ui.history_viewer import HistoryTab
 from qt_ui.review_tab import ReviewTab
@@ -90,17 +89,6 @@ def open_sign_in():
     """Tray "Sign in": the main window with the sign-in dialog on top."""
     open_main_window()
     _win._account_area._open_auth_dialog()
-
-
-def refresh_calendar_views():
-    """Called after an event is saved/deleted (qt_ui/event_editor.py) so
-    any already-open calendar/finished views pick up the change -- the Qt
-    equivalent of the Tk version's _refresh_all_calendar_views() walking
-    _state["refresh_callbacks"]. A no-op if the main window isn't open."""
-    if _win is None:
-        return
-    _win._pages["calendar"].refresh()
-    _win._pages["finished"].refresh()
 
 
 _NORMAL_SIZE = (800, 800)
@@ -188,17 +176,15 @@ class _MainWindow(QWidget):
         root_layout.addWidget(content, 1)
 
         self._pages = {}
-        self._add_page("calendar", CalendarPage())
         self._add_page("focus", FocusTab())
         self._add_page("tasks", TasksTab())
         self._add_page("board", BoardTab())
         self._add_page("review", ReviewTab())
         self._add_page("scribe", ScribeTab())
         self._add_page("screentime", ScreenTimeTab())
-        self._add_page("finished", FinishedTab())
         self._add_page("history", HistoryTab())
 
-        self._show_tab("calendar")
+        self._show_tab("focus")
 
     def _add_page(self, key, widget):
         self._pages[key] = widget
@@ -219,14 +205,12 @@ class _MainWindow(QWidget):
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
         nav_items = [
-            ("calendar", "📅  Calendar"),
             ("focus", "🔥  Focus"),
             ("tasks", "🎯  Tasks"),
             ("board", "🗂  The Board"),
             ("review", "🔁  Review"),
             ("scribe", "✏️  Scribe"),
             ("screentime", "⏱  Screen Time"),
-            ("finished", "✅  Finished"),
             ("history", "📜  Session History"),
         ]
         for key, label in nav_items:
@@ -236,7 +220,7 @@ class _MainWindow(QWidget):
             button.clicked.connect(lambda checked, k=key: self._show_tab(k))
             layout.addWidget(button)
             self._nav_group.addButton(button)
-            if key == "calendar":
+            if key == "focus":
                 button.setChecked(True)
 
         layout.addStretch(1)
