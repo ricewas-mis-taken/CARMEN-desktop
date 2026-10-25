@@ -570,3 +570,13 @@ tick only while visible, restyle only when the look changes). Old TaskCard/burno
   Not done: a weekday filter on top of a period total ("10 hours a week, but only Mon/Wed/Fri"). Every day counts toward the total.
   Sync / old devices: a computer that has not been updated treats an unknown recurrence as daily, so a 600-minute weekly goal would read as 600 minutes a day there. Update both computers together. sync_client._normalize_task now sanitises periodAnchor.
   Extension: no change; it never reads task goals, only the running session.
+
+[2026-10-25] Starting a focus session over a running one pauses it (Focus tab, tray dialog)
+  Fork: keep start_session()'s "new session wins" for the hand-started case too (the Focus tab disabled Start while anything ran to avoid it), or park the running one.
+  Chose to park: picker_dialogs.start_manual_session() pauses a running session first, and start_session() already sets a paused one aside to come back later. Disabling Start made it impossible to start an a-la-carte session during a task or review, which is exactly when you want one; replacing it would silently end the task's session. The Focus tab now lists the running session and every waiting one with Switch / End. start_session()'s own behaviour is unchanged for calendar, task and review starts and for POST /session/start.
+  Extension: none; it only reads the sessions.
+
+[2026-10-25] One look for the app's tabs: qt_ui/ui_kit.py
+  Fork: restyle each redesigned tab on its own, or share the pieces the Tasks cards already had.
+  Chose a small shared module (colours, DIN numerals via Bahnschrift, chips, buttons, the ring, an elided label); tasks_tab keeps its old private names as aliases. Focus, Board, Scribe, Screen Time and Review were redesigned on it: white cards with a hairline border on the grey page, ink text, one accent per thing (task colour, importance ramp, category colour), and a number as the hero wherever the page is about a number. Fonts are set in label stylesheets, not setFont(), because the app stylesheet sets a font on every label and wins.
+  Replaced the Review table (nine columns, horizontal scroll) with a row per problem; the Board's tag drop-down became chips. Tests that reached into the table now read the rows.
