@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -955,6 +956,176 @@ def _tool_icon(key):
     return icon
 
 
+class _ColorWell(QWidget):
+    """Line and fill in one picture: a ring (the line colour) over a disc (the fill). Click the
+    ring or the disc to pick that colour."""
+
+    strokeClicked = Signal()
+    fillClicked = Signal()
+
+    def __init__(self, stroke, fill):
+        super().__init__()
+        self.stroke = stroke
+        self.fill = fill
+        self.setFixedSize(68, 68)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("Line colour (ring) and fill colour (disc)")
+
+    def set_colors(self, stroke=None, fill=None, set_fill=False):
+        if stroke is not None:
+            self.stroke = stroke
+        if set_fill or fill is not None:
+            self.fill = fill
+        self.update()
+
+    _STROKE_CENTER = QPointF(24, 24)
+    _FILL_CENTER = QPointF(44, 44)
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        # fill disc (behind)
+        rect = QRectF(self._FILL_CENTER.x() - 18, self._FILL_CENTER.y() - 18, 36, 36)
+        p.setPen(QPen(QColor("#C9CED8"), 1))
+        if self.fill:
+            p.setBrush(QColor(self.fill))
+            p.drawEllipse(rect)
+        else:
+            p.setBrush(QColor("#FFFFFF"))
+            p.drawEllipse(rect)
+            p.setPen(QPen(QColor("#D33"), 2, Qt.SolidLine, Qt.RoundCap))
+            p.drawLine(QPointF(rect.left() + 7, rect.bottom() - 7), QPointF(rect.right() - 7, rect.top() + 7))
+        # line ring (in front), with a white gap around it so it reads over the disc
+        ring = QRectF(self._STROKE_CENTER.x() - 17, self._STROKE_CENTER.y() - 17, 34, 34)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor("#FFFFFF"), 13))
+        p.drawEllipse(ring)
+        p.setPen(QPen(QColor(self.stroke), 9))
+        p.drawEllipse(ring)
+        p.setPen(QPen(QColor("#C9CED8"), 1))
+        p.drawEllipse(ring.adjusted(-4.5, -4.5, 4.5, 4.5))
+        p.drawEllipse(ring.adjusted(4.5, 4.5, -4.5, -4.5))
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.LeftButton:
+            return
+        pos = event.position()
+        near_ring = abs(math.hypot(pos.x() - self._STROKE_CENTER.x(), pos.y() - self._STROKE_CENTER.y()) - 17) <= 8
+        if near_ring:
+            self.strokeClicked.emit()
+        elif math.hypot(pos.x() - self._FILL_CENTER.x(), pos.y() - self._FILL_CENTER.y()) <= 18:
+            self.fillClicked.emit()
+        else:
+            self.strokeClicked.emit()
+
+
+class _ColorDot(QPushButton):
+    """A quick colour: left-click sets the line, right-click the fill. The current line colour wears a ring."""
+
+    picked = Signal(str)
+    pickedFill = Signal(str)
+
+    def __init__(self, color):
+        super().__init__()
+        self._color = color
+        self.setCheckable(True)
+        self.setFixedSize(22, 22)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setContextMenuPolicy(Qt.NoContextMenu)
+        self.clicked.connect(lambda: self.picked.emit(self._color))
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.RightButton:
+            self.pickedFill.emit(self._color)
+            return
+        super().mousePressEvent(event)
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        center = QPointF(self.width() / 2, self.height() / 2)
+        if self.isChecked():
+            p.setPen(QPen(QColor(SCRIBE_INK), 2))
+            p.setBrush(Qt.NoBrush)
+            p.drawEllipse(center, 10, 10)
+        p.setPen(QPen(QColor("#C9CED8"), 1))
+        p.setBrush(QColor(self._color))
+        p.drawEllipse(center, 7.5 if self.isChecked() else 9, 7.5 if self.isChecked() else 9)
+
+
+class _StrokePreview(QWidget):
+    """A sample line in the current colour, width, dash and caps -- what you draw next looks like this."""
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedHeight(46)
+        self._style = ("#000000", 4, False, True)
+
+    def set_style(self, color, width, dashed, rounded):
+        self._style = (color, width, dashed, rounded)
+        self.update()
+
+    def paintEvent(self, _event):
+        color, width, dashed, rounded = self._style
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor("#F7F8FA"))
+        p.drawRoundedRect(QRectF(self.rect()), 10, 10)
+        pen = QPen(QColor(color), max(1.0, min(float(width), 22.0)))
+        pen.setCapStyle(Qt.RoundCap if rounded else Qt.FlatCap)
+        pen.setJoinStyle(Qt.RoundJoin if rounded else Qt.MiterJoin)
+        if dashed:
+            pen.setStyle(Qt.DashLine)
+        p.setPen(pen)
+        path = QPainterPath(QPointF(18, self.height() / 2 + 8))
+        path.cubicTo(self.width() * 0.35, self.height() / 2 - 20, self.width() * 0.6, self.height() / 2 + 20,
+                     self.width() - 18, self.height() / 2 - 8)
+        p.drawPath(path)
+
+
+class _PaperChip(QPushButton):
+    """A small picture of one paper (white, grid, dots...); the chosen one wears a ring."""
+
+    def __init__(self, key, label):
+        super().__init__()
+        self._key = key
+        self.setCheckable(True)
+        self.setFixedSize(40, 40)
+        self.setToolTip(label)
+        self.setAccessibleName(f"{label} paper")
+        self.setCursor(Qt.PointingHandCursor)
+
+    def paintEvent(self, _event):
+        paper, minor, major, _dark = _BACKGROUNDS[self._key]
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        inner = QRectF(3, 3, self.width() - 6, self.height() - 6)
+        path = QPainterPath()
+        path.addRoundedRect(inner, 8, 8)
+        p.setClipPath(path)
+        p.fillRect(inner, QColor(paper))
+        if minor is not None:
+            p.setPen(QPen(QColor(minor), 1))
+            if self._key == "dots":
+                p.setPen(QPen(QColor(minor), 2, Qt.SolidLine, Qt.RoundCap))
+                for x in range(8, 36, 8):
+                    for y in range(8, 36, 8):
+                        p.drawPoint(QPointF(x, y))
+            elif self._key == "lined":
+                for y in range(11, 36, 8):
+                    p.drawLine(QPointF(inner.left(), y), QPointF(inner.right(), y))
+            else:
+                for v in range(11, 36, 8):
+                    p.setPen(QPen(QColor(major if v == 19 else minor), 1))
+                    p.drawLine(QPointF(v, inner.top()), QPointF(v, inner.bottom()))
+                    p.drawLine(QPointF(inner.left(), v), QPointF(inner.right(), v))
+        p.setClipping(False)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor(SCRIBE_INK) if self.isChecked() else QColor("#D5D9E0"), 2 if self.isChecked() else 1))
+        p.drawRoundedRect(inner, 8, 8)
+
+
 class ScribeTab(QWidget):
     def __init__(self):
         super().__init__()
@@ -977,6 +1148,8 @@ class ScribeTab(QWidget):
         layout.addWidget(self._build_right())
 
         self.canvas.changed.connect(self._schedule_save)
+        self.canvas.changed.connect(self._refresh_preview)
+        self.canvas.changed.connect(self._sync_quick_dots)
         self.canvas.zoomChanged.connect(self._show_zoom)
         self.canvas.toolChanged.connect(self._show_tool)
         self.canvas.layersChanged.connect(self._refresh_layers)
@@ -1159,67 +1332,64 @@ class ScribeTab(QWidget):
         inner.addWidget(self.canvas)
         return frame
 
-    def _swatch(self, color):
-        button = QPushButton()
-        button.setFixedSize(52, 30)
-        self._paint_swatch(button, color)
-        return button
-
-    @staticmethod
-    def _paint_swatch(button, color):
-        if color:
-            button.setText("")
-            button.setStyleSheet(f"background: {color}; border: 1px solid #C9CED8; border-radius: 9px;")
-        else:
-            button.setText("∅")
-            button.setStyleSheet(
-                "background: #FFFFFF; color: #D33; border: 1px solid #C9CED8; border-radius: 9px;")
-
     def _build_right(self):
-        card = self._card(214)
+        card = self._card(226)
         box = QVBoxLayout(card)
-        box.setContentsMargins(14, 14, 14, 14)
-        box.setSpacing(8)
+        box.setContentsMargins(16, 16, 16, 16)
+        box.setSpacing(10)
         prefs = self.canvas.prefs
+        self._pref_checks = getattr(self, "_pref_checks", {})
 
-        box.addWidget(self._heading("Colour"))
+        # --- ink: one well that shows stroke and fill together, and the quick colours
+        box.addWidget(self._heading("Ink"))
+        well_row = QHBoxLayout()
+        well_row.setSpacing(12)
+        self._color_well = _ColorWell(prefs["stroke"], prefs["fill"])
+        self._color_well.strokeClicked.connect(self._pick_stroke)
+        self._color_well.fillClicked.connect(self._pick_fill)
+        well_row.addWidget(self._color_well)
+        well_text = QVBoxLayout()
+        well_text.setSpacing(2)
+        hint = QLabel("Click the ring for the line,\nthe disc for the fill.")
+        hint.setProperty("scribe", "muted")
+        well_text.addWidget(hint)
         row = QHBoxLayout()
-        row.setSpacing(8)
-        for label, attr, handler in (("Stroke", "_stroke_swatch", self._pick_stroke),
-                                     ("Fill", "_fill_swatch", self._pick_fill)):
-            column = QVBoxLayout()
-            column.setSpacing(3)
-            swatch = self._swatch(prefs["stroke" if attr == "_stroke_swatch" else "fill"])
-            swatch.clicked.connect(handler)
-            setattr(self, attr, swatch)
-            column.addWidget(swatch)
-            caption = QLabel(label)
-            caption.setProperty("scribe", "muted")
-            column.addWidget(caption)
-            row.addLayout(column)
+        row.setSpacing(4)
+        swap = QPushButton("⇄")
+        swap.setToolTip("Swap line and fill colours")
+        swap.setProperty("scribe", "ghost")
+        swap.setFixedHeight(26)
+        swap.clicked.connect(self._swap_colors)
         no_fill = QPushButton("No fill")
         no_fill.setProperty("scribe", "ghost")
+        no_fill.setFixedHeight(26)
         no_fill.clicked.connect(lambda: self._set_fill(None))
-        row.addWidget(no_fill, 0, Qt.AlignTop)
+        row.addWidget(swap)
+        row.addWidget(no_fill)
         row.addStretch(1)
-        box.addLayout(row)
-        quick = QHBoxLayout()
-        quick.setSpacing(5)
-        for color in _QUICK_COLORS:
-            dot = QPushButton()
-            dot.setFixedSize(18, 18)
-            dot.setCursor(Qt.PointingHandCursor)
-            dot.setToolTip(f"Stroke {color}")
-            dot.setStyleSheet(
-                f"QPushButton {{ background: {color}; border: 1px solid #C9CED8; border-radius: 9px; padding: 0; }}"
-                "QPushButton:hover { border: 2px solid #1F2328; }")
-            dot.clicked.connect(lambda _checked=False, c=color: self._quick_stroke(c))
-            quick.addWidget(dot)
-        quick.addStretch(1)
-        box.addLayout(quick)
+        well_text.addLayout(row)
+        well_row.addLayout(well_text, 1)
+        box.addLayout(well_row)
 
-        box.addSpacing(6)
+        self._quick_dots = {}
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(6)
+        for index, color in enumerate(_QUICK_COLORS):
+            dot = _ColorDot(color)
+            dot.setToolTip(f"Line {color}  (right-click: fill)")
+            dot.picked.connect(self._quick_stroke)
+            dot.pickedFill.connect(self._set_fill)
+            self._quick_dots[color] = dot
+            grid.addWidget(dot, index // 8, index % 8)
+        box.addLayout(grid)
+        self._sync_quick_dots()
+
+        # --- line: width with a live preview of the line itself
+        box.addSpacing(4)
         box.addWidget(self._heading("Line"))
+        self._stroke_preview = _StrokePreview()
+        box.addWidget(self._stroke_preview)
         row = QHBoxLayout()
         row.setSpacing(8)
         self._width_slider = QSlider(Qt.Horizontal)
@@ -1240,18 +1410,32 @@ class ScribeTab(QWidget):
             check.toggled.connect(lambda on, k=key: self.canvas.set_flag(k, on))
             self._pref_checks[key] = check
             box.addWidget(check)
+        self._refresh_preview()
 
-        box.addSpacing(6)
+        # --- paper: thumbnails of each background (the combo underneath still holds the value)
+        box.addSpacing(4)
         box.addWidget(self._heading("Paper"))
         self._background = QComboBox()
         for key, label in BACKGROUND_LABELS.items():
             self._background.addItem(label, key)
         self._background.setCurrentIndex(self._background.findData(prefs["background"]))
-        self._background.currentIndexChanged.connect(
-            lambda: self.canvas.set_background(self._background.currentData()))
+        self._background.currentIndexChanged.connect(self._background_changed)
+        self._background.hide()
         box.addWidget(self._background)
+        self._paper_chips = {}
+        paper_grid = QGridLayout()
+        paper_grid.setHorizontalSpacing(6)
+        paper_grid.setVerticalSpacing(6)
+        for index, key in enumerate(BACKGROUND_LABELS):
+            chip = _PaperChip(key, BACKGROUND_LABELS[key])
+            chip.clicked.connect(lambda _c=False, k=key: self._background.setCurrentIndex(self._background.findData(k)))
+            self._paper_chips[key] = chip
+            paper_grid.addWidget(chip, index // 4, index % 4)
+        box.addLayout(paper_grid)
+        self._sync_paper_chips()
 
-        box.addSpacing(6)
+        # --- layers
+        box.addSpacing(4)
         box.addWidget(self._heading("Layers"))
         self._opacity = QComboBox()
         for pct in scribe_store.OPACITIES:
@@ -1265,7 +1449,7 @@ class ScribeTab(QWidget):
         row.addWidget(self._opacity, 1)
         box.addLayout(row)
         self._layer_list = QListWidget()
-        self._layer_list.setFixedHeight(104)
+        self._layer_list.setFixedHeight(96)
         self._layer_list.currentRowChanged.connect(self._layer_row_changed)
         self._layer_list.itemChanged.connect(self._layer_item_changed)
         box.addWidget(self._layer_list)
@@ -1276,7 +1460,7 @@ class ScribeTab(QWidget):
                               ("↓", lambda: self.canvas.move_layer(-1), "Move down")):
             button = QPushButton(text)
             button.setToolTip(tip)
-            button.setFixedHeight(30)
+            button.setFixedHeight(28)
             button.clicked.connect(fn)
             row.addWidget(button)
         box.addLayout(row)
@@ -1301,6 +1485,24 @@ class ScribeTab(QWidget):
             self._width_slider.setValue(min(60, value))
             self._width_slider.blockSignals(False)
         self.canvas.set_width(value)
+        self._refresh_preview()
+
+    def _refresh_preview(self):
+        prefs = self.canvas.prefs
+        self._stroke_preview.set_style(prefs["stroke"], prefs["width"], prefs["dashed"], prefs["roundCorners"])
+
+    def _background_changed(self):
+        self.canvas.set_background(self._background.currentData())
+        self._sync_paper_chips()
+
+    def _sync_paper_chips(self):
+        for key, chip in self._paper_chips.items():
+            chip.setChecked(key == self._background.currentData())
+
+    def _sync_quick_dots(self):
+        stroke = (self.canvas.prefs["stroke"] or "").lower()
+        for color, dot in self._quick_dots.items():
+            dot.setChecked(color.lower() == stroke)
 
     def _show_zoom(self, zoom):
         self._zoom_label.setText(f"{zoom * 100:.0f}%")
@@ -1313,14 +1515,15 @@ class ScribeTab(QWidget):
             self._pan_button.setChecked(False)
 
     def _quick_stroke(self, color):
-        self._paint_swatch(self._stroke_swatch, color)
+        self._color_well.set_colors(stroke=color)
         self.canvas.set_stroke(color)
+        self._sync_quick_dots()
+        self._refresh_preview()
 
     def _pick_stroke(self):
         color = QColorDialog.getColor(QColor(self.canvas.prefs["stroke"]), self, "Stroke color")
         if color.isValid():
-            self._paint_swatch(self._stroke_swatch, color.name())
-            self.canvas.set_stroke(color.name())
+            self._quick_stroke(color.name())
 
     def _pick_fill(self):
         start = QColor(self.canvas.prefs["fill"] or "#FFD54F")
@@ -1329,8 +1532,15 @@ class ScribeTab(QWidget):
             self._set_fill(color.name())
 
     def _set_fill(self, color):
-        self._paint_swatch(self._fill_swatch, color)
+        self._color_well.set_colors(fill=color, set_fill=True)
         self.canvas.set_fill(color)
+
+    def _swap_colors(self):
+        stroke, fill = self.canvas.prefs["stroke"], self.canvas.prefs["fill"]
+        if fill is None:
+            return
+        self._set_fill(stroke)
+        self._quick_stroke(fill)
 
     def _new_board(self):
         answer = QMessageBox.question(
