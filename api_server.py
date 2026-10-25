@@ -339,6 +339,9 @@ def status():
 @app.route("/review/pause", methods=["POST"])
 @_require_token
 def review_pause():
+    # A first attempt (no review_store row) is paused by asking the banner that times it.
+    if review_store.get_active_review() is None and review_store.request_first_attempt("pause"):
+        return jsonify({"ok": True})
     review_store.pause_active_review()
     return jsonify({"ok": True})
 
@@ -346,6 +349,8 @@ def review_pause():
 @app.route("/review/resume", methods=["POST"])
 @_require_token
 def review_resume():
+    if review_store.get_active_review() is None and review_store.request_first_attempt("resume"):
+        return jsonify({"ok": True})
     review_store.resume_active_review()
     return jsonify({"ok": True})
 

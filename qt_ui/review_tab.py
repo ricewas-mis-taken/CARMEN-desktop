@@ -1536,6 +1536,7 @@ class _ReviewBanner(QWidget):
             if active is None or active["token"] != self._session_token:
                 self._abandon_after_external_end()
                 return
+        self._apply_first_attempt_request()
         self._sync_first_attempt_with_pomodoro_break()
         is_paused = self._currently_paused()
         self._pause_btn.setText(self._pause_button_text(is_paused))
@@ -1548,6 +1549,17 @@ class _ReviewBanner(QWidget):
         # entire time it stayed paused.
         self._timer_label.setText(_format_mmss(self._elapsed_seconds_now()))
         self._publish_first_attempt()
+
+    def _apply_first_attempt_request(self):
+        """The extension asked (via /review/pause or /review/resume) to pause or resume a
+        first attempt, which only this banner can do."""
+        if self._first_attempt_callback is None or self._end_session_on_finish:
+            return
+        request = review_store.take_first_attempt_request()
+        if request == "pause" and not self._currently_paused():
+            self._pause_resume()
+        elif request == "resume" and self._currently_paused():
+            self._pause_resume()
 
     def _pause_resume(self):
         if self._end_session_on_finish and self._linked_view()[1]:
