@@ -50,6 +50,7 @@ from PySide6.QtWidgets import (
 
 import scribe_geometry as geo
 import scribe_store
+from qt_ui.ui_kit import with_check_icon
 
 GRID = 20.0  # world units between grid lines at 100% zoom
 SAVE_DELAY_MS = 600
@@ -846,7 +847,11 @@ QLabel[scribe="heading"] { color: #667085; font-size: 12px; font-weight: 700; }
 QLabel[scribe="muted"] { color: #667085; font-size: 12px; }
 QCheckBox { color: #1F2328; spacing: 8px; font-size: 12.5px; }
 QCheckBox::indicator { width: 16px; height: 16px; border: 1.5px solid #B8BFCC; border-radius: 5px; background: #FFFFFF; }
-QCheckBox::indicator:checked { background: #1F2328; border-color: #1F2328; }
+QCheckBox::indicator:hover { border-color: #2F9E44; }
+QCheckBox::indicator:checked { background: #2F9E44; border-color: #2F9E44; image: url(@CHECK@); }
+QListWidget::indicator { width: 16px; height: 16px; border: 1.5px solid #B8BFCC; border-radius: 5px; background: #FFFFFF; }
+QListWidget::indicator:checked { background: #2F9E44; border-color: #2F9E44; image: url(@CHECK@); }
+QMenu::indicator:checked { image: url(@CHECK@); }
 QPushButton { color: #1F2328; background: #F2F4F7; border: none; border-radius: 10px; padding: 6px 10px;
     font-size: 12.5px; font-weight: 600; }
 QPushButton:hover { background: #E7EAF0; }
@@ -1019,7 +1024,7 @@ class ScribeTab(QWidget):
     def _card(width=None):
         frame = QFrame()
         frame.setObjectName("ScribeCard")
-        frame.setStyleSheet(_STYLE)
+        frame.setStyleSheet(with_check_icon(_STYLE))
         if width:
             frame.setFixedWidth(width)
         shadow = QGraphicsDropShadowEffect(frame)

@@ -393,3 +393,44 @@ QFrame.BoardCard {
 QFrame.BoardCard:hover {
     border: 1px solid #C9CED8;
 }
+
+/* Every checkbox, everywhere: a green box with a white tick when checked. @CHECK@ is
+   replaced with the path of the tick picture when the stylesheet is loaded
+   (qt_ui/ui_kit.py: with_check_icon). */
+QCheckBox::indicator,
+QListView::indicator,
+QMenu::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1.5px solid #B8BFCC;
+    border-radius: 5px;
+    background: #FFFFFF;
+}
+
+QCheckBox::indicator:hover,
+QListView::indicator:hover {
+    border-color: #2F9E44;
+}
+
+QCheckBox::indicator:checked,
+QListView::indicator:checked,
+QMenu::indicator:checked {
+    background: #2F9E44;
+    border-color: #2F9E44;
+    image: url(@CHECK@);
+}
+
+QCheckBox::indicator:checked:hover,
+QListView::indicator:checked:hover {
+    background: #278A3B;
+    border-color: #278A3B;
+}
+
+QCheckBox::indicator:disabled {
+    background: #EEF0F4;
+    border-color: #D5D9E0;
+}
+
+QMenu::indicator {
+    margin-left: 6px;
+}

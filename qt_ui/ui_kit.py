@@ -6,8 +6,11 @@ The language: white cards with a hairline border on a soft grey page, ink text, 
 accent colour per thing (a task's colour, a subject's colour), and DIN-style numerals
 (Bahnschrift) wherever a number is the point of the card.
 """
-from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
+import os
+import tempfile
+
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QLabel, QPushButton, QSizePolicy, QWidget
 
 from qt_ui.day_layout import contrasting_text_color
@@ -213,3 +216,48 @@ def link_button(text):
     b.setCursor(Qt.PointingHandCursor)
     b.setStyleSheet(LINK_STYLE)
     return b
+
+
+# --- the checkmark ----------------------------------------------------------------------
+#
+# Every checked box in the app is green with a white tick. A stylesheet can colour the
+# box but needs a picture for the tick, so one is drawn here once (and a 2x copy for
+# sharp screens) into the temp folder, and the stylesheets refer to it by path.
+
+CHECK_GREEN = "#2F9E44"
+CHECK_GREEN_HOVER = "#278A3B"
+
+
+def _draw_check(size):
+    image = QImage(size, size, QImage.Format_ARGB32)
+    image.fill(Qt.transparent)
+    p = QPainter(image)
+    p.setRenderHint(QPainter.Antialiasing)
+    scale = size / 16.0
+    tick = QPainterPath(QPointF(3.6 * scale, 8.4 * scale))
+    tick.lineTo(6.7 * scale, 11.5 * scale)
+    tick.lineTo(12.4 * scale, 4.9 * scale)
+    p.setPen(QPen(QColor("#FFFFFF"), 2.0 * scale, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+    p.drawPath(tick)
+    p.end()
+    return image
+
+
+def check_icon_path():
+    """Path (forward slashes) of the white tick picture, drawn on first use."""
+    folder = os.path.join(tempfile.gettempdir(), "carmen-focus-ui")
+    path = os.path.join(folder, "check-white.png")
+    try:
+        os.makedirs(folder, exist_ok=True)
+        for size, name in ((16, "check-white.png"), (32, "check-white@2x.png")):
+            target = os.path.join(folder, name)
+            if not os.path.exists(target):
+                _draw_check(size).save(target)
+    except OSError:
+        pass
+    return path.replace("\\", "/")
+
+
+def with_check_icon(stylesheet):
+    """The stylesheet with its @CHECK@ placeholder pointing at the tick picture."""
+    return stylesheet.replace("@CHECK@", check_icon_path())

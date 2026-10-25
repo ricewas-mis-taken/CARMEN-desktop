@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 import api_server
 import auto_updater
+from qt_ui import ui_kit
 import autostart
 import desktop_menu
 import calendar_scheduler
@@ -42,7 +43,7 @@ STYLESHEET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "styl
 def _load_stylesheet(app):
     try:
         with open(STYLESHEET_PATH, "r", encoding="utf-8") as f:
-            app.setStyleSheet(f.read())
+            app.setStyleSheet(ui_kit.with_check_icon(f.read()))
     except OSError:
         pass  # missing/unreadable stylesheet must never block the app from starting
 
