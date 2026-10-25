@@ -22,6 +22,7 @@ listed inside the card.
 The grid reflows with the window: as many cards per row as fit, between CARD_MIN and
 CARD_MAX wide, flowing down and across as the window is resized.
 """
+import math
 from datetime import date
 
 from PySide6.QtCore import QEvent, QRectF, Qt, QTimer, Signal
@@ -78,6 +79,10 @@ def _format_minutes(total_minutes):
     if hours:
         return f"{hours}h {minutes}m"
     return f"{minutes}m"
+
+
+def _days_text(days, tail):
+    return f"{days} day{'s' if days != 1 else ''} {tail}"
 
 
 def _format_clock(total_seconds):
@@ -794,7 +799,10 @@ class _TaskCard(QFrame):
         self._armed = False
         self._custom = False
         self._cash_in_balance_int = 0
-        self._logged_minutes_today = 0
+        self._logged_minutes_today = 0  # logged toward the goal's own stretch (today, or the week/month)
+        self._snap = None
+        self._restrictions_variants = []
+        self._restrictions_laid_out = False
         self._style_key = None
         self.goal_state = "none"
 
@@ -827,13 +835,57 @@ class _TaskCard(QFrame):
         outer.addWidget(self._running_panel)
         self._running_panel.hide()
 
+        self._edit_button = self._build_edit_button()
         self._apply_card_style("idle")
 
     # --- static pieces ---
 
+    def _build_edit_button(self):
+        """A tiny pencil in the top-right corner, shown while the pointer is over the
+        card, in every state (it also edits a running task: see _TaskEditor)."""
+        button = QPushButton("✎", self)
+        button.setObjectName("editTaskButton")
+        button.setFlat(True)
+        button.setFixedSize(24, 24)
+        button.setCursor(Qt.PointingHandCursor)
+        button.setToolTip("Edit task")
+        button.setAccessibleName("Edit task")
+        button.setStyleSheet(
+            f"QPushButton{{border:1px solid #E6E9EF;background:#FFFFFF;color:{MUTED};font-size:13px;"
+            f"border-radius:12px;padding:0;}}"
+            f"QPushButton:hover{{background:#F2F4F7;color:{INK};}}")
+        button.clicked.connect(self._open_editor)
+        button.hide()
+        return button
+
+    def _place_edit_button(self):
+        self._edit_button.move(self.width() - self._edit_button.width() - 10, 10)
+        self._edit_button.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._place_edit_button()
+
+    def enterEvent(self, event):
+        self._place_edit_button()
+        self._edit_button.show()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._edit_button.hide()
+        super().leaveEvent(event)
+
+    def eventFilter(self, obj, event):
+        # The restrictions line re-fits its wording whenever its column is resized.
+        if obj is self._blocklist_button and event.type() == QEvent.Resize:
+            self._restrictions_laid_out = True
+            self._fit_restrictions()
+        return super().eventFilter(obj, event)
+
     def _build_header(self):
         row = QHBoxLayout()
         row.setSpacing(10)
+        row.setContentsMargins(0, 0, 22, 0)  # room for the hover pencil in the corner
         self._dot = QLabel()
         self._dot.setFixedSize(12, 12)
         self._dot.setStyleSheet(f"background:{self._color};border-radius:6px;")
@@ -844,17 +896,6 @@ class _TaskCard(QFrame):
         self._state_chip = QLabel()
         self._state_chip.hide()
         row.addWidget(self._state_chip)
-        # The old gear: edit the task.
-        self._gear_button = QPushButton("⋯")
-        self._gear_button.setFlat(True)
-        self._gear_button.setFixedSize(28, 28)
-        self._gear_button.setCursor(Qt.PointingHandCursor)
-        self._gear_button.setToolTip("Edit task")
-        self._gear_button.setStyleSheet(
-            f"QPushButton{{border:none;background:transparent;color:{FAINT};font-size:20px;padding-bottom:6px;border-radius:14px;}}"
-            f"QPushButton:hover{{background:#F2F4F7;color:{INK};}}")
-        self._gear_button.clicked.connect(self._open_editor)
-        row.addWidget(self._gear_button)
         return row
 
     def _build_chips(self):
@@ -891,6 +932,7 @@ class _TaskCard(QFrame):
         # Opens the "what is blocked" list.
         self._blocklist_button = _link_button("")
         self._blocklist_button.clicked.connect(self._open_blocklist_viewer)
+        self._blocklist_button.installEventFilter(self)
         column.addWidget(self._blocklist_button)
         self._vacation_label = _VacationLine()
         self._vacation_label.clicked.connect(self._open_vacation_dialog)
@@ -997,13 +1039,11 @@ class _TaskCard(QFrame):
     def _set_chip(self, text, tone):
         if not text:
             self._state_chip.hide()
-            self._gear_button.show()
             return
         self._state_chip.setText(text)
         self._state_chip.setStyleSheet(
             f"background:{tone[0]};color:{tone[1]};border-radius:10px;padding:2px 10px;font-size:11.5px;font-weight:600;")
         self._state_chip.show()
-        self._gear_button.hide()
 
     # --- state transitions ---
 
@@ -1012,7 +1052,7 @@ class _TaskCard(QFrame):
             return
         self._armed = True
         self._custom = False
-        self._duration_edit.setText(str(self._today_required_minutes()))
+        self._duration_edit.setText(str(self._suggested_session_minutes()))
         self._show_panel()
 
     def _disarm(self):
@@ -1198,7 +1238,19 @@ class _TaskCard(QFrame):
     # --- dynamic refresh (called every tick by TasksTab) ---
 
     def _today_required_minutes(self):
+        """What is required for the goal's own stretch (today, or the week / month for a
+        period goal), after vacation cashed in against it."""
+        if self._snap is not None:
+            return self._snap["required"]
         return tasks_store.required_minutes_for_date(self._task, date.today())
+
+    def _suggested_session_minutes(self):
+        required = int(self._today_required_minutes())
+        if self._snap is not None and self._snap["isPeriod"]:
+            # A whole week's total is no length for one sitting: offer what is left, up to an hour.
+            remaining = max(0, required - int(self._logged_minutes_today))
+            return max(1, min(remaining or 60, 60))
+        return required
 
     def _belongs_to_this_task(self, status):
         # "review" sessions (a review timer started against this task's linked topic,
@@ -1225,14 +1277,15 @@ class _TaskCard(QFrame):
 
     def update_dynamic(self, status, sessions, reviews=None):
         today = date.today()
-        required = self._today_required_minutes()
-        logged_seconds = tasks_store.logged_seconds_for_date(self._task, today, sessions, live_status=status)
-        logged_minutes = logged_seconds / 60
+        snap = tasks_store.goal_snapshot(self._task, today, sessions, live_status=status)
+        self._snap = snap
+        required = snap["required"]
+        logged_minutes = snap["logged"]
         self._logged_minutes_today = logged_minutes
 
-        # Today's cashed-in vacation counts as if worked, against the ORIGINAL target --
+        # Cashed-in vacation counts as if worked, against the ORIGINAL target --
         # cashing in visibly fills the ring instead of just shrinking the goal.
-        today_cashed = (self._task.get("cashedInDates") or {}).get(today.isoformat(), 0)
+        today_cashed = snap["cashed"]
         display_required = required + today_cashed
         display_logged = logged_minutes + today_cashed
         fraction = 0.0 if display_required <= 0 else display_logged / display_required
@@ -1271,11 +1324,39 @@ class _TaskCard(QFrame):
         self.goal_state = "none" if display_required <= 0 else ("reached" if fraction >= 1 else "open")
 
     def _restrictions_text(self):
+        """(variants, clickable): the longest wording first, shorter ones for a narrow card."""
         apps = len(self._task.get("processBlocklist") or [])
         sites = len(self._task.get("domainWhitelist") or [])
         if not (apps or sites):
-            return "No restrictions set", False
-        return f"{apps} app{'s' if apps != 1 else ''} blocked · {sites} site{'s' if sites != 1 else ''} ok", True
+            return ["No restrictions set", "No rules"], False
+        a = f"{apps} app{'s' if apps != 1 else ''}"
+        t = f"{sites} site{'s' if sites != 1 else ''}"
+        return [f"{a} blocked · {t} ok", f"{a} · {t}", f"{apps} · {sites}"], True
+
+    def _set_restrictions(self, variants, clickable):
+        self._restrictions_variants = variants
+        self._blocklist_button.setEnabled(clickable)
+        self._blocklist_button.setToolTip(variants[0] if len(variants) > 1 else "")
+        self._fit_restrictions()
+
+    def _fit_restrictions(self):
+        """Shows the longest wording that fits the button; never cuts a word off."""
+        variants = self._restrictions_variants
+        if not variants:
+            return
+        button = self._blocklist_button
+        room = button.width() - 14  # the link style's side padding
+        fm = button.fontMetrics()
+        chosen = variants[0]  # until the column has a real width, trust the full wording
+        if self._restrictions_laid_out and room > 40:
+            for text in variants:
+                if fm.horizontalAdvance(text) <= room:
+                    chosen = text
+                    break
+            else:
+                chosen = fm.elidedText(variants[-1], Qt.ElideRight, room)
+        if button.text() != chosen:
+            button.setText(chosen)
 
     def _update_idle_view(self, fraction, logged, required, locked_by_other, status, reviews):
         self._apply_card_style("idle")
@@ -1284,27 +1365,41 @@ class _TaskCard(QFrame):
         self._dot.setStyleSheet(f"background:{'#D0D5DD' if locked_by_other else self._color};border-radius:6px;")
         self._name_label.setStyleSheet(
             f"font-size:17px;font-weight:700;color:{'#8A93A3' if locked_by_other else INK};background:transparent;")
+        snap = self._snap or {"isPeriod": False, "phrase": "today", "daysLeft": 1}
+        phrase = snap["phrase"]
+        period = snap["isPeriod"]
+        scheduled = required > 0 or period
         done = required > 0 and fraction >= 1
         ring_color = "#B8BFCC" if locked_by_other else self._color
-        if required <= 0:
+        detail = ""
+        if not scheduled:
             self._ring.set_state(ring_color, 0.0, _format_minutes(logged), "logged today", dim=locked_by_other)
             headline = "Not scheduled today"
+        elif required <= 0:
+            self._ring.set_state(ring_color, 0.0, _format_minutes(logged), f"logged {phrase}", dim=locked_by_other)
+            headline = "No target set"
         elif done:
             over = int(round(logged - required))
             self._ring.set_state(ring_color, 1.0, "Done", f"{_format_minutes(logged)} logged", dim=locked_by_other)
             headline = "Goal reached" if over <= 0 else f"+{over} min over"
+            if period:
+                detail = _days_text(snap["daysLeft"], "left in the period")
         else:
             self._ring.set_state(
-                ring_color, fraction, _format_minutes(logged), f"of {_format_minutes(required)} today",
+                ring_color, fraction, _format_minutes(logged), f"of {_format_minutes(required)} {phrase}",
                 dim=locked_by_other)
-            headline = f"{max(0, int(round(required - logged)))} min to go"
+            left = max(0, int(round(required - logged)))
+            headline = f"{_format_minutes(left)} to go" if period else f"{left} min to go"
+            if period:
+                days = max(1, snap["daysLeft"])
+                pace = _format_minutes(math.ceil(left / days))
+                detail = "Due today" if days == 1 else f"{_days_text(days, 'left')} · about {pace} a day"
         self._countdown_label.setText(headline)
         self._countdown_label.setStyleSheet(
             f"font-size:15px;font-weight:600;color:{'#8A93A3' if locked_by_other else INK};background:transparent;")
-        self._detail_label.hide()
-        text, clickable = self._restrictions_text()
-        self._blocklist_button.setText(text)
-        self._blocklist_button.setEnabled(clickable)
+        self._detail_label.setText(detail)
+        self._detail_label.setVisible(bool(detail))
+        self._set_restrictions(*self._restrictions_text())
 
         self._running_panel.hide()
         self._start_button.setText("▶  Start again" if done else "▶  Start")
@@ -1359,8 +1454,9 @@ class _TaskCard(QFrame):
         self._countdown_label.setStyleSheet(f"font-size:15px;font-weight:600;color:{INK};background:transparent;")
         self._ring.set_state(ring_color, ring_fraction, big, small, dim=paused or is_waiting)
 
-        detail = (f"{_format_minutes(logged)} of {_format_minutes(required)} today" if required > 0
-                  else f"{_format_minutes(logged)} logged today")
+        phrase = self._snap["phrase"] if self._snap else "today"
+        detail = (f"{_format_minutes(logged)} of {_format_minutes(required)} {phrase}" if required > 0
+                  else f"{_format_minutes(logged)} logged {phrase}")
         if is_waiting:
             detail = "Time is frozen. Nothing is blocked for this task."
         elif on_break:
