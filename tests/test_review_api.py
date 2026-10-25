@@ -363,3 +363,29 @@ def test_finish_review_whose_write_fails_can_be_retried(isolate_review_db, monke
 
     monkeypatch.setattr(review_store, "_apply_review_outcome", real)
     assert review_store.finish_review(token) is not None
+
+
+# ---------------------------------------------- pausing a first attempt remotely ----
+
+def test_pause_and_resume_reach_a_first_attempt_through_a_request(client, isolate_review_db):
+    topic = _create_topic(client)
+    import review_store
+    review_store.publish_first_attempt(topic["id"], "2026-10-04T10:00:00", 40, False)
+
+    assert client.post("/review/pause").status_code == 200
+    snap = review_store.get_first_attempt()
+    assert snap["isPaused"] and snap["elapsedSeconds"] >= 40       # shows paused at once, time frozen
+    assert review_store.take_first_attempt_request() == "pause"
+    assert review_store.take_first_attempt_request() is None       # taken once
+
+    assert client.post("/review/resume").status_code == 200
+    assert not review_store.get_first_attempt()["isPaused"]
+    assert review_store.take_first_attempt_request() == "resume"
+
+
+def test_a_pause_with_nothing_to_pause_asks_for_nothing(client, isolate_review_db):
+    import review_store
+    review_store.clear_first_attempt()
+    assert client.post("/review/pause").status_code == 200
+    assert review_store.take_first_attempt_request() is None
+    assert review_store.request_first_attempt("jump") is False

@@ -918,3 +918,25 @@ def test_the_empty_list_explains_itself(qtbot, isolate_review_db):
     view._set_due_only(False)
     texts = [l.text() for l in view.findChildren(review_tab.QLabel)]
     assert any("No problems yet" in t for t in texts)
+
+
+def test_the_extension_can_pause_and_resume_a_first_attempt(qtbot, isolate_review_db, isolate_state, monkeypatch):
+    """The first attempt is timed only by this banner, so a pause asked for through the
+    API (review_store.request_first_attempt) is applied here on the next tick."""
+    banner = _first_attempt_banner(qtbot, monkeypatch, {"on": False})
+    assert not banner._currently_paused()
+    review_store.request_first_attempt("pause")
+    banner._tick()
+    assert banner._currently_paused() and banner._pause_btn.text() == "Resume"
+    assert review_store.get_first_attempt()["isPaused"]
+    review_store.request_first_attempt("resume")
+    banner._tick()
+    assert not banner._currently_paused() and banner._pause_btn.text() == "Pause"
+    assert not review_store.get_first_attempt()["isPaused"]
+
+
+def test_a_request_for_the_state_it_is_already_in_changes_nothing(qtbot, isolate_review_db, isolate_state, monkeypatch):
+    banner = _first_attempt_banner(qtbot, monkeypatch, {"on": False})
+    review_store.request_first_attempt("resume")   # already running
+    banner._tick()
+    assert not banner._currently_paused()
