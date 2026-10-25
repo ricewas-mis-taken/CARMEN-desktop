@@ -134,6 +134,10 @@ def isolate_real_data_paths(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(review_store, "ACTIVE_SESSION_PATH", str(base / "active_review.json"))
     monkeypatch.setattr(review_store, "_parked_reviews", {})
     monkeypatch.setattr(review_store, "_parked_loaded", True)
+    # An in-memory first-attempt snapshot (and a pending pause request for it) must not leak
+    # from one test into the next either.
+    monkeypatch.setattr(review_store, "_first_attempt", None)
+    monkeypatch.setattr(review_store, "_first_attempt_request", None)
     monkeypatch.setattr(review_store, "PHOTOS_DIR", str(base / "review_photos"))
     # sync_client's account-owner marker and watermark: a test that calls
     # sync_now() without isolating them used to write a fake user id into the
@@ -274,5 +278,9 @@ def isolate_review_db(isolate_calendar_db, tmp_path, monkeypatch):
     monkeypatch.setattr(review_store, "ACTIVE_SESSION_PATH", str(tmp_path / "active_review.json"))
     monkeypatch.setattr(review_store, "_parked_reviews", {})
     monkeypatch.setattr(review_store, "_parked_loaded", True)
+    # An in-memory first-attempt snapshot (and a pending pause request for it) must not leak
+    # from one test into the next either.
+    monkeypatch.setattr(review_store, "_first_attempt", None)
+    monkeypatch.setattr(review_store, "_first_attempt_request", None)
     monkeypatch.setattr(review_store, "PHOTOS_DIR", str(tmp_path / "review_photos"))
     yield

@@ -10,6 +10,9 @@ import session_manager as sm
 import tasks_store
 
 
+pytestmark = pytest.mark.usefixtures("isolate_review_db")
+
+
 @pytest.fixture
 def isolate_tasks(tmp_path, monkeypatch):
     monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
