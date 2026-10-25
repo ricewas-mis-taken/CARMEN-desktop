@@ -249,3 +249,59 @@ def test_edit_session_rules_dialog_without_active_session_shows_message(qtbot, i
     win = picker_dialogs._EditSessionRulesDialog()
     qtbot.addWidget(win)
     assert not hasattr(win, "_process_edit")
+
+
+# ------------------------------------------------------------ rules picker ----
+
+def _rules_picker(qtbot, monkeypatch, apps=(), profiles=()):
+    import installed_apps
+    import window_tracker
+    monkeypatch.setattr(installed_apps, "list_installed_apps", lambda: [
+        {"process_name": a, "display_name": a.replace(".exe", "").title()} for a in apps])
+    monkeypatch.setattr(window_tracker, "list_known_browser_profiles", lambda: [
+        {"aumi": p, "label": f"Chrome {p}", "is_running": True} for p in profiles])
+    picker = picker_dialogs._BlocklistPicker(for_next_session=True)
+    qtbot.addWidget(picker)
+    return picker
+
+
+def test_the_rules_picker_offers_apps_websites_and_browser_profiles(qtbot, isolate_state, monkeypatch):
+    import config
+    config.update_config(lambda cfg: cfg.update({"domainWhitelist": ["docs.google.com"]}))
+    picker = _rules_picker(qtbot, monkeypatch, apps=["steam.exe"], profiles=["Chrome.Profile1"])
+    assert picker._checklist.has_key("steam.exe")
+    assert picker._checklist.has_key("Chrome.Profile1")
+    assert picker._domains_checklist is not None and picker._domains_checklist.has_key("docs.google.com")
+
+
+def test_the_rules_picker_works_while_a_session_runs(qtbot, isolate_state, monkeypatch):
+    """The ordinary picker turns into "unblock what is blocked now" mid-session, listing nothing to add."""
+    session_manager.start_session(25, "soft", ["discord.exe"], [])
+    picker = _rules_picker(qtbot, monkeypatch, apps=["steam.exe"])
+    assert not picker._session_active and picker._checklist.has_key("steam.exe")
+
+
+def test_saving_the_rules_writes_all_three_lists(qtbot, isolate_state, monkeypatch):
+    import config
+    saved = []
+    picker = _rules_picker(qtbot, monkeypatch, apps=["steam.exe", "discord.exe"], profiles=["Chrome.Profile1"])
+    picker.on_saved = lambda: saved.append(True)
+    picker._checklist._checkboxes_by_key["steam.exe"][0].setChecked(True)
+    picker._checklist._checkboxes_by_key["chrome.profile1"][0].setChecked(True)
+    picker._domain_edit.setText("https://Wikipedia.org/")
+    picker._add_domain()
+    picker._save()
+    cfg = config.load_config()
+    assert cfg["processBlocklist"] == ["steam.exe"]
+    assert cfg["browserProfileBlocklist"] == ["Chrome.Profile1"]
+    assert cfg["domainWhitelist"] == ["wikipedia.org"]
+    assert saved == [True]
+    assert "1 app(s), 1 browser profile(s) and 1 website(s)" in picker._status_label.text()
+
+
+def test_a_blank_or_spaced_website_is_ignored(qtbot, isolate_state, monkeypatch):
+    picker = _rules_picker(qtbot, monkeypatch)
+    for bad in ("", "   ", "two words"):
+        picker._domain_edit.setText(bad)
+        picker._add_domain()
+    assert picker._domains_checklist.checked_keys() == []
