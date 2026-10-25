@@ -111,3 +111,93 @@ def test_deleting_a_different_tasks_session_does_not_touch_the_active_one(qtbot,
     win._delete()
 
     assert session_manager.is_active()
+
+
+# ---------------------------------------------------------------- repeats ----
+
+def _editor(qtbot, task=None):
+    win = task_editor._TaskEditor(task, on_saved=None)
+    qtbot.addWidget(win)
+    win._name_edit.setText("Read")
+    return win
+
+
+def _pick(win, kind):
+    win._repeat_combo.setCurrentIndex(win._repeat_combo.findData(kind))
+
+
+def test_the_repeat_menu_offers_every_kind_of_goal(qtbot, isolate_tasks):
+    win = _editor(qtbot)
+    kinds = [win._repeat_combo.itemData(i) for i in range(win._repeat_combo.count())]
+    assert kinds == ["daily", "weekly_days", "weekly_total", "biweekly_total", "monthly_total"]
+
+
+def test_a_weekly_total_saves_hours_as_minutes(qtbot, isolate_tasks):
+    win = _editor(qtbot)
+    _pick(win, "weekly_total")
+    win._target_edit.setText("10h")
+    win._save()
+    saved = tasks_store.load_tasks()[0]
+    assert (saved["recurrence"], saved["targetMinutes"], saved["weekdays"]) == ("weekly_total", 600, [])
+
+
+@pytest.mark.parametrize("kind", ["biweekly_total", "monthly_total"])
+def test_longer_totals_save_too(qtbot, isolate_tasks, kind):
+    win = _editor(qtbot)
+    _pick(win, kind)
+    win._target_edit.setText("1h 30m")
+    win._save()
+    saved = tasks_store.load_tasks()[0]
+    assert (saved["recurrence"], saved["targetMinutes"]) == (kind, 90)
+
+
+def test_the_weekday_boxes_only_show_for_specific_days(qtbot, isolate_tasks):
+    win = _editor(qtbot)
+    win.show()
+    assert win._weekday_row.isHidden()
+    _pick(win, "weekly_days")
+    assert not win._weekday_row.isHidden()
+    _pick(win, "weekly_total")
+    assert win._weekday_row.isHidden()
+
+
+def test_specific_days_still_need_a_day_ticked(qtbot, isolate_tasks):
+    win = _editor(qtbot)
+    _pick(win, "weekly_days")
+    win._target_edit.setText("30")
+    win._save()
+    assert win._status_label.text() == "Pick at least one weekday."
+    assert tasks_store.load_tasks() == []
+    win._weekday_checks["MO"].setChecked(True)
+    win._save()
+    saved = tasks_store.load_tasks()[0]
+    assert (saved["recurrence"], saved["weekdays"], saved["targetMinutes"]) == ("weekly_days", ["MO"], 30)
+
+
+def test_the_label_and_hint_follow_the_choice(qtbot, isolate_tasks):
+    win = _editor(qtbot)
+    assert win._target_label.text() == "Target per day"
+    _pick(win, "weekly_total")
+    assert win._target_label.text() == "Target per week"
+    assert "Sunday" in win._repeat_hint.text()
+
+
+def test_editing_a_weekly_task_shows_its_target_in_hours(qtbot, isolate_tasks):
+    task = _make_task(recurrence="weekly_total", targetMinutes=600)
+    win = task_editor._TaskEditor(task, on_saved=None)
+    qtbot.addWidget(win)
+    assert win._repeat_kind() == "weekly_total" and win._target_edit.text() == "10h"
+
+
+def test_a_bad_target_is_refused_with_the_accepted_forms(qtbot, isolate_tasks):
+    win = _editor(qtbot)
+    for bad in ("", "0", "soon", "-5"):
+        win._target_edit.setText(bad)
+        win._save()
+        assert "positive time" in win._status_label.text()
+    assert tasks_store.load_tasks() == []
+
+
+@pytest.mark.parametrize("text,minutes", [("45", 45), ("90m", 90), ("10h", 600), ("1.5h", 90), ("1h 30m", 90), ("1h30", 90)])
+def test_target_forms(text, minutes):
+    assert task_editor.parse_minutes(text) == minutes
