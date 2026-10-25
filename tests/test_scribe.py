@@ -324,7 +324,7 @@ def test_a_quick_colour_sets_the_stroke(qtbot):
     qtbot.addWidget(tab)
     tab._quick_stroke("#E03131")
     assert tab.canvas.prefs["stroke"] == "#E03131"
-    assert "#E03131" in tab._stroke_swatch.styleSheet()
+    assert tab._color_well.stroke == "#E03131" and tab._quick_dots["#E03131"].isChecked()
 
 
 def test_width_slider_and_box_stay_in_step(qtbot):
@@ -343,3 +343,58 @@ def test_the_snap_menu_drives_the_view_options(qtbot):
     before = tab.canvas.prefs["showRulers"]
     action.setChecked(not before)
     assert tab.canvas.prefs["showRulers"] is (not before)
+
+
+# ------------------------------------------------------------- the inspector ----
+
+def test_the_colour_well_follows_stroke_and_fill(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab._set_fill("#FFD54F")
+    assert tab._color_well.fill == "#FFD54F" and tab.canvas.prefs["fill"] == "#FFD54F"
+    tab._set_fill(None)
+    assert tab._color_well.fill is None and tab.canvas.prefs["fill"] is None
+
+
+def test_swap_trades_line_and_fill(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab._quick_stroke("#1971C2")
+    tab._set_fill("#FAB005")
+    tab._swap_colors()
+    assert (tab.canvas.prefs["stroke"], tab.canvas.prefs["fill"]) == ("#FAB005", "#1971C2")
+    tab._set_fill(None)
+    tab._swap_colors()   # nothing to swap with: left alone
+    assert tab.canvas.prefs["stroke"] == "#FAB005" and tab.canvas.prefs["fill"] is None
+
+
+def test_a_right_click_on_a_quick_colour_sets_the_fill(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab.show()
+    dot = tab._quick_dots["#2F9E44"]
+    QTest.mouseClick(dot, Qt.RightButton)
+    assert tab.canvas.prefs["fill"] == "#2F9E44"
+    QTest.mouseClick(dot, Qt.LeftButton)
+    assert tab.canvas.prefs["stroke"] == "#2F9E44"
+
+
+def test_the_preview_shows_the_line_you_will_draw(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab._quick_stroke("#7048E8")
+    tab._width.setValue(9)
+    tab._pref_checks["dashed"].setChecked(True)
+    tab.canvas.changed.emit()
+    assert tab._stroke_preview._style == ("#7048E8", 9, True, tab.canvas.prefs["roundCorners"])
+
+
+def test_paper_thumbnails_set_the_background_and_show_the_current_one(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab._paper_chips["dots"].click()
+    assert tab.canvas.prefs["background"] == "dots" and tab._background.currentData() == "dots"
+    assert tab._paper_chips["dots"].isChecked() and not tab._paper_chips["grid"].isChecked()
+    assert set(tab._paper_chips) == set(scribe_store.BACKGROUNDS)
+    for chip in tab._paper_chips.values():
+        chip.grab()   # every paper paints
