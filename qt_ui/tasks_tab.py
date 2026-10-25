@@ -690,20 +690,20 @@ class _TaskCard(QFrame):
         button = QPushButton("✎", self)
         button.setObjectName("editTaskButton")
         button.setFlat(True)
-        button.setFixedSize(24, 24)
+        button.setFixedSize(34, 34)
         button.setCursor(Qt.PointingHandCursor)
         button.setToolTip("Edit task")
         button.setAccessibleName("Edit task")
         button.setStyleSheet(
-            f"QPushButton{{border:1px solid #E6E9EF;background:#FFFFFF;color:{MUTED};font-size:13px;"
-            f"border-radius:12px;padding:0;}}"
+            f"QPushButton{{border:1px solid #E1E5EC;background:#FFFFFF;color:{INK};font-size:19px;"
+            f"border-radius:17px;padding:0 0 2px 0;}}"
             f"QPushButton:hover{{background:#F2F4F7;color:{INK};}}")
         button.clicked.connect(self._open_editor)
         button.hide()
         return button
 
     def _place_edit_button(self):
-        self._edit_button.move(self.width() - self._edit_button.width() - 10, 10)
+        self._edit_button.move(self.width() - self._edit_button.width() - 10, 9)
         self._edit_button.raise_()
 
     def resizeEvent(self, event):
@@ -729,7 +729,7 @@ class _TaskCard(QFrame):
     def _build_header(self):
         row = QHBoxLayout()
         row.setSpacing(10)
-        row.setContentsMargins(0, 0, 22, 0)  # room for the hover pencil in the corner
+        row.setContentsMargins(0, 0, 30, 0)  # room for the hover pencil in the corner
         self._dot = QLabel()
         self._dot.setFixedSize(12, 12)
         self._dot.setStyleSheet(f"background:{self._color};border-radius:6px;")
