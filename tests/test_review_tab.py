@@ -70,11 +70,11 @@ def test_topic_view_lists_due_problems_by_default(qtbot, isolate_review_db):
     view = tab._topic_views[topic["id"]]
     # 5-star problems land 1 day out (see review_scheduler), so nothing is
     # due yet under the default "Due" filter.
-    assert view._table.rowCount() == 0
+    assert len(view._rows) == 0
 
     view._set_due_only(False)
-    assert view._table.rowCount() == 1
-    assert view._table.item(0, review_tab.COLUMN_NAME).text() == "Solve it"
+    assert len(view._rows) == 1
+    assert view._rows[0].name_label.text() == "Solve it"
 
 
 def test_topic_view_shows_due_problem_when_next_review_is_today(qtbot, isolate_review_db):
@@ -93,10 +93,10 @@ def test_topic_view_shows_due_problem_when_next_review_is_today(qtbot, isolate_r
     tab = review_tab.ReviewTab()
     qtbot.addWidget(tab)
     view = tab._topic_views[topic["id"]]
-    assert view._table.rowCount() == 1
+    assert len(view._rows) == 1
 
 
-def test_start_and_finish_review_updates_table(qtbot, isolate_review_db):
+def test_start_and_finish_review_updates_the_list(qtbot, isolate_review_db):
     topic, subject = _make_topic_and_subject()
     problem = review_store.create_problem(
         topic["id"], subject["id"], "Due today", stars=3,
@@ -112,14 +112,14 @@ def test_start_and_finish_review_updates_table(qtbot, isolate_review_db):
     tab = review_tab.ReviewTab()
     qtbot.addWidget(tab)
     view = tab._topic_views[topic["id"]]
-    assert view._table.rowCount() == 1
+    assert len(view._rows) == 1
 
     token = review_store.start_review(problem["id"])
     review_store.finish_review(token)
     view.refresh()
 
     # Rescheduled at least a day out, so it drops off the "Due" view.
-    assert view._table.rowCount() == 0
+    assert len(view._rows) == 0
 
 
 def test_add_problem_dialog_creates_problem_with_text_description(qtbot, isolate_review_db):
@@ -656,7 +656,7 @@ def test_first_solved_reads_never_for_a_problem_never_reviewed(qtbot, isolate_re
     view = tab._topic_views[topic["id"]]
     view._set_due_only(False)
 
-    assert view._table.item(0, review_tab.COLUMN_FIRST_SOLVED).text() == "Never"
+    assert view._rows[0].first_solved_text == "Never"
 
 
 def test_first_solved_shows_date_once_a_problem_has_been_reviewed():
@@ -810,8 +810,7 @@ def test_rebuilt_view_gives_a_resumed_first_attempt_its_add_problem_dialog(
 
 
 def _start_buttons(view):
-    return [view._table.cellWidget(row, review_tab.COLUMN_START).findChild(review_tab.QPushButton)
-            for row in range(view._table.rowCount())]
+    return [row.start_button for row in view._rows]
 
 
 def test_review_banner_sits_above_the_topic_tabs_and_is_shared(qtbot, isolate_review_db):
@@ -853,3 +852,69 @@ def test_start_button_of_the_review_in_progress_is_greyed_out(qtbot, isolate_rev
 
     tab.banner._end_early()
     assert all(b.isEnabled() for b in _start_buttons(view))
+
+
+# ------------------------------------------------------ redesigned rows ----
+
+def _problem_dict(**over):
+    problem = {"reviewCount": 0, "lastReviewedAt": None, "nextReviewDate": None, "fastestTimeSeconds": None,
+               "fastestTimeIsSolved": False, "firstSolvedAt": None, "firstSolved": None}
+    problem.update(over)
+    return problem
+
+
+def test_the_due_pill_reads_overdue_today_or_later():
+    from datetime import date, timedelta
+    iso = lambda days: (date.today() + timedelta(days=days)).isoformat()
+    assert review_tab._next_review_pill(_problem_dict(nextReviewDate=iso(-3)))[0] == "Overdue · 3 days ago"
+    assert review_tab._next_review_pill(_problem_dict(nextReviewDate=iso(0)))[0] == "Due today"
+    assert review_tab._next_review_pill(_problem_dict(nextReviewDate=iso(1)))[0] == "Next · Tomorrow"
+    assert review_tab._next_review_pill(_problem_dict(nextReviewDate=iso(5)))[0] == "Next · in 5 days"
+    assert review_tab._next_review_pill(_problem_dict())[0] == "Not scheduled"
+    assert review_tab._next_review_pill(_problem_dict(nextReviewDate=iso(-3)))[1] == review_tab.RED
+
+
+def test_a_new_problems_history_line_says_what_has_not_happened(qtbot, isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    review_store.create_problem(topic["id"], subject["id"], "Solve it", stars=3, description_type="text",
+                                description_text="x")
+    view = review_tab._TopicView(topic["id"])
+    qtbot.addWidget(view)
+    view._set_due_only(False)
+    meta = view._rows[0].meta_label.text()
+    assert "0 reviews" in meta and "never reviewed" in meta and "not solved yet" in meta
+
+
+def test_each_row_carries_its_subject_stars_and_start_button(qtbot, isolate_review_db):
+    topic, subject = _make_topic_and_subject("Math", "Quadratics", "#4A90D9")
+    review_store.create_problem(topic["id"], subject["id"], "Solve it", stars=4, description_type="text",
+                                description_text="x")
+    view = review_tab._TopicView(topic["id"])
+    qtbot.addWidget(view)
+    view._set_due_only(False)
+    row = view._rows[0]
+    assert row.name_label.text() == "Solve it" and row.stars_label.text() == "★★★★☆"
+    assert "Quadratics" in [l.text() for l in row.findChildren(review_tab.QLabel)]
+    assert row.start_button.objectName() == "reviewStartButton" and row.start_button.isEnabled()
+
+
+def test_the_summary_counts_due_and_all(qtbot, isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    view = review_tab._TopicView(topic["id"])
+    qtbot.addWidget(view)
+    assert view._summary_label.text() == "Nothing due · 0 problems"
+    review_store.create_problem(topic["id"], subject["id"], "A", stars=3, description_type="text", description_text="x")
+    view.refresh()
+    assert view._summary_label.text().endswith("· 1 problem")
+
+
+def test_the_empty_list_explains_itself(qtbot, isolate_review_db):
+    topic, _subject = _make_topic_and_subject()
+    view = review_tab._TopicView(topic["id"])
+    qtbot.addWidget(view)
+    assert view._rows == []
+    texts = [l.text() for l in view.findChildren(review_tab.QLabel)]
+    assert any("Nothing to review today" in t for t in texts)
+    view._set_due_only(False)
+    texts = [l.text() for l in view.findChildren(review_tab.QLabel)]
+    assert any("No problems yet" in t for t in texts)

@@ -71,10 +71,7 @@ def _names(tab):
 
 
 def _start_buttons(view):
-    return {
-        p["name"]: view._table.cellWidget(row, review_tab.COLUMN_START).findChild(review_tab.QPushButton)
-        for row, p in enumerate(view._problems)
-    }
+    return {row.problem["name"]: row.start_button for row in view._rows}
 
 
 # (is a first attempt, topic linked to a task): a review driving a task
