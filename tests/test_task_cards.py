@@ -45,14 +45,16 @@ def test_idle_card_shows_the_goal_the_rules_and_a_start_button(qtbot, world):
     card = _card(qtbot, _task(processBlocklist=["a.exe", "b.exe"], domainWhitelist=["x.com"]))
     assert card._countdown_label.text() == "30 min to go"
     assert card._ring._big == "0m" and card._ring._small == "of 30m today"
-    assert card._blocklist_button.text() == "2 apps blocked · 1 site ok"
+    assert card._restrictions_variants[0] == "2 apps blocked · 1 site ok"
+    assert card._blocklist_button.text() in card._restrictions_variants
     assert card._start_button.isEnabled() and card._start_button.text().endswith("Start")
     assert not card._running_panel.isVisible() and not card._armed_panel.isVisible()
 
 
 def test_no_rules_reads_as_no_restrictions(qtbot, world):
     card = _card(qtbot, _task())
-    assert card._blocklist_button.text() == "No restrictions set"
+    assert card._restrictions_variants[0] == "No restrictions set"
+    assert card._blocklist_button.text() in card._restrictions_variants
     assert not card._blocklist_button.isEnabled()
 
 
@@ -371,3 +373,78 @@ def test_summary_counts_goals_reached(qtbot, world, monkeypatch):
     tab._tick()
     assert tab._summary_label.text() == "Today · 2 of 2 goals reached"
     assert first.goal_state == "reached"
+
+
+# ------------------------------------------------------- edit pencil / fit ----
+
+def test_pencil_appears_in_the_corner_on_hover_and_opens_the_editor(qtbot, world, monkeypatch):
+    card = _card(qtbot, _task())
+    card.resize(360, 300)
+    assert card._edit_button.isHidden()
+    card.enterEvent(_enter())
+    assert not card._edit_button.isHidden()
+    button = card._edit_button
+    assert button.x() + button.width() <= card.width() and button.x() > card.width() // 2
+    assert button.y() < 24
+    opened = []
+    monkeypatch.setattr(tasks_tab, "open_task_editor", lambda task, on_saved: opened.append(task["id"]))
+    button.click()
+    assert opened == [card._task["id"]]
+    card.leaveEvent(QEvent(QEvent.Leave))
+    assert card._edit_button.isHidden()
+
+
+def test_pencil_is_still_there_while_the_task_runs(qtbot, world):
+    task = _task()
+    sm.start_session(30, "soft", [], [], source="task", event_id=task["id"], event_title=task["name"])
+    card = _card(qtbot, task)
+    assert card._state_chip.isVisible()  # "Running" chip in the header
+    card.enterEvent(_enter())
+    assert not card._edit_button.isHidden()
+    assert not card._edit_button.geometry().intersects(card._state_chip.geometry().translated(card._state_chip.parent().pos()))
+
+
+@pytest.mark.parametrize("width", [tasks_tab.CARD_MIN, 400, tasks_tab.CARD_MAX])
+def test_restrictions_line_is_never_cut_off(qtbot, world, width):
+    card = _card(qtbot, _task(processBlocklist=[f"a{i}.exe" for i in range(12)], domainWhitelist=[f"s{i}.com" for i in range(14)]))
+    card.setFixedWidth(width)
+    card.show()
+    qtbot.wait(30)
+    button = card._blocklist_button
+    fm = button.fontMetrics()
+    assert fm.horizontalAdvance(button.text()) <= button.width()
+    assert button.text() in card._restrictions_variants or button.text().endswith("…")
+    assert "12 apps blocked · 14 sites ok" in button.toolTip() or button.text() == "12 apps blocked · 14 sites ok"
+
+
+# ------------------------------------------------------------ period goals ----
+
+def _weekly_task(minutes=600, **extra):
+    return _task("Read", recurrence="weekly_total", targetMinutes=minutes, **extra)
+
+
+def test_weekly_goal_card_shows_the_week_not_today(qtbot, world):
+    card = _card(qtbot, _weekly_task())
+    assert card._ring._small == "of 10h 0m this week"
+    assert card._countdown_label.text() == "10h 0m to go"
+    detail = card._detail_label.text()
+    assert detail == "Due today" or ("left" in detail and "a day" in detail)  # Sunday is the last day
+    assert card.goal_state == "open"
+
+
+def test_weekly_goal_is_reached_by_work_on_any_day_of_the_week(qtbot, world, monkeypatch):
+    task = _weekly_task(minutes=60)
+    day = date.today()
+    monkeypatch.setattr(session_history, "load_all", lambda: [{
+        "source": "task", "eventId": task["id"], "violationLog": [],
+        "startTime": f"{day.isoformat()}T09:00:00", "endTime": f"{day.isoformat()}T10:05:00",
+    }])
+    card = _card(qtbot, task)
+    assert card.goal_state == "reached"
+    assert card._countdown_label.text() in ("Goal reached", "+5 min over")
+
+
+def test_weekly_goal_suggests_a_sitting_not_the_whole_week(qtbot, world):
+    card = _card(qtbot, _weekly_task(minutes=600))
+    card._arm()
+    assert card._duration_edit.text() == "60"
