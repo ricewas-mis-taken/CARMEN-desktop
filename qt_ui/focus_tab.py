@@ -1,18 +1,21 @@
-"""Focus tab: start an a-la-carte focus session, see what is running now, and every
-session waiting behind it.
+"""Focus tab: start an a-la-carte focus session, see what is running now, and everything
+waiting behind it.
 
-  Start a session -- a length (15 / 25 / 45 / 60 or any number), soft or hard lock, and
-                     the saved blocklist. Always available: if something is already
-                     running it is paused and waits (picker_dialogs.start_manual_session),
-                     it is never silently replaced.
-  Now             -- the running session: name, a big clock, pause / rules / end.
-  Waiting         -- every paused session, however many, each with its own
-                     "Switch to this" and "End".
+  Start a session -- a length in minutes, soft or hard lock, and the rules (apps,
+                     allowed websites, browser profiles). Always available: if something
+                     is already running it is paused and waits
+                     (picker_dialogs.start_manual_session), it is never silently replaced.
+  Now             -- the big time. Normally the running session; while a review is being
+                     timed, the REVIEW is the big time (its pause key, its task's rules and
+                     violations) and the session behind it shrinks to a row with "Resume".
+  Waiting         -- every paused session and set-aside review, each with its own
+                     "Switch to this" and "End" where it can be done from here.
 
 Tasks started from the Tasks tab, reviews and sessions started here all show up in the
-same two lists, since they are all just sessions to session_manager.
+same lists, since they are all just sessions (or reviews) to the engine.
 """
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -25,10 +28,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtGui import QColor
 
 import config
 import picker_gui
+import review_store
 import session_manager
 import tasks_store
 import qt_ui.nuclear_dialog as nuclear_dialog
@@ -50,7 +53,6 @@ from qt_ui.ui_kit import (
 )
 
 STATUS_REFRESH_MS = 1000
-PRESET_MINUTES = (15, 25, 45, 60)
 DEFAULT_COLOR = "#5B8DEF"
 
 _PILL_STYLE = (
@@ -86,6 +88,10 @@ def _session_name(session):
     return session.get("eventTitle") or "Focus session"
 
 
+def _review_name(review):
+    return "First attempt" if review.get("isFirstAttempt") else f"Review: {review['problemName']}"
+
+
 def _session_kind(session):
     source = session.get("source")
     if session.get("reviewProblemName"):
@@ -118,6 +124,31 @@ def _clock_for(session):
     if _is_stopwatch(session):
         return format_clock(_elapsed_seconds(session)), "elapsed"
     return format_clock(session.get("secondsRemaining", 0)), "remaining"
+
+
+def _running_review(status):
+    """The review being timed on its own (a first attempt too), or None. A review that IS
+    the running session is not "beside" it: that case is the session itself."""
+    if status.get("source") == "review":
+        return None
+    try:
+        return review_store.get_active_review() or review_store.get_first_attempt()
+    except Exception:
+        return None
+
+
+def pause_review(review):
+    """Sets a running review aside from here. A real review is paused in review_store;
+    a first attempt only its own banner can pause, so it is asked to."""
+    if review.get("isFirstAttempt"):
+        return review_store.request_first_attempt("pause")
+    return review_store.pause_active_review()
+
+
+def resume_review(review):
+    if review.get("isFirstAttempt"):
+        return review_store.request_first_attempt("resume")
+    return review_store.resume_active_review()
 
 
 class _WaitingRow(QFrame):
@@ -166,12 +197,41 @@ class _WaitingRow(QFrame):
         self.detail_label.setText(detail)
 
 
+class _NoteRow(QFrame):
+    """A set-aside review: shown so it is not forgotten; it is resumed in the Review tab."""
+
+    def __init__(self, review):
+        super().__init__()
+        self.token = review.get("token")
+        self.setObjectName("NoteRow")
+        self.setStyleSheet("QFrame#NoteRow{background:#FFFFFF;border:1px dashed #C9CED8;border-radius:14px;}")
+        row = QHBoxLayout(self)
+        row.setContentsMargins(16, 12, 16, 12)
+        row.setSpacing(12)
+        dot = QLabel()
+        dot.setFixedSize(10, 10)
+        dot.setStyleSheet(f"background:{DEFAULT_COLOR};border-radius:5px;")
+        row.addWidget(dot, 0, Qt.AlignVCenter)
+        text = QVBoxLayout()
+        text.setSpacing(1)
+        self.name_label = ElidedLabel(f"Review: {review['problemName']}")
+        self.name_label.setStyleSheet(f"font-size:14.5px;font-weight:700;color:{INK};background:transparent;")
+        text.addWidget(self.name_label)
+        self.detail_label = ElidedLabel(
+            f"{format_clock(review.get('elapsedSeconds', 0))} elapsed · paused · resume it in the Review tab")
+        self.detail_label.setStyleSheet(f"font-size:12.5px;color:{MUTED};background:transparent;")
+        text.addWidget(self.detail_label)
+        row.addLayout(text, 1)
+
+
 class FocusTab(QWidget):
     def __init__(self):
         super().__init__()
         self._parked_note = ""
         self._waiting_rows = {}
+        self._review_rows = {}
         self._start_note_text = ""
+        self._shown_review = None  # the review that is the big time right now, if any
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -203,6 +263,14 @@ class FocusTab(QWidget):
         layout.addWidget(self._build_start_card())
         layout.addWidget(self._build_now_card())
 
+        # The session that is still there while a review holds the big time.
+        self._behind_title = _section_title("Behind the review")
+        layout.addWidget(self._behind_title)
+        self._behind_box = QVBoxLayout()
+        self._behind_box.setSpacing(10)
+        layout.addLayout(self._behind_box)
+        self._behind_row = None
+
         self._waiting_title = _section_title("Waiting")
         layout.addWidget(self._waiting_title)
         self._waiting_box = QVBoxLayout()
@@ -231,36 +299,20 @@ class FocusTab(QWidget):
         last_minutes = cfg.get("last_duration_minutes", 25)
 
         length = QHBoxLayout()
-        length.setSpacing(8)
-        self._preset_buttons = {}
-        self._preset_group = QButtonGroup(self)
-        self._preset_group.setExclusive(True)
-        for minutes in PRESET_MINUTES:
-            pill = QPushButton(f"{minutes} min")
-            pill.setCheckable(True)
-            pill.setCursor(Qt.PointingHandCursor)
-            pill.setFixedHeight(38)
-            pill.setStyleSheet(_PILL_STYLE)
-            pill.clicked.connect(lambda _checked=False, m=minutes: self._pick_preset(m))
-            self._preset_group.addButton(pill)
-            self._preset_buttons[minutes] = pill
-            length.addWidget(pill)
-        self._custom_edit = QLineEdit()
-        self._custom_edit.setPlaceholderText("other")
+        length.setSpacing(10)
+        length.addWidget(QLabel("For"))
+        self._custom_edit = QLineEdit(f"{last_minutes:g}" if isinstance(last_minutes, float) else str(last_minutes))
+        self._custom_edit.setPlaceholderText("25")
         self._custom_edit.setAlignment(Qt.AlignCenter)
-        self._custom_edit.setFixedSize(76, 38)
+        self._custom_edit.setFixedSize(84, 40)
         self._custom_edit.setStyleSheet(
-            f"QLineEdit{{border:1px solid #E1E5EC;border-radius:12px;font-size:13.5px;font-weight:600;"
+            f"QLineEdit{{border:1px solid #E1E5EC;border-radius:12px;font-size:16px;font-weight:600;"
             f"color:{INK};background:#FFFFFF;}}QLineEdit:focus{{border:1.5px solid {INK};}}")
-        self._custom_edit.textEdited.connect(self._custom_typed)
+        self._custom_edit.textEdited.connect(lambda _t: self._start_error.hide())
         self._custom_edit.returnPressed.connect(self._start_clicked)
         length.addWidget(self._custom_edit)
-        length.addWidget(QLabel("min"))
-        length.addStretch(1)
-        box.addLayout(length)
-
-        lock = QHBoxLayout()
-        lock.setSpacing(8)
+        length.addWidget(QLabel("minutes"))
+        length.addSpacing(14)
         self._soft_button = QPushButton("Soft lock")
         self._hard_button = QPushButton("Hard lock")
         lock_group = QButtonGroup(self)
@@ -268,19 +320,23 @@ class FocusTab(QWidget):
         for pill in (self._soft_button, self._hard_button):
             pill.setCheckable(True)
             pill.setCursor(Qt.PointingHandCursor)
-            pill.setFixedHeight(34)
+            pill.setFixedHeight(36)
             pill.setStyleSheet(_PILL_STYLE)
             lock_group.addButton(pill)
-            lock.addWidget(pill)
+            length.addWidget(pill)
         (self._hard_button if cfg.get("last_lock_mode", "soft") == "hard" else self._soft_button).setChecked(True)
-        lock.addSpacing(8)
+        length.addStretch(1)
+        box.addLayout(length)
+
+        rules = QHBoxLayout()
+        rules.setSpacing(12)
         self._rules_summary = QLabel()
         self._rules_summary.setStyleSheet(f"font-size:12.5px;color:{MUTED};background:transparent;")
-        lock.addWidget(self._rules_summary, 1)
-        blocklist_button = button("Pick apps", SECONDARY_STYLE, height=34)
-        blocklist_button.clicked.connect(picker_gui.open_blocklist_picker)
-        lock.addWidget(blocklist_button)
-        box.addLayout(lock)
+        rules.addWidget(self._rules_summary, 1)
+        self._rules_button = button("Pick apps, websites, profiles", SECONDARY_STYLE, height=34)
+        self._rules_button.clicked.connect(self._open_rules)
+        rules.addWidget(self._rules_button)
+        box.addLayout(rules)
 
         go = QHBoxLayout()
         go.setSpacing(14)
@@ -299,52 +355,34 @@ class FocusTab(QWidget):
         self._start_error.hide()
         box.addWidget(self._start_error)
 
-        self._duration_minutes = last_minutes if last_minutes in PRESET_MINUTES else 25
-        if last_minutes in PRESET_MINUTES:
-            self._preset_buttons[last_minutes].setChecked(True)
-        else:
-            self._custom_edit.setText(f"{last_minutes:g}" if isinstance(last_minutes, float) else str(last_minutes))
-            self._duration_minutes = None
         self._update_rules_summary(cfg)
         return card
 
-    def _pick_preset(self, minutes):
-        self._duration_minutes = minutes
-        self._custom_edit.clear()
-        self._start_error.hide()
-
-    def _custom_typed(self, _text):
-        # Typing a length replaces the preset choice.
-        self._duration_minutes = None
-        self._preset_group.setExclusive(False)
-        for pill in self._preset_buttons.values():
-            pill.setChecked(False)
-        self._preset_group.setExclusive(True)
-        self._start_error.hide()
+    def _open_rules(self):
+        picker_dialogs.open_rules_picker(on_saved=self._update_rules_summary)
 
     def _chosen_minutes(self):
         text = self._custom_edit.text().strip()
-        if text:
-            try:
-                return float(text)
-            except ValueError:
-                return None
-        return self._duration_minutes
+        try:
+            return float(text) if text else None
+        except ValueError:
+            return None
 
     def _update_rules_summary(self, cfg=None):
-        cfg = cfg or config.load_config()
+        cfg = cfg if isinstance(cfg, dict) else config.load_config()
         apps = len(cfg.get("processBlocklist", []))
         sites = len(cfg.get("domainWhitelist", []))
         profiles = len(cfg.get("browserProfileBlocklist", []))
-        text = f"{apps} app{'s' if apps != 1 else ''} blocked · {sites} site{'s' if sites != 1 else ''} ok"
+        parts = [f"{apps} app{'s' if apps != 1 else ''} blocked",
+                 f"{sites} website{'s' if sites != 1 else ''} allowed"]
         if profiles:
-            text += f" · {profiles} browser profile{'s' if profiles != 1 else ''}"
-        self._rules_summary.setText(text)
+            parts.append(f"{profiles} browser profile{'s' if profiles != 1 else ''} blocked")
+        self._rules_summary.setText(" · ".join(parts))
 
     def _start_clicked(self):
         minutes = self._chosen_minutes()
         if minutes is None:
-            self._show_start_error("Pick a length, or type a number of minutes.")
+            self._show_start_error("Type how many minutes to focus for.")
             return
         lock_mode = "hard" if self._hard_button.isChecked() else "soft"
         error = picker_dialogs.start_manual_session(minutes, lock_mode, parent=self)
@@ -415,10 +453,25 @@ class FocusTab(QWidget):
         return self._now_card
 
     def _pause_resume(self):
+        """Pause or resume the big time: the review while one is the big time, else the session."""
+        review = self._shown_review
+        if review is not None:
+            pause_review(review)
+            self._refresh_status()
+            return
         if session_manager.get_status()["isPaused"]:
             session_manager.resume_session()
         else:
             session_manager.pause_session()
+
+    def _resume_session_over_review(self):
+        """"Resume" on the session behind a review: the review is set aside, the session comes back."""
+        review = self._shown_review
+        if review is not None:
+            pause_review(review)
+        if session_manager.get_status()["isPaused"]:
+            session_manager.resume_session()
+        self._refresh_status()
 
     def _open_nuclear_dialog(self):
         # qt_ui/nuclear_dialog.py was written for tray.py's pystray menu
@@ -439,21 +492,68 @@ class FocusTab(QWidget):
         active = status["isActive"]
         self._was_active = active
         parked = status.get("parkedSessions") or []
-        self._update_summary(active, status, parked)
-        self._update_now(status, active)
-        self._update_waiting(parked)
+        review = _running_review(status)
+        self._shown_review = review if (review is not None and not review.get("isPaused")) else None
+        try:
+            set_aside = review_store.list_parked_reviews()
+        except Exception:
+            set_aside = []
+        self._update_summary(active, status, parked, review, set_aside)
+        if self._shown_review is not None:
+            self._update_now_review(self._shown_review, status, active)
+        else:
+            self._update_now(status, active)
+        self._update_behind(status, active)
+        self._update_waiting(parked, set_aside)
         self._update_start_note(status, active)
         self._update_rules_summary()
 
-    def _update_summary(self, active, status, parked):
+    def _update_summary(self, active, status, parked, review, set_aside):
         parts = []
-        if active and not status["isPaused"]:
+        if self._shown_review is not None:
+            parts.append("1 reviewing")
+        elif active and not status["isPaused"]:
             parts.append("1 running")
         elif active:
             parts.append("1 paused")
-        if parked:
-            parts.append(f"{len(parked)} waiting")
+        waiting = len(parked) + len(set_aside) + (1 if (self._shown_review is not None and active) else 0)
+        if review is not None and self._shown_review is None:
+            waiting += 1  # a paused review
+        if waiting:
+            parts.append(f"{waiting} waiting")
         self._summary_label.setText(" · ".join(parts) if parts else "Nothing running")
+
+    def _show_chip(self, text, tone):
+        self._now_chip.setText(text)
+        self._now_chip.setStyleSheet(
+            f"background:{tone[0]};color:{tone[1]};border-radius:10px;padding:2px 10px;"
+            "font-size:11.5px;font-weight:600;")
+        self._now_chip.show()
+
+    def _update_now_review(self, review, status, active):
+        """A review is being timed: it is the big time, with the session's rules around it."""
+        self._now_card.setVisible(True)
+        self._pause_button.setVisible(True)
+        self._nuclear_button.setVisible(False)  # a review is finished or ended from the Review tab
+        self._edit_rules_button.setVisible(active)
+        task = tasks_store.get_task(status.get("eventId")) if active and status.get("eventId") else None
+        color = safe_color(review.get("taskColor") or review.get("subjectColor") or (task or {}).get("color"))
+        self._now_dot.setStyleSheet(f"background:{color};border-radius:6px;")
+        self._now_name.setText(_review_name(review))
+        self._show_chip("Reviewing", GREEN)
+        self._clock_label.setText(format_clock(review.get("elapsedSeconds", 0)))
+        self._clock_caption.setText("elapsed")
+        lines = []
+        if active:
+            lines.append(f"Lock mode: {status['lockMode']}   Violations: {status['violationCount']}")
+            if status.get("eventTitle"):
+                lines.append(f"{_session_kind(status)}: {status['eventTitle']}")
+        else:
+            lines.append("No session behind it, so nothing is blocked.")
+        lines.append("Finish it in the Review tab.")
+        self._status_label.setText("\n".join(lines))
+        self._pause_button.setText("Pause")
+        self._pause_button.setStyleSheet(SECONDARY_STYLE)
 
     def _update_now(self, status, active):
         self._now_card.setVisible(True)
@@ -473,16 +573,11 @@ class FocusTab(QWidget):
         self._now_dot.setStyleSheet(f"background:{_session_color(status)};border-radius:6px;")
         self._now_name.setText(_session_name(status))
         if paused:
-            text, tone = "Paused", AMBER
+            self._show_chip("Paused", AMBER)
         elif on_break:
-            text, tone = "Break", TEAL
+            self._show_chip("Break", TEAL)
         else:
-            text, tone = "Running", GREEN
-        self._now_chip.setText(text)
-        self._now_chip.setStyleSheet(
-            f"background:{tone[0]};color:{tone[1]};border-radius:10px;padding:2px 10px;"
-            "font-size:11.5px;font-weight:600;")
-        self._now_chip.show()
+            self._show_chip("Running", GREEN)
         big, caption = _clock_for(status)
         self._clock_label.setText(big)
         self._clock_caption.setText("paused" if paused else caption)
@@ -494,9 +589,34 @@ class FocusTab(QWidget):
         self._pause_button.setText("Resume" if paused else "Pause")
         self._pause_button.setStyleSheet(primary_style(INK) if paused else SECONDARY_STYLE)
 
-    def _update_waiting(self, parked):
-        self._waiting_title.setVisible(bool(parked))
-        self._waiting_title.setText(f"Waiting · {len(parked)}")
+    def _update_behind(self, status, active):
+        """While a review is the big time, the running (or paused) session is a row of its own."""
+        show = self._shown_review is not None and active
+        self._behind_title.setVisible(show)
+        if not show:
+            if self._behind_row is not None:
+                self._behind_box.removeWidget(self._behind_row)
+                self._behind_row.deleteLater()
+                self._behind_row = None
+            return
+        if self._behind_row is None:
+            row = _WaitingRow(status)
+            row.switch_button.clicked.disconnect()
+            row.switch_button.clicked.connect(self._resume_session_over_review)
+            row.end_button.clicked.disconnect()
+            row.end_button.clicked.connect(self._open_nuclear_dialog)
+            self._behind_row = row
+            self._behind_box.addWidget(row)
+        row = self._behind_row
+        row.update_from(status)
+        paused = bool(status["isPaused"])
+        row.switch_button.setText("Resume pomodoro" if status.get("pomodoro") and paused else "Resume" if paused else "Switch to this")
+        row.setStyleSheet("QFrame#WaitingRow{background:#FFFFFF;border:1px solid #E6E9EF;border-radius:14px;}")
+
+    def _update_waiting(self, parked, set_aside):
+        total = len(parked) + len(set_aside)
+        self._waiting_title.setVisible(bool(total))
+        self._waiting_title.setText(f"Waiting · {total}")
         keep = {p.get("parkId") for p in parked}
         for park_id in list(self._waiting_rows):
             if park_id not in keep:
@@ -514,10 +634,27 @@ class FocusTab(QWidget):
                 if self._waiting_box.indexOf(row) != index:
                     self._waiting_box.removeWidget(row)
                     self._waiting_box.insertWidget(index, row)
+        # Reviews set aside: listed after the sessions, read-only.
+        keep_tokens = {r.get("token") for r in set_aside}
+        for token in list(self._review_rows):
+            if token not in keep_tokens:
+                row = self._review_rows.pop(token)
+                self._waiting_box.removeWidget(row)
+                row.deleteLater()
+        for review in set_aside:
+            token = review.get("token")
+            if token not in self._review_rows:
+                row = self._review_rows[token] = _NoteRow(review)
+                self._waiting_box.addWidget(row)
+            else:
+                self._review_rows[token].detail_label.setText(
+                    f"{format_clock(review.get('elapsedSeconds', 0))} elapsed · paused · resume it in the Review tab")
         self._parked_note = ""
 
     def _update_start_note(self, status, active):
-        if active and not status["isPaused"]:
+        if self._shown_review is not None:
+            note = f"“{_review_name(self._shown_review)}” keeps running; this session starts beside it."
+        elif active and not status["isPaused"]:
             note = f"“{_session_name(status)}” will pause and wait while this one runs."
         elif active:
             note = "The paused session will wait until this one ends."
