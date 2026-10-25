@@ -6,14 +6,18 @@ see that module's docstring). Grouped by category
 (Entertainment/Education/Games/Tools/Other, screentime_categories.py), with
 anything under 5 minutes collapsed into one expandable row per category
 instead of cluttering the list with noise.
+
+The page opens on the total (a big numeral) and one bar split by category, then a
+card per category with its biggest apps and sites.
 """
 from datetime import date, timedelta
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -24,17 +28,25 @@ from PySide6.QtWidgets import (
 
 import screentime_categories
 import screentime_store
+from qt_ui.ui_kit import FAINT, INK, MUTED, NUM_CSS
 
 REFRESH_MS = 5000
 GROUP_THRESHOLD_SECONDS = 5 * 60
 
+# Same hues the browser extension's Screen Time page uses.
 _CATEGORY_COLORS = {
-    "Entertainment": "#E27D60",
-    "Education": "#4A90D9",
-    "Games": "#8E44AD",
-    "Tools": "#2E8B57",
-    "Other": "#9AA0A8",
+    "Entertainment": "#D4572E",
+    "Education": "#2B47E0",
+    "Games": "#7A3FCF",
+    "Tools": "#0F7A58",
+    "Other": "#8A93A3",
 }
+
+_SEGMENT_STYLE = (
+    f"QPushButton{{background:#FFFFFF;color:{INK};border:1px solid #E1E5EC;border-radius:13px;"
+    "font-size:12.5px;font-weight:600;padding:0 14px;}"
+    "QPushButton:hover{background:#F6F7FA;}"
+    f"QPushButton:checked{{background:{INK};color:#FFFFFF;border:1px solid {INK};}}")
 
 
 def _format_duration(seconds):
@@ -48,84 +60,153 @@ def _format_duration(seconds):
     return f"{secs}s"
 
 
-class _BarChart(QWidget):
-    """Simple proportional horizontal bar chart, one bar per category --
-    no charting library dependency, just QPainter."""
+def _format_total(seconds):
+    """The hero number: hours and minutes, never seconds once it is a real amount."""
+    seconds = int(round(seconds))
+    hours, rem = divmod(seconds, 3600)
+    minutes = rem // 60
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    if minutes:
+        return f"{minutes}m"
+    return f"{seconds}s"
+
+
+def _card(object_name="STCard"):
+    frame = QFrame()
+    frame.setObjectName(object_name)
+    frame.setStyleSheet(f"QFrame#{object_name}{{background:#FFFFFF;border:1px solid #E6E9EF;border-radius:16px;}}")
+    shadow = QGraphicsDropShadowEffect(frame)
+    shadow.setBlurRadius(22)
+    shadow.setOffset(0, 5)
+    shadow.setColor(QColor(16, 24, 40, 18))
+    frame.setGraphicsEffect(shadow)
+    return frame
+
+
+class _StackedBar(QWidget):
+    """One bar split into a segment per category, each as wide as its share of the
+    total -- the whole day at a glance. No charting library, just QPainter."""
 
     def __init__(self):
         super().__init__()
         self._entries = []  # [(label, seconds, color_hex), ...]
-        self.setMinimumHeight(28 * 5 + 10)
+        self.setFixedHeight(18)
 
     def set_entries(self, entries):
         self._entries = entries
-        self.setMinimumHeight(max(1, len(entries)) * 32 + 10)
         self.update()
 
-    def paintEvent(self, event):
+    def segments(self, width):
+        """[(label, x, w)] for the current entries in `width` pixels (gaps included)."""
+        total = sum(seconds for _label, seconds, _color in self._entries)
+        if total <= 0:
+            return []
+        gap = 3
+        usable = max(1, width - gap * (len(self._entries) - 1))
+        out, x = [], 0.0
+        for label, seconds, _color in self._entries:
+            w = max(4.0, usable * seconds / total)
+            out.append((label, x, w))
+            x += w + gap
+        return out
+
+    def paintEvent(self, _event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
         if not self._entries:
-            painter.setPen(QColor("#888"))
-            painter.drawText(self.rect(), Qt.AlignCenter, "No screen time recorded yet.")
+            painter.setBrush(QColor("#EEF0F4"))
+            painter.drawRoundedRect(QRectF(0, 0, self.width(), self.height()), 9, 9)
             return
-
-        max_seconds = max(seconds for _label, seconds, _color in self._entries) or 1
-        row_height = 32
-        label_width = 110
-        value_width = 90
-        bar_area_width = max(1, self.width() - label_width - value_width - 16)
-
-        y = 6
-        for label, seconds, color in self._entries:
-            painter.setPen(QColor("#1F2328"))
-            painter.drawText(0, y, label_width, row_height - 6, Qt.AlignVCenter | Qt.AlignLeft, label)
-
-            bar_width = int(bar_area_width * (seconds / max_seconds))
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(color))
-            painter.drawRoundedRect(label_width, y + 4, max(2, bar_width), row_height - 14, 4, 4)
-
-            painter.setPen(QColor("#5A6070"))
-            painter.drawText(
-                label_width + bar_area_width + 8, y, value_width, row_height - 6,
-                Qt.AlignVCenter | Qt.AlignLeft, _format_duration(seconds),
-            )
-            y += row_height
+        colors = {label: color for label, _s, color in self._entries}
+        for label, x, w in self.segments(self.width()):
+            painter.setBrush(QColor(colors[label]))
+            painter.drawRoundedRect(QRectF(x, 0, w, self.height()), 6, 6)
 
 
-class _CategorySection(QWidget):
+class _MiniBar(QWidget):
+    """A thin bar for one app/site, as long as its share of the category's biggest."""
+
+    def __init__(self, fraction, color):
+        super().__init__()
+        self._fraction = max(0.0, min(1.0, fraction))
+        self._color = QColor(color)
+        self.setFixedHeight(6)
+        self.setMinimumWidth(60)
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        track = QColor(self._color)
+        track.setAlphaF(0.14)
+        painter.setBrush(track)
+        painter.drawRoundedRect(QRectF(0, 0, self.width(), self.height()), 3, 3)
+        painter.setBrush(self._color)
+        painter.drawRoundedRect(QRectF(0, 0, max(4.0, self.width() * self._fraction), self.height()), 3, 3)
+
+
+class _Dot(QFrame):
+    """A colour dot. A QFrame, not a QLabel, so a section's first label is its name."""
+
+    def __init__(self, color, size=10):
+        super().__init__()
+        self.setFixedSize(size, size)
+        self.setStyleSheet(f"background:{color};border-radius:{size // 2}px;border:none;")
+
+
+class _CategorySection(QFrame):
     def __init__(self, category, entries):
         """entries: list of (name, seconds), already sorted desc."""
         super().__init__()
+        self.setObjectName("STSection")
+        self.setStyleSheet(
+            "QFrame#STSection{background:#FFFFFF;border:1px solid #E6E9EF;border-radius:16px;}")
+        self._color = _CATEGORY_COLORS.get(category, "#8A93A3")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 8, 0, 8)
-        layout.setSpacing(4)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(6)
 
         total = sum(seconds for _name, seconds in entries)
-        header = QLabel(f"{category}  •  {_format_duration(total)}")
-        header.setStyleSheet(f"font-weight: 700; font-size: 13px; color: {_CATEGORY_COLORS.get(category, '#1F2328')};")
-        layout.addWidget(header)
+        self._peak = max((seconds for _name, seconds in entries), default=1) or 1
+        head = QWidget()
+        head_row = QHBoxLayout(head)
+        head_row.setContentsMargins(0, 0, 0, 4)
+        head_row.setSpacing(8)
+        head_row.addWidget(_Dot(self._color), 0, Qt.AlignVCenter)
+        name = QLabel(category)
+        name.setStyleSheet(f"font-weight:700;font-size:14px;color:{INK};background:transparent;")
+        head_row.addWidget(name)
+        head_row.addStretch(1)
+        total_label = QLabel(_format_duration(total))
+        total_label.setStyleSheet(f"font-size:13px;font-weight:600;color:{MUTED};background:transparent;")
+        head_row.addWidget(total_label)
+        layout.addWidget(head)
 
         shown = [e for e in entries if e[1] >= GROUP_THRESHOLD_SECONDS]
         grouped = [e for e in entries if e[1] < GROUP_THRESHOLD_SECONDS]
 
-        for name, seconds in shown:
-            layout.addWidget(self._row(name, seconds))
+        for name_text, seconds in shown:
+            layout.addWidget(self._row(name_text, seconds))
 
         if grouped:
             grouped_total = sum(seconds for _name, seconds in grouped)
             toggle = QPushButton(f"+ {len(grouped)} more under 5 min ({_format_duration(grouped_total)} total)")
-            toggle.setProperty("class", "SecondaryButton")
             toggle.setCheckable(True)
+            toggle.setCursor(Qt.PointingHandCursor)
+            toggle.setStyleSheet(
+                f"QPushButton{{background:transparent;color:{MUTED};border:none;font-size:12.5px;"
+                "font-weight:600;text-align:left;padding:4px 0;}"
+                f"QPushButton:hover{{color:{INK};}}")
             layout.addWidget(toggle)
 
             details = QWidget()
             details_layout = QVBoxLayout(details)
-            details_layout.setContentsMargins(16, 4, 0, 0)
-            details_layout.setSpacing(2)
-            for name, seconds in grouped:
-                details_layout.addWidget(self._row(name, seconds))
+            details_layout.setContentsMargins(0, 2, 0, 0)
+            details_layout.setSpacing(4)
+            for name_text, seconds in grouped:
+                details_layout.addWidget(self._row(name_text, seconds))
             details.setVisible(False)
             layout.addWidget(details)
 
@@ -134,12 +215,17 @@ class _CategorySection(QWidget):
     def _row(self, name, seconds):
         row = QWidget()
         row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setContentsMargins(0, 2, 0, 2)
+        row_layout.setSpacing(12)
         name_label = QLabel(name)
-        name_label.setStyleSheet("font-size: 12px; color: #1F2328;")
-        row_layout.addWidget(name_label, 1)
+        name_label.setMinimumWidth(110)
+        name_label.setStyleSheet(f"font-size:13px;color:{INK};background:transparent;")
+        row_layout.addWidget(name_label, 2)
+        row_layout.addWidget(_MiniBar(seconds / self._peak, self._color), 3, Qt.AlignVCenter)
         time_label = QLabel(_format_duration(seconds))
-        time_label.setStyleSheet("font-size: 12px; color: #5A6070;")
+        time_label.setMinimumWidth(64)
+        time_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        time_label.setStyleSheet(f"font-size:12.5px;color:{MUTED};background:transparent;")
         row_layout.addWidget(time_label)
         return row
 
@@ -152,43 +238,46 @@ class ScreenTimeTab(QWidget):
         self._device_keys = None
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(24, 16, 24, 20)
-        outer.setSpacing(10)
+        outer.setContentsMargins(28, 24, 28, 20)
+        outer.setSpacing(14)
 
+        head = QHBoxLayout()
+        head.setSpacing(8)
         title = QLabel("Screen Time")
-        title.setStyleSheet("font-size: 20px; font-weight: 700;")
-        outer.addWidget(title)
-
-        toggle_row = QHBoxLayout()
-        self._day_btn = QPushButton("Daily")
-        self._week_btn = QPushButton("Weekly")
+        title.setStyleSheet(f"font-size:26px;font-weight:700;color:{INK};background:transparent;")
+        head.addWidget(title)
+        head.addStretch(1)
+        self._day_btn = QPushButton("Today")
+        self._week_btn = QPushButton("This week")
         group = QButtonGroup(self)
         group.setExclusive(True)
         for btn, key in ((self._day_btn, "day"), (self._week_btn, "week")):
             btn.setCheckable(True)
-            btn.setProperty("class", "SecondaryButton")
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setFixedHeight(32)
+            btn.setStyleSheet(_SEGMENT_STYLE)
             btn.clicked.connect(lambda checked=False, k=key: self._set_range(k))
             group.addButton(btn)
-            toggle_row.addWidget(btn)
-        toggle_row.addStretch(1)
+            head.addWidget(btn)
         self._day_btn.setChecked(True)
-        outer.addLayout(toggle_row)
+        outer.addLayout(head)
 
         # One button per computer (this one, each other one, and all together);
         # only shown once another computer has sent its screen time.
         self._device_bar = QWidget()
         self._device_layout = QHBoxLayout(self._device_bar)
         self._device_layout.setContentsMargins(0, 0, 0, 0)
+        self._device_layout.setSpacing(6)
         self._device_group = QButtonGroup(self)
         self._device_group.setExclusive(True)
         self._device_bar.setVisible(False)
         outer.addWidget(self._device_bar)
 
-        self._chart = _BarChart()
-        outer.addWidget(self._chart)
+        outer.addWidget(self._build_hero())
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
         # A bare QScrollArea's viewport autofills with the OS palette's
         # Window color (dark on a dark-mode Windows install) rather than
         # inheriting the light #F7F7F8 ContentArea background it sits in --
@@ -205,7 +294,8 @@ class ScreenTimeTab(QWidget):
         )
         self._sections_container = QWidget()
         self._sections_layout = QVBoxLayout(self._sections_container)
-        self._sections_layout.setContentsMargins(0, 0, 0, 0)
+        self._sections_layout.setContentsMargins(2, 2, 8, 12)
+        self._sections_layout.setSpacing(12)
         self._sections_layout.addStretch(1)
         scroll.setWidget(self._sections_container)
         outer.addWidget(scroll, 1)
@@ -215,6 +305,32 @@ class ScreenTimeTab(QWidget):
         self._timer.start(REFRESH_MS)
 
         self.refresh()
+
+    def _build_hero(self):
+        card = _card("STHero")
+        box = QVBoxLayout(card)
+        box.setContentsMargins(24, 20, 24, 20)
+        box.setSpacing(10)
+
+        top = QHBoxLayout()
+        top.setSpacing(14)
+        self._total_label = QLabel("0s")
+        self._total_label.setStyleSheet(f"font-size:54px;{NUM_CSS}color:{INK};background:transparent;")
+        top.addWidget(self._total_label, 0, Qt.AlignBottom)
+        self._caption = QLabel("")
+        self._caption.setStyleSheet(f"font-size:13px;color:{MUTED};background:transparent;")
+        top.addWidget(self._caption, 0, Qt.AlignBottom)
+        top.addStretch(1)
+        box.addLayout(top)
+
+        self._chart = _StackedBar()
+        box.addWidget(self._chart)
+
+        self._legend = QHBoxLayout()
+        self._legend.setSpacing(16)
+        self._legend_labels = []
+        box.addLayout(self._legend)
+        return card
 
     def _set_range(self, key):
         self._range = key
@@ -235,6 +351,7 @@ class ScreenTimeTab(QWidget):
         self._device_keys = keys
         for button in list(self._device_group.buttons()):
             self._device_group.removeButton(button)
+            self._device_layout.removeWidget(button)
             button.deleteLater()
         self._device_bar.setVisible(bool(others))
         if not others:
@@ -243,11 +360,14 @@ class ScreenTimeTab(QWidget):
         for key, label in entries:
             button = QPushButton(label)
             button.setCheckable(True)
-            button.setProperty("class", "SecondaryButton")
+            button.setCursor(Qt.PointingHandCursor)
+            button.setFixedHeight(28)
+            button.setStyleSheet(_SEGMENT_STYLE)
             button.setChecked(key == self._device)
             button.clicked.connect(lambda checked=False, k=key: self._set_device(k))
             self._device_group.addButton(button)
             self._device_layout.addWidget(button)
+        self._device_layout.addStretch(1)
 
     def _current_data(self):
         today = date.today()
@@ -256,6 +376,32 @@ class ScreenTimeTab(QWidget):
         monday = today - timedelta(days=today.weekday())
         sunday = monday + timedelta(days=6)
         return screentime_store.get_range(monday.isoformat(), sunday.isoformat(), self._device)
+
+    def _device_caption(self):
+        if self._device == "this":
+            return "this computer"
+        if self._device == "all":
+            return "all computers"
+        for device in screentime_store.remote_devices():
+            if device["id"] == self._device:
+                return device["name"]
+        return "this computer"
+
+    def _set_legend(self, entries):
+        for label in self._legend_labels:
+            self._legend.removeWidget(label)
+            label.deleteLater()
+        self._legend_labels = []
+        while self._legend.count():
+            self._legend.takeAt(0)
+        for category, seconds, color in entries:
+            label = QLabel(
+                f'<span style="color:{color};">●</span>&nbsp;<span style="color:{INK};font-weight:600;">'
+                f'{category}</span>&nbsp;<span style="color:{MUTED};">{_format_total(seconds)}</span>')
+            label.setStyleSheet("font-size:12.5px;background:transparent;")
+            self._legend.addWidget(label)
+            self._legend_labels.append(label)
+        self._legend.addStretch(1)
 
     def refresh(self):
         self._sync_device_buttons()
@@ -271,8 +417,13 @@ class ScreenTimeTab(QWidget):
         for category in screentime_categories.CATEGORIES:
             total = sum(seconds for _name, seconds in by_category[category])
             if total > 0:
-                chart_entries.append((category, total, _CATEGORY_COLORS.get(category, "#9AA0A8")))
+                chart_entries.append((category, total, _CATEGORY_COLORS.get(category, "#8A93A3")))
         self._chart.set_entries(chart_entries)
+        self._set_legend(chart_entries)
+        grand_total = sum(seconds for _category, seconds, _color in chart_entries)
+        self._total_label.setText(_format_total(grand_total))
+        when = "today" if self._range == "day" else "this week"
+        self._caption.setText(f"{when} · {self._device_caption()}")
 
         while self._sections_layout.count() > 1:
             item = self._sections_layout.takeAt(0)
@@ -290,5 +441,8 @@ class ScreenTimeTab(QWidget):
 
         if not any_data:
             empty = QLabel("Nothing recorded yet today." if self._range == "day" else "Nothing recorded yet this week.")
-            empty.setStyleSheet("color: #888; font-size: 13px;")
+            empty.setAlignment(Qt.AlignCenter)
+            empty.setStyleSheet(
+                f"color:{FAINT};font-size:14px;background:#FFFFFF;border:1px dashed #D0D5DD;"
+                "border-radius:16px;padding:32px 24px;")
             self._sections_layout.insertWidget(0, empty)

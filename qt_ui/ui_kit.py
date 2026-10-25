@@ -18,6 +18,9 @@ FAINT = "#98A2B3"
 TEXT_FONT = "Segoe UI"
 # DIN-style numerals for the ring and clocks (falls back to Segoe UI).
 NUM_FONTS = ["Bahnschrift SemiBold", "Segoe UI Semibold", "Segoe UI"]
+# The same face for a QLabel: it has to come from the label's stylesheet, because the
+# app stylesheet sets a font on every label and wins over QWidget.setFont().
+NUM_CSS = "font-family:'Bahnschrift SemiBold','Segoe UI Semibold','Segoe UI';"
 
 GREEN = ("#E3F6E8", "#157F3B")
 AMBER = ("#FEF0C7", "#93370D")

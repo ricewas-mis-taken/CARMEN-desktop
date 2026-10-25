@@ -13,7 +13,6 @@ Tasks started from the Tasks tab, reviews and sessions started here all show up 
 same two lists, since they are all just sessions to session_manager.
 """
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -39,7 +38,7 @@ from qt_ui.ui_kit import (
     GREEN,
     INK,
     MUTED,
-    NUM_FONTS,
+    NUM_CSS,
     SECONDARY_STYLE,
     TEAL,
     DANGER_STYLE,
@@ -382,11 +381,7 @@ class FocusTab(QWidget):
         clock_row = QHBoxLayout()
         clock_row.setSpacing(12)
         self._clock_label = QLabel("")
-        big = QFont()
-        big.setFamilies(NUM_FONTS)
-        big.setPixelSize(52)
-        self._clock_label.setFont(big)
-        self._clock_label.setStyleSheet(f"color:{INK};background:transparent;")
+        self._clock_label.setStyleSheet(f"font-size:52px;{NUM_CSS}color:{INK};background:transparent;")
         clock_row.addWidget(self._clock_label, 0, Qt.AlignBottom)
         self._clock_caption = QLabel("")
         self._clock_caption.setStyleSheet(f"font-size:13px;color:{MUTED};background:transparent;")
