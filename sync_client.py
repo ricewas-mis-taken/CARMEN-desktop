@@ -531,6 +531,13 @@ def _normalize_task(item):
             merged[key] = list(tasks_store.DEFAULT_TASK[key])
     if not isinstance(merged.get("cashedInDates"), dict):
         merged["cashedInDates"] = {}
+    # The Monday a two-week goal counts from: a date string or nothing.
+    anchor = merged.get("periodAnchor")
+    if anchor is not None:
+        try:
+            datetime.fromisoformat(anchor)
+        except (TypeError, ValueError):
+            merged["periodAnchor"] = None
     merged["targetMinutesHistory"] = [
         e for e in merged["targetMinutesHistory"]
         if isinstance(e, dict) and isinstance(e.get("date"), str) and _is_real_number(e.get("minutes"))
