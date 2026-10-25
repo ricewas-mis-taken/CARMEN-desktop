@@ -17,10 +17,10 @@ import os
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QPixmap
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QPixmap
 from PySide6.QtWidgets import (
-    QComboBox,
     QFileDialog,
+    QGraphicsDropShadowEffect,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -36,6 +36,7 @@ from qt_ui.wrap_edit import WrapEdit
 
 import board_store
 from qt_ui.safe_link import make_link_label
+from qt_ui.ui_kit import DANGER_STYLE, INK, MUTED, NUM_FONTS, SECONDARY_STYLE, button, link_button
 
 # Not a real preset tag -- board_store.PRESET_TAGS only holds tags a task can
 # actually be assigned, and this one can't be (a task either has tags or it
@@ -127,24 +128,71 @@ def _build_info_content(layout, task):
         layout.addWidget(empty_label)
 
 
+def importance_colors(value):
+    """(background, text) for an importance 1-10: cool for the low end, amber in the
+    middle, red for what matters most -- so the list reads at a glance."""
+    if value >= 9:
+        return "#FDE1DE", "#B42318"
+    if value >= 7:
+        return "#FFE6D5", "#B54708"
+    if value >= 4:
+        return "#FEF0C7", "#93370D"
+    return "#E4ECFB", "#2F4D9A"
+
+
+def _importance_style(value, size):
+    bg, fg = importance_colors(value)
+    return (f"background:{bg};color:{fg};border-radius:{size // 3}px;font-size:{size // 2}px;"
+            "font-family:'Bahnschrift SemiBold','Segoe UI Semibold','Segoe UI';")
+
+
+def _importance_button_style(value, radius):
+    bg, fg = importance_colors(value)
+    return (
+        f"QPushButton {{ border-radius: {radius}px; font-size: 12px; font-weight: 600; "
+        "background: #EEF0F4; color: #1B2230; border: none; padding: 0; }"
+        f"QPushButton:hover {{ background: {bg}; color: {fg}; }}"
+        f"QPushButton:checked {{ background: {fg}; color: #FFFFFF; }}"
+    )
+
+
+def _numeral_font(pixel_size):
+    font = QFont()
+    font.setFamilies(NUM_FONTS)
+    font.setPixelSize(pixel_size)
+    return font
+
+
+_CHIP_ON = f"QPushButton{{background:{INK};color:#FFFFFF;border:1px solid {INK};border-radius:13px;"
+_CHIP_STYLE = (
+    f"QPushButton{{background:#FFFFFF;color:{INK};border:1px solid #E1E5EC;border-radius:13px;"
+    "font-size:12.5px;font-weight:600;padding:0 13px;}"
+    "QPushButton:hover{background:#F6F7FA;}"
+    f"QPushButton:checked{{background:{INK};color:#FFFFFF;border:1px solid {INK};}}")
+
+
 class BoardTab(QWidget):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 22, 24, 20)
-        layout.setSpacing(12)
+        layout.setContentsMargins(28, 24, 28, 20)
+        layout.setSpacing(14)
 
         self._tag_filter = "all"
         self._hidden_tags = set()
         layout.addLayout(self._build_header())
+        layout.addLayout(self._build_tag_chips())
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
-        scroll.setStyleSheet("background: #FFFFFF; border: none;")
+        scroll.setStyleSheet("QScrollArea{background: transparent; border: none;}")
         self._list_container = QWidget()
+        self._list_container.setObjectName("BoardList")
+        self._list_container.setStyleSheet("QWidget#BoardList{background: transparent;}")
         self._list_layout = QVBoxLayout(self._list_container)
-        self._list_layout.setSpacing(12)
+        self._list_layout.setContentsMargins(2, 2, 6, 16)
+        self._list_layout.setSpacing(10)
         self._list_layout.setAlignment(Qt.AlignTop)
         scroll.setWidget(self._list_container)
         layout.addWidget(scroll, 1)
@@ -174,45 +222,61 @@ class BoardTab(QWidget):
 
     def _build_header(self):
         header = QHBoxLayout()
+        header.setSpacing(8)
+        titles = QVBoxLayout()
+        titles.setSpacing(2)
         title = QLabel("The Board")
-        title.setStyleSheet("font-size: 20px; font-weight: 700;")
-        header.addWidget(title)
+        title.setStyleSheet(f"font-size: 26px; font-weight: 700; color: {INK}; background: transparent;")
+        titles.addWidget(title)
+        self._subtitle = QLabel()
+        self._subtitle.setStyleSheet(f"font-size: 13px; color: {MUTED}; background: transparent;")
+        titles.addWidget(self._subtitle)
+        header.addLayout(titles)
         header.addStretch(1)
 
-        self._tag_filter_combo = QComboBox()
-        self._tag_filter_combo.addItem("All Tags", "all")
-        for tag in board_store.PRESET_TAGS:
-            self._tag_filter_combo.addItem(tag["label"], tag["id"])
-        self._tag_filter_combo.setStyleSheet(
-            "QComboBox { border: 1px solid #D8DCE3; border-radius: 8px; padding: 5px 10px; "
-            "background: #FFFFFF; color: #1F2328; font-size: 13px; }"
-        )
-        self._tag_filter_combo.currentIndexChanged.connect(self._on_tag_filter_changed)
-        header.addWidget(self._tag_filter_combo)
-
-        self._hide_tags_button = QPushButton("Hide Tags")
-        self._hide_tags_button.setProperty("class", "SecondaryButton")
+        self._hide_tags_button = link_button("Hide Tags")
         self._hide_tags_button.clicked.connect(self._open_hide_tags_menu)
         header.addWidget(self._hide_tags_button)
 
-        self._upcoming_button = QPushButton("Upcoming")
-        self._upcoming_button.setProperty("class", "SecondaryButton")
+        self._upcoming_button = link_button("Upcoming")
         self._upcoming_button.clicked.connect(self._open_upcoming_dialog)
         header.addWidget(self._upcoming_button)
 
-        self._finished_button = QPushButton("Finished")
-        self._finished_button.setProperty("class", "SecondaryButton")
+        self._finished_button = link_button("Finished")
         self._finished_button.clicked.connect(self._open_finished_dialog)
         header.addWidget(self._finished_button)
+        header.addSpacing(10)
 
-        add_button = QPushButton("+ Add Task")
-        add_button.setProperty("class", "AccentButton")
+        add_button = button("+ Add task", f"QPushButton{{background:{INK};color:#FFFFFF;border:none;border-radius:12px;"
+                            "font-size:13.5px;font-weight:600;padding:0 18px;}"
+                            "QPushButton:hover{background:#2B3445;}", height=38)
         add_button.clicked.connect(self._open_add_dialog)
         header.addWidget(add_button)
         return header
 
-    def _on_tag_filter_changed(self, _index):
-        self._tag_filter = self._tag_filter_combo.currentData()
+    def _build_tag_chips(self):
+        """One chip per tag, instead of a drop-down: click one to show only that tag."""
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        self._tag_chips = {}
+        entries = [("all", "All")] + [(t["id"], t["label"]) for t in board_store.PRESET_TAGS]
+        for tag_id, label in entries:
+            chip = QPushButton(label)
+            chip.setCheckable(True)
+            chip.setCursor(Qt.PointingHandCursor)
+            chip.setFixedHeight(28)
+            chip.setStyleSheet(_CHIP_STYLE)
+            chip.setChecked(tag_id == self._tag_filter)
+            chip.clicked.connect(lambda _checked=False, t=tag_id: self._set_tag_filter(t))
+            self._tag_chips[tag_id] = chip
+            row.addWidget(chip)
+        row.addStretch(1)
+        return row
+
+    def _set_tag_filter(self, tag_id):
+        self._tag_filter = tag_id
+        for key, chip in self._tag_chips.items():
+            chip.setChecked(key == tag_id)
         self.refresh()
 
     def _open_hide_tags_menu(self):
@@ -264,9 +328,13 @@ class BoardTab(QWidget):
             elif self._tag_filter != "all":
                 empty_text = "No tasks with this tag."
             else:
-                empty_text = "No tasks yet -- click “+ Add Task” to create one."
+                empty_text = "Nothing on the board yet. Click “+ Add task” to put the first thing on it."
             empty_label = QLabel(empty_text)
-            empty_label.setStyleSheet("color: #8A8F98; font-size: 14px;")
+            empty_label.setWordWrap(True)
+            empty_label.setAlignment(Qt.AlignCenter)
+            empty_label.setStyleSheet(
+                f"color: {MUTED}; font-size: 14px; background: #FFFFFF; border: 1px dashed #D0D5DD; "
+                "border-radius: 16px; padding: 36px 24px;")
             self._list_layout.addWidget(empty_label)
         for task in tasks:
             self._list_layout.addWidget(_BoardCard(task, on_changed=self.refresh))
@@ -276,6 +344,13 @@ class BoardTab(QWidget):
 
         upcoming_count = len(board_store.list_upcoming_tasks())
         self._upcoming_button.setText(f"Upcoming ({upcoming_count})" if upcoming_count else "Upcoming")
+
+        active_count = len(board_store.list_active_tasks())
+        parts = [f"{active_count} task{'s' if active_count != 1 else ''}"]
+        if len(tasks) != active_count:
+            parts[0] = f"{len(tasks)} of {active_count} tasks"
+        parts.append("most important first")
+        self._subtitle.setText(" · ".join(parts))
 
     def _open_add_dialog(self):
         _AddTaskDialog(on_added=lambda _t: self.refresh())
@@ -291,8 +366,7 @@ def _make_tag_pill(tag):
     pill = QLabel(tag["label"])
     pill.setStyleSheet(
         f"background: {tag['bg']}; color: {tag['color']}; "
-        f"border: 1px solid {tag['color']}; border-radius: 9px; "
-        f"padding: 1px 9px; font-size: 11px; font-weight: 600;"
+        f"border-radius: 9px; padding: 1px 9px; font-size: 11px; font-weight: 600;"
     )
     return pill
 
@@ -312,8 +386,14 @@ class _BoardCard(QFrame):
         # filterable concept for the Hide Tags menu (see BoardTab._is_hidden),
         # derived purely from an empty tags list.
 
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(20)
+        shadow.setOffset(0, 4)
+        shadow.setColor(QColor(16, 24, 40, 16))
+        self.setGraphicsEffect(shadow)
+
         self._outer = QVBoxLayout(self)
-        self._outer.setContentsMargins(18, 14, 18, 14)
+        self._outer.setContentsMargins(16, 14, 16, 14)
         self._outer.setSpacing(10)
 
         top_row = QHBoxLayout()
@@ -323,40 +403,39 @@ class _BoardCard(QFrame):
         top_row.addWidget(self._badge)
 
         text_col = QVBoxLayout()
-        text_col.setSpacing(2)
+        text_col.setSpacing(3)
         name_row = QHBoxLayout()
         name_row.setSpacing(8)
         name_label = QLabel(task.get("name") or "(untitled task)")
-        name_label.setStyleSheet("font-size: 16px; font-weight: 600; color: #1F2328;")
-        name_row.addWidget(name_label)
+        name_label.setWordWrap(True)
+        name_label.setStyleSheet(f"font-size: 15.5px; font-weight: 650; color: {INK}; background: transparent;")
+        name_row.addWidget(name_label, 1)
+        text_col.addLayout(name_row)
+
+        meta_row = QHBoxLayout()
+        meta_row.setSpacing(6)
         tag_ids = task.get("tags") or []
         for tag_id in tag_ids:
             tag = board_store.PRESET_TAGS_BY_ID.get(tag_id)
             if tag:
-                name_row.addWidget(_make_tag_pill(tag))
-        name_row.addStretch(1)
-        text_col.addLayout(name_row)
-
+                meta_row.addWidget(_make_tag_pill(tag))
         recurring_text = _recurring_text(task)
         if recurring_text:
-            recur_label = QLabel(f"🔁 {recurring_text}")
-            recur_label.setStyleSheet("font-size: 12px; color: #5A6070;")
-            text_col.addWidget(recur_label)
-
+            recur_label = QLabel(f"↻ {recurring_text.replace('Repeats: ', '')}")
+            recur_label.setStyleSheet(f"font-size: 12px; color: {MUTED}; background: transparent;")
+            meta_row.addWidget(recur_label)
         next_due = _format_date(task.get("nextDueDate")) if task.get("finished") else None
         if next_due:
             next_label = QLabel(f"Next: {next_due}")
-            next_label.setStyleSheet("font-size: 12px; color: #5A6070;")
-            text_col.addWidget(next_label)
+            next_label.setStyleSheet(f"font-size: 12px; color: {MUTED}; background: transparent;")
+            meta_row.addWidget(next_label)
+        meta_row.addStretch(1)
+        text_col.addLayout(meta_row)
         top_row.addLayout(text_col, 1)
 
-        self._details_button = QPushButton("View Details")
-        self._details_button.setStyleSheet(
-            "background: #28a745; color: white; font-weight: 600; "
-            "border-radius: 8px; padding: 6px 16px; font-size: 13px;"
-        )
+        self._details_button = button("Details", SECONDARY_STYLE, height=34)
         self._details_button.clicked.connect(self._toggle_details)
-        top_row.addWidget(self._details_button)
+        top_row.addWidget(self._details_button, 0, Qt.AlignVCenter)
 
         self._outer.addLayout(top_row)
 
@@ -382,14 +461,14 @@ class _BoardCard(QFrame):
         )
         self._outer.addWidget(self._details_panel)
         self._expanded = True
-        self._details_button.setText("Hide Details")
+        self._details_button.setText("Hide")
 
     def _collapse(self):
         if self._details_panel is not None:
             self._details_panel.deleteLater()
             self._details_panel = None
         self._expanded = False
-        self._details_button.setText("View Details")
+        self._details_button.setText("Details")
 
     def _toggle_importance_editor(self):
         if self._importance_editor is not None:
@@ -446,21 +525,29 @@ class _BoardCard(QFrame):
 
 
 class _ImportanceBadge(QLabel):
-    """The round difficulty badge -- double-click opens a small inline editor
+    """The importance tile -- double-click opens a small inline editor
     (see _build_importance_editor) to change it, separate from the larger
-    View Details expansion."""
+    Details expansion. Its colour follows the value (see importance_colors)."""
 
     def __init__(self, value, on_double_click):
         super().__init__(str(value))
         self._on_double_click = on_double_click
-        self.setFixedSize(40, 40)
+        self.setFixedSize(46, 46)
         self.setAlignment(Qt.AlignCenter)
         self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip("Double-click to change difficulty")
-        self.setStyleSheet(
-            "background: #5B8DEF; color: white; border-radius: 20px; "
-            "font-size: 16px; font-weight: 700;"
-        )
+        self.setToolTip("Importance. Double-click to change it")
+        self.setFont(_numeral_font(24))
+        self._restyle(value)
+
+    def _restyle(self, value):
+        self.setStyleSheet(_importance_style(value, 46))
+
+    def setText(self, text):
+        super().setText(text)
+        try:
+            self._restyle(int(text))
+        except ValueError:
+            pass
 
     def mouseDoubleClickEvent(self, event):
         self._on_double_click()
@@ -469,27 +556,24 @@ class _ImportanceBadge(QLabel):
 
 def _build_importance_editor(current, on_save, on_cancel):
     panel = QFrame()
-    panel.setStyleSheet("background: #F7F8FA; border-radius: 8px;")
+    panel.setStyleSheet("background: #F4F6F9; border-radius: 12px;")
     layout = QVBoxLayout(panel)
     layout.setContentsMargins(14, 10, 14, 10)
     layout.setSpacing(8)
 
-    layout.addWidget(_bold_label("Difficulty"))
+    layout.addWidget(_bold_label("Importance"))
     pending = {"value": current}
     row, _buttons = _build_importance_row(current, lambda n: pending.update(value=n))
     layout.addLayout(row)
 
     button_row = QHBoxLayout()
     button_row.addStretch(1)
-    cancel_button = QPushButton("Cancel")
-    cancel_button.setProperty("class", "SecondaryButton")
+    cancel_button = button("Cancel", SECONDARY_STYLE, height=34)
     cancel_button.clicked.connect(on_cancel)
     button_row.addWidget(cancel_button)
-    save_button = QPushButton("Save")
-    save_button.setStyleSheet(
-        "background: #28a745; color: white; font-weight: 600; "
-        "border-radius: 8px; padding: 6px 18px; font-size: 13px;"
-    )
+    save_button = button("Save", f"QPushButton{{background:{INK};color:#FFFFFF;border:none;border-radius:12px;"
+                         "font-size:13.5px;font-weight:600;padding:0 18px;}QPushButton:hover{background:#2B3445;}",
+                         height=34)
     save_button.clicked.connect(lambda: on_save(pending["value"]))
     button_row.addWidget(save_button)
     layout.addLayout(button_row)
@@ -519,9 +603,9 @@ def _make_confirm_button(label, confirm_label, style, on_confirmed):
 
 def _build_details_panel(task, on_deleted, on_deleted_all, on_marked_done, on_edit):
     panel = QFrame()
-    panel.setStyleSheet("background: #F7F8FA; border-radius: 8px;")
+    panel.setStyleSheet("background: #F4F6F9; border-radius: 12px;")
     layout = QVBoxLayout(panel)
-    layout.setContentsMargins(14, 12, 14, 12)
+    layout.setContentsMargins(16, 14, 16, 14)
     layout.setSpacing(8)
 
     opened_text = _format_date(task.get("firstOpenedAt")) or "Just now"
@@ -548,24 +632,19 @@ def _build_details_panel(task, on_deleted, on_deleted_all, on_marked_done, on_ed
     _build_info_content(layout, task)
 
     action_row = QHBoxLayout()
-    edit_button = QPushButton("Edit Details")
-    edit_button.setProperty("class", "SecondaryButton")
+    edit_button = button("Edit details", SECONDARY_STYLE, height=36)
     edit_button.clicked.connect(on_edit)
     action_row.addWidget(edit_button)
     action_row.addStretch(1)
     if not task.get("finished"):
-        done_button = QPushButton("Mark Done")
-        done_button.setStyleSheet(
-            "background: #28a745; color: white; font-weight: 600; "
-            "border-radius: 8px; padding: 8px 20px; font-size: 13px;"
-        )
+        done_button = button(
+            "Mark done",
+            "QPushButton{background:#157F3B;color:#FFFFFF;border:none;border-radius:12px;"
+            "font-size:13.5px;font-weight:600;padding:0 20px;}QPushButton:hover{background:#116B32;}", height=36)
         done_button.clicked.connect(on_marked_done)
         action_row.addWidget(done_button)
 
-    delete_style = (
-        "background: #c62828; color: white; font-weight: 600; "
-        "border-radius: 8px; padding: 8px 20px; font-size: 13px;"
-    )
+    delete_style = DANGER_STYLE.replace("padding:0 20px", "padding:7px 18px")
     delete_button = _make_confirm_button("Delete", "Click again to delete", delete_style, on_deleted)
     action_row.addWidget(delete_button)
 
@@ -597,11 +676,7 @@ def _build_importance_row(current, on_change):
         btn.setFixedSize(28, 28)
         btn.setCheckable(True)
         btn.setChecked(n == current)
-        btn.setStyleSheet(
-            "QPushButton { border-radius: 14px; font-size: 11px; font-weight: 600; "
-            "background: #E5E8EF; color: #1F2328; border: none; padding: 0; }"
-            "QPushButton:checked { background: #5B8DEF; color: white; }"
-        )
+        btn.setStyleSheet(_importance_button_style(n, 14))
         btn.clicked.connect(lambda checked=False, n=n: _set(n))
         row.addWidget(btn)
         buttons[n] = btn
@@ -860,11 +935,7 @@ class _AddTaskDialog(QWidget):
             btn = QPushButton(str(n))
             btn.setFixedSize(30, 30)
             btn.setCheckable(True)
-            btn.setStyleSheet(
-                "QPushButton { border-radius: 15px; font-size: 12px; font-weight: 600; "
-                "background: #E5E8EF; color: #1F2328; border: none; padding: 0; }"
-                "QPushButton:checked { background: #5B8DEF; color: white; }"
-            )
+            btn.setStyleSheet(_importance_button_style(n, 15))
             btn.clicked.connect(lambda checked=False, n=n: self._set_importance(n))
             row.addWidget(btn)
             buttons[n] = btn

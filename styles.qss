@@ -386,10 +386,10 @@ QFrame.InlineForm {
 
 QFrame.BoardCard {
     background: #FFFFFF;
-    border: 1px solid #ECEEF1;
-    border-radius: 12px;
+    border: 1px solid #E6E9EF;
+    border-radius: 16px;
 }
 
 QFrame.BoardCard:hover {
-    border: 1px solid #5B8DEF;
+    border: 1px solid #C9CED8;
 }
