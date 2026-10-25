@@ -10,7 +10,7 @@ import os
 import tempfile
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QLabel, QPushButton, QSizePolicy, QWidget
 
 from qt_ui.day_layout import contrasting_text_color
@@ -303,3 +303,85 @@ def accent(button_):
 def danger(button_):
     button_.setProperty("class", "DangerButton")
     return button_
+
+
+# --- sidebar icons ------------------------------------------------------------------------
+#
+# Line icons for the sidebar, drawn here (no image files): one 24px picture per page, in a quiet
+# grey for the page you are not on and white for the one you are on.
+
+def _nav_pixmap(key, color):
+    ratio = 2
+    image = QImage(24 * ratio, 24 * ratio, QImage.Format_ARGB32)
+    image.fill(Qt.transparent)
+    image.setDevicePixelRatio(ratio)
+    p = QPainter(image)
+    p.setRenderHint(QPainter.Antialiasing)
+    pen = QPen(QColor(color), 1.7, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+    p.setPen(pen)
+    p.setBrush(Qt.NoBrush)
+    if key == "focus":       # a target: ring, ring, dot
+        p.drawEllipse(QPointF(12, 12), 8, 8)
+        p.drawEllipse(QPointF(12, 12), 3.6, 3.6)
+    elif key == "tasks":     # a tick in a ring
+        p.drawEllipse(QPointF(12, 12), 8.2, 8.2)
+        tick = QPainterPath(QPointF(8.2, 12.3))
+        tick.lineTo(10.9, 15)
+        tick.lineTo(15.8, 9.2)
+        p.drawPath(tick)
+    elif key == "board":     # three columns
+        for x, h in ((4.5, 14), (10, 9), (15.5, 12)):
+            p.drawRoundedRect(QRectF(x, 5, 4.5, h), 1.6, 1.6)
+    elif key == "review":    # two arrows chasing each other
+        p.drawArc(QRectF(5, 5, 14, 14), 30 * 16, 130 * 16)
+        p.drawArc(QRectF(5, 5, 14, 14), 210 * 16, 130 * 16)
+        p.drawLine(QPointF(17.7, 4.8), QPointF(18.9, 8.8))
+        p.drawLine(QPointF(18.9, 8.8), QPointF(14.9, 9.4))
+        p.drawLine(QPointF(6.3, 19.2), QPointF(5.1, 15.2))
+        p.drawLine(QPointF(5.1, 15.2), QPointF(9.1, 14.6))
+    elif key == "scribe":    # a pencil
+        body = QPainterPath(QPointF(5, 19))
+        body.lineTo(6, 14.6)
+        body.lineTo(15.4, 5.2)
+        body.lineTo(18.8, 8.6)
+        body.lineTo(9.4, 18)
+        body.closeSubpath()
+        p.drawPath(body)
+        p.drawLine(QPointF(13.6, 7), QPointF(17, 10.4))
+    elif key == "screentime":  # a clock
+        p.drawEllipse(QPointF(12, 12), 8, 8)
+        p.drawLine(QPointF(12, 7.5), QPointF(12, 12))
+        p.drawLine(QPointF(12, 12), QPointF(15.2, 13.8))
+    elif key == "history":   # a list, newest first
+        for y in (7, 12, 17):
+            p.drawLine(QPointF(9.5, y), QPointF(19, y))
+            p.setBrush(QColor(color))
+            p.drawEllipse(QPointF(5.6, y), 1.1, 1.1)
+            p.setBrush(Qt.NoBrush)
+    p.end()
+    return QPixmap.fromImage(image)
+
+
+def nav_icon(key):
+    from PySide6.QtGui import QIcon
+    icon = QIcon()
+    icon.addPixmap(_nav_pixmap(key, "#9AA3B5"), QIcon.Normal, QIcon.Off)
+    icon.addPixmap(_nav_pixmap(key, "#FFFFFF"), QIcon.Normal, QIcon.On)
+    return icon
+
+
+class LogoMark(QWidget):
+    """The Carmen ring: a ring with a gap in it (the same mark as the browser extension's)."""
+
+    def __init__(self, size=22, color="#8EA0FF"):
+        super().__init__()
+        self._color = QColor(color)
+        self.setFixedSize(size, size)
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        width = self.width() * 0.2
+        rect = QRectF(width / 2, width / 2, self.width() - width, self.height() - width)
+        p.setPen(QPen(self._color, width, Qt.SolidLine, Qt.RoundCap))
+        p.drawArc(rect, 10 * 16, 292 * 16)

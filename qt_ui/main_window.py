@@ -15,7 +15,7 @@ if sys.platform != "darwin":
     import win32gui
 
 from PySide6.QtCore import Qt
-from PySide6.QtCore import QEvent
+from PySide6.QtCore import QEvent, QSize
 from PySide6.QtWidgets import (
     QButtonGroup,
     QHBoxLayout,
@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from qt_ui.account_widget import AccountArea
+from qt_ui.ui_kit import LogoMark, nav_icon
 from qt_ui.board_tab import BoardTab
 from qt_ui.focus_tab import FocusTab
 from qt_ui.history_viewer import HistoryTab
@@ -198,24 +199,36 @@ class _MainWindow(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
+        brand = QWidget()
+        brand_row = QHBoxLayout(brand)
+        brand_row.setContentsMargins(20, 24, 18, 18)
+        brand_row.setSpacing(10)
+        brand_row.addWidget(LogoMark(22), 0, Qt.AlignVCenter)
         title = QLabel("Carmen Focus")
         title.setObjectName("SidebarTitle")
-        layout.addWidget(title)
+        brand_row.addWidget(title, 1)
+        layout.addWidget(brand)
 
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
-        nav_items = [
-            ("focus", "🔥  Focus"),
-            ("tasks", "🎯  Tasks"),
-            ("board", "🗂  The Board"),
-            ("review", "🔁  Review"),
-            ("scribe", "✏️  Scribe"),
-            ("screentime", "⏱  Screen Time"),
-            ("history", "📜  Session History"),
+        # (page key, label) in groups; a group's heading is the line above it.
+        nav_groups = [
+            ("Work", [("focus", "Focus"), ("tasks", "Tasks"), ("board", "The Board")]),
+            ("Study", [("review", "Review"), ("scribe", "Scribe")]),
+            ("Look back", [("screentime", "Screen Time"), ("history", "Session History")]),
         ]
+        nav_items = [item for _heading, items in nav_groups for item in items]
+        group_starts = {items[0][0]: heading for heading, items in nav_groups}
         for key, label in nav_items:
+            if key in group_starts:
+                caption = QLabel(group_starts[key])
+                caption.setObjectName("SidebarGroup")
+                layout.addWidget(caption)
             button = QPushButton(label)
             button.setProperty("class", "NavButton")
+            button.setIcon(nav_icon(key))
+            button.setIconSize(QSize(20, 20))
+            button.setCursor(Qt.PointingHandCursor)
             button.setCheckable(True)
             button.clicked.connect(lambda checked, k=key: self._show_tab(k))
             layout.addWidget(button)
