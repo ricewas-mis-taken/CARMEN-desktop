@@ -10,15 +10,18 @@ import copy
 import math
 import time
 
-from PySide6.QtCore import QBuffer, QByteArray, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QBuffer, QByteArray, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
     QFontMetricsF,
+    QIcon,
     QImage,
     QKeySequence,
     QPainter,
+    QPainterPath,
     QPen,
+    QPixmap,
     QShortcut,
 )
 from PySide6.QtWidgets import (
@@ -29,14 +32,18 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMessageBox,
     QPushButton,
+    QSlider,
     QSpinBox,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -328,6 +335,10 @@ class ScribeCanvas(QWidget):
 
     def paintEvent(self, event):
         p = QPainter(self)
+        # Round the board's corners to match the card it sits in.
+        corners = QPainterPath()
+        corners.addRoundedRect(QRectF(self.rect()), 15, 15)
+        p.setClipPath(corners)
         self._paint_background(p)
         p.setRenderHint(QPainter.Antialiasing, True)
         self._paint_scene(p, self.width(), self.height(), self.zoom, self.view["x"], self.view["y"], ui=True)
@@ -812,33 +823,131 @@ class ScribeCanvas(QWidget):
             super().keyReleaseEvent(e)
 
 
+# (key, name, hotkey) -- in the order the tool rail shows them, grouped by what they do.
 _TOOLS = [
-    ("line", "╱", "Line", "1"), ("curve", "⌒", "Curve", "2"), ("fill", "🪣", "Fill", "3"),
-    ("text", "Aa", "Text", "4"), ("rect", "▭", "Rectangle", "5"), ("circle", "◯", "Circle", "6"),
-    ("select", "⬚", "Select", "7"), ("arrow", "➘", "Arrow", "8"), ("insert", "📎", "Insert", ""),
-    ("freehand", "✎", "Freehand", "0"),
+    ("select", "Select", "7"), ("freehand", "Freehand", "0"), ("line", "Line", "1"),
+    ("curve", "Curve", "2"), ("arrow", "Arrow", "8"),
+    None,
+    ("rect", "Rectangle", "5"), ("circle", "Circle", "6"),
+    None,
+    ("text", "Text", "4"), ("fill", "Fill", "3"), ("insert", "Insert image", ""),
 ]
 
+SCRIBE_INK = "#1F2328"
+_QUICK_COLORS = ["#000000", "#E03131", "#F08C00", "#FAB005", "#2F9E44", "#1971C2", "#7048E8", "#FFFFFF"]
+
+# Scoped to this tab's own columns (never the whole tab): dialogs parented to the tab
+# (New, Text, colour picker) would inherit the dark label colour and show blank on a
+# dark dialog background.
 _STYLE = """
-QFrame#ScribePanel { background: #FFFFFF; border: 1px solid #E3E5E9; border-radius: 8px; }
-QLabel#ScribePanelTitle { background: #EEF0F3; color: #59616B; font-weight: 600; padding: 3px 8px;
-    border-top-left-radius: 8px; border-top-right-radius: 8px; }
-QPushButton[scribe="tool"] { text-align: left; padding: 6px 8px; border: 1px solid #E3E5E9;
-    border-radius: 6px; background: #FAFBFC; color: #1F2328; }
-QPushButton[scribe="tool"]:checked { background: #CFE3FF; border-color: #8DB8F5; }
-QPushButton[scribe="tool"]:hover { background: #EEF4FF; }
-QLabel#ScribeKey { background: #FFF200; color: #333; font-size: 10px; padding: 2px 4px; border-radius: 3px; }
-QLabel { color: #1F2328; }
-QCheckBox { color: #1F2328; }
-QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #9AA0A8; border-radius: 3px; background: #FFFFFF; }
-QCheckBox::indicator:checked { background: #5B8DEF; border-color: #5B8DEF; }
-QPushButton { color: #1F2328; background: #FAFBFC; border: 1px solid #E3E5E9; border-radius: 6px; padding: 5px 8px; }
-QPushButton:hover { background: #EEF4FF; }
-QPushButton:checked { background: #CFE3FF; border-color: #8DB8F5; }
-QComboBox, QSpinBox, QListWidget { background: #FAFBFC; color: #1F2328; border: 1px solid #E3E5E9;
-    border-radius: 6px; padding: 2px 6px; }
-QListWidget::item:selected { background: #CFE3FF; color: #1F2328; }
+QFrame#ScribeCard { background: #FFFFFF; border: 1px solid #E6E9EF; border-radius: 16px; }
+QLabel { color: #1F2328; background: transparent; }
+QLabel[scribe="heading"] { color: #667085; font-size: 12px; font-weight: 700; }
+QLabel[scribe="muted"] { color: #667085; font-size: 12px; }
+QCheckBox { color: #1F2328; spacing: 8px; font-size: 12.5px; }
+QCheckBox::indicator { width: 16px; height: 16px; border: 1.5px solid #B8BFCC; border-radius: 5px; background: #FFFFFF; }
+QCheckBox::indicator:checked { background: #1F2328; border-color: #1F2328; }
+QPushButton { color: #1F2328; background: #F2F4F7; border: none; border-radius: 10px; padding: 6px 10px;
+    font-size: 12.5px; font-weight: 600; }
+QPushButton:hover { background: #E7EAF0; }
+QPushButton:checked { background: #1F2328; color: #FFFFFF; }
+QPushButton[scribe="tool"] { background: transparent; border-radius: 12px; padding: 0; }
+QPushButton[scribe="tool"]:hover { background: #EEF0F4; }
+QPushButton[scribe="tool"]:checked { background: #1F2328; }
+QPushButton[scribe="ghost"] { background: transparent; color: #667085; }
+QPushButton[scribe="ghost"]:hover { background: #EEF0F4; color: #1F2328; }
+QPushButton[scribe="danger"] { color: #B42318; background: #FEF3F2; }
+QPushButton[scribe="danger"]:hover { background: #FEE4E2; }
+QToolButton { color: #1F2328; background: #F2F4F7; border: none; border-radius: 10px; padding: 6px 10px;
+    font-size: 12.5px; font-weight: 600; }
+QToolButton:hover { background: #E7EAF0; }
+QToolButton::menu-indicator { image: none; }
+QComboBox, QSpinBox { background: #F7F8FA; color: #1F2328; border: 1px solid #E6E9EF; border-radius: 9px;
+    padding: 3px 8px; font-size: 12.5px; }
+QListWidget { background: #F7F8FA; color: #1F2328; border: 1px solid #E6E9EF; border-radius: 10px;
+    padding: 3px; font-size: 12.5px; }
+QListWidget::item { padding: 4px 6px; border-radius: 6px; }
+QListWidget::item:selected { background: #1F2328; color: #FFFFFF; }
+QSlider::groove:horizontal { height: 4px; background: #E1E5EC; border-radius: 2px; }
+QSlider::handle:horizontal { width: 16px; height: 16px; margin: -6px 0; border-radius: 8px; background: #1F2328; }
+QSlider::sub-page:horizontal { background: #1F2328; border-radius: 2px; }
 """
+
+
+def _tool_pixmap(key, color):
+    """A 24px line icon for a tool, drawn here so it is crisp at any scale."""
+    ratio = 2
+    pix = QPixmap(24 * ratio, 24 * ratio)
+    pix.setDevicePixelRatio(ratio)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    pen = QPen(QColor(color), 1.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+    p.setPen(pen)
+    p.setBrush(Qt.NoBrush)
+    if key == "select":
+        dash = QPen(QColor(color), 1.6, Qt.DashLine, Qt.RoundCap, Qt.RoundJoin)
+        p.setPen(dash)
+        p.drawRoundedRect(QRectF(4, 4, 16, 16), 3, 3)
+        p.setPen(pen)
+        p.setBrush(QColor(color))
+        p.drawEllipse(QPointF(12, 12), 1.8, 1.8)
+    elif key == "freehand":
+        path = QPainterPath(QPointF(3.5, 15))
+        path.cubicTo(7, 4, 10, 4, 12, 12)
+        path.cubicTo(14, 20, 17, 20, 20.5, 9)
+        p.drawPath(path)
+    elif key == "line":
+        p.drawLine(QPointF(5, 19), QPointF(19, 5))
+        p.setBrush(QColor(color))
+        p.drawEllipse(QPointF(5, 19), 1.6, 1.6)
+        p.drawEllipse(QPointF(19, 5), 1.6, 1.6)
+    elif key == "curve":
+        path = QPainterPath(QPointF(4.5, 18))
+        path.quadTo(QPointF(5, 5), QPointF(19.5, 6))
+        p.drawPath(path)
+    elif key == "arrow":
+        p.drawLine(QPointF(5, 19), QPointF(19, 5))
+        p.drawLine(QPointF(19, 5), QPointF(11, 5.6))
+        p.drawLine(QPointF(19, 5), QPointF(18.4, 13))
+    elif key == "rect":
+        p.drawRoundedRect(QRectF(4, 6, 16, 12), 2.5, 2.5)
+    elif key == "circle":
+        p.drawEllipse(QPointF(12, 12), 8, 8)
+    elif key == "text":
+        p.drawLine(QPointF(6, 6.5), QPointF(18, 6.5))
+        p.drawLine(QPointF(12, 6.5), QPointF(12, 19))
+        p.drawLine(QPointF(9.5, 19), QPointF(14.5, 19))
+    elif key == "fill":
+        bucket = QPainterPath(QPointF(5, 12))
+        bucket.lineTo(11, 5.5)
+        bucket.lineTo(18, 12.5)
+        bucket.lineTo(12, 18.5)
+        bucket.closeSubpath()
+        p.drawPath(bucket)
+        p.setBrush(QColor(color))
+        drop = QPainterPath(QPointF(20, 15))
+        drop.cubicTo(18.2, 17.6, 18.2, 19.8, 20, 19.8)
+        drop.cubicTo(21.8, 19.8, 21.8, 17.6, 20, 15)
+        p.drawPath(drop)
+    elif key == "insert":
+        p.drawRoundedRect(QRectF(4, 5, 16, 14), 2.5, 2.5)
+        p.drawEllipse(QPointF(9, 10), 1.5, 1.5)
+        mountain = QPainterPath(QPointF(5, 17.5))
+        mountain.lineTo(10.5, 12.5)
+        mountain.lineTo(14, 16)
+        mountain.lineTo(16.5, 13.5)
+        mountain.lineTo(19.5, 17)
+        p.drawPath(mountain)
+    p.end()
+    return pix
+
+
+def _tool_icon(key):
+    icon = QIcon()
+    icon.addPixmap(_tool_pixmap(key, SCRIBE_INK), QIcon.Normal, QIcon.Off)
+    icon.addPixmap(_tool_pixmap(key, "#FFFFFF"), QIcon.Normal, QIcon.On)
+    return icon
 
 
 class ScribeTab(QWidget):
@@ -852,12 +961,13 @@ class ScribeTab(QWidget):
         self._save_timer.timeout.connect(self.flush)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
-        layout.addWidget(self._build_left())
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
+        layout.addWidget(self._build_left(), 0, Qt.AlignTop)
         center = QVBoxLayout()
+        center.setSpacing(10)
         center.addWidget(self._build_topbar())
-        center.addWidget(self.canvas, 1)
+        center.addWidget(self._build_canvas_card(), 1)
         layout.addLayout(center, 1)
         layout.addWidget(self._build_right())
 
@@ -868,6 +978,7 @@ class ScribeTab(QWidget):
         self._show_zoom(self.canvas.zoom)
         self._show_tool(self.canvas.tool)
         self._refresh_layers()
+        self._show_saved(True)
 
         for keys, fn in (("Ctrl+Z", self.canvas.undo), ("Ctrl+Y", self.canvas.redo),
                          ("Ctrl+Shift+Z", self.canvas.redo)):
@@ -881,6 +992,7 @@ class ScribeTab(QWidget):
     # ---- saving ----------------------------------------------------------
     def _schedule_save(self):
         self._dirty = True
+        self._show_saved(False)
         self._save_timer.start()
 
     def flush(self):
@@ -889,49 +1001,66 @@ class ScribeTab(QWidget):
         try:
             scribe_store.save(self.canvas.doc)
             self._dirty = False
+            self._show_saved(True)
         except OSError:
             pass  # stays dirty; the next change (or quit) tries again
+
+    def _show_saved(self, saved):
+        self._saved_label.setText("Saved" if saved else "Saving…")
+        self._saved_dot.setStyleSheet(
+            f"background: {'#2F9E44' if saved else '#F08C00'}; border-radius: 4px;")
 
     def hideEvent(self, event):
         self.flush()
         super().hideEvent(event)
 
     # ---- layout helpers --------------------------------------------------
-    def _panel(self, title, width=None):
+    @staticmethod
+    def _card(width=None):
         frame = QFrame()
-        frame.setObjectName("ScribePanel")
-        outer = QVBoxLayout(frame)
-        outer.setContentsMargins(0, 0, 0, 6)
-        outer.setSpacing(4)
-        label = QLabel(title)
-        label.setObjectName("ScribePanelTitle")
-        outer.addWidget(label)
-        body = QVBoxLayout()
-        body.setContentsMargins(8, 2, 8, 2)
-        body.setSpacing(4)
-        outer.addLayout(body)
-        return frame, body
+        frame.setObjectName("ScribeCard")
+        frame.setStyleSheet(_STYLE)
+        if width:
+            frame.setFixedWidth(width)
+        shadow = QGraphicsDropShadowEffect(frame)
+        shadow.setBlurRadius(24)
+        shadow.setOffset(0, 5)
+        shadow.setColor(QColor(16, 24, 40, 20))
+        frame.setGraphicsEffect(shadow)
+        return frame
+
+    @staticmethod
+    def _heading(text):
+        label = QLabel(text)
+        label.setProperty("scribe", "heading")
+        return label
 
     def _build_left(self):
-        column = QWidget()
-        # Styled on the columns and top bar only, never on the whole tab: dialogs
-        # parented to the tab (New, Text, colour picker) would inherit the dark
-        # label colour and show blank on a dark dialog background.
-        column.setStyleSheet(_STYLE)
-        column.setFixedWidth(178)
-        box = QVBoxLayout(column)
-        box.setContentsMargins(0, 0, 0, 0)
-        box.setSpacing(8)
-
-        tools, body = self._panel("Tools")
+        card = self._card(64)
+        box = QVBoxLayout(card)
+        box.setContentsMargins(9, 10, 9, 10)
+        box.setSpacing(4)
         self._tool_group = QButtonGroup(self)
         self._tool_group.setExclusive(True)
         self._tool_buttons = {}
-        for key, glyph, name, hotkey in _TOOLS:
-            row = QHBoxLayout()
-            row.setSpacing(4)
-            button = QPushButton(f"{glyph}   {name}")
+        for entry in _TOOLS:
+            if entry is None:
+                rule = QFrame()
+                rule.setFixedHeight(1)
+                rule.setStyleSheet("background: #E6E9EF; border: none;")
+                box.addSpacing(3)
+                box.addWidget(rule)
+                box.addSpacing(3)
+                continue
+            key, name, hotkey = entry
+            button = QPushButton()
             button.setProperty("scribe", "tool")
+            button.setIcon(_tool_icon(key))
+            button.setIconSize(QSize(24, 24))
+            button.setFixedSize(46, 42)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setToolTip(f"{name}  ({hotkey})" if hotkey else name)
+            button.setAccessibleName(name)
             if key == "insert":
                 button.clicked.connect(self.canvas.insert_images)
             else:
@@ -939,86 +1068,95 @@ class ScribeTab(QWidget):
                 self._tool_group.addButton(button)
                 self._tool_buttons[key] = button
                 button.clicked.connect(lambda checked, k=key: self.canvas.set_tool(k))
-            row.addWidget(button, 1)
-            if hotkey:
-                badge = QLabel(hotkey)
-                badge.setObjectName("ScribeKey")
-                row.addWidget(badge)
-            body.addLayout(row)
-        box.addWidget(tools)
-
-        view, body = self._panel("View")
-        self._pref_checks = {}
-        for key, label in (("snapToGrid", "Snap to grid"), ("snapAroundGrid", "Snap around grid"),
-                           ("snapTo15", "Snap to 15°"), ("showGuides", "Show guides"),
-                           ("showRulers", "Show rulers")):
-            check = QCheckBox(label)
-            check.setChecked(self.canvas.prefs[key])
-            check.toggled.connect(lambda on, k=key: self.canvas.set_flag(k, on))
-            self._pref_checks[key] = check
-            body.addWidget(check)
-        box.addWidget(view)
-
-        layers, body = self._panel("Layers")
-        self._opacity = QComboBox()
-        for pct in scribe_store.OPACITIES:
-            self._opacity.addItem(f"{pct}%", pct)
-        self._opacity.currentIndexChanged.connect(
-            lambda: self.canvas.set_layer_opacity(self._opacity.currentData()))
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Opacity:"))
-        row.addWidget(self._opacity, 1)
-        body.addLayout(row)
-        self._layer_list = QListWidget()
-        self._layer_list.setFixedHeight(110)
-        self._layer_list.currentRowChanged.connect(self._layer_row_changed)
-        self._layer_list.itemChanged.connect(self._layer_item_changed)
-        body.addWidget(self._layer_list)
-        row = QHBoxLayout()
-        for text, fn in (("+", self.canvas.add_layer), ("−", self.canvas.remove_layer),
-                         ("↑", lambda: self.canvas.move_layer(1)), ("↓", lambda: self.canvas.move_layer(-1))):
-            button = QPushButton(text)
-            button.setFixedWidth(34)
-            button.clicked.connect(fn)
-            row.addWidget(button)
-        body.addLayout(row)
-        box.addWidget(layers)
-        box.addStretch(1)
-        return column
+            box.addWidget(button)
+        return card
 
     def _build_topbar(self):
-        holder = QWidget()
-        holder.setStyleSheet(_STYLE)
-        bar = QHBoxLayout(holder)
-        bar.setContentsMargins(0, 0, 0, 0)
-        bar.setSpacing(6)
+        card = self._card()
+        card.setFixedHeight(54)
+        bar = QHBoxLayout(card)
+        bar.setContentsMargins(16, 0, 12, 0)
+        bar.setSpacing(8)
+
+        title = QLabel("Scribe")
+        title.setStyleSheet(f"font-size: 17px; font-weight: 700; color: {SCRIBE_INK}; background: transparent;")
+        bar.addWidget(title)
+        self._saved_dot = QLabel()
+        self._saved_dot.setFixedSize(8, 8)
+        bar.addWidget(self._saved_dot, 0, Qt.AlignVCenter)
+        self._saved_label = QLabel()
+        self._saved_label.setProperty("scribe", "muted")
+        bar.addWidget(self._saved_label)
+        bar.addStretch(1)
+
         minus = QPushButton("−")
         plus = QPushButton("+")
         for button in (minus, plus):
-            button.setFixedWidth(30)
+            button.setFixedSize(32, 32)
         minus.clicked.connect(lambda: self.canvas.zoom_by(1 / 1.25))
         plus.clicked.connect(lambda: self.canvas.zoom_by(1.25))
+        minus.setToolTip("Zoom out")
+        plus.setToolTip("Zoom in")
         self._zoom_label = QLabel("100%")
-        self._zoom_label.setMinimumWidth(48)
+        self._zoom_label.setMinimumWidth(52)
         self._zoom_label.setAlignment(Qt.AlignCenter)
-        self._pan_button = QPushButton("✋ Pan")
+        self._zoom_label.setStyleSheet(
+            "font-size: 13px; font-weight: 700; color: #1F2328; background: transparent;")
+        self._pan_button = QPushButton("Pan")
         self._pan_button.setCheckable(True)
+        self._pan_button.setToolTip("Drag the board (or hold Space, or middle-drag)")
         self._pan_button.toggled.connect(self.canvas.set_pan_mode)
-        reset = QPushButton("↻ Reset")
-        reset.clicked.connect(self.canvas.reset_view)
-        fit = QPushButton("⤢ Fit")
+        fit = QPushButton("Fit")
+        fit.setToolTip("Zoom to everything you drew")
         fit.clicked.connect(self.canvas.fit_all)
-        for widget in (minus, self._zoom_label, plus, self._pan_button, reset, fit):
+        reset = QPushButton("Reset")
+        reset.setToolTip("Back to 100% at the centre")
+        reset.clicked.connect(self.canvas.reset_view)
+        for widget in (minus, self._zoom_label, plus, self._pan_button, fit, reset):
             bar.addWidget(widget)
-        hint = QLabel("Scroll to zoom · hold Space or middle-drag to pan · always saved")
-        hint.setStyleSheet("color: #8A9099; font-size: 11px;")
-        bar.addWidget(hint)
-        bar.addStretch(1)
-        return holder
+        bar.addSpacing(10)
+
+        undo = QPushButton("↶")
+        redo = QPushButton("↷")
+        for button, fn, tip in ((undo, self.canvas.undo, "Undo  (Ctrl+Z)"), (redo, self.canvas.redo, "Redo  (Ctrl+Y)")):
+            button.setFixedSize(32, 32)
+            button.setStyleSheet("font-size: 17px; padding: 0 0 2px 0;")
+            button.setToolTip(tip)
+            button.clicked.connect(fn)
+            bar.addWidget(button)
+        bar.addWidget(self._build_snap_menu())
+        return card
+
+    def _build_snap_menu(self):
+        """Snapping and the guides/rulers overlay, behind one button."""
+        self._pref_checks = {}
+        menu_button = QToolButton()
+        menu_button.setText("Snap && guides")  # "&&" is a literal ampersand in Qt
+        menu_button.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(menu_button)
+        for key, label in (("snapToGrid", "Snap to grid"), ("snapAroundGrid", "Snap around grid"),
+                           ("snapTo15", "Snap to 15°"), ("showGuides", "Show guides"),
+                           ("showRulers", "Show rulers")):
+            action = menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(self.canvas.prefs[key])
+            action.toggled.connect(lambda on, k=key: self.canvas.set_flag(k, on))
+            self._pref_checks[key] = action
+        menu_button.setMenu(menu)
+        return menu_button
+
+    def _build_canvas_card(self):
+        frame = QFrame()
+        frame.setObjectName("ScribeBoard")
+        frame.setStyleSheet("QFrame#ScribeBoard { background: #FFFFFF; border: 1px solid #E6E9EF; border-radius: 16px; }")
+        inner = QVBoxLayout(frame)
+        inner.setContentsMargins(1, 1, 1, 1)
+        inner.addWidget(self.canvas)
+        return frame
 
     def _swatch(self, color):
         button = QPushButton()
-        button.setFixedSize(44, 28)
+        button.setFixedSize(52, 30)
         self._paint_swatch(button, color)
         return button
 
@@ -1026,80 +1164,139 @@ class ScribeTab(QWidget):
     def _paint_swatch(button, color):
         if color:
             button.setText("")
-            button.setStyleSheet(f"background: {color}; border: 1px solid #888; border-radius: 4px;")
+            button.setStyleSheet(f"background: {color}; border: 1px solid #C9CED8; border-radius: 9px;")
         else:
             button.setText("∅")
-            button.setStyleSheet("background: #FFFFFF; color: #D33; border: 1px solid #888; border-radius: 4px;")
+            button.setStyleSheet(
+                "background: #FFFFFF; color: #D33; border: 1px solid #C9CED8; border-radius: 9px;")
 
     def _build_right(self):
-        column = QWidget()
-        # Styled on the columns and top bar only, never on the whole tab: dialogs
-        # parented to the tab (New, Text, colour picker) would inherit the dark
-        # label colour and show blank on a dark dialog background.
-        column.setStyleSheet(_STYLE)
-        column.setFixedWidth(168)
-        box = QVBoxLayout(column)
-        box.setContentsMargins(0, 0, 0, 0)
+        card = self._card(214)
+        box = QVBoxLayout(card)
+        box.setContentsMargins(14, 14, 14, 14)
         box.setSpacing(8)
         prefs = self.canvas.prefs
 
-        colors, body = self._panel("Colors")
+        box.addWidget(self._heading("Colour"))
         row = QHBoxLayout()
-        row.addWidget(QLabel("Stroke:"), 1)
-        self._stroke_swatch = self._swatch(prefs["stroke"])
-        self._stroke_swatch.clicked.connect(self._pick_stroke)
-        row.addWidget(self._stroke_swatch)
-        body.addLayout(row)
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Fill:"), 1)
-        self._fill_swatch = self._swatch(prefs["fill"])
-        self._fill_swatch.clicked.connect(self._pick_fill)
-        row.addWidget(self._fill_swatch)
-        body.addLayout(row)
+        row.setSpacing(8)
+        for label, attr, handler in (("Stroke", "_stroke_swatch", self._pick_stroke),
+                                     ("Fill", "_fill_swatch", self._pick_fill)):
+            column = QVBoxLayout()
+            column.setSpacing(3)
+            swatch = self._swatch(prefs["stroke" if attr == "_stroke_swatch" else "fill"])
+            swatch.clicked.connect(handler)
+            setattr(self, attr, swatch)
+            column.addWidget(swatch)
+            caption = QLabel(label)
+            caption.setProperty("scribe", "muted")
+            column.addWidget(caption)
+            row.addLayout(column)
         no_fill = QPushButton("No fill")
+        no_fill.setProperty("scribe", "ghost")
         no_fill.clicked.connect(lambda: self._set_fill(None))
-        body.addWidget(no_fill)
-        box.addWidget(colors)
+        row.addWidget(no_fill, 0, Qt.AlignTop)
+        row.addStretch(1)
+        box.addLayout(row)
+        quick = QHBoxLayout()
+        quick.setSpacing(5)
+        for color in _QUICK_COLORS:
+            dot = QPushButton()
+            dot.setFixedSize(18, 18)
+            dot.setCursor(Qt.PointingHandCursor)
+            dot.setToolTip(f"Stroke {color}")
+            dot.setStyleSheet(
+                f"QPushButton {{ background: {color}; border: 1px solid #C9CED8; border-radius: 9px; padding: 0; }}"
+                "QPushButton:hover { border: 2px solid #1F2328; }")
+            dot.clicked.connect(lambda _checked=False, c=color: self._quick_stroke(c))
+            quick.addWidget(dot)
+        quick.addStretch(1)
+        box.addLayout(quick)
 
-        stroke, body = self._panel("Stroke")
+        box.addSpacing(6)
+        box.addWidget(self._heading("Line"))
         row = QHBoxLayout()
-        row.addWidget(QLabel("Width:"), 1)
+        row.setSpacing(8)
+        self._width_slider = QSlider(Qt.Horizontal)
+        self._width_slider.setRange(1, 60)
         self._width = QSpinBox()
         self._width.setRange(1, 200)
         self._width.setValue(int(prefs["width"]))
-        self._width.valueChanged.connect(self.canvas.set_width)
+        self._width_slider.setValue(min(60, int(prefs["width"])))
+        self._width_slider.valueChanged.connect(self._width.setValue)
+        self._width.valueChanged.connect(self._width_changed)
+        row.addWidget(self._width_slider, 1)
         row.addWidget(self._width)
-        body.addLayout(row)
-        for key, label in (("shouldScale", "Should scale"), ("roundCorners", "Round corners"),
+        box.addLayout(row)
+        for key, label in (("shouldScale", "Scale with zoom"), ("roundCorners", "Round corners"),
                            ("dashed", "Dashed")):
             check = QCheckBox(label)
             check.setChecked(prefs[key])
             check.toggled.connect(lambda on, k=key: self.canvas.set_flag(k, on))
             self._pref_checks[key] = check
-            body.addWidget(check)
-        box.addWidget(stroke)
+            box.addWidget(check)
 
-        background, body = self._panel("Background")
+        box.addSpacing(6)
+        box.addWidget(self._heading("Paper"))
         self._background = QComboBox()
         for key, label in BACKGROUND_LABELS.items():
             self._background.addItem(label, key)
         self._background.setCurrentIndex(self._background.findData(prefs["background"]))
         self._background.currentIndexChanged.connect(
             lambda: self.canvas.set_background(self._background.currentData()))
-        body.addWidget(self._background)
-        box.addWidget(background)
+        box.addWidget(self._background)
 
-        menu, body = self._panel("Menu")
-        for text, fn in (("↶  Undo (Ctrl+Z)", self.canvas.undo), ("↷  Redo (Ctrl+Y)", self.canvas.redo),
-                         ("📄  New", self._new_board), ("💾  Export PNG", self._export)):
+        box.addSpacing(6)
+        box.addWidget(self._heading("Layers"))
+        self._opacity = QComboBox()
+        for pct in scribe_store.OPACITIES:
+            self._opacity.addItem(f"{pct}%", pct)
+        self._opacity.currentIndexChanged.connect(
+            lambda: self.canvas.set_layer_opacity(self._opacity.currentData()))
+        row = QHBoxLayout()
+        caption = QLabel("Opacity")
+        caption.setProperty("scribe", "muted")
+        row.addWidget(caption)
+        row.addWidget(self._opacity, 1)
+        box.addLayout(row)
+        self._layer_list = QListWidget()
+        self._layer_list.setFixedHeight(104)
+        self._layer_list.currentRowChanged.connect(self._layer_row_changed)
+        self._layer_list.itemChanged.connect(self._layer_item_changed)
+        box.addWidget(self._layer_list)
+        row = QHBoxLayout()
+        row.setSpacing(4)
+        for text, fn, tip in (("+", self.canvas.add_layer, "Add a layer"), ("−", self.canvas.remove_layer, "Remove this layer"),
+                              ("↑", lambda: self.canvas.move_layer(1), "Move up"),
+                              ("↓", lambda: self.canvas.move_layer(-1), "Move down")):
             button = QPushButton(text)
+            button.setToolTip(tip)
+            button.setFixedHeight(30)
             button.clicked.connect(fn)
-            body.addWidget(button)
-        box.addWidget(menu)
+            row.addWidget(button)
+        box.addLayout(row)
+
         box.addStretch(1)
-        return column
+        new_board = QPushButton("New board")
+        new_board.setProperty("scribe", "danger")
+        new_board.clicked.connect(self._new_board)
+        export = QPushButton("Export PNG")
+        export.clicked.connect(self._export)
+        footer = QHBoxLayout()
+        footer.setSpacing(6)
+        footer.addWidget(export, 1)
+        footer.addWidget(new_board, 1)
+        box.addLayout(footer)
+        return card
 
     # ---- panel callbacks -------------------------------------------------
+    def _width_changed(self, value):
+        if self._width_slider.value() != min(60, value):
+            self._width_slider.blockSignals(True)
+            self._width_slider.setValue(min(60, value))
+            self._width_slider.blockSignals(False)
+        self.canvas.set_width(value)
+
     def _show_zoom(self, zoom):
         self._zoom_label.setText(f"{zoom * 100:.0f}%")
 
@@ -1109,6 +1306,10 @@ class ScribeTab(QWidget):
             button.setChecked(True)
         if self._pan_button.isChecked():
             self._pan_button.setChecked(False)
+
+    def _quick_stroke(self, color):
+        self._paint_swatch(self._stroke_swatch, color)
+        self.canvas.set_stroke(color)
 
     def _pick_stroke(self):
         color = QColorDialog.getColor(QColor(self.canvas.prefs["stroke"]), self, "Stroke color")
