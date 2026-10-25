@@ -580,3 +580,14 @@ tick only while visible, restyle only when the look changes). Old TaskCard/burno
   Fork: restyle each redesigned tab on its own, or share the pieces the Tasks cards already had.
   Chose a small shared module (colours, DIN numerals via Bahnschrift, chips, buttons, the ring, an elided label); tasks_tab keeps its old private names as aliases. Focus, Board, Scribe, Screen Time and Review were redesigned on it: white cards with a hairline border on the grey page, ink text, one accent per thing (task colour, importance ramp, category colour), and a number as the hero wherever the page is about a number. Fonts are set in label stylesheets, not setFont(), because the app stylesheet sets a font on every label and wins.
   Replaced the Review table (nine columns, horizontal scroll) with a row per problem; the Board's tag drop-down became chips. Tests that reached into the table now read the rows.
+
+[2026-10-25] A first attempt can be paused from outside; a running review is the big time everywhere
+  Fork: leave a first attempt read-only for the extension (it has no review_store row), or let it be paused.
+  Chose to let it: POST /review/pause|resume leave a request in review_store (request_first_attempt) and also update the published snapshot at once, so /status shows the new state immediately; the banner that really times it applies the request on its next tick. Why now: the "review becomes the big time" popup behaviour had been written to skip first attempts, and a first attempt is exactly what was running, so it never showed. The extension and the Focus tab now treat any running review, first attempt included, as the big time, with the session (a paused pomodoro too) beside it and a "Resume pomodoro" that sets the review aside and resumes the session.
+  Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-10-25] (popup takeover).
+
+[2026-10-25] Focus tab: custom length only, and one rules picker for apps, websites and browser profiles
+  The preset buttons are gone (type minutes). "Pick apps" used to open the blocklist picker, which switches to "unblock what is blocked now" while a session runs (so it only ever listed apps then) and never offered websites. A separate mode, picker_dialogs.open_rules_picker(), always edits the next session's saved defaults: processBlocklist, browserProfileBlocklist and domainWhitelist.
+
+[2026-10-25] Session History redesigned on top of the same file
+  session_history.json and session_history.load_all() are untouched; the page only reads them. Pause-aware worked time comes from tasks_store.worked_seconds, as the Tasks cards use. format_session_html() stays for anything that wants the old text.
