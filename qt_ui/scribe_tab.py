@@ -835,6 +835,45 @@ _TOOLS = [
     ("text", "Text", "4"), ("fill", "Fill", "3"), ("insert", "Insert image", ""),
 ]
 
+# What each control does: shown when the pointer rests on it.
+TOOL_HELP = {
+    "select": "Click a shape to pick it, drag to move it, drag a box to pick several. Delete removes them.",
+    "freehand": "Draw by hand. Hold the button down and move.",
+    "line": "Click and drag to draw a straight line.",
+    "curve": "Drag a straight line, then click where the bend should go.",
+    "arrow": "Click and drag to draw a line with an arrowhead.",
+    "rect": "Click and drag to draw a rectangle (or a square with the corners rounded, if you chose that).",
+    "circle": "Click and drag to draw a circle or an oval.",
+    "text": "Click where the words should go, then type.",
+    "fill": "Click inside a closed shape to colour it with the fill colour.",
+    "insert": "Put a picture on the board from a file.",
+}
+HELP = {
+    "colour_well": "Line colour (the ring) and fill colour (the disc). Click either one to change it.",
+    "swap": "Swap the line colour and the fill colour.",
+    "no_fill": "Draw shapes as outlines, with nothing inside.",
+    "quick": "Left-click: use as the line colour. Right-click: use as the fill colour.",
+    "preview": "What the next line you draw will look like.",
+    "width": "How thick lines are, in board units. Changes the selected shapes too.",
+    "shouldScale": "Line width grows and shrinks as you zoom, like a real part of the drawing.",
+    "roundCorners": "Round the ends and corners of lines and rectangles.",
+    "dashed": "Draw lines as dashes instead of solid.",
+    "paper": "The paper behind the drawing. It does not change what you drew.",
+    "opacity": "How see-through the selected layer is.",
+    "layers": "Layers stack like sheets of tracing paper. Tick one to show it, double-click to rename it.",
+    "export": "Save the whole drawing as a picture (PNG).",
+    "new": "Clear every shape on every layer. Undo brings it back until you quit.",
+    "snapToGrid": "Corners and ends jump to the nearest grid point.",
+    "snapAroundGrid": "Shapes jump to the lines between grid points too.",
+    "snapTo15": "Lines turn in steps of 15 degrees, so they come out straight or at clean angles.",
+    "showGuides": "Show alignment guides while you drag.",
+    "showRulers": "Show a ruler along the top and left edges.",
+    "undo": "Take back the last change (Ctrl+Z).",
+    "redo": "Put back what you just undid (Ctrl+Y).",
+    "zoom_label": "How far in you are. Scroll the mouse wheel over the board to zoom.",
+    "snap_menu": "Snapping, guides and rulers.",
+}
+
 SCRIBE_INK = "#1F2328"
 _QUICK_COLORS = ["#000000", "#E03131", "#F08C00", "#FAB005", "#2F9E44", "#1971C2", "#7048E8", "#FFFFFF"]
 
@@ -969,7 +1008,7 @@ class _ColorWell(QWidget):
         self.fill = fill
         self.setFixedSize(68, 68)
         self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip("Line colour (ring) and fill colour (disc)")
+        self.setToolTip(HELP["colour_well"])
 
     def set_colors(self, stroke=None, fill=None, set_fill=False):
         if stroke is not None:
@@ -1092,7 +1131,6 @@ class _PaperChip(QPushButton):
         self._key = key
         self.setCheckable(True)
         self.setFixedSize(40, 40)
-        self.setToolTip(label)
         self.setAccessibleName(f"{label} paper")
         self.setCursor(Qt.PointingHandCursor)
 
@@ -1237,7 +1275,7 @@ class ScribeTab(QWidget):
             button.setIconSize(QSize(24, 24))
             button.setFixedSize(46, 42)
             button.setCursor(Qt.PointingHandCursor)
-            button.setToolTip(f"{name}  ({hotkey})" if hotkey else name)
+            button.setToolTip(f"{name}{f'  ({hotkey})' if hotkey else ''}\n{TOOL_HELP[key]}")
             button.setAccessibleName(name)
             if key == "insert":
                 button.clicked.connect(self.canvas.insert_images)
@@ -1278,6 +1316,7 @@ class ScribeTab(QWidget):
         self._zoom_label = QLabel("100%")
         self._zoom_label.setMinimumWidth(52)
         self._zoom_label.setAlignment(Qt.AlignCenter)
+        self._zoom_label.setToolTip(HELP["zoom_label"])
         self._zoom_label.setStyleSheet(
             "font-size: 13px; font-weight: 700; color: #1F2328; background: transparent;")
         self._pan_button = QPushButton("Pan")
@@ -1296,7 +1335,7 @@ class ScribeTab(QWidget):
 
         undo = QPushButton("↶")
         redo = QPushButton("↷")
-        for button, fn, tip in ((undo, self.canvas.undo, "Undo  (Ctrl+Z)"), (redo, self.canvas.redo, "Redo  (Ctrl+Y)")):
+        for button, fn, tip in ((undo, self.canvas.undo, HELP["undo"]), (redo, self.canvas.redo, HELP["redo"])):
             button.setFixedSize(32, 32)
             button.setStyleSheet("font-size: 17px; padding: 0 0 2px 0;")
             button.setToolTip(tip)
@@ -1311,11 +1350,14 @@ class ScribeTab(QWidget):
         menu_button = QToolButton()
         menu_button.setText("Snap && guides")  # "&&" is a literal ampersand in Qt
         menu_button.setPopupMode(QToolButton.InstantPopup)
+        menu_button.setToolTip(HELP["snap_menu"])
         menu = QMenu(menu_button)
+        menu.setToolTipsVisible(True)
         for key, label in (("snapToGrid", "Snap to grid"), ("snapAroundGrid", "Snap around grid"),
                            ("snapTo15", "Snap to 15°"), ("showGuides", "Show guides"),
                            ("showRulers", "Show rulers")):
             action = menu.addAction(label)
+            action.setToolTip(HELP[key])
             action.setCheckable(True)
             action.setChecked(self.canvas.prefs[key])
             action.toggled.connect(lambda on, k=key: self.canvas.set_flag(k, on))
@@ -1356,12 +1398,13 @@ class ScribeTab(QWidget):
         row = QHBoxLayout()
         row.setSpacing(4)
         swap = QPushButton("⇄")
-        swap.setToolTip("Swap line and fill colours")
+        swap.setToolTip(HELP["swap"])
         swap.setProperty("scribe", "ghost")
         swap.setFixedHeight(26)
         swap.clicked.connect(self._swap_colors)
         no_fill = QPushButton("No fill")
         no_fill.setProperty("scribe", "ghost")
+        no_fill.setToolTip(HELP["no_fill"])
         no_fill.setFixedHeight(26)
         no_fill.clicked.connect(lambda: self._set_fill(None))
         row.addWidget(swap)
@@ -1377,7 +1420,7 @@ class ScribeTab(QWidget):
         grid.setVerticalSpacing(6)
         for index, color in enumerate(_QUICK_COLORS):
             dot = _ColorDot(color)
-            dot.setToolTip(f"Line {color}  (right-click: fill)")
+            dot.setToolTip(f"{color.upper()}\n{HELP['quick']}")
             dot.picked.connect(self._quick_stroke)
             dot.pickedFill.connect(self._set_fill)
             self._quick_dots[color] = dot
@@ -1389,12 +1432,15 @@ class ScribeTab(QWidget):
         box.addSpacing(4)
         box.addWidget(self._heading("Line"))
         self._stroke_preview = _StrokePreview()
+        self._stroke_preview.setToolTip(HELP["preview"])
         box.addWidget(self._stroke_preview)
         row = QHBoxLayout()
         row.setSpacing(8)
         self._width_slider = QSlider(Qt.Horizontal)
         self._width_slider.setRange(1, 60)
+        self._width_slider.setToolTip(HELP["width"])
         self._width = QSpinBox()
+        self._width.setToolTip(HELP["width"])
         self._width.setRange(1, 200)
         self._width.setValue(int(prefs["width"]))
         self._width_slider.setValue(min(60, int(prefs["width"])))
@@ -1406,6 +1452,7 @@ class ScribeTab(QWidget):
         for key, label in (("shouldScale", "Scale with zoom"), ("roundCorners", "Round corners"),
                            ("dashed", "Dashed")):
             check = QCheckBox(label)
+            check.setToolTip(HELP[key])
             check.setChecked(prefs[key])
             check.toggled.connect(lambda on, k=key: self.canvas.set_flag(k, on))
             self._pref_checks[key] = check
@@ -1420,6 +1467,7 @@ class ScribeTab(QWidget):
             self._background.addItem(label, key)
         self._background.setCurrentIndex(self._background.findData(prefs["background"]))
         self._background.currentIndexChanged.connect(self._background_changed)
+        self._background.setToolTip(HELP["paper"])
         self._background.hide()
         box.addWidget(self._background)
         self._paper_chips = {}
@@ -1428,6 +1476,7 @@ class ScribeTab(QWidget):
         paper_grid.setVerticalSpacing(6)
         for index, key in enumerate(BACKGROUND_LABELS):
             chip = _PaperChip(key, BACKGROUND_LABELS[key])
+            chip.setToolTip(f"{BACKGROUND_LABELS[key]} paper\n{HELP['paper']}")
             chip.clicked.connect(lambda _c=False, k=key: self._background.setCurrentIndex(self._background.findData(k)))
             self._paper_chips[key] = chip
             paper_grid.addWidget(chip, index // 4, index % 4)
@@ -1440,16 +1489,19 @@ class ScribeTab(QWidget):
         self._opacity = QComboBox()
         for pct in scribe_store.OPACITIES:
             self._opacity.addItem(f"{pct}%", pct)
+        self._opacity.setToolTip(HELP["opacity"])
         self._opacity.currentIndexChanged.connect(
             lambda: self.canvas.set_layer_opacity(self._opacity.currentData()))
         row = QHBoxLayout()
         caption = QLabel("Opacity")
+        caption.setToolTip(HELP["opacity"])
         caption.setProperty("scribe", "muted")
         row.addWidget(caption)
         row.addWidget(self._opacity, 1)
         box.addLayout(row)
         self._layer_list = QListWidget()
         self._layer_list.setFixedHeight(96)
+        self._layer_list.setToolTip(HELP["layers"])
         self._layer_list.currentRowChanged.connect(self._layer_row_changed)
         self._layer_list.itemChanged.connect(self._layer_item_changed)
         box.addWidget(self._layer_list)
@@ -1468,8 +1520,10 @@ class ScribeTab(QWidget):
         box.addStretch(1)
         new_board = QPushButton("New board")
         new_board.setProperty("scribe", "danger")
+        new_board.setToolTip(HELP["new"])
         new_board.clicked.connect(self._new_board)
         export = QPushButton("Export PNG")
+        export.setToolTip(HELP["export"])
         export.clicked.connect(self._export)
         footer = QHBoxLayout()
         footer.setSpacing(6)
