@@ -53,6 +53,16 @@ def open_blocklist_picker():
     _track(_BlocklistPicker()).show()
 
 
+def open_rules_picker(on_saved=None):
+    """The Focus tab's "Pick rules": apps, allowed websites and browser profiles for the
+    NEXT session -- always, even while another session runs (open_blocklist_picker()
+    switches to "unblock what is blocked now" in that case)."""
+    picker = _BlocklistPicker(for_next_session=True)
+    picker.on_saved = on_saved
+    _track(picker).show()
+    return picker
+
+
 def open_timer_dialog():
     _track(_TimerDialog()).show()
 
@@ -88,18 +98,20 @@ class _Checklist:
 
 
 class _BlocklistPicker(QWidget):
-    def __init__(self):
+    def __init__(self, for_next_session=False):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
-        self.setWindowTitle("Carmen Focus — Pick Apps to Blocklist")
-        self.resize(440, 640)
+        self.setWindowTitle("Carmen Focus — Session Rules" if for_next_session else "Carmen Focus — Pick Apps to Blocklist")
+        self.resize(460, 760 if for_next_session else 640)
+        self._domains_checklist = None
+        self.on_saved = None  # the Focus tab refreshes its summary line through this
 
         # Populated below only in the not-session-active branch -- lets
         # _save() tell a picked browser-profile AUMI apart from a picked
         # process name, since both live as keys in the same checklist.
         self._profile_aumi_keys = set()
 
-        self._session_active = session_manager.is_active()
+        self._session_active = False if for_next_session else session_manager.is_active()
         if self._session_active:
             # Mid-session, this picker isn't for adding new restrictions --
             # it lists what's *currently* blocked so the user can pick which
@@ -120,7 +132,12 @@ class _BlocklistPicker(QWidget):
                 "one before it's let through."
             )
         else:
-            instructions = "Check the apps to block during a focus session.\nPreviously saved picks are pre-checked."
+            instructions = (
+                "Pick what the next focus session blocks: apps and browser profiles,\n"
+                "and which websites stay allowed. Saved picks are pre-checked."
+                if for_next_session else
+                "Check the apps to block during a focus session.\nPreviously saved picks are pre-checked."
+            )
         instructions_label = QLabel(instructions)
         instructions_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(instructions_label)
@@ -167,6 +184,9 @@ class _BlocklistPicker(QWidget):
             self._manual_status.setStyleSheet("color: #c62828;")
             layout.addWidget(self._manual_status)
 
+            if for_next_session:
+                self._build_websites_section(layout)
+
         self._status_label = QLabel()
         self._status_label.setStyleSheet("color: #2e7d32;")
         layout.addWidget(self._status_label)
@@ -175,6 +195,41 @@ class _BlocklistPicker(QWidget):
         save_button = QPushButton(button_label)
         save_button.clicked.connect(self._save)
         layout.addWidget(save_button, alignment=Qt.AlignCenter)
+
+    def _build_websites_section(self, layout):
+        """The websites that stay allowed (everything else in a browser is off-limits),
+        saved as the default domain list the browser extension also uses."""
+        title = QLabel("Allowed websites:")
+        title.setStyleSheet("font-weight: bold;")
+        layout.addWidget(title)
+        saved = list(config.load_config().get("domainWhitelist", []))
+        self._domains_checklist = _Checklist(height=150)
+        if not saved:
+            self._domains_checklist.add_separator_label("No websites yet. Add the ones you need.")
+        for domain in saved:
+            self._domains_checklist.add_row(domain, domain, checked=True)
+        layout.addWidget(self._domains_checklist.widget)
+
+        row = QHBoxLayout()
+        self._domain_edit = QLineEdit()
+        self._domain_edit.setPlaceholderText("e.g. docs.google.com")
+        add_button = QPushButton("Add")
+        self._domain_edit.returnPressed.connect(self._add_domain)
+        add_button.clicked.connect(self._add_domain)
+        row.addWidget(self._domain_edit)
+        row.addWidget(add_button)
+        layout.addLayout(row)
+
+    def _add_domain(self):
+        domain = self._domain_edit.text().strip().lower()
+        for prefix in ("https://", "http://"):
+            if domain.startswith(prefix):
+                domain = domain[len(prefix):]
+        domain = domain.strip("/ ")
+        if not domain or " " in domain:
+            return
+        self._domains_checklist.add_row(domain, domain, checked=True)
+        self._domain_edit.setText("")
 
     def _add_quick_readd_rows(self):
         # Only offered when picking the blocklist for the *next* session, not
@@ -253,14 +308,18 @@ class _BlocklistPicker(QWidget):
         profile_keys = [key for key in selected if key in self._profile_aumi_keys]
         process_keys = [key for key in selected if key not in self._profile_aumi_keys]
 
-        config.update_config(lambda cfg: cfg.update({
-            "processBlocklist": process_keys,
-            "browserProfileBlocklist": profile_keys,
-        }))
+        changes = {"processBlocklist": process_keys, "browserProfileBlocklist": profile_keys}
+        if self._domains_checklist is not None:
+            changes["domainWhitelist"] = self._domains_checklist.checked_keys()
+        config.update_config(lambda cfg: cfg.update(changes))
         status = f"Saved {len(process_keys)} app(s)"
         if self._profile_aumi_keys:
-            status += f" and {len(profile_keys)} browser profile(s)"
-        self._status_label.setText(status + " to the blocklist.")
+            status += f", {len(profile_keys)} browser profile(s)"
+        if self._domains_checklist is not None:
+            status += f" and {len(changes['domainWhitelist'])} website(s)"
+        self._status_label.setText(status + ".")
+        if self.on_saved is not None:
+            self.on_saved()
 
 
 class _ReasonDialog(QWidget):
