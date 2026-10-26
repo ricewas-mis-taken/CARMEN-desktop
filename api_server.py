@@ -251,6 +251,13 @@ def quicknote_open():
     return jsonify({"ok": True})
 
 
+@app.route("/theme", methods=["GET"])
+def get_theme():
+    """The chosen colours, so the browser extension can wear the same theme. Open like /status (colours only)."""
+    import theme
+    return jsonify(theme.catalogue())
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"ok": True})

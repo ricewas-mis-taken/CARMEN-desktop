@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import threading
+import theme
 import time
 
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -43,7 +44,7 @@ STYLESHEET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "styl
 def _load_stylesheet(app):
     try:
         with open(STYLESHEET_PATH, "r", encoding="utf-8") as f:
-            app.setStyleSheet(ui_kit.with_check_icon(f.read()))
+            app.setStyleSheet(ui_kit.with_check_icon(theme.apply_to_stylesheet(f.read(), theme.startup_colours())))
     except OSError:
         pass  # missing/unreadable stylesheet must never block the app from starting
 

@@ -15,9 +15,13 @@ from PySide6.QtWidgets import QLabel, QPushButton, QSizePolicy, QWidget
 
 from qt_ui.day_layout import contrasting_text_color
 
-INK = "#1B2230"
-MUTED = "#667085"
-FAINT = "#98A2B3"
+import theme
+
+_THEME = theme.startup_colours()
+INK = _THEME["ink"]
+MUTED = _THEME["muted"]
+FAINT = _THEME["faint"]
+ACCENT = _THEME["accent"]
 TEXT_FONT = "Segoe UI"
 # DIN-style numerals for the ring and clocks (falls back to Segoe UI).
 NUM_FONTS = ["Bahnschrift SemiBold", "Segoe UI Semibold", "Segoe UI"]
