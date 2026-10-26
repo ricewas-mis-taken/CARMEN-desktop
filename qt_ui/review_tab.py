@@ -1285,29 +1285,25 @@ class _TopicView(QWidget):
         # (see _elapsed_seconds_now()'s end_session_on_finish branch).
         end_session_on_finish = False
         topic = review_store.get_topic(self._topic_id)
-        status = session_manager.get_status()
-        # A paused review session may be driven over: start_session() sets it
-        # aside (that is how a review is pushed back behind another).
-        can_drive_session = not status.get("isActive") or (
-            status.get("isPaused") and status.get("source") == "review")
-        if topic and topic.get("linkedTaskId") and can_drive_session:
-            task = tasks_store.get_task(topic["linkedTaskId"])
-            if task:
-                session_manager.start_session(
-                    duration_minutes=tasks_store.BURNOUT_MINUTES,
-                    lock_mode=task["lockMode"],
-                    process_blocklist=task.get("processBlocklist", []),
-                    domain_whitelist=task.get("domainWhitelist", []),
-                    source="review",
-                    event_id=task["id"],
-                    event_title=f"{task['name']} - {problem['subjectName']} review",
-                    review_problem_name=problem["name"],
-                    review_subject_name=problem["subjectName"],
-                    review_problem_id=problem["id"],
-                    hide_taskbar_badges=bool(task.get("hideTaskbarBadges")),
-                    stop_taskbar_flashing=bool(task.get("stopTaskbarFlashing")),
-                )
-                end_session_on_finish = True
+        # See _make_room_for(): the review gets its own blocking session unless the
+        # SAME task's session is already running (then it rides beside it).
+        task = tasks_store.get_task(topic["linkedTaskId"]) if topic and topic.get("linkedTaskId") else None
+        if task and _make_room_for(task):
+            session_manager.start_session(
+                duration_minutes=tasks_store.BURNOUT_MINUTES,
+                lock_mode=task["lockMode"],
+                process_blocklist=task.get("processBlocklist", []),
+                domain_whitelist=task.get("domainWhitelist", []),
+                source="review",
+                event_id=task["id"],
+                event_title=f"{task['name']} - {problem['subjectName']} review",
+                review_problem_name=problem["name"],
+                review_subject_name=problem["subjectName"],
+                review_problem_id=problem["id"],
+                hide_taskbar_badges=bool(task.get("hideTaskbarBadges")),
+                stop_taskbar_flashing=bool(task.get("stopTaskbarFlashing")),
+            )
+            end_session_on_finish = True
 
         # token=None when end_session_on_finish: same as _resume_if_active()
         # rebuilding this same banner after a restart -- Finish still logs a
@@ -1359,24 +1355,23 @@ class _TopicView(QWidget):
         end_session_on_finish = False
         event_id = None
         topic = review_store.get_topic(self._topic_id)
-        if topic and topic.get("linkedTaskId") and not session_manager.is_active():
-            task = tasks_store.get_task(topic["linkedTaskId"])
-            if task:
-                session_manager.start_session(
-                    duration_minutes=tasks_store.BURNOUT_MINUTES,
-                    lock_mode=task["lockMode"],
-                    process_blocklist=task.get("processBlocklist", []),
-                    domain_whitelist=task.get("domainWhitelist", []),
-                    source="review",
-                    event_id=task["id"],
-                    event_title=f"{task['name']} - first attempt",
-                    review_problem_name=session_manager.FIRST_ATTEMPT_NAME,
-                    review_subject_name=None,
-                    hide_taskbar_badges=bool(task.get("hideTaskbarBadges")),
-                    stop_taskbar_flashing=bool(task.get("stopTaskbarFlashing")),
-                )
-                end_session_on_finish = True
-                event_id = task["id"]
+        task = tasks_store.get_task(topic["linkedTaskId"]) if topic and topic.get("linkedTaskId") else None
+        if task and _make_room_for(task):
+            session_manager.start_session(
+                duration_minutes=tasks_store.BURNOUT_MINUTES,
+                lock_mode=task["lockMode"],
+                process_blocklist=task.get("processBlocklist", []),
+                domain_whitelist=task.get("domainWhitelist", []),
+                source="review",
+                event_id=task["id"],
+                event_title=f"{task['name']} - first attempt",
+                review_problem_name=session_manager.FIRST_ATTEMPT_NAME,
+                review_subject_name=None,
+                hide_taskbar_badges=bool(task.get("hideTaskbarBadges")),
+                stop_taskbar_flashing=bool(task.get("stopTaskbarFlashing")),
+            )
+            end_session_on_finish = True
+            event_id = task["id"]
 
         if self._review_tab:
             self._review_tab.on_review_started()
@@ -1897,6 +1892,29 @@ class _ReviewBanner(QWidget):
             _end_session_for_problem(problem)
         self._finishing = False
         self._on_finished()
+
+
+def _can_drive_over(status):
+    """True when a review may start its own blocking session: nothing is running, or
+    what is running is paused (it is set aside and comes back when the review ends)."""
+    return not status.get("isActive") or bool(status.get("isPaused"))
+
+
+def _make_room_for(task):
+    """True when a review of `task` may start its own blocking session (the linked task's
+    app/site rules). Nothing running, or a paused session: yes (the paused one is set
+    aside and comes back). A running session of a DIFFERENT task is paused first, so its
+    clock stops and the review's rules replace its rules. A running session of the SAME
+    task keeps going and the review rides beside it (a pomodoro's breaks then pause the
+    review by themselves). Anything else running (a manual or calendar session) is left
+    alone."""
+    status = session_manager.get_status()
+    if _can_drive_over(status):
+        return True
+    if status.get("source") == "task" and status.get("eventId") != task["id"]:
+        session_manager.pause_session()
+        return True
+    return False
 
 
 def _confirm(parent, title, text):
