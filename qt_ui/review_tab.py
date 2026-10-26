@@ -967,9 +967,16 @@ class _TopicView(QWidget):
         scroll.setWidget(self._list_container)
         layout.addWidget(scroll, 1)
 
-        root.addWidget(self._build_sidebar())
+        self._side_card = self._build_sidebar()
+        root.addWidget(self._side_card)
 
         self.refresh()
+
+    SIDEBAR_FROM = 760       # narrower than this the list needs the room more than the sidebar does
+
+    def resizeEvent(self, event):
+        self._side_card.setVisible(event.size().width() >= self.SIDEBAR_FROM)
+        super().resizeEvent(event)
 
     def _show_banner_for_linked_session(self):
         if not self._review_banner.is_running():
