@@ -40,12 +40,26 @@ def test_home_tab_renders_and_navigates(qtbot, isolate_state, tmp_path, monkeypa
     assert went == ["focus"]
 
 
-def test_choosing_a_theme_saves_it(qtbot, isolate_state, tmp_path, monkeypatch):
-    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
+def test_options_dialog_saves_a_theme(qtbot, monkeypatch):
+    import qt_ui.options_dialog as options
     saved = []
     monkeypatch.setattr(theme, "load_setting", lambda: saved[-1] if saved else {"name": "Paper"})
     monkeypatch.setattr(theme, "save_setting", saved.append)
+    monkeypatch.setattr(options, "reapply_stylesheet", lambda: None)
+    dialog = options.OptionsDialog()
+    qtbot.addWidget(dialog)
+    dialog._choose("Moss")
+    assert saved == [{"name": "Moss"}]
+
+
+def test_home_survives_every_window_width(qtbot, isolate_state, tmp_path, monkeypatch):
+    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
+    tasks_store.create_task({"name": "A very long task name " * 6, "targetMinutes": 45, "color": "#e53935"})
     tab = home.HomeTab()
     qtbot.addWidget(tab)
-    tab._choose("Moss")
-    assert saved == [{"name": "Moss"}]
+    tab.show()
+    for width in (1400, 880, 900, 520, 1000):
+        tab.resize(width, 600)
+        qtbot.wait(20)
+        assert tab.minimumSizeHint().width() == 0
+        assert tab._body.width() <= width   # never wider than the window: no sideways scrolling
