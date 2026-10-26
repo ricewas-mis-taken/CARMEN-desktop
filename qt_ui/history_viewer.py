@@ -500,6 +500,14 @@ class HistoryTab(QWidget):
 
     def refresh(self):
         everything = session_history.load_all()
+        # The tab re-reads the log every time it is shown; laying the page out again is the
+        # costly part, so only do it when a session was added or the view itself changed.
+        last = everything[-1] if everything else {}
+        signature = (len(everything), last.get("sessionId"), last.get("startTime"), last.get("endTime"),
+                     self._window_days, self._kind, self._shown, date.today())
+        if signature == getattr(self, "_signature", None):
+            return
+        self._signature = signature
         sessions = self._filtered(everything)
         scroll = self._scroll.verticalScrollBar().value()
 
