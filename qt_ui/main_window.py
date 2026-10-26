@@ -158,7 +158,7 @@ class _MainWindow(QWidget):
         super().__init__()
         self.setWindowTitle("Carmen Focus")
         self.resize(*_NORMAL_SIZE)
-        self.setMinimumSize(540, 540)
+        self.setMinimumSize(540, 600)
         self._was_maximized = False
         self._drag_frame_size = None  # (width, height) in physical px, set only during a title-bar move
 
