@@ -9,7 +9,8 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFontMetrics, QTextCursor, QTextOption
 from PySide6.QtWidgets import QFrame, QPlainTextEdit, QSizePolicy
 
-DARK_STYLE = """
+# The light boxed look every popup uses now (see styles.qss, #PopupBg).
+LIGHT_STYLE = """
 QPlainTextEdit#WrapEdit {
     background: #F7F8FA; color: #1B2230; border: 1px solid #E6E9EF;
     border-radius: 10px; padding: 7px 10px; font-size: 13.5px;
@@ -19,10 +20,10 @@ QPlainTextEdit#WrapEdit:focus { border: 1.5px solid #1B2230; }
 QPlainTextEdit#WrapEdit:disabled { color: #98A2B3; }
 """
 
-# Matches the light popups' QLineEdit/QTextEdit boxes (styles.qss, #PopupBg).
-LIGHT_STYLE = """
+# For the few windows that are still dark (the lock overlay, the event editor).
+DARK_STYLE = """
 QPlainTextEdit#WrapEdit {
-    background: #FAFBFC; color: #1F2328; border: 1px solid #E3E5E9;
+    background: #2C2F37; color: #F2F3F5; border: 1px solid #3F444D;
     border-radius: 8px; padding: 4px 8px;
 }
 QPlainTextEdit#WrapEdit:focus { border: 1px solid #5B8DEF; }

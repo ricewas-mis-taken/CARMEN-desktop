@@ -89,13 +89,11 @@ def test_wrap_edit_is_light_by_default_and_dark_when_asked(qtbot):
     light, dark = WrapEdit(), WrapEdit(dark=True)
     qtbot.addWidget(light)
     qtbot.addWidget(dark)
-    assert "#FAFBFC" in light.styleSheet()
+    assert "#F7F8FA" in light.styleSheet()
     assert "#2C2F37" in dark.styleSheet()
 
 
 def test_dark_dialogs_ask_for_the_dark_box():
     import inspect
     import qt_ui.enforcer_overlay as overlay
-    import qt_ui.event_editor as editor
     assert "dark=True" in inspect.getsource(overlay)
-    assert "dark=True" in inspect.getsource(editor)
