@@ -513,6 +513,16 @@ def _is_real_number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value == value and abs(value) != float("inf")
 
 
+def _clean_day_minutes(value):
+    """{"MO": 30, ...}: only real weekday codes with positive numbers survive."""
+    if not isinstance(value, dict):
+        return {}
+    return {
+        code: minutes for code, minutes in value.items()
+        if code in tasks_store.WEEKDAY_CODES and _is_real_number(minutes) and minutes > 0
+    }
+
+
 def _normalize_task(item):
     """Fills in defaults for fields a pulled task record lacks and replaces
     wrongly-typed values the UI does arithmetic on -- one malformed record
@@ -538,10 +548,17 @@ def _normalize_task(item):
             datetime.fromisoformat(anchor)
         except (TypeError, ValueError):
             merged["periodAnchor"] = None
+    merged["dayMinutes"] = _clean_day_minutes(merged.get("dayMinutes"))
+    days = merged.get("periodDays")
+    if not (isinstance(days, int) and not isinstance(days, bool) and 2 <= days <= 366):
+        merged["periodDays"] = None
     merged["targetMinutesHistory"] = [
         e for e in merged["targetMinutesHistory"]
         if isinstance(e, dict) and isinstance(e.get("date"), str) and _is_real_number(e.get("minutes"))
     ]
+    for entry in merged["targetMinutesHistory"]:
+        if "dayMinutes" in entry:
+            entry["dayMinutes"] = _clean_day_minutes(entry["dayMinutes"])
     if not merged["targetMinutesHistory"]:
         merged["targetMinutesHistory"] = [
             {"date": (merged.get("createdAt") or datetime.now().isoformat())[:10], "minutes": merged["targetMinutes"]}

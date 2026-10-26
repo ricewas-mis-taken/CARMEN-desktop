@@ -187,6 +187,7 @@ def _non_default(key, default):
         "weekdays": ["MO", "TU"], "processBlocklist": ["a.exe"], "domainWhitelist": ["a.com"],
         "targetMinutesHistory": [{"date": "2026-01-01", "minutes": 11}], "recurringDays": ["MO"],
         "tags": ["quick"], "color": "#112233", "importance": 9,
+        "dayMinutes": {"MO": 40}, "periodDays": 10,
     }
     if key in special:
         return special[key]
