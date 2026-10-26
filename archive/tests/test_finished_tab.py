@@ -108,3 +108,8 @@ def test_day_view_shows_sessions_for_selected_date(qtbot, isolate_state):
     ]
     assert len(day_sessions) == 1
     assert day_sessions[0]["eventTitle"] == "Target Session"
+
+
+def test_session_color_for_the_end_types_session_manager_really_writes():
+    assert finished_tab._session_color(_fake_session(end_type="natural")) == "#fb8c00"
+    assert finished_tab._session_color(_fake_session(end_type="superseded")) == "#9AA0A8"
