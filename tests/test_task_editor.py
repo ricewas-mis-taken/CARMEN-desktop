@@ -129,7 +129,7 @@ def _pick(win, kind):
 def test_the_repeat_menu_offers_every_kind_of_goal(qtbot, isolate_tasks):
     win = _editor(qtbot)
     kinds = [win._repeat_combo.itemData(i) for i in range(win._repeat_combo.count())]
-    assert kinds == ["daily", "weekly_days", "weekly_total", "biweekly_total", "monthly_total"]
+    assert kinds == ["daily", "weekly_days", "weekly_total", "biweekly_total", "monthly_total", "custom_total"]
 
 
 def test_a_weekly_total_saves_hours_as_minutes(qtbot, isolate_tasks):
@@ -201,3 +201,64 @@ def test_a_bad_target_is_refused_with_the_accepted_forms(qtbot, isolate_tasks):
 @pytest.mark.parametrize("text,minutes", [("45", 45), ("90m", 90), ("10h", 600), ("1.5h", 90), ("1h 30m", 90), ("1h30", 90)])
 def test_target_forms(text, minutes):
     assert task_editor.parse_minutes(text) == minutes
+
+
+def test_each_ticked_day_can_get_its_own_time(qtbot, isolate_tasks):
+    win = _editor(qtbot)
+    win.show()
+    _pick(win, "weekly_days")
+    win._weekday_checks["MO"].setChecked(True)
+    win._weekday_checks["WE"].setChecked(True)
+    win._per_day_check.setChecked(True)
+    assert not win._per_day_row.isHidden() and win._target_edit.isHidden()
+    assert win._day_edits["MO"].isEnabled() and not win._day_edits["TU"].isEnabled()
+    win._day_edits["MO"].setText("20")
+    win._day_edits["WE"].setText("1h 30m")
+    win._save()
+    saved = tasks_store.load_tasks()[0]
+    assert saved["dayMinutes"] == {"MO": 20, "WE": 90}
+    assert saved["weekdays"] == ["MO", "WE"]
+
+
+def test_a_ticked_day_left_blank_is_asked_for(qtbot, isolate_tasks):
+    win = _editor(qtbot)
+    _pick(win, "weekly_days")
+    win._weekday_checks["MO"].setChecked(True)
+    win._weekday_checks["WE"].setChecked(True)
+    win._per_day_check.setChecked(True)
+    win._day_edits["MO"].setText("20")
+    win._save()
+    assert "WE" in win._status_label.text()
+    assert tasks_store.load_tasks() == []
+
+
+def test_same_time_each_day_saves_no_per_day_times(qtbot, isolate_tasks):
+    win = _editor(qtbot)
+    _pick(win, "weekly_days")
+    win._weekday_checks["MO"].setChecked(True)
+    win._target_edit.setText("30")
+    win._save()
+    assert tasks_store.load_tasks()[0]["dayMinutes"] == {}
+
+
+def test_a_custom_stretch_saves_its_length(qtbot, isolate_tasks):
+    win = _editor(qtbot)
+    win.show()
+    _pick(win, "custom_total")
+    assert not win._length_row.isHidden()
+    win._length_spin.setValue(10)
+    win._target_edit.setText("6h")
+    win._save()
+    saved = tasks_store.load_tasks()[0]
+    assert (saved["recurrence"], saved["periodDays"], saved["targetMinutes"]) == ("custom_total", 10, 360)
+    assert saved["periodAnchor"]
+
+
+def test_editing_a_task_with_per_day_times_shows_them(qtbot, isolate_tasks):
+    task = tasks_store.create_task({
+        "name": "P", "color": "#123456", "recurrence": "weekly_days", "weekdays": ["MO", "FR"],
+        "targetMinutes": 20, "dayMinutes": {"MO": 20, "FR": 45}})
+    win = task_editor._TaskEditor(task, on_saved=None)
+    qtbot.addWidget(win)
+    assert win._per_day_check.isChecked()
+    assert win._day_edits["FR"].text() == "45"

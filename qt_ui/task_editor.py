@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QRadioButton,
     QVBoxLayout,
     QWidget,
@@ -66,6 +67,8 @@ REPEAT_CHOICES = [
      "Work any day. It is due at the end of every second week."),
     ("monthly_total", "A total each month", "Target per month",
      "Work any day. It is due on the last day of the month."),
+    ("custom_total", "A total over a number of days", "Target for the whole stretch",
+     "Work any day. It is due at the end of every stretch, counted from the day you save it."),
 ]
 
 _DURATION = re.compile(
@@ -161,6 +164,42 @@ class _TaskEditor(QWidget):
             weekday_layout.addWidget(check)
         layout.addWidget(self._weekday_row)
 
+        # "On specific days": the same time on each, or a time for each day.
+        saved_day_minutes = (task or {}).get("dayMinutes") or {}
+        self._per_day_check = QCheckBox("A different time for each day")
+        self._per_day_check.setChecked(bool(saved_day_minutes))
+        layout.addWidget(self._per_day_check)
+        self._per_day_row = QWidget()
+        per_day_layout = QHBoxLayout(self._per_day_row)
+        per_day_layout.setContentsMargins(0, 0, 0, 0)
+        per_day_layout.setSpacing(6)
+        self._day_edits = {}
+        for code in tasks_store.WEEKDAY_CODES:
+            column = QVBoxLayout()
+            column.setSpacing(2)
+            column.addWidget(role_label(code, "hint"))
+            edit = QLineEdit()
+            edit.setPlaceholderText("min")
+            if code in saved_day_minutes:
+                edit.setText(format_target(saved_day_minutes[code], False))
+            self._day_edits[code] = edit
+            column.addWidget(edit)
+            per_day_layout.addLayout(column)
+        layout.addWidget(self._per_day_row)
+
+        # "A total over a number of days": how many.
+        self._length_row = QWidget()
+        length_layout = QHBoxLayout(self._length_row)
+        length_layout.setContentsMargins(0, 0, 0, 0)
+        length_layout.addWidget(role_label("Every", "hint"))
+        self._length_spin = QSpinBox()
+        self._length_spin.setRange(tasks_store.MIN_PERIOD_DAYS, tasks_store.MAX_PERIOD_DAYS)
+        self._length_spin.setValue((task or {}).get("periodDays") or 14)
+        length_layout.addWidget(self._length_spin)
+        length_layout.addWidget(role_label("days", "hint"))
+        length_layout.addStretch(1)
+        layout.addWidget(self._length_row)
+
         self._target_label = _bold_label("Target")
         layout.addWidget(self._target_label)
         self._target_edit = QLineEdit(
@@ -170,6 +209,9 @@ class _TaskEditor(QWidget):
         self._repeat_hint = role_label("", "hint", wrap=True)
         layout.addWidget(self._repeat_hint)
         self._repeat_combo.currentIndexChanged.connect(self._on_repeat_changed)
+        self._per_day_check.toggled.connect(self._on_repeat_changed)
+        for chk in self._weekday_checks.values():
+            chk.toggled.connect(self._on_repeat_changed)
         self._on_repeat_changed()
 
         layout.addWidget(_bold_label("Lock mode"))
@@ -252,6 +294,15 @@ class _TaskEditor(QWidget):
         self._repeat_hint.setText(hint)
         # "isHidden", not isVisible: the editor may not be shown yet.
         self._weekday_row.setVisible(kind == "weekly_days")
+        self._per_day_check.setVisible(kind == "weekly_days")
+        per_day = kind == "weekly_days" and self._per_day_check.isChecked()
+        self._per_day_row.setVisible(per_day)
+        self._length_row.setVisible(kind == "custom_total")
+        # With a time for each day the single target box has nothing to say.
+        self._target_label.setVisible(not per_day)
+        self._target_edit.setVisible(not per_day)
+        for code, edit in self._day_edits.items():
+            edit.setEnabled(self._weekday_checks[code].isChecked())
 
     def _pick_color(self, hexval):
         self._color = hexval
@@ -290,17 +341,27 @@ class _TaskEditor(QWidget):
         if not name:
             self._status_label.setText("Name is required.")
             return
-        target_minutes = parse_minutes(self._target_edit.text())
-        if target_minutes is None:
-            self._status_label.setText('Target must be a positive time, like 45, 90m, 10h or 1h 30m.')
-            return
-
         recurrence_kind = self._repeat_kind()
         weekdays = []
+        day_minutes = {}
         if recurrence_kind == "weekly_days":
             weekdays = [code for code, chk in self._weekday_checks.items() if chk.isChecked()]
             if not weekdays:
                 self._status_label.setText("Pick at least one weekday.")
+                return
+            if self._per_day_check.isChecked():
+                for code in weekdays:
+                    minutes = parse_minutes(self._day_edits[code].text())
+                    if minutes is None:
+                        self._status_label.setText(f"Give {code} a time, like 45, 90m or 1h 30m.")
+                        return
+                    day_minutes[code] = minutes
+        if day_minutes:
+            target_minutes = day_minutes[weekdays[0]]      # what a day without its own time would use
+        else:
+            target_minutes = parse_minutes(self._target_edit.text())
+            if target_minutes is None:
+                self._status_label.setText('Target must be a positive time, like 45, 90m, 10h or 1h 30m.')
                 return
 
         data = {
@@ -309,6 +370,8 @@ class _TaskEditor(QWidget):
             "targetMinutes": target_minutes,
             "recurrence": recurrence_kind,
             "weekdays": weekdays,
+            "dayMinutes": day_minutes,
+            "periodDays": self._length_spin.value() if recurrence_kind == "custom_total" else None,
             "lockMode": "hard" if self._hard_radio.isChecked() else "soft",
             "processBlocklist": checklist.get_checked(self._process_checks),
             "domainWhitelist": checklist.get_checked(self._domain_checks),
