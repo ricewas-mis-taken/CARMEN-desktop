@@ -3,6 +3,7 @@ mid-session is a deliberate, disruptive act -- this asks why before it
 happens so the reason lands in session_history.json alongside it."""
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from qt_ui.ui_kit import danger, dialog_title, field_label, role_label
 from qt_ui.wrap_edit import WrapEdit
 
 import session_manager
@@ -26,34 +27,33 @@ class _NuclearReasonDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle("Carmen Focus — Nuclear End")
-        self.resize(360, 180)
+        self.resize(440, 320)
         self._icon = icon
         self._format_end_summary = format_end_summary
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(10)
+        layout.addWidget(dialog_title(
+            "End this session early?",
+            "It is marked as ended early in your history, with the reason you give here."))
 
-        prompt = QLabel("Why are you ending this session early?")
-        prompt.setWordWrap(True)
-        prompt.setAlignment(Qt.AlignCenter)
-        layout.addWidget(prompt)
-
+        layout.addWidget(field_label("Why are you stopping?"))
         self._reason_edit = WrapEdit()
         layout.addWidget(self._reason_edit)
 
-        self._status_label = QLabel()
-        self._status_label.setStyleSheet("color: #c62828;")
-        self._status_label.setAlignment(Qt.AlignCenter)
+        layout.addStretch(1)
+        self._status_label = role_label("", "error")
         layout.addWidget(self._status_label)
 
         button_row = QHBoxLayout()
-        confirm_button = QPushButton("End Session (Nuclear)")
-        cancel_button = QPushButton("Cancel")
+        confirm_button = danger(QPushButton("End session"))
+        cancel_button = QPushButton("Keep going")
         confirm_button.clicked.connect(self._confirm)
         cancel_button.clicked.connect(self.close)
         button_row.addStretch(1)
-        button_row.addWidget(confirm_button)
         button_row.addWidget(cancel_button)
-        button_row.addStretch(1)
+        button_row.addWidget(confirm_button)
         layout.addLayout(button_row)
 
         self._reason_edit.returnPressed.connect(self._confirm)

@@ -91,7 +91,7 @@ def _data_file_names_mentioned_in_the_code():
     import re
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     pattern = re.compile(r"""["']([\w\-]+\.(?:json|db|txt|sqlite3?|ini|cfg|pkl))["']""")
-    skip_dirs = {".git", "tests", "__pycache__", "node_modules", "venv", ".venv", "mac-os", "scripts"}
+    skip_dirs = {".git", "tests", "__pycache__", "node_modules", "venv", ".venv", "mac-os", "scripts", "design-skills"}
     found = set()
     for folder, dirs, files in os.walk(root):
         dirs[:] = [d for d in dirs if d not in skip_dirs]
@@ -187,6 +187,7 @@ def _non_default(key, default):
         "weekdays": ["MO", "TU"], "processBlocklist": ["a.exe"], "domainWhitelist": ["a.com"],
         "targetMinutesHistory": [{"date": "2026-01-01", "minutes": 11}], "recurringDays": ["MO"],
         "tags": ["quick"], "color": "#112233", "importance": 9,
+        "dayMinutes": {"MO": 40}, "periodDays": 10,
     }
     if key in special:
         return special[key]

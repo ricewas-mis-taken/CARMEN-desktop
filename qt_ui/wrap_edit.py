@@ -11,11 +11,12 @@ from PySide6.QtWidgets import QFrame, QPlainTextEdit, QSizePolicy
 
 BOXED_STYLE = """
 QPlainTextEdit#WrapEdit {
-    background: #2C2F37; color: #F2F3F5; border: 1px solid #3F444D;
-    border-radius: 8px; padding: 4px 8px;
+    background: #F7F8FA; color: #1B2230; border: 1px solid #E6E9EF;
+    border-radius: 10px; padding: 7px 10px; font-size: 13.5px;
+    selection-background-color: #1B2230; selection-color: #FFFFFF;
 }
-QPlainTextEdit#WrapEdit:focus { border: 1px solid #5B8DEF; }
-QPlainTextEdit#WrapEdit:disabled { color: #8A8F98; }
+QPlainTextEdit#WrapEdit:focus { border: 1.5px solid #1B2230; }
+QPlainTextEdit#WrapEdit:disabled { color: #98A2B3; }
 """
 
 

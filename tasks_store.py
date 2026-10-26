@@ -39,8 +39,17 @@ DEFAULT_TASK = {
     "name": "",
     "color": "#5B8DEF",
     "targetMinutes": 30,
-    "recurrence": "daily",  # "daily" or "weekly_days"
+    # "daily", "weekly_days" (targetMinutes each checked weekday) or one of
+    # PERIOD_RECURRENCES (targetMinutes is one total for the whole week / two
+    # weeks / month -- see "goal periods" below).
+    "recurrence": "daily",
     "weekdays": [],  # WEEKDAY_CODES entries, only used for "weekly_days"
+    # Minutes for particular weekdays of a "weekly_days" task ({"MO": 30, "WE": 60}); a ticked
+    # weekday with no entry here uses targetMinutes. Empty = the same time every ticked day.
+    "dayMinutes": {},
+    # Length in days of a "custom_total" stretch, counted from periodAnchor.
+    "periodDays": None,
+    "periodAnchor": None,  # "YYYY-MM-DD" Monday two-week stretches count from ("biweekly_total")
     "lockMode": "soft",
     "processBlocklist": [],
     "domainWhitelist": [],
@@ -198,8 +207,10 @@ def create_task(data):
         task["createdAt"] = datetime.now().isoformat()
         task["updatedAt"] = task["createdAt"]
         task["targetMinutesHistory"] = [
-            {"date": task["createdAt"][:10], "minutes": task.get("targetMinutes", 0)}
+            {"date": task["createdAt"][:10], "minutes": task.get("targetMinutes", 0),
+             **({"dayMinutes": dict(task["dayMinutes"])} if task.get("dayMinutes") else {})}
         ]
+        _ensure_period_anchor(task)
         tasks = load_tasks(include_deleted=True)
         tasks.append(task)
         save_tasks(tasks)
@@ -218,7 +229,14 @@ def update_task(task_id, data):
         for task in tasks:
             if task["id"] == task_id:
                 new_target = data.get("targetMinutes")
-                if new_target is not None and new_target != task.get("targetMinutes"):
+                new_days = data.get("dayMinutes")
+                target_changed = new_target is not None and new_target != task.get("targetMinutes")
+                days_changed = new_days is not None and new_days != (task.get("dayMinutes") or {})
+                if target_changed or days_changed:
+                    if new_target is None:
+                        new_target = task.get("targetMinutes", 0)
+                    if new_days is None:
+                        new_days = task.get("dayMinutes") or {}
                     # Record when the target changed instead of overwriting it in
                     # place, so vacation_balance_minutes can look up whatever
                     # target was actually in effect on a given past day -- a
@@ -226,12 +244,18 @@ def update_task(task_id, data):
                     # what counted as "surplus" on days before it.
                     history = list(task.get("targetMinutesHistory") or [])
                     today_key = date.today().isoformat()
+                    entry = {"date": today_key, "minutes": new_target}
+                    # Per-day times are only written when there are some, or when they
+                    # were just removed (so the history says the weekdays are equal again).
+                    if new_days or (history and history[-1].get("dayMinutes")):
+                        entry["dayMinutes"] = dict(new_days)
                     if history and history[-1]["date"] == today_key:
-                        history[-1] = {"date": today_key, "minutes": new_target}
+                        history[-1] = entry
                     else:
-                        history.append({"date": today_key, "minutes": new_target})
+                        history.append(entry)
                     task["targetMinutesHistory"] = history
                 task.update(data)
+                _ensure_period_anchor(task)
                 task["updatedAt"] = datetime.now().isoformat()
                 updated = task
                 break
@@ -309,32 +333,45 @@ def is_scheduled_on(task, day):
     if task.get("recurrence") == "weekly_days":
         code = WEEKDAY_CODES[day.weekday()]
         return code in (task.get("weekdays") or [])
-    return True
+    return True  # daily, and every day counts toward a period goal
 
 
 def _target_minutes_for_date(task, day):
     """The goal-time value that was actually in effect on `day`, from
     targetMinutesHistory (oldest first) -- not necessarily today's
     targetMinutes. A later goal-time change must not reach backward and
-    change what counted as surplus/vacation on earlier days."""
+    change what counted as surplus/vacation on earlier days. A "weekly_days"
+    task may give a weekday its own time (dayMinutes); that is kept in the same
+    history entry, so it can't reach backward either."""
     history = task.get("targetMinutesHistory") or []
     if not history:
-        return task.get("targetMinutes", 0)
+        return _minutes_for_weekday(task, task.get("dayMinutes"), task.get("targetMinutes", 0), day)
     day_key = day.isoformat()
-    applicable = history[0]["minutes"]
+    applicable = history[0]
     for entry in history:
         if entry["date"] <= day_key:
-            applicable = entry["minutes"]
+            applicable = entry
         else:
             break
-    return applicable
+    return _minutes_for_weekday(task, applicable.get("dayMinutes"), applicable["minutes"], day)
+
+
+def _minutes_for_weekday(task, day_minutes, default, day):
+    if task.get("recurrence") == "weekly_days" and isinstance(day_minutes, dict):
+        own = day_minutes.get(WEEKDAY_CODES[day.weekday()])
+        if isinstance(own, (int, float)) and not isinstance(own, bool) and own > 0:
+            return own
+    return default
 
 
 def required_minutes_for_date(task, day):
     """Target minutes for `day` (as of whatever the goal time actually was
     on that day), after subtracting whatever vacation time was cashed in
     against that specific date. Never negative, and 0 on a day the task
-    isn't scheduled at all (nothing to cash in against, either)."""
+    isn't scheduled at all (nothing to cash in against, either). For a period
+    goal there is no per-day target: this is the whole period's requirement."""
+    if is_period_task(task):
+        return required_minutes_for_period(task, day)
     if not is_scheduled_on(task, day):
         return 0
     target = _target_minutes_for_date(task, day)
@@ -431,6 +468,181 @@ def logged_seconds_for_date(task, day, sessions, live_status=None):
     return total
 
 
+# --- goal periods (a total per week / 2 weeks / month, due by its end) ---
+#
+# "daily" and "weekly_days" goals are per day: each scheduled day has its own
+# target. A period goal is one total for a stretch of days ("10 hours a week"):
+# any day in the stretch counts toward it and it's only due on the stretch's last
+# day. Weeks run Monday to Sunday (WEEKDAY_CODES); a two-week stretch counts
+# from the Monday stored in periodAnchor; a month is the calendar month.
+
+PERIOD_RECURRENCES = ("weekly_total", "biweekly_total", "monthly_total", "custom_total")
+
+MIN_PERIOD_DAYS, MAX_PERIOD_DAYS = 2, 366
+
+PERIOD_PHRASES = {
+    "daily": "today",
+    "weekly_days": "today",
+    "weekly_total": "this week",
+    "biweekly_total": "these 2 weeks",
+    "monthly_total": "this month",
+}
+
+
+def is_period_task(task):
+    return task.get("recurrence") in PERIOD_RECURRENCES
+
+
+def monday_of(day):
+    return day - timedelta(days=day.weekday())
+
+
+def _anchor_for(task, day):
+    """The Monday a two-week stretch is counted from. A task with no anchor
+    (saved before it had one) counts from the Monday of its creation week."""
+    raw = task.get("periodAnchor") or (task.get("createdAt") or "")[:10]
+    try:
+        return monday_of(date.fromisoformat(raw))
+    except ValueError:
+        return monday_of(day)
+
+
+def period_bounds(task, day):
+    """(first day, last day), both inclusive, of the stretch `day` falls in.
+    A per-day goal's stretch is just that day."""
+    kind = task.get("recurrence")
+    if kind == "weekly_total":
+        start = monday_of(day)
+        return start, start + timedelta(days=6)
+    if kind == "biweekly_total":
+        anchor = _anchor_for(task, day)
+        start = anchor + timedelta(days=((day - anchor).days // 14) * 14)
+        return start, start + timedelta(days=13)
+    if kind == "custom_total":
+        length = custom_period_days(task)
+        raw = task.get("periodAnchor") or (task.get("createdAt") or "")[:10]
+        try:
+            anchor = date.fromisoformat(raw[:10])
+        except ValueError:
+            anchor = day
+        start = anchor + timedelta(days=((day - anchor).days // length) * length)
+        return start, start + timedelta(days=length - 1)
+    if kind == "monthly_total":
+        start = day.replace(day=1)
+        next_month = (start + timedelta(days=32)).replace(day=1)
+        return start, next_month - timedelta(days=1)
+    return day, day
+
+
+def _ensure_period_anchor(task):
+    """A two-week goal needs a Monday to count from; give it this week's the
+    first time it's set to that, so the stretch you start in is the first one."""
+    if task.get("recurrence") == "biweekly_total" and not task.get("periodAnchor"):
+        task["periodAnchor"] = monday_of(date.today()).isoformat()
+    # A custom stretch starts on the day it is set up, not on a Monday.
+    if task.get("recurrence") == "custom_total" and not task.get("periodAnchor"):
+        task["periodAnchor"] = date.today().isoformat()
+
+
+def custom_period_days(task):
+    """How long a "custom_total" stretch is, in days; a missing or silly value is a week."""
+    days = task.get("periodDays")
+    if isinstance(days, int) and not isinstance(days, bool) and MIN_PERIOD_DAYS <= days <= MAX_PERIOD_DAYS:
+        return days
+    return 7
+
+
+def period_phrase(task):
+    if task.get("recurrence") == "custom_total":
+        return f"these {custom_period_days(task)} days"
+    return PERIOD_PHRASES.get(task.get("recurrence"), "today")
+
+
+def days_left_in_period(task, day):
+    """Days still available to work, counting `day` itself."""
+    return (period_bounds(task, day)[1] - day).days + 1
+
+
+def _cashed_in_period(task, start, end):
+    total = 0
+    for key, minutes in (task.get("cashedInDates") or {}).items():
+        try:
+            when = date.fromisoformat(key)
+        except ValueError:
+            continue
+        if start <= when <= end:
+            total += minutes
+    return total
+
+
+def required_minutes_for_period(task, day, today=None):
+    """The period's total target minus vacation cashed in against any day of it.
+    The target is whatever was in effect on the period's last day (or today, for
+    one still running), so a mid-period change to the target applies to the whole
+    period it was made in, not just the days after it. Never negative."""
+    if not is_period_task(task):
+        return required_minutes_for_date(task, day)
+    today = today or date.today()
+    start, end = period_bounds(task, day)
+    target = _target_minutes_for_date(task, min(end, today))
+    return max(0, target - _cashed_in_period(task, start, end))
+
+
+def logged_seconds_for_period(task, day, sessions, live_status=None):
+    """Seconds worked on `task` across the stretch `day` falls in."""
+    start, end = period_bounds(task, day)
+    total = 0
+    cursor = start
+    while cursor <= end:
+        total += logged_seconds_for_date(task, cursor, sessions, live_status=live_status)
+        cursor += timedelta(days=1)
+    return total
+
+
+def _period_surplus(task, sessions, today):
+    """Minutes worked beyond the target in every period that has already ended
+    (the running one doesn't count: a period isn't banked until it's over)."""
+    seen = set()
+    earned = 0.0
+    for entry in _task_history_entries(task["id"], sessions):
+        first = datetime.fromisoformat(entry["startTime"]).date()
+        last = datetime.fromisoformat(entry["endTime"]).date() if entry.get("endTime") else first
+        for when in {first, last}:
+            start, end = period_bounds(task, when)
+            if end >= today or start in seen:
+                continue
+            seen.add(start)
+            logged = logged_seconds_for_period(task, when, sessions) / 60
+            earned += max(0, logged - required_minutes_for_period(task, when, today))
+    return earned
+
+
+def goal_snapshot(task, day, sessions, live_status=None):
+    """What the Tasks card shows for `day`, whichever kind of goal this is: how
+    much is required, how much is logged, and how much vacation was cashed in, all
+    in minutes and all for the goal's own stretch (the day itself for a per-day
+    goal, the week / 2 weeks / month for a period goal)."""
+    start, end = period_bounds(task, day)
+    if is_period_task(task):
+        required = required_minutes_for_period(task, day)
+        cashed = _cashed_in_period(task, start, end)
+        logged = logged_seconds_for_period(task, day, sessions, live_status=live_status) / 60
+    else:
+        required = required_minutes_for_date(task, day)
+        cashed = (task.get("cashedInDates") or {}).get(day.isoformat(), 0)
+        logged = logged_seconds_for_date(task, day, sessions, live_status=live_status) / 60
+    return {
+        "isPeriod": is_period_task(task),
+        "phrase": period_phrase(task),
+        "start": start,
+        "end": end,
+        "daysLeft": days_left_in_period(task, day),
+        "required": required,
+        "cashed": cashed,
+        "logged": logged,
+    }
+
+
 def vacation_balance_minutes(task, sessions, today=None):
     """Minutes of "vacation" this task has banked: the sum of every past
     scheduled day's surplus (minutes logged beyond that day's requirement,
@@ -440,6 +652,9 @@ def vacation_balance_minutes(task, sessions, today=None):
     it's over, so same-day overwork can't be cashed in against itself."""
     today = today or date.today()
     cashed_in_dates = task.get("cashedInDates") or {}
+
+    if is_period_task(task):
+        return max(0.0, _period_surplus(task, sessions, today) - sum(cashed_in_dates.values()))
 
     total_earned = 0.0
     seen_days = set()

@@ -10,6 +10,9 @@ import session_manager as sm
 import tasks_store
 
 
+pytestmark = pytest.mark.usefixtures("isolate_review_db")
+
+
 @pytest.fixture
 def isolate_tasks(tmp_path, monkeypatch):
     monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
@@ -27,11 +30,12 @@ def _start_for(task, **kw):
 
 # --- Focus tab ---
 
-def test_start_stays_disabled_while_a_session_is_running(qtbot, isolate_state):
-    sm.start_session(25, "soft", [], [])
+def test_start_stays_available_while_a_session_is_running(qtbot, isolate_state):
+    sm.start_session(25, "soft", [], [], source="task", event_id="a", event_title="Alpha")
     tab = focus_tab.FocusTab()
     qtbot.addWidget(tab)
-    assert not tab._start_button.isEnabled()
+    assert tab._start_button.isEnabled()
+    assert "Alpha" in tab._start_note.text() and "wait" in tab._start_note.text()
 
 
 def test_start_is_available_while_the_current_session_is_paused(qtbot, isolate_state):
@@ -42,19 +46,40 @@ def test_start_is_available_while_the_current_session_is_paused(qtbot, isolate_s
     assert tab._start_button.isEnabled()
 
 
-def test_focus_tab_shows_the_waiting_session_and_a_switch_button(qtbot, isolate_state):
+def test_focus_tab_lists_every_waiting_session_with_its_own_buttons(qtbot, isolate_state):
     sm.start_session(25, "soft", [], [], source="task", event_id="a", event_title="Alpha")
     sm.pause_session()
     sm.start_session(25, "soft", [], [], source="task", event_id="b", event_title="Beta")
+    sm.pause_session()
+    sm.start_session(25, "soft", [], [], source="task", event_id="c", event_title="Gamma")
     tab = focus_tab.FocusTab()
     qtbot.addWidget(tab)
     tab.show()
     tab._refresh_status()
-    assert "waiting (paused): alpha" in tab._status_label.text().lower()
-    assert tab._swap_button.isVisible()
-    assert not tab._start_button.isEnabled()  # the one waiting spot is taken, and Beta is running
-    tab._swap_button.click()
+    assert tab._summary_label.text() == "1 running · 2 waiting"
+    assert tab._now_name.text() == "Gamma"
+    names = sorted(row.name_label.text() for row in tab._waiting_rows.values())
+    assert names == ["Alpha", "Beta"]
+    row = next(r for r in tab._waiting_rows.values() if r.name_label.text() == "Alpha")
+    assert row.switch_button.isVisible() and row.end_button.isVisible()
+    row.switch_button.click()
     assert sm.get_status()["eventTitle"] == "Alpha"
+    tab._refresh_status()
+    assert sorted(r.name_label.text() for r in tab._waiting_rows.values()) == ["Beta", "Gamma"]
+
+
+def test_ending_one_waiting_session_leaves_the_others(qtbot, isolate_state):
+    for letter in "abc":
+        sm.start_session(25, "soft", [], [], source="task", event_id=letter, event_title=letter.upper())
+        if letter != "c":
+            sm.pause_session()
+    tab = focus_tab.FocusTab()
+    qtbot.addWidget(tab)
+    row = next(r for r in tab._waiting_rows.values() if r.name_label.text() == "A")
+    row.end_button.click()
+    tab._refresh_status()
+    assert sorted(r.name_label.text() for r in tab._waiting_rows.values()) == ["B"]
+    assert sm.get_status()["eventTitle"] == "C"
 
 
 # --- Tasks tab ---

@@ -1129,9 +1129,42 @@ def publish_first_attempt(topic_id, started_at_iso, elapsed_seconds, is_paused, 
 
 
 def clear_first_attempt():
-    global _first_attempt
+    global _first_attempt, _first_attempt_request
     with _lock:
         _first_attempt = None
+        _first_attempt_request = None
+
+
+# A first attempt has no review_store row, so the extension cannot pause it the way it
+# pauses a real review: it leaves a request here instead, and the banner that owns the
+# timer (qt_ui/review_tab.py) applies it on its next tick. The published snapshot is
+# updated at once so /status already shows the new state.
+_first_attempt_request = None
+
+
+def request_first_attempt(action):
+    """action is "pause" or "resume". Returns True if a first attempt is running to act on."""
+    global _first_attempt_request
+    if action not in ("pause", "resume"):
+        return False
+    current = get_first_attempt()
+    if current is None:
+        return False
+    with _lock:
+        _first_attempt_request = action
+        if _first_attempt is not None:
+            _first_attempt["elapsed_seconds"] = int(current["elapsedSeconds"])
+            _first_attempt["is_paused"] = action == "pause"
+            _first_attempt["auto_paused"] = False
+            _first_attempt["published_at"] = datetime.now()
+    return True
+
+
+def take_first_attempt_request():
+    global _first_attempt_request
+    with _lock:
+        request, _first_attempt_request = _first_attempt_request, None
+    return request
 
 
 def get_first_attempt():

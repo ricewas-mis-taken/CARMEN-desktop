@@ -535,3 +535,123 @@ is stored as the centre point, not the top-left, so it reopens right whatever th
 *drawn* white on dark backgrounds (stored colour untouched) so the default pen never vanishes when the background changes.
 (5) Undo is in-memory snapshots (100 deep); the document itself is saved continuously.
 Skipped from the reference site: Login/VGP+/Share/Print (no meaning here); the extension has no counterpart.
+
+[2026-10-24] Tasks tab: redesigned cards, one ring per task, grid that reflows (desktop only)
+Decision: each task card is a white card on a light page with the task's colour used in three places only (dot, ring,
+Start button). The progress ring is the focal element: today's progress at rest, the live session's own progress (with its
+clock inside) while running. Start is a real button; it opens Until burnout / Custom time and a long Pomodoro bar (Pomodoro
+keeps its own window). Banked vacation is quiet text with a hover-only "Use" tag that opens a window. The grid shows as many
+330-470px cards per row as fit and reflows on resize.
+Forks: (1) Colour-filled cards (old look) vs white cards with a colour accent: filled cards forced every text colour to be
+chosen per task colour and clashed with the Start button; white cards keep contrast fixed and let the colour carry meaning.
+(2) Click-anywhere-to-arm was dropped for an explicit Start button -- the card now holds buttons and hover text that a
+whole-card click target fought with. (3) A review of the task's linked topic that is timed beside its session is listed IN the
+card (read from review_store), but only the running one can be paused from there; set-aside reviews are resumed in the Review
+tab, which owns that flow. (4) Vacation "Use" became a window (balance, quick amounts, minutes) instead of an inline editor.
+(5) The card reads session state each tick; nothing new is stored. update_dynamic() gained an optional `reviews` argument so
+the tab queries review_store once per tick, not once per card.
+Supersedes the open "tasks cards fit window width" and "tasks tab does less work" changes (both folded in: responsive columns,
+tick only while visible, restyle only when the look changes). Old TaskCard/burnout/pomodoro/startTask rules removed from styles.qss.
+
+[2026-10-25] Calendar and Finished tabs archived, not deleted
+  Fork: delete the code, hide the tabs and leave the files, or move the tab UI to archive/.
+  Chose archive/ (git mv, so history follows): the tabs' UI modules and their tests leave the importable tree, the data layer stays. Deleting loses a working feature the user may want back; hiding only leaves dead code that still gets imported and tested.
+  Kept on purpose: calendar_store / calendar_recurrence / calendar_toast and the calendar sync, backup and API paths, so existing events are not lost and the session-complete toast keeps working. day_layout.py (Tasks tab) and history_viewer.py (Session History tab) were never calendar-only.
+  Stopped: calendar_scheduler is no longer started in main.py. With the tab gone, a leftover event would still pop reminders and start a session out of nowhere, with no way to see or edit it.
+  Extension: no change; it never had a calendar tab. A "calendar-event" session from an older event simply no longer starts.
+
+[2026-10-25] Task goals per week / 2 weeks / month, due at the end of the period
+  Fork 1: a new kind of task, or more values of the existing recurrence field.
+  Chose more values ("weekly_total", "biweekly_total", "monthly_total" beside "daily" and "weekly_days") with targetMinutes meaning "per period". One field keeps sync, the editor and every existing task as they were. "Specific days" already existed as weekly_days, so it was not duplicated.
+  Fork 2: how a period is measured.
+  Chose one function, tasks_store.period_bounds(task, day) -> (first, last): a per-day goal's period is the day itself, a week is Monday to Sunday, a two-week stretch counts from periodAnchor (a Monday, set the first time a task becomes two-weekly), a month is the calendar month. goal_snapshot() hands the card required / logged / cashed for that stretch, so the card has no per-kind branches beyond wording.
+  Fork 3: which target applies. A period uses the target in effect on its last day (or today, for the running one), so raising the target on Wednesday applies to the whole week, not only to Thursday on.
+  Fork 4: vacation. Only finished periods bank surplus (same rule as "today never banks"); cashing in is recorded against a day inside the current period and lowers that period's requirement. Per-day goals are untouched.
+  Not done: a weekday filter on top of a period total ("10 hours a week, but only Mon/Wed/Fri"). Every day counts toward the total.
+  Sync / old devices: a computer that has not been updated treats an unknown recurrence as daily, so a 600-minute weekly goal would read as 600 minutes a day there. Update both computers together. sync_client._normalize_task now sanitises periodAnchor.
+  Extension: no change; it never reads task goals, only the running session.
+
+[2026-10-25] Starting a focus session over a running one pauses it (Focus tab, tray dialog)
+  Fork: keep start_session()'s "new session wins" for the hand-started case too (the Focus tab disabled Start while anything ran to avoid it), or park the running one.
+  Chose to park: picker_dialogs.start_manual_session() pauses a running session first, and start_session() already sets a paused one aside to come back later. Disabling Start made it impossible to start an a-la-carte session during a task or review, which is exactly when you want one; replacing it would silently end the task's session. The Focus tab now lists the running session and every waiting one with Switch / End. start_session()'s own behaviour is unchanged for calendar, task and review starts and for POST /session/start.
+  Extension: none; it only reads the sessions.
+
+[2026-10-25] One look for the app's tabs: qt_ui/ui_kit.py
+  Fork: restyle each redesigned tab on its own, or share the pieces the Tasks cards already had.
+  Chose a small shared module (colours, DIN numerals via Bahnschrift, chips, buttons, the ring, an elided label); tasks_tab keeps its old private names as aliases. Focus, Board, Scribe, Screen Time and Review were redesigned on it: white cards with a hairline border on the grey page, ink text, one accent per thing (task colour, importance ramp, category colour), and a number as the hero wherever the page is about a number. Fonts are set in label stylesheets, not setFont(), because the app stylesheet sets a font on every label and wins.
+  Replaced the Review table (nine columns, horizontal scroll) with a row per problem; the Board's tag drop-down became chips. Tests that reached into the table now read the rows.
+
+[2026-10-25] A first attempt can be paused from outside; a running review is the big time everywhere
+  Fork: leave a first attempt read-only for the extension (it has no review_store row), or let it be paused.
+  Chose to let it: POST /review/pause|resume leave a request in review_store (request_first_attempt) and also update the published snapshot at once, so /status shows the new state immediately; the banner that really times it applies the request on its next tick. Why now: the "review becomes the big time" popup behaviour had been written to skip first attempts, and a first attempt is exactly what was running, so it never showed. The extension and the Focus tab now treat any running review, first attempt included, as the big time, with the session (a paused pomodoro too) beside it and a "Resume pomodoro" that sets the review aside and resumes the session.
+  Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-10-25] (popup takeover).
+
+[2026-10-25] Focus tab: custom length only, and one rules picker for apps, websites and browser profiles
+  The preset buttons are gone (type minutes). "Pick apps" used to open the blocklist picker, which switches to "unblock what is blocked now" while a session runs (so it only ever listed apps then) and never offered websites. A separate mode, picker_dialogs.open_rules_picker(), always edits the next session's saved defaults: processBlocklist, browserProfileBlocklist and domainWhitelist.
+
+[2026-10-25] Session History redesigned on top of the same file
+  session_history.json and session_history.load_all() are untouched; the page only reads them. Pause-aware worked time comes from tasks_store.worked_seconds, as the Tasks cards use. format_session_html() stays for anything that wants the old text.
+
+2026-10-25  Review quick entry (miss log, paste a list, score a set)
+  Fork: add new columns (miss_count, set kind, session score) vs. build on existing fields.
+  Chose existing fields. A miss is a problem in a "Mistakes" subject (logging it again raises its
+  stars one step and is not a duplicate); a batch is many ordinary problems; a set's score becomes
+  the same solved/shaky/checked-answer outcome a timed review gives (90%+ solid, 60-89% shaky,
+  under 60% needs-answers, hardcoded). Why: new columns change the sync contract and old devices
+  would drop or reset them. Cost: the raw score (e.g. 8/10) is not stored, only its effect.
+  Skipped: global hotkey, undo for a batch, per-topic thresholds.
+
+2026-10-25  Shared colour themes (counterpart: carmen-extension DESIGN_DECISIONS.txt, same date)
+  A theme is six colours (ink, muted, faint, accent, page, sidebar); the rest is derived, so a custom
+  theme can't produce unreadable text. Five named themes, each picked for an effect, not a fashion:
+  Paper (neutral default), Deep work (navy; blue is tied to sustained attention), Moss (green, restful
+  for long review), Clay (warm; pushes you to start a task you avoid), Graphite (almost no colour).
+  "Make your own" edits all six. Saved in config.json, per computer, not synced (the extension reads it
+  from the local GET /theme instead).
+  Fork: rewrite styles.qss around variables vs. swap its literal colours at load. Swapped at load
+  (theme.apply_to_stylesheet): QSS has no variables and a rewrite would touch 640 lines for no visible gain.
+  Cost: colours written directly into a widget's own style (ink buttons, numerals, Home's cards) only
+  change on the next launch; the stylesheet part changes immediately.
+  Cards stay white in every theme, so there is no dark theme. A dark theme needs every white-on-ink label
+  swapped as well. Still dark regardless of theme: quicknote, mini timer, lock overlay.
+
+2026-10-25  Home page
+  Opens first. Order is the decision: what to do now (the open task with the most time left, one
+  Start button), then three numbers (focused today, tasks open, reviews due), then the week as bars,
+  then colours. No streaks, badges or quotes: nothing there rewards opening the app for its own sake.
+  Falls back to "reviews are due" or "nothing is waiting" so the top card never shows an empty box.
+
+2026-10-25  Design references used
+  Cloned (reference only, nothing executed, git-ignored in design-skills/): anthropics/skills,
+  nextlevelbuilder/ui-ux-pro-max-skill, pbakaus/impeccable, vercel-labs/agent-skills,
+  Owl-Listener/designer-skills, LovroPodobnik/refactoring-ui-skill, Leonxlnx/taste-skill.
+  What was actually applied, from Refactoring UI and Impeccable's critique rules: a fixed spacing
+  scale (4/8/12/16/24/32), hierarchy by weight and colour not size alone, one accent per screen,
+  shadows only at two elevations, no decorative gradients or emoji icons (the sidebar's emoji became
+  drawn line icons), copy that says what happens ("Log it", "End session") not "Submit".
+  Not applied: the larger frameworks (scroll animation, 3D, marketing-page kits): wrong for a desktop tool.
+  Not done and said plainly: I did not run each skill's full workflow; I took their rules, not their tooling.
+
+2026-10-25  Colours moved from Home to Options; Home resize fix
+  Colours are set once and rarely again, so they live in an Options popup (profile menu when signed in,
+  an Options button under Sign In when not) and Home keeps only what changes daily.
+  Resize bugs found by measuring minimum sizes at 560, 800 and 1400 px: the stat cells had no minimum
+  height and overlapped, a right-hand label had zero width (an Ignored size policy with no stretch),
+  and the hero card was wider than the page below 640 px. Fixes: minimum cell height, plain labels
+  where text must not shrink, hero stacks its ring above its text when narrow, two columns from 900 px.
+  Window minimum height raised to 600 so the sidebar footer is not clipped.
+
+2026-10-25  Per-weekday times and custom-length goal periods
+  Per-day times: dayMinutes {"MO": 30, ...} on a "weekly_days" task. A ticked day without an entry uses
+  targetMinutes, so "the same every day" is simply no entries.
+  Fork: a second per-day history list vs. putting dayMinutes inside the existing targetMinutesHistory
+  entries. Chose the entries: one history, one lookup (_target_minutes_for_date), so changing Monday's
+  time today can't reach back and change past surplus. An entry only carries dayMinutes when there are
+  some, or when they were just removed, so tasks that never used the feature keep an unchanged history.
+  Custom period: recurrence "custom_total" with periodDays (2-366, anything else reads as 7) counted
+  from periodAnchor, which is the day it was saved (not a Monday like the 2-week goal). Everything that
+  already handled week/2-week/month goals (progress, vacation surplus, days left) works unchanged
+  because they all go through period_bounds.
+  Sync: both fields are cleaned on pull (sync_client._clean_day_minutes). A computer on the old version
+  ignores them and shows every ticked day at targetMinutes, which the editor sets to the first ticked
+  day's time. Not done: a per-day time for the daily kind (every day is already "each day").

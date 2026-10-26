@@ -113,3 +113,60 @@ def test_add_dialog_survives_photo_deleted_before_save(qtbot, isolate_board, tmp
     dialog._submit()
     assert "Could not read" in dialog._status_label.text()
     assert board_store.list_active_tasks() == []
+
+
+# ------------------------------------------------- redesigned header and tiles ----
+
+def test_importance_colours_run_from_cool_to_hot():
+    cool = board_tab.importance_colors(1)
+    warm = board_tab.importance_colors(5)
+    hot = board_tab.importance_colors(10)
+    assert len({cool, warm, hot}) == 3
+    assert board_tab.importance_colors(3) == cool and board_tab.importance_colors(4) == warm
+    assert board_tab.importance_colors(9) == hot and board_tab.importance_colors(7) != hot
+
+
+def test_the_tile_restyles_when_importance_changes(qtbot, isolate_board):
+    task = board_store.create_task("Tile", importance=2)
+    card = board_tab._BoardCard(task, on_changed=lambda: None)
+    qtbot.addWidget(card)
+    before = card._badge.styleSheet()
+    card._badge.setText("9")
+    assert card._badge.styleSheet() != before
+    assert board_tab.importance_colors(9)[0] in card._badge.styleSheet()
+
+
+def test_clicking_a_tag_chip_shows_only_that_tag_and_all_resets(qtbot, isolate_board):
+    board_store.create_task("Milk", importance=5, tags=["shopping"])
+    board_store.create_task("Trip", importance=5, tags=["long-term"])
+    tab = board_tab.BoardTab()
+    qtbot.addWidget(tab)
+    assert tab._list_layout.count() == 2 and tab._tag_chips["all"].isChecked()
+    tab._tag_chips["shopping"].click()
+    assert tab._list_layout.count() == 1 and tab._list_layout.itemAt(0).widget()._task["name"] == "Milk"
+    assert tab._tag_chips["shopping"].isChecked() and not tab._tag_chips["all"].isChecked()
+    tab._tag_chips["all"].click()
+    assert tab._list_layout.count() == 2
+
+
+def test_the_subtitle_counts_what_is_shown(qtbot, isolate_board):
+    tab = board_tab.BoardTab()
+    qtbot.addWidget(tab)
+    assert tab._subtitle.text().startswith("0 tasks")
+    board_store.create_task("One", importance=5, tags=["quick"])
+    board_store.create_task("Two", importance=5)
+    tab.refresh()
+    assert tab._subtitle.text().startswith("2 tasks")
+    tab._tag_chips["quick"].click()
+    assert tab._subtitle.text().startswith("1 of 2 tasks")
+
+
+def test_details_button_toggles_between_details_and_hide(qtbot, isolate_board):
+    task = board_store.create_task("Open", importance=5)
+    card = board_tab._BoardCard(task, on_changed=lambda: None)
+    qtbot.addWidget(card)
+    assert card._details_button.text() == "Details"
+    card._expand()
+    assert card._details_button.text() == "Hide"
+    card._collapse()
+    assert card._details_button.text() == "Details"

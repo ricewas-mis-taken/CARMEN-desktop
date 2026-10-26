@@ -1,6 +1,7 @@
-"""The real Qt main window: sidebar nav (Calendar / Focus / Tasks /
-Finished) + QStackedWidget content, replacing calendar_gui.py's Tk
-`.tkraise()` frame switching and Stage 1's placeholder stand-in.
+"""The real Qt main window: sidebar nav (Focus / Tasks / The Board / ...) +
+QStackedWidget content, replacing calendar_gui.py's Tk `.tkraise()` frame
+switching and Stage 1's placeholder stand-in. The Calendar and Finished tabs
+now live in archive/ (see archive/README.md).
 """
 import ctypes
 import sys
@@ -14,7 +15,7 @@ if sys.platform != "darwin":
     import win32gui
 
 from PySide6.QtCore import Qt
-from PySide6.QtCore import QEvent
+from PySide6.QtCore import QEvent, QSize
 from PySide6.QtWidgets import (
     QButtonGroup,
     QHBoxLayout,
@@ -26,9 +27,9 @@ from PySide6.QtWidgets import (
 )
 
 from qt_ui.account_widget import AccountArea
+from qt_ui.home_tab import HomeTab
+from qt_ui.ui_kit import LogoMark, nav_icon
 from qt_ui.board_tab import BoardTab
-from qt_ui.calendar_page import CalendarPage
-from qt_ui.finished_tab import FinishedTab
 from qt_ui.focus_tab import FocusTab
 from qt_ui.history_viewer import HistoryTab
 from qt_ui.review_tab import ReviewTab
@@ -90,17 +91,6 @@ def open_sign_in():
     """Tray "Sign in": the main window with the sign-in dialog on top."""
     open_main_window()
     _win._account_area._open_auth_dialog()
-
-
-def refresh_calendar_views():
-    """Called after an event is saved/deleted (qt_ui/event_editor.py) so
-    any already-open calendar/finished views pick up the change -- the Qt
-    equivalent of the Tk version's _refresh_all_calendar_views() walking
-    _state["refresh_callbacks"]. A no-op if the main window isn't open."""
-    if _win is None:
-        return
-    _win._pages["calendar"].refresh()
-    _win._pages["finished"].refresh()
 
 
 _NORMAL_SIZE = (800, 800)
@@ -168,7 +158,7 @@ class _MainWindow(QWidget):
         super().__init__()
         self.setWindowTitle("Carmen Focus")
         self.resize(*_NORMAL_SIZE)
-        self.setMinimumSize(540, 540)
+        self.setMinimumSize(540, 600)
         self._was_maximized = False
         self._drag_frame_size = None  # (width, height) in physical px, set only during a title-bar move
 
@@ -188,17 +178,16 @@ class _MainWindow(QWidget):
         root_layout.addWidget(content, 1)
 
         self._pages = {}
-        self._add_page("calendar", CalendarPage())
+        self._add_page("home", HomeTab(on_navigate=self._show_tab))
         self._add_page("focus", FocusTab())
         self._add_page("tasks", TasksTab())
         self._add_page("board", BoardTab())
         self._add_page("review", ReviewTab())
         self._add_page("scribe", ScribeTab())
         self._add_page("screentime", ScreenTimeTab())
-        self._add_page("finished", FinishedTab())
         self._add_page("history", HistoryTab())
 
-        self._show_tab("calendar")
+        self._show_tab("home")
 
     def _add_page(self, key, widget):
         self._pages[key] = widget
@@ -212,31 +201,44 @@ class _MainWindow(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
+        brand = QWidget()
+        brand_row = QHBoxLayout(brand)
+        brand_row.setContentsMargins(20, 24, 18, 18)
+        brand_row.setSpacing(10)
+        brand_row.addWidget(LogoMark(22), 0, Qt.AlignVCenter)
         title = QLabel("Carmen Focus")
         title.setObjectName("SidebarTitle")
-        layout.addWidget(title)
+        brand_row.addWidget(title, 1)
+        layout.addWidget(brand)
 
+        self._nav_buttons = {}
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
-        nav_items = [
-            ("calendar", "📅  Calendar"),
-            ("focus", "🔥  Focus"),
-            ("tasks", "🎯  Tasks"),
-            ("board", "🗂  The Board"),
-            ("review", "🔁  Review"),
-            ("scribe", "✏️  Scribe"),
-            ("screentime", "⏱  Screen Time"),
-            ("finished", "✅  Finished"),
-            ("history", "📜  Session History"),
+        # (page key, label) in groups; a group's heading is the line above it.
+        nav_groups = [
+            ("Today", [("home", "Home")]),
+            ("Work", [("focus", "Focus"), ("tasks", "Tasks"), ("board", "The Board")]),
+            ("Study", [("review", "Review"), ("scribe", "Scribe")]),
+            ("Look back", [("screentime", "Screen Time"), ("history", "Session History")]),
         ]
+        nav_items = [item for _heading, items in nav_groups for item in items]
+        group_starts = {items[0][0]: heading for heading, items in nav_groups}
         for key, label in nav_items:
+            if key in group_starts:
+                caption = QLabel(group_starts[key])
+                caption.setObjectName("SidebarGroup")
+                layout.addWidget(caption)
             button = QPushButton(label)
             button.setProperty("class", "NavButton")
+            button.setIcon(nav_icon(key))
+            button.setIconSize(QSize(20, 20))
+            button.setCursor(Qt.PointingHandCursor)
             button.setCheckable(True)
             button.clicked.connect(lambda checked, k=key: self._show_tab(k))
             layout.addWidget(button)
             self._nav_group.addButton(button)
-            if key == "calendar":
+            self._nav_buttons[key] = button
+            if key == "home":
                 button.setChecked(True)
 
         layout.addStretch(1)
@@ -248,6 +250,9 @@ class _MainWindow(QWidget):
 
     def _show_tab(self, key):
         self._stack.setCurrentWidget(self._pages[key])
+        button = self._nav_buttons.get(key)
+        if button is not None:
+            button.setChecked(True)
 
     def changeEvent(self, event):
         # Qt restores a "restore down" (un-maximize) click to whatever

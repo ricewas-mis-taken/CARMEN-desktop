@@ -6,12 +6,14 @@ import os
 import subprocess
 import sys
 import threading
+import theme
 import time
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 import api_server
 import auto_updater
+from qt_ui import ui_kit
 import autostart
 import desktop_menu
 import calendar_scheduler
@@ -42,7 +44,7 @@ STYLESHEET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "styl
 def _load_stylesheet(app):
     try:
         with open(STYLESHEET_PATH, "r", encoding="utf-8") as f:
-            app.setStyleSheet(f.read())
+            app.setStyleSheet(ui_kit.with_check_icon(theme.apply_to_stylesheet(f.read(), theme.startup_colours())))
     except OSError:
         pass  # missing/unreadable stylesheet must never block the app from starting
 
@@ -132,7 +134,10 @@ def main():
     api_thread = threading.Thread(target=run_server, daemon=True)
     api_thread.start()
 
-    calendar_scheduler.start(stop_event)
+    # The calendar's reminders and auto-start-at-event-time are parked with the
+    # Calendar tab (see archive/README.md): with no way to see or edit events,
+    # a leftover one would still start a session out of nowhere.
+    # calendar_scheduler.start(stop_event)
     sync_scheduler.start(stop_event)
     sync_live.start(stop_event)
     sync_realtime.start(stop_event)

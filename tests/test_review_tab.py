@@ -70,11 +70,11 @@ def test_topic_view_lists_due_problems_by_default(qtbot, isolate_review_db):
     view = tab._topic_views[topic["id"]]
     # 5-star problems land 1 day out (see review_scheduler), so nothing is
     # due yet under the default "Due" filter.
-    assert view._table.rowCount() == 0
+    assert len(view._rows) == 0
 
     view._set_due_only(False)
-    assert view._table.rowCount() == 1
-    assert view._table.item(0, review_tab.COLUMN_NAME).text() == "Solve it"
+    assert len(view._rows) == 1
+    assert view._rows[0].name_label.text() == "Solve it"
 
 
 def test_topic_view_shows_due_problem_when_next_review_is_today(qtbot, isolate_review_db):
@@ -93,10 +93,10 @@ def test_topic_view_shows_due_problem_when_next_review_is_today(qtbot, isolate_r
     tab = review_tab.ReviewTab()
     qtbot.addWidget(tab)
     view = tab._topic_views[topic["id"]]
-    assert view._table.rowCount() == 1
+    assert len(view._rows) == 1
 
 
-def test_start_and_finish_review_updates_table(qtbot, isolate_review_db):
+def test_start_and_finish_review_updates_the_list(qtbot, isolate_review_db):
     topic, subject = _make_topic_and_subject()
     problem = review_store.create_problem(
         topic["id"], subject["id"], "Due today", stars=3,
@@ -112,14 +112,14 @@ def test_start_and_finish_review_updates_table(qtbot, isolate_review_db):
     tab = review_tab.ReviewTab()
     qtbot.addWidget(tab)
     view = tab._topic_views[topic["id"]]
-    assert view._table.rowCount() == 1
+    assert len(view._rows) == 1
 
     token = review_store.start_review(problem["id"])
     review_store.finish_review(token)
     view.refresh()
 
     # Rescheduled at least a day out, so it drops off the "Due" view.
-    assert view._table.rowCount() == 0
+    assert len(view._rows) == 0
 
 
 def test_add_problem_dialog_creates_problem_with_text_description(qtbot, isolate_review_db):
@@ -656,7 +656,7 @@ def test_first_solved_reads_never_for_a_problem_never_reviewed(qtbot, isolate_re
     view = tab._topic_views[topic["id"]]
     view._set_due_only(False)
 
-    assert view._table.item(0, review_tab.COLUMN_FIRST_SOLVED).text() == "Never"
+    assert view._rows[0].first_solved_text == "Never"
 
 
 def test_first_solved_shows_date_once_a_problem_has_been_reviewed():
@@ -810,8 +810,7 @@ def test_rebuilt_view_gives_a_resumed_first_attempt_its_add_problem_dialog(
 
 
 def _start_buttons(view):
-    return [view._table.cellWidget(row, review_tab.COLUMN_START).findChild(review_tab.QPushButton)
-            for row in range(view._table.rowCount())]
+    return [row.start_button for row in view._rows]
 
 
 def test_review_banner_sits_above_the_topic_tabs_and_is_shared(qtbot, isolate_review_db):
@@ -853,3 +852,200 @@ def test_start_button_of_the_review_in_progress_is_greyed_out(qtbot, isolate_rev
 
     tab.banner._end_early()
     assert all(b.isEnabled() for b in _start_buttons(view))
+
+
+# ------------------------------------------------------ redesigned rows ----
+
+def _problem_dict(**over):
+    problem = {"reviewCount": 0, "lastReviewedAt": None, "nextReviewDate": None, "fastestTimeSeconds": None,
+               "fastestTimeIsSolved": False, "firstSolvedAt": None, "firstSolved": None}
+    problem.update(over)
+    return problem
+
+
+def test_the_due_pill_reads_overdue_today_or_later():
+    from datetime import date, timedelta
+    iso = lambda days: (date.today() + timedelta(days=days)).isoformat()
+    assert review_tab._next_review_pill(_problem_dict(nextReviewDate=iso(-3)))[0] == "Overdue · 3 days ago"
+    assert review_tab._next_review_pill(_problem_dict(nextReviewDate=iso(0)))[0] == "Due today"
+    assert review_tab._next_review_pill(_problem_dict(nextReviewDate=iso(1)))[0] == "Next · Tomorrow"
+    assert review_tab._next_review_pill(_problem_dict(nextReviewDate=iso(5)))[0] == "Next · in 5 days"
+    assert review_tab._next_review_pill(_problem_dict())[0] == "Not scheduled"
+    assert review_tab._next_review_pill(_problem_dict(nextReviewDate=iso(-3)))[1] == review_tab.RED
+
+
+def test_a_new_problems_history_line_says_what_has_not_happened(qtbot, isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    review_store.create_problem(topic["id"], subject["id"], "Solve it", stars=3, description_type="text",
+                                description_text="x")
+    view = review_tab._TopicView(topic["id"])
+    qtbot.addWidget(view)
+    view._set_due_only(False)
+    meta = view._rows[0].meta_label.text()
+    assert "0 reviews" in meta and "never reviewed" in meta and "not solved yet" in meta
+
+
+def test_each_row_carries_its_subject_stars_and_start_button(qtbot, isolate_review_db):
+    topic, subject = _make_topic_and_subject("Math", "Quadratics", "#4A90D9")
+    review_store.create_problem(topic["id"], subject["id"], "Solve it", stars=4, description_type="text",
+                                description_text="x")
+    view = review_tab._TopicView(topic["id"])
+    qtbot.addWidget(view)
+    view._set_due_only(False)
+    row = view._rows[0]
+    assert row.name_label.text() == "Solve it" and row.stars_label.text() == "★★★★☆"
+    assert "Quadratics" in [l.text() for l in row.findChildren(review_tab.QLabel)]
+    assert row.start_button.objectName() == "reviewStartButton" and row.start_button.isEnabled()
+
+
+def test_the_summary_counts_due_and_all(qtbot, isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    view = review_tab._TopicView(topic["id"])
+    qtbot.addWidget(view)
+    assert view._summary_label.text() == "Nothing due · 0 problems"
+    review_store.create_problem(topic["id"], subject["id"], "A", stars=3, description_type="text", description_text="x")
+    view.refresh()
+    assert view._summary_label.text().endswith("· 1 problem")
+
+
+def test_the_empty_list_explains_itself(qtbot, isolate_review_db):
+    topic, _subject = _make_topic_and_subject()
+    view = review_tab._TopicView(topic["id"])
+    qtbot.addWidget(view)
+    assert view._rows == []
+    texts = [l.text() for l in view.findChildren(review_tab.QLabel)]
+    assert any("Nothing to review today" in t for t in texts)
+    view._set_due_only(False)
+    texts = [l.text() for l in view.findChildren(review_tab.QLabel)]
+    assert any("No problems yet" in t for t in texts)
+
+
+def test_the_extension_can_pause_and_resume_a_first_attempt(qtbot, isolate_review_db, isolate_state, monkeypatch):
+    """The first attempt is timed only by this banner, so a pause asked for through the
+    API (review_store.request_first_attempt) is applied here on the next tick."""
+    banner = _first_attempt_banner(qtbot, monkeypatch, {"on": False})
+    assert not banner._currently_paused()
+    review_store.request_first_attempt("pause")
+    banner._tick()
+    assert banner._currently_paused() and banner._pause_btn.text() == "Resume"
+    assert review_store.get_first_attempt()["isPaused"]
+    review_store.request_first_attempt("resume")
+    banner._tick()
+    assert not banner._currently_paused() and banner._pause_btn.text() == "Pause"
+    assert not review_store.get_first_attempt()["isPaused"]
+
+
+def test_a_request_for_the_state_it_is_already_in_changes_nothing(qtbot, isolate_review_db, isolate_state, monkeypatch):
+    banner = _first_attempt_banner(qtbot, monkeypatch, {"on": False})
+    review_store.request_first_attempt("resume")   # already running
+    banner._tick()
+    assert not banner._currently_paused()
+
+
+# ---------------------------------------------- find / category / sort sidebar ----
+
+def _view_with_problems(qtbot):
+    topic = review_store.create_topic("Calculus")
+    integrals = review_store.create_subject(topic["id"], "Integrals", "#4A90D9")
+    limits = review_store.create_subject(topic["id"], "Limits", "#e53935")
+    for name, subject, stars in (("Parts drill", integrals, 4), ("Trig sub", integrals, 2), ("Epsilon proof", limits, 5)):
+        review_store.create_problem(topic["id"], subject["id"], name, stars=stars, description_type="text",
+                                    description_text=f"notes about {name.lower()} and a secret word zebra" if name == "Trig sub" else "x")
+    view = review_tab._TopicView(topic["id"])
+    qtbot.addWidget(view)
+    view._set_due_only(False)
+    return view, integrals, limits
+
+
+def _names(view):
+    return [row.name_label.text() for row in view._rows]
+
+
+def test_the_sidebar_lists_every_category_with_its_count(qtbot, isolate_review_db):
+    view, integrals, limits = _view_with_problems(qtbot)
+    buttons = view._category_buttons
+    assert list(buttons) == [None, integrals["id"], limits["id"]] or set(buttons) == {None, integrals["id"], limits["id"]}
+    assert buttons[None]._count == 3 and buttons[integrals["id"]]._count == 2 and buttons[limits["id"]]._count == 1
+    assert buttons[None].isChecked()
+
+
+def test_picking_a_category_shows_only_its_problems_and_all_brings_the_rest_back(qtbot, isolate_review_db):
+    view, integrals, limits = _view_with_problems(qtbot)
+    view._category_buttons[limits["id"]].click()
+    assert _names(view) == ["Epsilon proof"] and view._category_buttons[limits["id"]].isChecked()
+    assert "showing 1" in view._summary_label.text()
+    view._category_buttons[None].click()
+    assert len(view._rows) == 3
+
+
+def test_search_matches_names_subjects_and_notes(qtbot, isolate_review_db):
+    view, _integrals, _limits = _view_with_problems(qtbot)
+    view._search_edit.setText("parts")
+    assert _names(view) == ["Parts drill"]
+    view._search_edit.setText("limits")        # a subject name
+    assert _names(view) == ["Epsilon proof"]
+    view._search_edit.setText("zebra")         # only in the notes
+    assert _names(view) == ["Trig sub"]
+    view._search_edit.setText("")
+    assert len(view._rows) == 3
+
+
+def test_search_and_category_work_together_and_an_empty_result_explains_itself(qtbot, isolate_review_db):
+    view, integrals, limits = _view_with_problems(qtbot)
+    view._category_buttons[integrals["id"]].click()
+    view._search_edit.setText("epsilon")
+    assert view._rows == []
+    assert any("Nothing matches" in label.text() for label in view.findChildren(review_tab.QLabel))
+
+
+def test_sorting(qtbot, isolate_review_db):
+    view, _i, _l = _view_with_problems(qtbot)
+    for key, expected in (("hardest", ["Epsilon proof", "Parts drill", "Trig sub"]),
+                          ("name", ["Epsilon proof", "Parts drill", "Trig sub"])):
+        view._sort_combo.setCurrentIndex(view._sort_combo.findData(key))
+        assert _names(view) == expected
+    view._sort_combo.setCurrentIndex(view._sort_combo.findData("newest"))
+    assert len(_names(view)) == 3
+
+
+def test_counts_follow_the_due_or_all_view(qtbot, isolate_review_db):
+    view, _i, _l = _view_with_problems(qtbot)
+    view._set_due_only(True)
+    assert view._category_buttons[None]._count == len(view._problems)
+
+
+def test_miss_dialog_logs_and_closes(qtbot, isolate_review_db):
+    topic = review_store.create_topic("Math")["id"]
+    done = []
+    dialog = review_tab._MissDialog(topic, on_done=lambda: done.append(1))
+    qtbot.addWidget(dialog)
+    dialog._edit.setText("Ch7 #14!")
+    dialog._save()
+    assert done == [1]
+    assert review_store.list_problems(topic, due_only=False)[0]["stars"] == 4
+
+
+def test_batch_dialog_previews_then_adds(qtbot, isolate_review_db):
+    topic = review_store.create_topic("Math")["id"]
+    review_store.create_subject(topic, "Algebra", "#112233")
+    dialog = review_tab._BatchDialog(topic, on_done=lambda: None)
+    qtbot.addWidget(dialog)
+    dialog._text.setPlainText("Ch 7 problems 1-3")
+    assert "3 to add" in dialog._summary.text()
+    dialog._save()
+    assert len(review_store.list_problems(topic, due_only=False)) == 3
+
+
+def test_score_dialog_rejects_bad_numbers_and_schedules(qtbot, isolate_review_db):
+    topic = review_store.create_topic("Math")["id"]
+    subject = review_store.create_subject(topic, "Sets", "#334455")
+    problem = review_store.create_problem(topic, subject["id"], "Set 1", 3, "text", description_text="")
+    dialog = review_tab._ScoreDialog(problem, on_done=lambda: None)
+    qtbot.addWidget(dialog)
+    dialog._correct.setText("12")
+    dialog._total.setText("10")
+    dialog._save()
+    assert review_store.get_problem(problem["id"])["reviewCount"] == 0
+    dialog._correct.setText("10")
+    dialog._save()
+    assert review_store.get_problem(problem["id"])["reviewCount"] == 1

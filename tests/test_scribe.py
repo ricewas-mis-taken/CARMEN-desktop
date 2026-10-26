@@ -285,3 +285,152 @@ def test_freehand_stroke_never_moves_after_drawing(qtbot):
     drawn = [list(p) for p in canvas._draft["pts"]]
     QTest.mouseRelease(canvas, Qt.LeftButton, Qt.NoModifier, QPoint(495, 300))
     assert canvas._active_items()[0]["pts"] == drawn
+
+
+# ------------------------------------------------------ redesigned chrome ----
+
+def test_every_tool_has_an_icon_and_a_tooltip_with_its_key(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    assert set(tab._tool_buttons) == {"select", "freehand", "line", "curve", "arrow", "rect", "circle", "text", "fill"}
+    for key, button in tab._tool_buttons.items():
+        assert not button.icon().isNull(), key
+        assert button.toolTip()
+    assert "(1)" in tab._tool_buttons["line"].toolTip() and "(7)" in tab._tool_buttons["select"].toolTip()
+
+
+def test_clicking_a_tool_on_the_rail_selects_it(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab._tool_buttons["circle"].click()
+    assert tab.canvas.tool == "circle" and tab._tool_buttons["circle"].isChecked()
+
+
+def test_the_saved_indicator_follows_the_save(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    assert tab._saved_label.text() == "Saved"
+    tab.resize(900, 700)
+    tab.show()
+    tab.canvas.set_tool("rect")
+    _drag(tab.canvas, (100, 100), (220, 180))
+    assert tab._saved_label.text() == "Saving…"
+    tab.flush()
+    assert tab._saved_label.text() == "Saved"
+
+
+def test_a_quick_colour_sets_the_stroke(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab._quick_stroke("#E03131")
+    assert tab.canvas.prefs["stroke"] == "#E03131"
+    assert tab._color_well.stroke == "#E03131" and tab._quick_dots["#E03131"].isChecked()
+
+
+def test_width_slider_and_box_stay_in_step(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab._width_slider.setValue(17)
+    assert tab._width.value() == 17 and tab.canvas.prefs["width"] == 17
+    tab._width.setValue(120)  # beyond the slider's range: the slider pins at its end
+    assert tab._width_slider.value() == 60 and tab.canvas.prefs["width"] == 120
+
+
+def test_the_snap_menu_drives_the_view_options(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    action = tab._pref_checks["showRulers"]
+    before = tab.canvas.prefs["showRulers"]
+    action.setChecked(not before)
+    assert tab.canvas.prefs["showRulers"] is (not before)
+
+
+# ------------------------------------------------------------- the inspector ----
+
+def test_the_colour_well_follows_stroke_and_fill(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab._set_fill("#FFD54F")
+    assert tab._color_well.fill == "#FFD54F" and tab.canvas.prefs["fill"] == "#FFD54F"
+    tab._set_fill(None)
+    assert tab._color_well.fill is None and tab.canvas.prefs["fill"] is None
+
+
+def test_swap_trades_line_and_fill(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab._quick_stroke("#1971C2")
+    tab._set_fill("#FAB005")
+    tab._swap_colors()
+    assert (tab.canvas.prefs["stroke"], tab.canvas.prefs["fill"]) == ("#FAB005", "#1971C2")
+    tab._set_fill(None)
+    tab._swap_colors()   # nothing to swap with: left alone
+    assert tab.canvas.prefs["stroke"] == "#FAB005" and tab.canvas.prefs["fill"] is None
+
+
+def test_a_right_click_on_a_quick_colour_sets_the_fill(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab.show()
+    dot = tab._quick_dots["#2F9E44"]
+    QTest.mouseClick(dot, Qt.RightButton)
+    assert tab.canvas.prefs["fill"] == "#2F9E44"
+    QTest.mouseClick(dot, Qt.LeftButton)
+    assert tab.canvas.prefs["stroke"] == "#2F9E44"
+
+
+def test_the_preview_shows_the_line_you_will_draw(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab._quick_stroke("#7048E8")
+    tab._width.setValue(9)
+    tab._pref_checks["dashed"].setChecked(True)
+    tab.canvas.changed.emit()
+    assert tab._stroke_preview._style == ("#7048E8", 9, True, tab.canvas.prefs["roundCorners"])
+
+
+def test_paper_thumbnails_set_the_background_and_show_the_current_one(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab._paper_chips["dots"].click()
+    assert tab.canvas.prefs["background"] == "dots" and tab._background.currentData() == "dots"
+    assert tab._paper_chips["dots"].isChecked() and not tab._paper_chips["grid"].isChecked()
+    assert set(tab._paper_chips) == set(scribe_store.BACKGROUNDS)
+    for chip in tab._paper_chips.values():
+        chip.grab()   # every paper paints
+
+
+# ------------------------------------------------------------------ hover help ----
+
+def _every_control(tab):
+    from PySide6.QtWidgets import QCheckBox, QComboBox, QListWidget, QPushButton, QSlider, QSpinBox, QToolButton
+    return [w for kind in (QPushButton, QCheckBox, QComboBox, QSlider, QSpinBox, QListWidget, QToolButton)
+            for w in tab.findChildren(kind)]
+
+
+def test_every_control_explains_itself_on_hover(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    missing = []
+    for widget in _every_control(tab):
+        if widget is tab._background:      # hidden: the paper thumbnails speak for it
+            continue
+        if not widget.toolTip().strip():
+            missing.append((type(widget).__name__, widget.text() if hasattr(widget, "text") else ""))
+    assert missing == []
+
+
+def test_tool_tooltips_say_what_the_tool_does(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    from qt_ui.scribe_tab import TOOL_HELP
+    for key, button in tab._tool_buttons.items():
+        assert TOOL_HELP[key] in button.toolTip()
+    assert "Click and drag" in tab._tool_buttons["line"].toolTip()
+
+
+def test_the_snap_menu_items_explain_themselves(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    for key in ("snapToGrid", "snapAroundGrid", "snapTo15", "showGuides", "showRulers"):
+        assert tab._pref_checks[key].toolTip()

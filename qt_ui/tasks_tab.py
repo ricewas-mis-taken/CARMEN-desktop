@@ -1,49 +1,44 @@
-"""Tasks tab: one "card" per recurring task (dashboard-card style, like the
-Calendar/Finished month grid's day cells), each showing today's progress
-toward its target minutes and its banked "vacation" time. Business logic
-(scheduling, pause-aware worked-time, vacation balance) lives in
-tasks_store.py -- this module is presentation + wiring a card's Start/Pause/
-End buttons to session_manager, the same session engine the Focus panel
-(qt_ui/finished_tab.py) and calendar events (calendar_scheduler.py) use, via
+"""Tasks tab: one card per recurring task. Each card shows today's progress toward the
+task's target minutes as a ring (in the task's own color), its lock rules, its banked
+"vacation" time and the buttons for the task's current state. Business logic
+(scheduling, pause-aware worked time, vacation balance) lives in tasks_store.py; this
+module is presentation plus wiring the buttons to session_manager -- the same session
+engine the Focus panel and calendar events use, via
 start_session(source="task", event_id=<task id>, event_title=<task name>).
 
-Card states (per-card, not global):
-  idle    -- shows today's progress + vacation bars. Clicking the card
-             (anywhere except the gear icon) arms it.
-  armed   -- the progress/vacation content is blurred; a Start Task overlay
-             (duration field, "Until I burnout", Start/Cancel buttons) sits
-             on top, unblurred, as *sibling* widgets rather than children of
-             the blurred content -- QGraphicsBlurEffect blurs its whole
-             widget subtree, so the trigger controls can't live inside it.
-             Clicking the card background (or the Start button) starts the
-             task; clicking into the duration field or Cancel does not,
-             since Qt delivers the press to that child widget instead of
-             bubbling it up to the card's own mousePressEvent.
-  running -- shown when session_manager reports an active session whose
-             source/eventId matches this task (polled on the shared status
-             timer below, not stored as card state) -- countdown, Pause/
-             Resume, End Task.
+A card is always in one of these states (decided each tick by update_dynamic()):
+  idle     -- today's ring, a Start button. Start opens the "how long" choices.
+  armed    -- Until burnout / Custom time / Pomodoro (Pomodoro opens its own window).
+  running  -- the session's own ring and countdown, Pause / End. Sub-states: paused,
+              on a pomodoro break, until burnout (counts up), a review of this task.
+  waiting  -- this task's session was set aside (paused) while another task runs:
+              "Switch to this" brings it back.
+  busy     -- another task is running: Start is disabled.
 
-Only one session can run at a time app-wide (session_manager's model), so
-any card other than the one actually running is dimmed and ignores clicks
-while some session -- task or otherwise -- is active.
+Only one session runs at a time app-wide (session_manager's model). A review of this
+task's linked topic that is timed beside the task's own session (see review_store) is
+listed inside the card.
+
+The grid reflows with the window: as many cards per row as fit, between CARD_MIN and
+CARD_MAX wide, flowing down and across as the window is resized.
 """
+import math
 from datetime import date
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont, QFontMetrics
+from PySide6.QtCore import QEvent, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
-    QGraphicsBlurEffect,
+    QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -52,41 +47,54 @@ import review_store
 import session_history
 import session_manager
 import tasks_store
+from qt_ui.day_layout import contrasting_text_color
+from qt_ui.ui_kit import (  # noqa: F401 -- aliases keep the older private names working
+    AMBER as _AMBER,
+    BREAK_COLOR as _BREAK_COLOR,
+    DANGER_STYLE as _DANGER_STYLE,
+    FAINT,
+    GREEN as _GREEN,
+    GREY as _GREY,
+    INK,
+    LINK_STYLE as _LINK_STYLE,
+    MUTED,
+    NUM_FONTS,
+    RED as _RED,
+    SECONDARY_STYLE as _SECONDARY_STYLE,
+    TEAL as _TEAL,
+    TEXT_FONT,
+    ElidedLabel as _ElidedLabel,
+    Ring as _Ring,
+    accent_style as _accent_style,
+    button as _button,
+    chip as _chip,
+    darker as _darker,
+    format_amount as _format_amount,
+    format_clock as _format_clock,
+    format_minutes as _format_minutes,
+    link_button as _link_button,
+    note as _note,
+    primary_style as _primary_style,
+    safe_color as _safe_color,
+    tint as _tint,
+)
 from qt_ui.task_editor import open_task_editor
 
 STATUS_REFRESH_MS = 1000
-CARD_WIDTH = 450
-CARD_HEIGHT = 360
-CARD_MARGIN = 22
-CARDS_PER_ROW = 3
-# Content width available to a full-width row inside the card, after the
-# left/right card margins -- used to elide text to the pixel budget instead
-# of letting Qt clip it mid-word or overflow past the card edge.
-CARD_CONTENT_WIDTH = CARD_WIDTH - 2 * CARD_MARGIN
+CARD_MIN = 330
+CARD_MAX = 470
+GRID_GAP = 18
+MAX_SUBJECT_CHIPS = 3
+
+# --- small helpers ---------------------------------------------------------
+
+def _ring_phrase(phrase):
+    # The ring's caption is small: "these 2 weeks" becomes "/ 2 weeks".
+    return "/ 2 weeks" if phrase == "these 2 weeks" else phrase
 
 
-def _format_minutes(total_minutes):
-    total_minutes = int(round(total_minutes))
-    hours, minutes = divmod(total_minutes, 60)
-    if hours:
-        return f"{hours}h {minutes}m"
-    return f"{minutes}m"
-
-
-def _pastelize(hex_color, mix=0.22):
-    """Blend a (possibly saturated) task color toward white so it reads as
-    a soft pastel card fill. The un-blended color is still used for the
-    progress bar chunk and the color-picker swatches, where full saturation
-    is what makes it legible/identifiable -- only the large card background
-    needs softening."""
-    hex_color = hex_color.lstrip("#")
-    if len(hex_color) != 6:
-        return "#FFFFFF"
-    r, g, b = (int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
-    r = round(r + (255 - r) * mix)
-    g = round(g + (255 - g) * mix)
-    b = round(b + (255 - b) * mix)
-    return f"#{r:02X}{g:02X}{b:02X}"
+def _days_text(days, tail):
+    return f"{days} day{'s' if days != 1 else ''} {tail}"
 
 
 def _subjects_for_task(task_id):
@@ -101,155 +109,259 @@ def _subjects_for_task(task_id):
         return []
 
 
-class TasksTab(QWidget):
+def _reviews_by_task():
+    """{task id: [review rows]} for reviews of a task's linked topic that are timed
+    on their own (not driving a session): the running one, then the set-aside ones.
+    A row is {"name", "seconds", "state": "running" | "paused", "token"}."""
+    rows = {}
+    try:
+        def task_of(problem_id):
+            problem = review_store.get_problem(problem_id)
+            topic = review_store.get_topic(problem["topicId"]) if problem else None
+            return topic.get("linkedTaskId") if topic else None
+
+        active = review_store.get_active_review()
+        if active:
+            task_id = task_of(active["problemId"])
+            if task_id:
+                rows.setdefault(task_id, []).append({
+                    "name": active["problemName"], "seconds": active["elapsedSeconds"],
+                    "state": "paused" if active.get("isPaused") else "running", "token": active["token"],
+                })
+        for parked in review_store.list_parked_reviews():
+            task_id = task_of(parked["problemId"])
+            if task_id:
+                rows.setdefault(task_id, []).append({
+                    "name": parked["problemName"], "seconds": parked["elapsedSeconds"],
+                    "state": "paused", "token": parked["token"],
+                })
+    except Exception:
+        return {}
+    return rows
+
+
+# --- building blocks -------------------------------------------------------
+
+class _VacationLine(QWidget):
+    """Quiet text; a small "Use" tag pops up beside it on hover, and a click opens the
+    vacation window. With nothing to use it is plain text."""
+
+    clicked = Signal()
+
     def __init__(self):
         super().__init__()
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 22, 24, 20)
-        layout.setSpacing(12)
+        self._usable = False
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        self._label = QLabel()
+        self._label.setStyleSheet(f"font-size:12.5px;color:{MUTED};background:transparent;")
+        layout.addWidget(self._label)
+        self._tag = QLabel("Use")
+        self._tag.setStyleSheet(
+            f"background:{INK};color:#FFFFFF;border-radius:8px;padding:1px 9px;font-size:11px;font-weight:600;")
+        self._tag.hide()
+        layout.addWidget(self._tag)
+        layout.addStretch(1)
 
-        layout.addLayout(self._build_header())
+    def set_state(self, text, usable):
+        self._label.setText(text)
+        self._usable = usable
+        self.setCursor(Qt.PointingHandCursor if usable else Qt.ArrowCursor)
+        self._label.setStyleSheet(f"font-size:12.5px;color:{MUTED if usable else FAINT};background:transparent;")
+        if not usable:
+            self._tag.hide()
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
-        scroll.setStyleSheet("background: #FFFFFF; border: none;")
-        self._grid_container = QWidget()
-        self._grid_container.setObjectName("TasksGridBg")
-        self._grid = QGridLayout(self._grid_container)
-        self._grid.setSpacing(16)
-        self._grid.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        scroll.setWidget(self._grid_container)
-        layout.addWidget(scroll, 1)
+    def text(self):
+        return self._label.text()
 
-        self._cards = {}
-        self.refresh()
+    def is_usable(self):
+        return self._usable
 
-        self._status_timer = QTimer(self)
-        self._status_timer.timeout.connect(self._tick)
-        self._status_timer.start(STATUS_REFRESH_MS)
+    def tag_visible(self):
+        return not self._tag.isHidden()
 
-    def _build_header(self):
-        header = QHBoxLayout()
-        title = QLabel("Tasks")
-        title.setStyleSheet("font-size: 20px; font-weight: 700;")
-        header.addWidget(title)
-        header.addStretch(1)
-        add_button = QPushButton("+ Add Recurring Task")
-        add_button.setProperty("class", "AccentButton")
-        add_button.clicked.connect(lambda: open_task_editor(on_saved=lambda _t: self.refresh()))
-        header.addWidget(add_button)
-        return header
+    def enterEvent(self, event):
+        if self._usable:
+            self._tag.show()
+            self._label.setStyleSheet(
+                f"font-size:12.5px;color:{INK};text-decoration:underline;background:transparent;")
+        super().enterEvent(event)
 
-    def refresh(self):
-        """Full rebuild -- called after a task is added/edited/deleted, or
-        when this tab first opens. Cheaper per-tick updates (progress bars,
-        countdown) go through _tick()/each card's update_dynamic() instead."""
-        while self._grid.count():
-            item = self._grid.takeAt(0)
+    def leaveEvent(self, event):
+        self._tag.hide()
+        if self._usable:
+            self._label.setStyleSheet(f"font-size:12.5px;color:{MUTED};background:transparent;")
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if self._usable and event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+class _ReviewBox(QFrame):
+    """Reviews of this task's topic that are timed beside its session: one review reads as
+    a line with its own pause button; several read as a short list, the running one first."""
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("ReviewBox")
+        self.setStyleSheet("QFrame#ReviewBox{background:#F7F8FA;border-radius:12px;} QLabel{background:transparent;}")
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(12, 10, 12, 10)
+        self._layout.setSpacing(6)
+        self._signature = None
+        self._time_labels = []
+        self.pause_buttons = []
+        self.hide()
+
+    def set_rows(self, rows, on_toggle, on_break):
+        """rows: [{"name", "seconds", "state", "token"}]. Rebuilds only when the list of
+        reviews or their states changes; otherwise just moves the clocks."""
+        if not rows:
+            self._signature = None
+            self.hide()
+            return
+        signature = tuple((r["token"], r["name"], r["state"]) for r in rows) + (on_break,)
+        if signature != self._signature:
+            self._signature = signature
+            self._rebuild(rows, on_toggle, on_break)
+        for label, row in zip(self._time_labels, rows):
+            label.setText(_format_clock(row["seconds"]))
+        self.show()
+
+    def _rebuild(self, rows, on_toggle, on_break):
+        while self._layout.count():
+            item = self._layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                widget.setParent(None)
                 widget.deleteLater()
-        self._cards = {}
+            elif item.layout() is not None:
+                self._drop_layout(item.layout())
+        self._time_labels = []
+        self.pause_buttons = []
+        if len(rows) > 1:
+            head = QLabel(f"Reviews · {len(rows)}")
+            head.setStyleSheet(f"font-size:12px;font-weight:700;color:{MUTED};")
+            self._layout.addWidget(head)
+        for row in rows:
+            line = QHBoxLayout()
+            line.setSpacing(8)
+            running = row["state"] == "running"
+            if len(rows) > 1:
+                mark = QLabel("●" if running else "❚❚")
+                mark.setFixedWidth(14)
+                mark.setStyleSheet(f"color:{'#16A34A' if running else FAINT};font-size:{9 if running else 8}px;")
+                line.addWidget(mark)
+            column = QVBoxLayout()
+            column.setSpacing(0)
+            title = _ElidedLabel(row["name"] if len(rows) > 1 else f"Reviewing {row['name']}")
+            title.setStyleSheet(
+                f"font-size:13px;font-weight:{'600' if running else '500'};color:{INK if running else '#475467'};")
+            column.addWidget(title)
+            if len(rows) == 1:
+                column.addWidget(_note(
+                    "Paused for the break" if on_break else ("Pauses on breaks, resumes after" if running else "Paused"),
+                    MUTED, 11.5))
+            line.addLayout(column, 1)
+            clock = QLabel(_format_clock(row["seconds"]))
+            clock.setStyleSheet(f"font-family:'{NUM_FONTS[0]}';font-size:15px;color:{INK if running else MUTED};")
+            line.addWidget(clock)
+            self._time_labels.append(clock)
+            # Only the review that is timed right now (or the only one) can be paused or
+            # resumed from here; the set-aside ones are picked up in the Review tab.
+            if running or len(rows) == 1:
+                toggle = QPushButton("Pause" if running else "Resume")
+                toggle.setFixedHeight(26)
+                toggle.setCursor(Qt.PointingHandCursor)
+                toggle.setToolTip("Pause this review" if running else "Resume this review")
+                toggle.setStyleSheet(
+                    "QPushButton{background:#FFFFFF;border:1px solid #DDE1E8;border-radius:13px;padding:0 12px;"
+                    f"font-size:12px;font-weight:600;color:{INK};}}"
+                    "QPushButton:hover{background:#F2F4F7;}")
+                toggle.clicked.connect(lambda _checked=False, r=row: on_toggle(r))
+                line.addWidget(toggle)
+                self.pause_buttons.append(toggle)
+            self._layout.addLayout(line)
 
-        tasks = [t for t in tasks_store.load_tasks() if not t.get("archived")]
-        if not tasks:
-            empty_label = QLabel("No tasks yet -- click “+ Add Recurring Task” to create one.")
-            empty_label.setStyleSheet("color: #8A8F98; font-size: 14px;")
-            self._grid.addWidget(empty_label, 0, 0)
-        for index, task in enumerate(tasks):
-            row, col = divmod(index, CARDS_PER_ROW)
-            card = _TaskCard(task, on_changed=self.refresh)
-            self._grid.addWidget(card, row, col, Qt.AlignLeft | Qt.AlignTop)
-            self._cards[task["id"]] = card
+    @staticmethod
+    def _drop_layout(layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+            elif item.layout() is not None:
+                _ReviewBox._drop_layout(item.layout())
 
-        # A divider that always sits directly under the last row of cards --
-        # placed one grid row past whatever row the last card landed in, so
-        # it shifts down on its own as more cards are added instead of
-        # needing to be repositioned by hand.
-        if tasks:
-            last_row = -(-len(tasks) // CARDS_PER_ROW)  # ceil division
-            divider = QFrame()
-            divider.setFrameShape(QFrame.HLine)
-            divider.setFixedHeight(1)
-            divider.setStyleSheet("background: rgba(0,0,0,0.12); border: none;")
-            self._grid.addWidget(divider, last_row, 0, 1, CARDS_PER_ROW)
 
-        self._tick()
+# --- dialogs ---------------------------------------------------------------
 
-    def _tick(self):
-        status = session_manager.get_status()
-        sessions = session_history.load_all()
-        for card in self._cards.values():
-            card.update_dynamic(status, sessions)
+_DIALOG_STYLE = (
+    "QDialog#PopupBg{background:#FFFFFF;} "
+    f"QDialog#PopupBg QLabel{{color:{INK};font-size:13px;background:transparent;}} "
+    "QDialog#PopupBg QLineEdit{background:#FFFFFF;border:1px solid #D5DAE2;border-radius:10px;"
+    f"padding:0 12px;color:{INK};font-size:15px;font-weight:600;min-height:40px;}} "
+    "QDialog#PopupBg QLineEdit:focus{border:1.5px solid #1B2230;}")
 
 
 class _PomodoroDialog(QDialog):
-    """Modal focus/break/cycles picker for _TaskCard's "Pomodoro" button --
-    modal (unlike picker_dialogs.py's non-modal windows) since it's a quick,
-    single-purpose form opened from inside an already-open card, not a
-    standalone window meant to sit alongside the rest of the UI."""
+    """Modal focus/break/cycles picker for a card's Pomodoro bar. Styled inline (not just
+    by the app stylesheet): it is parented to its card, and a window parented to a styled
+    widget still inherits that widget's stylesheet."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        # setObjectName("PopupBg") alone isn't enough here, unlike every
-        # other popup in the app (picker_dialogs.py's _TimerDialog, this
-        # file's _AddProblemDialog): those are parented to None or to a
-        # plain QWidget, but this one is parented to its _TaskCard (see
-        # get_settings() below), which sets its OWN instance-level
-        # stylesheet on itself (f"QFrame.TaskCard {{ ... }} QFrame.TaskCard
-        # QWidget {{ background: transparent; }}") to tint the card by the
-        # task's color. That "QFrame.TaskCard QWidget" selector matches ANY
-        # QWidget descendant in the parent chain -- including this dialog,
-        # since QDialog(parent=card) still makes the dialog a child of card
-        # for stylesheet-cascade purposes even though it renders as its own
-        # top-level window. A widget's own/ancestor's directly-set
-        # .setStyleSheet() always outranks the global QApplication
-        # stylesheet styles.qss's #PopupBg rule lives in (the exact same
-        # rule already root-caused for the burnout/pomodoro buttons on this
-        # same card), so the ancestor's "background: transparent" rule won
-        # over #PopupBg's light background -- rendering as black (whatever
-        # showed through the transparency) with the dark #1F2328 text still
-        # applied on top, i.e. black-on-black. Setting the full style
-        # inline, directly on this dialog, wins over the ancestor's rule the
-        # same way the buttons' own inline styles did.
         self.setObjectName("PopupBg")
-        self.setStyleSheet(
-            "QDialog#PopupBg { background: #F7F7F8; } "
-            "QDialog#PopupBg QLabel { color: #1F2328; font-size: 13px; } "
-            "QDialog#PopupBg QLineEdit { background: #FAFBFC; border: 1px solid #E3E5E9; "
-            "border-radius: 8px; padding: 4px 6px; color: #1F2328; } "
-            "QDialog#PopupBg QPushButton { background: #F1F3F6; color: #1F2328; border: none; "
-            "border-radius: 8px; padding: 6px 14px; } "
-            "QDialog#PopupBg QPushButton:hover { background: #E6E9EE; }"
-        )
+        self.setStyleSheet(_DIALOG_STYLE)
         self.setWindowTitle("Start Pomodoro")
+        self.setMinimumWidth(380)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(26, 24, 26, 22)
+        layout.setSpacing(14)
+
+        title = QLabel("Start a Pomodoro")
+        title.setStyleSheet(f"font-size:18px;font-weight:700;color:{INK};")
+        layout.addWidget(title)
+        layout.addWidget(_note("Focus blocks are blocked, breaks are free."))
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
 
         def _field(label_text, default_value):
-            layout.addWidget(QLabel(label_text))
+            column = QVBoxLayout()
+            column.setSpacing(5)
+            label = QLabel(label_text)
+            label.setStyleSheet(f"font-size:12.5px;font-weight:600;color:{MUTED};")
+            column.addWidget(label)
             edit = QLineEdit(str(default_value))
             edit.setAlignment(Qt.AlignCenter)
-            layout.addWidget(edit)
+            column.addWidget(edit)
+            row.addLayout(column, 1)
             return edit
 
-        self._focus_edit = _field("Focus minutes", 25)
-        self._break_edit = _field("Break minutes", 5)
+        self._focus_edit = _field("Focus (min)", 25)
+        self._break_edit = _field("Break (min)", 5)
         self._cycles_edit = _field("Cycles", 4)
+        layout.addLayout(row)
 
         self._status_label = QLabel()
-        self._status_label.setStyleSheet("color: #c62828;")
+        self._status_label.setStyleSheet("color:#B42318;font-size:12.5px;")
         layout.addWidget(self._status_label)
 
-        button_row = QHBoxLayout()
-        cancel_button = QPushButton("Cancel")
-        cancel_button.clicked.connect(self.reject)
-        button_row.addWidget(cancel_button)
-        start_button = QPushButton("Start")
-        start_button.clicked.connect(self._on_start)
-        button_row.addWidget(start_button)
-        layout.addLayout(button_row)
-
+        buttons = QHBoxLayout()
+        buttons.setSpacing(8)
+        buttons.addStretch(1)
+        cancel = _button("Cancel", _SECONDARY_STYLE)
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(cancel)
+        start = _button("Start Pomodoro", _primary_style(INK))
+        start.clicked.connect(self._on_start)
+        buttons.addWidget(start)
+        layout.addLayout(buttons)
         self._result = None
 
     def _on_start(self):
@@ -268,11 +380,258 @@ class _PomodoroDialog(QDialog):
 
     @staticmethod
     def get_settings(parent=None):
-        """Returns (focus_minutes, break_minutes, cycles) or None if
-        cancelled."""
+        """Returns (focus_minutes, break_minutes, cycles) or None if cancelled."""
         dialog = _PomodoroDialog(parent)
         dialog.exec()
         return dialog._result
+
+
+class _VacationDialog(QDialog):
+    """"Use vacation time": spend banked minutes on today's goal."""
+
+    def __init__(self, task_name, color, balance_minutes, usable, parent=None):
+        super().__init__(parent)
+        self.setObjectName("PopupBg")
+        self.setStyleSheet(_DIALOG_STYLE)
+        self.setWindowTitle("Use vacation time")
+        self.setMinimumWidth(400)
+        self._usable = usable
+        self._result = None
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(26, 24, 26, 22)
+        layout.setSpacing(14)
+
+        title = QLabel("Use vacation time")
+        title.setStyleSheet(f"font-size:18px;font-weight:700;color:{INK};")
+        layout.addWidget(title)
+        layout.addWidget(_note(
+            f"Spend banked minutes on today's goal for {task_name}. They count as if you had worked them."))
+
+        balance = QHBoxLayout()
+        big = QLabel(_format_minutes(balance_minutes))
+        big.setStyleSheet(f"font-family:'{NUM_FONTS[0]}';font-size:34px;color:{INK};")
+        balance.addWidget(big)
+        caption = QLabel(f"banked\n{usable} min usable today")
+        caption.setStyleSheet(f"font-size:12px;color:{MUTED};")
+        balance.addWidget(caption)
+        balance.addStretch(1)
+        layout.addLayout(balance)
+
+        chips = QHBoxLayout()
+        chips.setSpacing(6)
+        options = [(str(amount), amount) for amount in (10, 15, 30) if amount < usable]
+        options.append((f"All {usable}", usable))
+        for label, amount in options:
+            b = QPushButton(label)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setFixedHeight(32)
+            b.setStyleSheet(
+                "QPushButton{border:1px solid #D5DAE2;border-radius:16px;padding:0 14px;background:#FFFFFF;"
+                f"color:{INK};font-size:13px;font-weight:600;}}"
+                f"QPushButton:hover{{border:1.5px solid {color};}}")
+            b.clicked.connect(lambda _checked=False, a=amount: self._minutes_edit.setText(str(a)))
+            chips.addWidget(b)
+        chips.addStretch(1)
+        layout.addLayout(chips)
+
+        field = QVBoxLayout()
+        field.setSpacing(5)
+        field_label = QLabel("Minutes to use")
+        field_label.setStyleSheet(f"font-size:12.5px;font-weight:600;color:{MUTED};")
+        field.addWidget(field_label)
+        row = QHBoxLayout()
+        self._minutes_edit = QLineEdit(str(min(15, usable)))
+        self._minutes_edit.returnPressed.connect(self._confirm)
+        row.addWidget(self._minutes_edit, 1)
+        row.addWidget(_note(f"of {usable}"))
+        field.addLayout(row)
+        layout.addLayout(field)
+
+        self._status_label = QLabel()
+        self._status_label.setStyleSheet("color:#B42318;font-size:12.5px;")
+        layout.addWidget(self._status_label)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(8)
+        buttons.addStretch(1)
+        cancel = _button("Cancel", _SECONDARY_STYLE)
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(cancel)
+        self._use_button = _button("Use", _primary_style(color))
+        self._use_button.clicked.connect(self._confirm)
+        buttons.addWidget(self._use_button)
+        layout.addLayout(buttons)
+        self._minutes_edit.textChanged.connect(self._refresh_button)
+        self._refresh_button()
+
+    def _refresh_button(self):
+        try:
+            minutes = int(self._minutes_edit.text())
+        except ValueError:
+            minutes = None
+        self._use_button.setText(f"Use {minutes} minute{'s' if minutes != 1 else ''}" if minutes else "Use")
+
+    def _confirm(self):
+        try:
+            minutes = int(self._minutes_edit.text())
+        except ValueError:
+            self._status_label.setText("Enter a whole number of minutes.")
+            return
+        if minutes <= 0 or minutes > self._usable:
+            self._status_label.setText(f"Enter a number between 1 and {self._usable}.")
+            return
+        self._result = minutes
+        self.accept()
+
+    @staticmethod
+    def get_minutes(task_name, color, balance_minutes, usable, parent=None):
+        dialog = _VacationDialog(task_name, color, balance_minutes, usable, parent)
+        dialog.exec()
+        return dialog._result
+
+
+# --- the tab ---------------------------------------------------------------
+
+class TasksTab(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("TasksPage")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet("QWidget#TasksPage{background:#F6F7F9;}")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(28, 24, 28, 20)
+        layout.setSpacing(4)
+
+        layout.addLayout(self._build_header())
+        self._summary_label = QLabel()
+        self._summary_label.setStyleSheet(f"color:{MUTED};font-size:13px;")
+        layout.addWidget(self._summary_label)
+
+        scroll = QScrollArea()
+        self._scroll = scroll
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
+        scroll.viewport().installEventFilter(self)
+        self._grid_container = QWidget()
+        self._grid_container.setObjectName("TasksGridBg")
+        self._grid_container.setStyleSheet("QWidget#TasksGridBg{background:transparent;}")
+        self._grid = QGridLayout(self._grid_container)
+        self._grid.setSpacing(GRID_GAP)
+        self._grid.setContentsMargins(0, 10, 0, 10)
+        self._grid.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        scroll.setWidget(self._grid_container)
+        layout.addWidget(scroll, 1)
+
+        self._cards = {}
+        self._card_order = []
+        self._empty_label = None
+        self._placed_columns = None
+        self.refresh()
+
+        self._status_timer = QTimer(self)
+        self._status_timer.timeout.connect(self._tick_if_visible)
+        self._status_timer.start(STATUS_REFRESH_MS)
+
+    def _build_header(self):
+        header = QHBoxLayout()
+        title = QLabel("Tasks")
+        title.setStyleSheet(f"font-size:22px;font-weight:700;color:{INK};")
+        header.addWidget(title)
+        header.addStretch(1)
+        add_button = QPushButton("+  Add recurring task")
+        add_button.setProperty("class", "AccentButton")
+        add_button.clicked.connect(lambda: open_task_editor(on_saved=lambda _t: self.refresh()))
+        header.addWidget(add_button)
+        return header
+
+    def refresh(self):
+        """Full rebuild -- called after a task is added/edited/deleted, or when this tab
+        first opens. Per-second updates (rings, countdowns) go through _tick()."""
+        while self._grid.count():
+            item = self._grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._cards = {}
+        self._card_order = []
+        self._empty_label = None
+
+        tasks = [t for t in tasks_store.load_tasks() if not t.get("archived")]
+        if not tasks:
+            self._empty_label = QLabel("No tasks yet. Click “+ Add recurring task” to create one.")
+            self._empty_label.setStyleSheet(f"color:{FAINT};font-size:14px;")
+            self._grid.addWidget(self._empty_label, 0, 0)
+        for task in tasks:
+            card = _TaskCard(task, on_changed=self.refresh)
+            self._cards[task["id"]] = card
+            self._card_order.append(card)
+        self._placed_columns = None
+        self._place_cards()
+        self._tick()
+
+    # --- layout: as many cards per row as fit ---
+
+    def _columns(self):
+        width = self._scroll.viewport().width()
+        return max(1, (width + GRID_GAP) // (CARD_MIN + GRID_GAP))
+
+    def _place_cards(self):
+        """(Re)seats the cards for the current width. Cards keep their natural height and
+        sit at the top of their row; leftover width is shared between the columns."""
+        columns = self._columns()
+        if columns == self._placed_columns:
+            return
+        for card in self._card_order:
+            self._grid.removeWidget(card)
+        for column in range(max(columns, self._placed_columns or 0)):
+            self._grid.setColumnStretch(column, 0)
+        for index, card in enumerate(self._card_order):
+            row, column = divmod(index, columns)
+            self._grid.addWidget(card, row, column, Qt.AlignTop)
+        for column in range(columns):
+            self._grid.setColumnStretch(column, 1)
+        self._placed_columns = columns
+
+    def eventFilter(self, obj, event):
+        # The viewport's own width decides the column count, and it is only final once
+        # the tab's resize has been laid out.
+        if obj is self._scroll.viewport() and event.type() == QEvent.Resize and self._card_order:
+            self._place_cards()
+        return super().eventFilter(obj, event)
+
+    # --- per-second work ---
+
+    def _tick_if_visible(self):
+        # Reloading history and restyling every card each second is waste while another
+        # tab is showing (showEvent catches up on return).
+        if self.isVisible():
+            self._tick()
+
+    def showEvent(self, event):
+        self._tick()
+        super().showEvent(event)
+
+    def _tick(self):
+        status = session_manager.get_status()
+        sessions = session_history.load_all()
+        reviews = _reviews_by_task()
+        reached = scheduled = 0
+        for task_id, card in self._cards.items():
+            card.update_dynamic(status, sessions, reviews.get(task_id, []))
+            if card.goal_state == "reached":
+                reached += 1
+                scheduled += 1
+            elif card.goal_state == "open":
+                scheduled += 1
+        if not self._cards:
+            self._summary_label.setText("")
+        elif not scheduled:
+            self._summary_label.setText("Nothing scheduled today")
+        else:
+            self._summary_label.setText(
+                f"Today · {reached} of {scheduled} goal{'s' if scheduled != 1 else ''} reached")
 
 
 class _TaskCard(QFrame):
@@ -280,394 +639,331 @@ class _TaskCard(QFrame):
         super().__init__()
         self._task = task
         self._on_changed = on_changed
+        self._color = _safe_color(task.get("color", "#5B8DEF"))
         self._armed = False
-        self._duration_minutes_text = ""
-        self._hovering = False
+        self._custom = False
         self._cash_in_balance_int = 0
-        self._logged_minutes_today = 0
+        self._logged_minutes_today = 0  # logged toward the goal's own stretch (today, or the week/month)
+        self._snap = None
+        self._restrictions_variants = []
+        self._restrictions_laid_out = False
+        self._style_key = None
+        self.goal_state = "none"
 
-        self.setProperty("class", "TaskCard")
-        self.setFixedWidth(CARD_WIDTH)
-        self.setMinimumHeight(CARD_HEIGHT)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        color = self._task.get("color", "#5B8DEF")
-        self.setStyleSheet(
-            f"QFrame.TaskCard {{ background: {color}; border: 1px solid rgba(0,0,0,0.12); "
-            f"border-radius: 12px; }} "
-            f"QFrame.TaskCard QWidget {{ background: transparent; }}"
-        )
+        self.setObjectName("TaskCard")
+        self.setMinimumWidth(CARD_MIN)
+        self.setMaximumWidth(CARD_MAX)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(28)
+        shadow.setOffset(0, 6)
+        shadow.setColor(QColor(16, 24, 40, 26))
+        self.setGraphicsEffect(shadow)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(CARD_MARGIN, 20, CARD_MARGIN, 20)
-        outer.setSpacing(6)
+        outer.setContentsMargins(22, 20, 22, 20)
+        outer.setSpacing(14)
+        outer.addLayout(self._build_header())
+        outer.addLayout(self._build_chips())
+        outer.addLayout(self._build_body())
 
-        outer.addLayout(self._build_header_row())
-        outer.addWidget(self._build_description_section())
+        self._review_box = _ReviewBox()
+        outer.addWidget(self._review_box)
 
-        # Everything that gets blurred while armed lives in this one
-        # sub-widget -- see module docstring for why the trigger controls
-        # must NOT be inside it.
-        self._content = QWidget()
-        content_layout = QVBoxLayout(self._content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(10)
-        content_layout.addLayout(self._build_subjects_row())
-        content_layout.addLayout(self._build_progress_section())
-        content_layout.addLayout(self._build_vacation_section())
-        outer.addWidget(self._content)
-
-        self._armed_overlay = self._build_armed_overlay()
-        outer.addWidget(self._armed_overlay)
-        self._armed_overlay.setVisible(False)
-
+        self._idle_actions = self._build_idle_actions()
+        outer.addWidget(self._idle_actions)
+        self._armed_panel = self._build_armed_panel()
+        outer.addWidget(self._armed_panel)
+        self._armed_panel.hide()
         self._running_panel = self._build_running_panel()
         outer.addWidget(self._running_panel)
-        self._running_panel.setVisible(False)
+        self._running_panel.hide()
 
-        self._blur = QGraphicsBlurEffect(self._content)
-        self._blur.setBlurRadius(0)
-        self._content.setGraphicsEffect(self._blur)
+        self._edit_button = self._build_edit_button()
+        self._apply_card_style("idle")
 
-    # --- static sections ---
+    # --- static pieces ---
 
-    def _build_header_row(self):
-        row = QHBoxLayout()
-        name_label = QLabel()
-        name_label.setStyleSheet("font-size: 30px; font-weight: 700; color: #1F2328;")
-        full_name = self._task.get("name") or "(untitled task)"
-        metrics = QFontMetrics(name_label.font())
-        # Elided to one line (rather than word-wrapped) so every idle card
-        # has the same header height -- long names no longer stretch a
-        # card's overall size relative to its neighbors in the grid.
-        available_width = CARD_CONTENT_WIDTH - 26 - 6  # gear button + spacing
-        name_label.setText(metrics.elidedText(full_name, Qt.ElideRight, available_width))
-        if name_label.text() != full_name:
-            name_label.setToolTip(full_name)
-        row.addWidget(name_label, 1)
+    def _build_edit_button(self):
+        """A tiny pencil in the top-right corner, shown while the pointer is over the
+        card, in every state (it also edits a running task: see _TaskEditor)."""
+        button = QPushButton("✎", self)
+        button.setObjectName("editTaskButton")
+        button.setFlat(True)
+        button.setFixedSize(34, 34)
+        button.setCursor(Qt.PointingHandCursor)
+        button.setToolTip("Edit task")
+        button.setAccessibleName("Edit task")
+        button.setStyleSheet(
+            f"QPushButton{{border:1px solid #E1E5EC;background:#FFFFFF;color:{INK};font-size:19px;"
+            f"border-radius:17px;padding:0 0 2px 0;}}"
+            f"QPushButton:hover{{background:#F2F4F7;color:{INK};}}")
+        button.clicked.connect(self._open_editor)
+        button.hide()
+        return button
 
-        # Hidden until the card is hovered (see enterEvent/leaveEvent below)
-        # so the idle card reads as a clean, decluttered tile.
-        self._gear_button = QPushButton("⚙")
-        self._gear_button.setFixedSize(26, 26)
-        self._gear_button.setProperty("class", "SecondaryButton")
-        self._gear_button.setStyleSheet("font-size: 14px; padding: 0;")
-        # "Segoe UI" (this app's base font, see styles.qss) has no glyph for
-        # U+2699 GEAR -- it rendered as an empty tofu box. Segoe UI Symbol
-        # covers the Miscellaneous Symbols block and is present on every
-        # Windows version this app targets.
-        gear_font = QFont(self._gear_button.font())
-        gear_font.setFamilies(["Segoe UI Symbol", "Segoe UI Emoji", gear_font.family()])
-        self._gear_button.setFont(gear_font)
-        self._gear_button.setToolTip("Edit task")
-        self._gear_button.clicked.connect(self._open_editor)
-        row.addWidget(self._gear_button)
-        return row
+    def _place_edit_button(self):
+        self._edit_button.move(self.width() - self._edit_button.width() - 10, 9)
+        self._edit_button.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._place_edit_button()
 
     def enterEvent(self, event):
-        self._hovering = True
-        self._refresh_cash_in_visibility()
+        self._place_edit_button()
+        self._edit_button.show()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        self._hovering = False
-        self._refresh_cash_in_visibility()
+        self._edit_button.hide()
         super().leaveEvent(event)
 
-    def _build_subjects_row(self):
+    def eventFilter(self, obj, event):
+        # The restrictions line re-fits its wording whenever its column is resized.
+        if obj is self._blocklist_button and event.type() == QEvent.Resize:
+            self._restrictions_laid_out = True
+            self._fit_restrictions()
+        return super().eventFilter(obj, event)
+
+    def _build_header(self):
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        row.setContentsMargins(0, 0, 30, 0)  # room for the hover pencil in the corner
+        self._dot = QLabel()
+        self._dot.setFixedSize(12, 12)
+        self._dot.setStyleSheet(f"background:{self._color};border-radius:6px;")
+        row.addWidget(self._dot, 0, Qt.AlignVCenter)
+        self._name_label = _ElidedLabel(self._task.get("name") or "(untitled task)")
+        self._name_label.setStyleSheet(f"font-size:17px;font-weight:700;color:{INK};background:transparent;")
+        row.addWidget(self._name_label, 1)
+        self._state_chip = QLabel()
+        self._state_chip.hide()
+        row.addWidget(self._state_chip)
+        return row
+
+    def _build_chips(self):
         row = QHBoxLayout()
         row.setSpacing(6)
+        row.addWidget(_chip("Hard lock" if self._task.get("lockMode") == "hard" else "Soft lock",
+                            solid=self._task.get("lockMode") == "hard"))
         subjects = _subjects_for_task(self._task["id"])
-        for subject in subjects:
-            pill = QLabel(subject["name"])
-            pill.setStyleSheet(
-                f"background: {subject['color']}; color: white; "
-                f"border-radius: 10px; padding: 3px 10px; font-size: 11px; font-weight: 600;"
-            )
-            row.addWidget(pill)
+        for subject in subjects[:MAX_SUBJECT_CHIPS]:
+            row.addWidget(_chip(subject["name"], _safe_color(subject.get("color"))))
+        if len(subjects) > MAX_SUBJECT_CHIPS:
+            row.addWidget(_chip(f"+{len(subjects) - MAX_SUBJECT_CHIPS}"))
+        self._violation_chip = _chip("", tone=_RED)
+        self._violation_chip.hide()
+        row.addWidget(self._violation_chip)
         row.addStretch(1)
         return row
 
-    def _build_description_section(self):
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(3)
-
-        self._lock_label = QLabel()
-        self._lock_label.setStyleSheet("font-size: 36px; font-weight: 600; color: #262A32;")
-        layout.addWidget(self._lock_label)
-
-        self._blocklist_button = QPushButton("(see restrictions)")
-        self._blocklist_button.setFlat(True)
-        self._blocklist_button.setCursor(Qt.PointingHandCursor)
-        self._blocklist_button.setStyleSheet(
-            "color: #3A3F48; font-size: 36px; text-align: left; border: none; "
-            "background: transparent; padding: 0;"
-        )
+    def _build_body(self):
+        body = QHBoxLayout()
+        body.setSpacing(20)
+        self._ring = _Ring()
+        body.addWidget(self._ring)
+        column = QVBoxLayout()
+        column.setSpacing(6)
+        column.addStretch(1)
+        # Headline: "18 min to go" at rest; the live session's own line while running.
+        self._countdown_label = QLabel()
+        self._countdown_label.setWordWrap(True)
+        self._countdown_label.setStyleSheet(f"font-size:15px;font-weight:600;color:{INK};background:transparent;")
+        column.addWidget(self._countdown_label)
+        self._detail_label = _note()
+        column.addWidget(self._detail_label)
+        # Opens the "what is blocked" list.
+        self._blocklist_button = _link_button("")
         self._blocklist_button.clicked.connect(self._open_blocklist_viewer)
-        layout.addWidget(self._blocklist_button)
+        self._blocklist_button.installEventFilter(self)
+        column.addWidget(self._blocklist_button)
+        self._vacation_label = _VacationLine()
+        self._vacation_label.clicked.connect(self._open_vacation_dialog)
+        column.addWidget(self._vacation_label)
+        column.addStretch(1)
+        body.addLayout(column, 1)
+        return body
 
-        self._refresh_description()
-        return container
-
-    def _blocklist_items(self):
-        return list(self._task.get("processBlocklist", [])) + list(self._task.get("domainWhitelist", []))
-
-    def _refresh_description(self):
-        self._lock_label.setText("Hard Lock" if self._task.get("lockMode") == "hard" else "Soft Lock")
-
-    def _open_blocklist_viewer(self):
-        from PySide6.QtWidgets import QDialog, QPlainTextEdit
-        dlg = QDialog(self.window())
-        dlg.setWindowTitle(f"{self._task['name']} — Restrictions")
-        dlg.setObjectName("PopupBg")
-        dlg.setMinimumWidth(340)
-        lay = QVBoxLayout(dlg)
-        lay.setContentsMargins(20, 16, 20, 16)
-        lay.setSpacing(8)
-
-        proc_lbl = QLabel("Blocked apps:")
-        proc_lbl.setStyleSheet("font-weight: 600; font-size: 13px; color: #1F2328;")
-        lay.addWidget(proc_lbl)
-        proc_view = QPlainTextEdit()
-        proc_view.setPlainText("\n".join(self._task.get("processBlocklist", [])) or "(none)")
-        proc_view.setFixedHeight(100)
-        proc_view.setReadOnly(True)
-        lay.addWidget(proc_view)
-
-        dom_lbl = QLabel("Allowed domains:")
-        dom_lbl.setStyleSheet("font-weight: 600; font-size: 13px; color: #1F2328;")
-        lay.addWidget(dom_lbl)
-        dom_view = QPlainTextEdit()
-        dom_view.setPlainText("\n".join(self._task.get("domainWhitelist", [])) or "(none)")
-        dom_view.setFixedHeight(80)
-        dom_view.setReadOnly(True)
-        lay.addWidget(dom_view)
-
-        close_btn = QPushButton("Close")
-        close_btn.clicked.connect(dlg.accept)
-        lay.addWidget(close_btn)
-
-        dlg.exec()
-
-    def _build_progress_section(self):
-        col = QVBoxLayout()
-        col.setSpacing(3)
-        self._progress_bar = QProgressBar()
-        self._progress_bar.setRange(0, 100)
-        self._progress_bar.setTextVisible(False)
-        self._progress_bar.setFixedHeight(14)
-        self._progress_bar.setProperty("class", "TaskProgressBar")
-        self._progress_bar.setStyleSheet(
-            "QProgressBar.TaskProgressBar { background: rgba(0,0,0,0.18); "
-            "border: 1px solid rgba(0,0,0,0.25); border-radius: 6px; } "
-            "QProgressBar.TaskProgressBar::chunk { background: rgba(255,255,255,0.85); "
-            "border-radius: 5px; }"
-        )
-        col.addWidget(self._progress_bar)
-        below_row = QHBoxLayout()
-        below_row.addStretch(1)
-        self._progress_label = QLabel()
-        self._progress_label.setStyleSheet("font-size: 17px; color: rgba(0,0,0,0.55);")
-        below_row.addWidget(self._progress_label)
-        col.addLayout(below_row)
-        return col
-
-    def _build_vacation_section(self):
-        col = QVBoxLayout()
-        col.setSpacing(4)
-
-        # The balance text itself is the cash-in trigger (clickable, like
-        # _blocklist_button's "(see restrictions)") rather than a separate
-        # hover-only button -- always visible so there's no discoverability
-        # gap, and disabled (no pointer cursor, no click) when there's
-        # nothing banked to cash in.
-        self._vacation_label = QPushButton()
-        self._vacation_label.setFlat(True)
-        self._vacation_label.setCursor(Qt.PointingHandCursor)
-        self._vacation_label.setStyleSheet(
-            "QPushButton { font-size: 18px; font-weight: 400; color: #5A6070; "
-            "text-align: left; border: none; background: transparent; padding: 0; }"
-            "QPushButton:hover:enabled { color: #1F2328; text-decoration: underline; }"
-        )
-        self._vacation_label.clicked.connect(self._open_cash_in_editor)
-        col.addWidget(self._vacation_label)
-        self._vacation_label_budget = CARD_CONTENT_WIDTH
-
-        self._cash_in_row = QWidget()
-        cash_layout = QHBoxLayout(self._cash_in_row)
-        cash_layout.setContentsMargins(0, 0, 0, 0)
-        cash_layout.setSpacing(6)
-        self._cash_in_edit = QLineEdit()
-        self._cash_in_edit.setFixedWidth(56)
-        self._cash_in_edit.setPlaceholderText("0")
-        self._cash_in_edit.setStyleSheet(
-            "font-size: 13px; color: #1F2328; background: #FFFFFF; "
-            "border: 1px solid rgba(0,0,0,0.2); border-radius: 6px; padding: 3px 6px;"
-        )
-        self._cash_in_edit.returnPressed.connect(self._confirm_cash_in)
-        cash_layout.addWidget(self._cash_in_edit)
-        self._cash_in_max_label = QLabel("/ 0")
-        self._cash_in_max_label.setStyleSheet("font-size: 13px; color: #1F2328;")
-        cash_layout.addWidget(self._cash_in_max_label)
-        confirm_button = QPushButton("✓")
-        confirm_button.setFixedSize(26, 26)
-        confirm_button.setProperty("class", "SecondaryButton")
-        confirm_button.setStyleSheet("font-size: 13px; padding: 0;")
-        confirm_button.clicked.connect(self._confirm_cash_in)
-        cash_layout.addWidget(confirm_button)
-        cancel_button = QPushButton("✕")
-        cancel_button.setFixedSize(26, 26)
-        cancel_button.setProperty("class", "SecondaryButton")
-        cancel_button.setStyleSheet("font-size: 13px; padding: 0;")
-        cancel_button.clicked.connect(self._close_cash_in_editor)
-        cash_layout.addWidget(cancel_button)
-        cash_layout.addStretch(1)
-        self._cash_in_row.setVisible(False)
-        col.addWidget(self._cash_in_row)
-
-        return col
-
-    def _build_armed_overlay(self):
-        overlay = QWidget()
-        layout = QVBoxLayout(overlay)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-
-        duration_row = QHBoxLayout()
-        duration_row.setSpacing(10)
-        duration_row.addStretch(1)
-        self._duration_edit = QLineEdit()
-        self._duration_edit.setPlaceholderText("minutes")
-        self._duration_edit.setFixedWidth(90)
-        self._duration_edit.setStyleSheet(
-            "font-size: 13px; color: #1F2328; background: #FFFFFF; "
-            "border: 1px solid rgba(0,0,0,0.15); border-radius: 6px; padding: 4px 6px;"
-        )
-        duration_row.addWidget(self._duration_edit)
-        # Inline (not just styles.qss's #burnoutButton/#pomodoroButton
-        # rules) because this card's own setStyleSheet() call above includes
-        # "QFrame.TaskCard QWidget { background: transparent; }" -- a
-        # widget-set ancestor stylesheet, which Qt gives priority over the
-        # app-wide styles.qss for any property it touches, "background"
-        # included. Without repeating it here directly on the button (a
-        # widget's own stylesheet always wins over an ancestor's), the
-        # button's background silently stayed transparent regardless of
-        # what styles.qss said -- on a card whose own color is close to the
-        # button's border color (e.g. a red task and burnoutButton's red
-        # border), the button became nearly invisible instead of standing
-        # out the way both buttons are meant to.
-        # Hover states are declared inline too (not left to styles.qss's
-        # #burnoutButton:hover/#pomodoroButton:hover), same reasoning as the
-        # comment above -- once a widget has its own stylesheet, don't rely
-        # on an outer one to merge in additional pseudo-states correctly.
-        self._burnout_button = QPushButton("Until I burnout")
-        self._burnout_button.setObjectName("burnoutButton")
-        self._burnout_button.setStyleSheet(
-            "QPushButton#burnoutButton { font-size: 13px; font-weight: 600; "
-            "background: #A93226; color: #FFFFFF; border: 2px solid #A93226; "
-            "border-radius: 8px; padding: 6px 14px; } "
-            "QPushButton#burnoutButton:hover { background: #8F2A20; }"
-        )
-        self._burnout_button.clicked.connect(self._start_burnout)
-        duration_row.addWidget(self._burnout_button)
-        self._pomodoro_button = QPushButton("Pomodoro")
-        self._pomodoro_button.setObjectName("pomodoroButton")
-        self._pomodoro_button.setStyleSheet(
-            "QPushButton#pomodoroButton { font-size: 13px; font-weight: 600; "
-            "background: #6C3FA8; color: #FFFFFF; border: 2px solid #6C3FA8; "
-            "border-radius: 8px; padding: 6px 14px; } "
-            "QPushButton#pomodoroButton:hover { background: #5A3389; }"
-        )
-        self._pomodoro_button.clicked.connect(self._start_pomodoro)
-        duration_row.addWidget(self._pomodoro_button)
-        duration_row.addStretch(1)
-        layout.addLayout(duration_row)
-
-        button_row = QHBoxLayout()
-        cancel_button = QPushButton("Cancel")
-        cancel_button.setProperty("class", "SecondaryButton")
-        cancel_button.setStyleSheet("font-size: 13px;")
-        cancel_button.clicked.connect(self._disarm)
-        button_row.addWidget(cancel_button)
-        start_button = QPushButton("Start Task")
-        start_button.setObjectName("startTaskButton")
-        # Inline for the same reason as _burnout_button/_pomodoro_button
-        # above -- the card's own ancestor stylesheet otherwise silently
-        # wins over styles.qss's #startTaskButton background.
-        start_button.setStyleSheet(
-            "font-size: 13px; font-weight: 600; background: #FFFFFF; color: #1F2328; "
-            "border: 2px solid #2E8B57; border-radius: 8px; padding: 6px 13px;"
-        )
-        start_button.clicked.connect(self._start_task)
-        button_row.addWidget(start_button)
-        layout.addLayout(button_row)
-
-        return overlay
-
-    def _build_running_panel(self):
+    def _build_idle_actions(self):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
-
-        self._countdown_label = QLabel()
-        # Word-wrapped and sized down from the original 24px -- the
-        # review-linked text ("<problem> in session, subject <subject>, time
-        # elapsed Xm Ys") runs well past the card's width as one line at
-        # 24px, and got clipped instead of wrapping to a second row.
-        self._countdown_label.setWordWrap(True)
-        self._countdown_label.setStyleSheet("font-size: 18px; font-weight: 700; color: #1F2328;")
-        layout.addWidget(self._countdown_label)
-
-        _running_btn_style = (
-            "background: white; color: #1F2328; "
-            "border: 2px solid black; border-radius: 6px; "
-            "font-size: 26px; padding: 4px 14px;"
-        )
-        button_row = QHBoxLayout()
-        self._pause_button = QPushButton("Pause")
-        self._pause_button.setStyleSheet(_running_btn_style)
-        self._pause_button.clicked.connect(self._pause_resume)
-        button_row.addWidget(self._pause_button)
-        end_button = QPushButton("End Task")
-        end_button.setStyleSheet(_running_btn_style)
-        end_button.clicked.connect(self._end_task)
-        button_row.addWidget(end_button)
-        layout.addLayout(button_row)
-
+        self._start_button = _button("▶  Start", _primary_style(self._color))
+        self._start_button.clicked.connect(self._arm)
+        layout.addWidget(self._start_button)
+        self._busy_note = _note("", FAINT, 12)
+        self._busy_note.setAlignment(Qt.AlignCenter)
+        self._busy_note.hide()
+        layout.addWidget(self._busy_note)
         return panel
+
+    def _build_armed_panel(self):
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self._armed_top = QWidget()
+        top = QHBoxLayout(self._armed_top)
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(8)
+        self._burnout_button = _button("Until burnout", _accent_style(self._color))
+        self._burnout_button.setObjectName("burnoutButton")
+        self._burnout_button.clicked.connect(self._start_burnout)
+        top.addWidget(self._burnout_button, 1)
+        self._custom_button = _button("Custom time", _accent_style(self._color))
+        self._custom_button.clicked.connect(self._show_custom)
+        top.addWidget(self._custom_button, 1)
+        layout.addWidget(self._armed_top)
+
+        self._custom_row = QWidget()
+        custom = QHBoxLayout(self._custom_row)
+        custom.setContentsMargins(0, 0, 0, 0)
+        custom.setSpacing(8)
+        self._duration_edit = QLineEdit()
+        self._duration_edit.setPlaceholderText("minutes")
+        self._duration_edit.setAlignment(Qt.AlignCenter)
+        self._duration_edit.setFixedSize(84, 40)
+        self._duration_edit.setStyleSheet(
+            f"QLineEdit{{border:1.5px solid {self._color};border-radius:12px;font-size:16px;font-weight:600;"
+            f"color:{INK};background:#FFFFFF;}}")
+        self._duration_edit.returnPressed.connect(self._start_task)
+        custom.addWidget(self._duration_edit)
+        custom.addWidget(_note("minutes"))
+        custom.addStretch(1)
+        self._custom_start_button = _button("▶  Start", _primary_style(self._color))
+        self._custom_start_button.setObjectName("startTaskButton")
+        self._custom_start_button.clicked.connect(self._start_task)
+        custom.addWidget(self._custom_start_button)
+        layout.addWidget(self._custom_row)
+        self._custom_row.hide()
+
+        self._pomodoro_button = _button("Pomodoro", _SECONDARY_STYLE)
+        self._pomodoro_button.setObjectName("pomodoroButton")
+        self._pomodoro_button.clicked.connect(self._start_pomodoro)
+        layout.addWidget(self._pomodoro_button)
+
+        self._cancel_button = _link_button("Cancel")
+        self._cancel_button.clicked.connect(self._back_or_cancel)
+        layout.addWidget(self._cancel_button, 0, Qt.AlignCenter)
+        return panel
+
+    def _build_running_panel(self):
+        panel = QWidget()
+        layout = QHBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        self._pause_button = _button("Pause", _SECONDARY_STYLE)
+        self._pause_button.clicked.connect(self._pause_resume)
+        layout.addWidget(self._pause_button, 1)
+        self._end_button = _button("End", _DANGER_STYLE)
+        self._end_button.clicked.connect(self._end_task)
+        layout.addWidget(self._end_button)
+        return panel
+
+    # --- card look ---
+
+    def _apply_card_style(self, mode):
+        """The card's frame: a hairline at rest, the task's color while its own session
+        runs, dashed while waiting. Only restyled when the look actually changes."""
+        key = (mode, self._color)
+        if key == self._style_key:
+            return
+        self._style_key = key
+        if mode == "live":
+            frame = f"2px solid {self._color}"
+        elif mode == "waiting":
+            frame = "1px dashed #C9CED8"
+        else:
+            frame = "1px solid #E6E9EF"
+        self.setStyleSheet(f"QFrame#TaskCard{{background:#FFFFFF;border:{frame};border-radius:18px;}}")
+
+    def _set_chip(self, text, tone):
+        if not text:
+            self._state_chip.hide()
+            return
+        self._state_chip.setText(text)
+        self._state_chip.setStyleSheet(
+            f"background:{tone[0]};color:{tone[1]};border-radius:10px;padding:2px 10px;font-size:11.5px;font-weight:600;")
+        self._state_chip.show()
 
     # --- state transitions ---
 
-    def mousePressEvent(self, event):
-        # Only reachable for clicks that landed on the card itself or a
-        # non-interactive child (labels, bars) -- QLineEdit/QPushButton
-        # children consume their own press events and never bubble here.
-        if self._is_locked_by_other_session():
-            super().mousePressEvent(event)
-            return
-        if not self._armed and not self._running_panel.isVisible():
-            self._arm()
-        elif self._armed:
-            self._start_task()
-        super().mousePressEvent(event)
-
     def _arm(self):
+        if self._is_locked_by_other_session():
+            return
         self._armed = True
-        self._blur.setBlurRadius(6)
-        self._armed_overlay.setVisible(True)
-        self._duration_minutes_text = str(self._today_required_minutes())
-        self._duration_edit.setText(self._duration_minutes_text)
+        self._custom = False
+        self._duration_edit.setText(str(self._suggested_session_minutes()))
+        self._show_panel()
 
     def _disarm(self):
         self._armed = False
-        self._blur.setBlurRadius(0)
-        self._armed_overlay.setVisible(False)
+        self._custom = False
+        self._show_panel()
+
+    def _show_custom(self):
+        self._custom = True
+        self._show_panel()
+        self._duration_edit.setFocus()
+        self._duration_edit.selectAll()
+
+    def _back_or_cancel(self):
+        if self._custom:
+            self._custom = False
+            self._show_panel()
+        else:
+            self._disarm()
+
+    def _show_panel(self):
+        """Which of the idle / armed areas shows, from the armed flag (the running panel
+        is driven by update_dynamic)."""
+        running = not self._running_panel.isHidden()
+        self._idle_actions.setVisible(not self._armed and not running)
+        self._armed_panel.setVisible(self._armed and not running)
+        self._armed_top.setVisible(not self._custom)
+        self._custom_row.setVisible(self._custom)
+        self._cancel_button.setText("Back" if self._custom else "Cancel")
 
     def _open_editor(self):
         open_task_editor(self._task, on_saved=lambda _t: self._on_changed())
+
+    def _blocklist_items(self):
+        return list(self._task.get("processBlocklist", [])) + list(self._task.get("domainWhitelist", []))
+
+    def _open_blocklist_viewer(self):
+        from PySide6.QtWidgets import QPlainTextEdit
+        dlg = QDialog(self.window())
+        dlg.setWindowTitle(f"{self._task['name']} — Restrictions")
+        dlg.setObjectName("PopupBg")
+        dlg.setStyleSheet(_DIALOG_STYLE)
+        dlg.setMinimumWidth(360)
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(24, 22, 24, 20)
+        lay.setSpacing(8)
+        box_style = ("QPlainTextEdit{background:#F7F8FA;border:1px solid #E6E9EF;border-radius:10px;"
+                     f"padding:6px 8px;color:{INK};font-size:13px;}}")
+
+        for heading, items, height in (
+            ("Blocked apps", self._task.get("processBlocklist", []), 100),
+            ("Allowed sites", self._task.get("domainWhitelist", []), 90),
+        ):
+            label = QLabel(heading)
+            label.setStyleSheet(f"font-weight:600;font-size:13px;color:{INK};")
+            lay.addWidget(label)
+            view = QPlainTextEdit()
+            view.setPlainText("\n".join(items) or "(none)")
+            view.setFixedHeight(height)
+            view.setReadOnly(True)
+            view.setStyleSheet(box_style)
+            lay.addWidget(view)
+
+        close_btn = _button("Close", _SECONDARY_STYLE)
+        close_btn.clicked.connect(dlg.accept)
+        lay.addWidget(close_btn)
+        dlg.exec()
 
     def _start_task(self):
         try:
@@ -742,37 +1038,38 @@ class _TaskCard(QFrame):
             return
         session_manager.end_session(end_type="manual")
 
+    def _toggle_review(self, row):
+        if row["state"] == "running":
+            review_store.pause_active_review()
+        else:
+            review_store.resume_active_review()
+
+    # --- vacation ---
+
     def _cash_in_max(self):
-        # Capped at how much is actually left to fill the bar today --
-        # today's required minutes (already reduced by whatever's been
-        # cashed in so far) minus whatever's genuinely been worked, not the
-        # whole banked balance. Cashing in more than that would just burn
-        # vacation minutes for no visible effect.
+        # Capped at how much is actually left to fill today's goal -- today's required
+        # minutes (already reduced by whatever was cashed in) minus what was worked.
+        # Cashing in more would burn vacation minutes for no visible effect.
         remaining = max(0, int(self._today_required_minutes()) - int(self._logged_minutes_today))
         return min(self._cash_in_balance_int, remaining)
 
-    def _open_cash_in_editor(self):
-        if self._cash_in_max() <= 0:
+    def _open_vacation_dialog(self):
+        usable = self._cash_in_max()
+        if usable <= 0 or self._is_running():
             return
-        self._cash_in_edit.setText("")
-        self._cash_in_max_label.setText(f"/ {self._cash_in_max()}")
-        self._cash_in_row.setVisible(True)
-        self._cash_in_edit.setFocus()
-
-    def _close_cash_in_editor(self):
-        self._cash_in_row.setVisible(False)
-
-    def _confirm_cash_in(self):
-        try:
-            minutes = int(self._cash_in_edit.text())
-        except ValueError:
+        minutes = _VacationDialog.get_minutes(
+            self._task.get("name") or "this task", self._color, self._cash_in_balance_int, usable,
+            parent=self.window())
+        if minutes is None:
             return
+        self._confirm_cash_in(minutes)
+
+    def _confirm_cash_in(self, minutes):
         cap = self._cash_in_max()
         if minutes <= 0 or minutes > cap:
             QMessageBox.warning(
                 self, "Carmen Focus",
-                f"Enter a whole number of minutes between 1 and {cap} (today's remaining time).",
-            )
+                f"Enter a whole number of minutes between 1 and {cap} (today's remaining time).")
             return
         sessions = session_history.load_all()
         try:
@@ -780,26 +1077,30 @@ class _TaskCard(QFrame):
         except ValueError as exc:
             QMessageBox.warning(self, "Carmen Focus", str(exc))
             return
-        self._close_cash_in_editor()
         self._on_changed()
-
-    def _refresh_cash_in_visibility(self):
-        can_cash_in = self._cash_in_max() > 0 and not self._is_running()
-        self._vacation_label.setEnabled(can_cash_in)
-        self._vacation_label.setCursor(Qt.PointingHandCursor if can_cash_in else Qt.ArrowCursor)
 
     # --- dynamic refresh (called every tick by TasksTab) ---
 
     def _today_required_minutes(self):
+        """What is required for the goal's own stretch (today, or the week / month for a
+        period goal), after vacation cashed in against it."""
+        if self._snap is not None:
+            return self._snap["required"]
         return tasks_store.required_minutes_for_date(self._task, date.today())
 
+    def _suggested_session_minutes(self):
+        required = int(self._today_required_minutes())
+        if self._snap is not None and self._snap["isPeriod"]:
+            # A whole week's total is no length for one sitting: offer what is left, up to an hour.
+            remaining = max(0, required - int(self._logged_minutes_today))
+            return max(1, min(remaining or 60, 60))
+        return required
+
     def _belongs_to_this_task(self, status):
-        # "review" sessions (a review timer started against this task's
-        # linked topic, see qt_ui/review_tab.py's _begin_review) run under
-        # this task's eventId too -- without treating them as "this task's
-        # session" the same as source="task", the card would read as locked
-        # by some other session for the whole review instead of showing its
-        # own running panel.
+        # "review" sessions (a review timer started against this task's linked topic,
+        # see qt_ui/review_tab.py's _begin_review) run under this task's eventId too --
+        # without treating them as "this task's session" the card would read as locked
+        # by some other session for the whole review.
         return status.get("source") in ("task", "review") and status.get("eventId") == self._task["id"]
 
     def _is_locked_by_other_session(self):
@@ -808,124 +1109,230 @@ class _TaskCard(QFrame):
             return False
         if self._belongs_to_this_task(status):
             return False
-        # A paused session doesn't block starting a different task: it just
-        # waits (session_manager.start_session()).
+        # A paused session doesn't block starting a different task: it just waits.
         if status["isPaused"]:
             return False
         # This task's own session may be one of the waiting ones.
         return self._parked_entry(status) is None
 
-    def update_dynamic(self, status, sessions):
-        today = date.today()
-        required = self._today_required_minutes()
-        logged_seconds = tasks_store.logged_seconds_for_date(self._task, today, sessions, live_status=status)
-        logged_minutes = logged_seconds / 60
-        self._logged_minutes_today = logged_minutes
-
-        # The bar/label count today's cashed-in vacation minutes as if they
-        # were worked, against the *original* (un-reduced) target -- so
-        # cashing in visibly fills the bar instead of just shrinking the
-        # goal underneath an unchanged 0/X display. required_minutes_for_date
-        # already subtracts today's cash-ins from the target, so adding them
-        # back on both sides recovers the original target as the denominator.
-        today_cashed = (self._task.get("cashedInDates") or {}).get(today.isoformat(), 0)
-        display_required = required + today_cashed
-        display_logged = logged_minutes + today_cashed
-
-        pct = 100 if display_required <= 0 else min(100, int(display_logged / display_required * 100))
-        self._progress_bar.setValue(pct if (display_required > 0 or display_logged > 0) else 0)
-        if display_required <= 0:
-            self._progress_label.setText(f"{_format_minutes(display_logged)} logged")
-        else:
-            self._progress_label.setText(f"{_format_minutes(display_logged)} of {_format_minutes(display_required)}")
-
-        balance = tasks_store.vacation_balance_minutes(self._task, sessions)
-        # Round rather than truncate -- a 0.97m balance reads as "1m banked"
-        # to the user (that's what _format_minutes below shows them), so the
-        # cashable amount must round the same way or the displayed number
-        # and the actually-clickable amount disagree (looked like the button
-        # "didn't work" when it truncated to 0 while showing "1m").
-        self._cash_in_balance_int = int(round(balance))
-        # Today's surplus (logged beyond today's required) isn't cashable yet
-        # (the day isn't over), but show it so the user can see they're earning.
-        today_surplus = max(0.0, logged_minutes - required) if required > 0 else 0.0
-        display_balance = balance + today_surplus
-        vacation_text = f"{_format_minutes(display_balance)} vacation banked"
-        metrics = QFontMetrics(self._vacation_label.font())
-        elided = metrics.elidedText(vacation_text, Qt.ElideRight, max(self._vacation_label_budget, 0))
-        self._vacation_label.setText(elided)
-        self._vacation_label.setToolTip(vacation_text if elided != vacation_text else "")
-
-        is_running = status.get("isActive") and self._belongs_to_this_task(status)
-        parked = self._parked_entry(status)
-        is_parked_here = parked is not None
-        # What the running panel describes: the live session, or this task's
-        # session waiting (paused) while a different one runs.
-        view = status if is_running else {**(parked or {}), "isActive": True, "isPaused": True}
-        locked_by_other = self._is_locked_by_other_session()
-        self._refresh_cash_in_visibility()
-
-        if is_running or is_parked_here:
-            if self._armed:
-                self._disarm()
-            self._close_cash_in_editor()
-            self._content.setVisible(False)
-            self._armed_overlay.setVisible(False)
-            self._running_panel.setVisible(True)
-            paused = " (paused)" if view.get("isPaused") else ""
-            violations = view.get("violationCount", 0)
-            violation_text = f"  •  {violations} violation{'s' if violations != 1 else ''}" if violations else ""
-            review_problem = view.get("source") == "review" and view.get("reviewProblemName")
-            if review_problem or view.get("isBurnout"):
-                # Reviews and burnout sessions are a stopwatch, not a timer
-                # -- there's no fixed duration to count down to, so show
-                # elapsed time instead, computed pause-aware from
-                # startTime/violationLog (same math as the day's
-                # logged-minutes tally).
-                elapsed_seconds = tasks_store.worked_seconds(
-                    view.get("startTime"), None, view.get("violationLog")
-                ) if view.get("startTime") else 0
-                el_minutes, el_seconds = divmod(elapsed_seconds, 60)
-                if review_problem:
-                    # A review timer (started against this task's linked
-                    # topic) is running underneath the task session -- name
-                    # the actual problem being reviewed instead of the
-                    # generic elapsed-time text, same as the Focus tab.
-                    self._countdown_label.setText(
-                        f"{review_problem}, time elapsed {el_minutes}m {el_seconds}s{paused}{violation_text}"
-                    )
-                else:
-                    self._countdown_label.setText(
-                        f"UNTIL BURNOUT - elapsed {el_minutes}m {el_seconds}s{paused}{violation_text}"
-                    )
-            else:
-                # Fixed-duration sessions count down the pause-aware
-                # secondsRemaining from session_manager, not elapsed time.
-                rem_minutes, rem_seconds = divmod(view.get("secondsRemaining", 0), 60)
-                pomo = view.get("pomodoro")
-                phase_text = ""
-                if pomo:
-                    phase_label = "Break" if view.get("isBreak") else "Focus"
-                    phase_text = f"  •  {phase_label} {pomo['currentCycle']}/{pomo['totalCycles']}"
-                self._countdown_label.setText(
-                    f"{rem_minutes}m {rem_seconds}s remaining{phase_text}{paused}{violation_text}"
-                )
-            if is_parked_here:
-                paused_label = "Waiting"
-                self._countdown_label.setText(f"{self._countdown_label.text()}  \u2022  {paused_label} while another task runs")
-                self._pause_button.setText("Switch to this")
-            else:
-                self._pause_button.setText("Resume" if view.get("isPaused") else "Pause")
-        else:
-            self._running_panel.setVisible(False)
-            self._content.setVisible(True)
-            if self._armed and locked_by_other:
-                self._disarm()
-
-        self.setProperty("locked", locked_by_other)
-        self.style().unpolish(self)
-        self.style().polish(self)
-
     def _is_running(self):
         status = session_manager.get_status()
-        return status.get("isActive") and self._belongs_to_this_task(status)
+        return bool(status.get("isActive") and self._belongs_to_this_task(status))
+
+    def update_dynamic(self, status, sessions, reviews=None):
+        today = date.today()
+        snap = tasks_store.goal_snapshot(self._task, today, sessions, live_status=status)
+        self._snap = snap
+        required = snap["required"]
+        logged_minutes = snap["logged"]
+        self._logged_minutes_today = logged_minutes
+
+        # Cashed-in vacation counts as if worked, against the ORIGINAL target --
+        # cashing in visibly fills the ring instead of just shrinking the goal.
+        today_cashed = snap["cashed"]
+        display_required = required + today_cashed
+        display_logged = logged_minutes + today_cashed
+        fraction = 0.0 if display_required <= 0 else display_logged / display_required
+
+        balance = tasks_store.vacation_balance_minutes(self._task, sessions)
+        # Round, not truncate: 0.97m reads as "1m" and the amount you can spend must match.
+        self._cash_in_balance_int = int(round(balance))
+        today_surplus = max(0.0, logged_minutes - required) if required > 0 else 0.0
+        display_balance = balance + today_surplus
+
+        is_running = bool(status.get("isActive") and self._belongs_to_this_task(status))
+        parked = self._parked_entry(status)
+        is_waiting = parked is not None
+        locked_by_other = self._is_locked_by_other_session()
+        view = status if is_running else {**(parked or {}), "isActive": True, "isPaused": True}
+
+        if is_running or is_waiting:
+            self._armed = False
+            self._custom = False
+            self._update_session_view(view, is_waiting, fraction, display_logged, display_required, reviews)
+        else:
+            self._update_idle_view(fraction, display_logged, display_required, locked_by_other, status, reviews)
+
+        # The vacation line and restrictions stay quiet while a session is on screen.
+        in_session = is_running or is_waiting
+        self._vacation_label.setVisible(not in_session)
+        self._blocklist_button.setVisible(not in_session)
+        if not in_session:
+            usable = self._cash_in_max() > 0
+            self._vacation_label.set_state(
+                f"{_format_minutes(display_balance)} vacation" if display_balance >= 0.5 else "No vacation banked",
+                usable)
+
+        if self.property("locked") != locked_by_other:
+            self.setProperty("locked", locked_by_other)
+        self.goal_state = "none" if display_required <= 0 else ("reached" if fraction >= 1 else "open")
+
+    def _restrictions_text(self):
+        """(variants, clickable): the longest wording first, shorter ones for a narrow card."""
+        apps = len(self._task.get("processBlocklist") or [])
+        sites = len(self._task.get("domainWhitelist") or [])
+        if not (apps or sites):
+            return ["No restrictions set", "No rules"], False
+        a = f"{apps} app{'s' if apps != 1 else ''}"
+        t = f"{sites} site{'s' if sites != 1 else ''}"
+        return [f"{a} blocked · {t} ok", f"{a} · {t}", f"{apps} · {sites}"], True
+
+    def _set_restrictions(self, variants, clickable):
+        self._restrictions_variants = variants
+        self._blocklist_button.setEnabled(clickable)
+        self._blocklist_button.setToolTip(variants[0] if len(variants) > 1 else "")
+        self._fit_restrictions()
+
+    def _fit_restrictions(self):
+        """Shows the longest wording that fits the button; never cuts a word off."""
+        variants = self._restrictions_variants
+        if not variants:
+            return
+        button = self._blocklist_button
+        room = button.width() - 14  # the link style's side padding
+        fm = button.fontMetrics()
+        chosen = variants[0]  # until the column has a real width, trust the full wording
+        if self._restrictions_laid_out and room > 40:
+            for text in variants:
+                if fm.horizontalAdvance(text) <= room:
+                    chosen = text
+                    break
+            else:
+                chosen = fm.elidedText(variants[-1], Qt.ElideRight, room)
+        if button.text() != chosen:
+            button.setText(chosen)
+
+    def _update_idle_view(self, fraction, logged, required, locked_by_other, status, reviews):
+        self._apply_card_style("idle")
+        self._set_chip("", None)
+        self._violation_chip.hide()
+        self._dot.setStyleSheet(f"background:{'#D0D5DD' if locked_by_other else self._color};border-radius:6px;")
+        self._name_label.setStyleSheet(
+            f"font-size:17px;font-weight:700;color:{'#8A93A3' if locked_by_other else INK};background:transparent;")
+        snap = self._snap or {"isPeriod": False, "phrase": "today", "daysLeft": 1}
+        phrase = snap["phrase"]
+        period = snap["isPeriod"]
+        scheduled = required > 0 or period
+        done = required > 0 and fraction >= 1
+        ring_color = "#B8BFCC" if locked_by_other else self._color
+        detail = ""
+        if not scheduled:
+            self._ring.set_state(ring_color, 0.0, _format_minutes(logged), "logged today", dim=locked_by_other)
+            headline = "Not scheduled today"
+        elif required <= 0:
+            self._ring.set_state(ring_color, 0.0, _format_minutes(logged), f"logged {phrase}", dim=locked_by_other)
+            headline = "No target set"
+        elif done:
+            over = int(round(logged - required))
+            self._ring.set_state(ring_color, 1.0, "Done", f"{_format_minutes(logged)} logged", dim=locked_by_other)
+            headline = "Goal reached" if over <= 0 else f"+{over} min over"
+            if period:
+                detail = _days_text(snap["daysLeft"], "left in the period")
+        else:
+            self._ring.set_state(
+                ring_color, fraction, _format_minutes(logged), f"of {_format_amount(required)} {_ring_phrase(phrase)}",
+                dim=locked_by_other)
+            left = max(0, int(round(required - logged)))
+            headline = f"{_format_amount(left)} to go" if period else f"{left} min to go"
+            if period:
+                days = max(1, snap["daysLeft"])
+                pace = _format_minutes(math.ceil(left / days))
+                detail = "Due today" if days == 1 else f"{_days_text(days, 'left')} · about {pace} a day"
+        self._countdown_label.setText(headline)
+        self._countdown_label.setStyleSheet(
+            f"font-size:15px;font-weight:600;color:{'#8A93A3' if locked_by_other else INK};background:transparent;")
+        self._detail_label.setText(detail)
+        self._detail_label.setVisible(bool(detail))
+        self._set_restrictions(*self._restrictions_text())
+
+        self._running_panel.hide()
+        self._start_button.setText("▶  Start again" if done else "▶  Start")
+        self._start_button.setEnabled(not locked_by_other)
+        self._busy_note.setVisible(bool(locked_by_other))
+        if locked_by_other:
+            self._busy_note.setText(f"{status.get('eventTitle') or 'Another session'} is running")
+            self._armed = False
+            self._custom = False
+        self._show_panel()
+        self._review_box.set_rows(reviews or [], self._toggle_review, bool(status.get("isBreak")))
+
+    def _update_session_view(self, view, is_waiting, fraction, logged, required, reviews):
+        self._dot.setStyleSheet(f"background:{self._color};border-radius:6px;")
+        self._name_label.setStyleSheet(f"font-size:17px;font-weight:700;color:{INK};background:transparent;")
+        paused = bool(view.get("isPaused"))
+        on_break = bool(view.get("isBreak"))
+        review_problem = view.get("source") == "review" and view.get("reviewProblemName")
+        violations = view.get("violationCount", 0)
+        pomo = view.get("pomodoro")
+        elapsed = tasks_store.worked_seconds(
+            view.get("startTime"), None, view.get("violationLog")) if view.get("startTime") else 0
+        elapsed_m, elapsed_s = divmod(elapsed, 60)
+
+        ring_color = _BREAK_COLOR if on_break else self._color
+        if review_problem or view.get("isBurnout"):
+            # A stopwatch, not a timer: no fixed duration to count down to.
+            big, small = _format_clock(elapsed), "elapsed"
+            ring_fraction = fraction
+            if review_problem:
+                headline = f"{review_problem} · {elapsed_m}m {elapsed_s}s elapsed"
+            else:
+                headline = f"Until burnout · {elapsed_m}m {elapsed_s}s elapsed"
+        else:
+            remaining = view.get("secondsRemaining", 0)
+            rem_m, rem_s = divmod(remaining, 60)
+            if pomo:
+                phase_minutes = pomo["breakMinutes"] if on_break else pomo["focusMinutes"]
+                label = "Break" if on_break else "Focus"
+                headline = f"{label} {pomo['currentCycle']}/{pomo['totalCycles']} · {rem_m}m {rem_s}s remaining"
+                total = phase_minutes * 60
+            else:
+                headline = f"{rem_m}m {rem_s}s remaining"
+                total = elapsed + remaining
+            big, small = _format_clock(remaining), "break" if on_break else "remaining"
+            ring_fraction = 0.0 if total <= 0 else 1 - remaining / total
+        if paused:
+            small = "paused"
+        if is_waiting:
+            headline = "Waiting while another task runs"
+        self._countdown_label.setText(headline)
+        self._countdown_label.setStyleSheet(f"font-size:15px;font-weight:600;color:{INK};background:transparent;")
+        self._ring.set_state(ring_color, ring_fraction, big, small, dim=paused or is_waiting)
+
+        phrase = self._snap["phrase"] if self._snap else "today"
+        detail = (f"{_format_minutes(logged)} of {_format_amount(required)} {phrase}" if required > 0
+                  else f"{_format_minutes(logged)} logged {phrase}")
+        if is_waiting:
+            detail = "Time is frozen. Nothing is blocked for this task."
+        elif on_break:
+            detail = "Nothing is blocked during the break."
+        self._detail_label.setText(detail)
+        self._detail_label.show()
+
+        if violations:
+            self._violation_chip.setText(f"{violations} violation{'s' if violations != 1 else ''}")
+            self._violation_chip.show()
+        else:
+            self._violation_chip.hide()
+
+        if is_waiting:
+            self._apply_card_style("waiting")
+            self._set_chip("Waiting", _GREY)
+            self._pause_button.setText("Switch to this")
+            self._pause_button.setStyleSheet(_primary_style(self._color))
+        else:
+            self._apply_card_style("live")
+            if review_problem and not paused:
+                self._set_chip("Reviewing", _GREEN)
+            elif on_break:
+                self._set_chip("Break", _TEAL)
+            elif paused:
+                self._set_chip("Paused", _AMBER)
+            else:
+                self._set_chip("Running", _GREEN)
+            self._pause_button.setText("Resume" if paused else "Pause")
+            self._pause_button.setStyleSheet(_primary_style(self._color) if paused else _SECONDARY_STYLE)
+
+        self._idle_actions.hide()
+        self._armed_panel.hide()
+        self._running_panel.show()
+        self._review_box.set_rows(reviews or [], self._toggle_review, on_break)

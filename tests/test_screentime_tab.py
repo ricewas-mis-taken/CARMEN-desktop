@@ -80,3 +80,52 @@ def test_weekly_range_sums_across_the_week(qtbot, isolate_screentime):
     )
     assert "github.com" in row_text
     assert "15m" in row_text
+
+
+# ------------------------------------------------------------ hero + bars ----
+
+def test_the_total_and_caption_lead_the_page(qtbot, isolate_screentime):
+    screentime_store.add_app_seconds("code.exe", 2 * 3600 + 5 * 60, when=date.today())
+    screentime_store.add_domain_seconds("youtube.com", 30 * 60, when=date.today())
+    tab = screentime_tab.ScreenTimeTab()
+    qtbot.addWidget(tab)
+    assert tab._total_label.text() == "2h 35m"
+    assert tab._caption.text() == "today · this computer"
+    tab._week_btn.click()
+    assert tab._caption.text() == "this week · this computer"
+
+
+def test_the_total_of_an_empty_day_is_zero(qtbot, isolate_screentime):
+    tab = screentime_tab.ScreenTimeTab()
+    qtbot.addWidget(tab)
+    assert tab._total_label.text() == "0s"
+
+
+def test_the_stacked_bar_splits_the_total_by_category(qtbot, isolate_screentime):
+    screentime_store.add_app_seconds("code.exe", 3 * 3600, when=date.today())            # Tools
+    screentime_store.add_domain_seconds("youtube.com", 3600, when=date.today())          # Entertainment
+    tab = screentime_tab.ScreenTimeTab()
+    qtbot.addWidget(tab)
+    segments = dict((label, w) for label, _x, w in tab._chart.segments(403))
+    # 403px minus one 3px gap = 400px, split 3:1
+    assert segments["Tools"] == pytest.approx(300) and segments["Entertainment"] == pytest.approx(100)
+    legend = " ".join(label.text() for label in tab._legend_labels)
+    assert "Tools" in legend and "3h 00m" in legend and "Entertainment" in legend
+
+
+def test_each_row_has_a_bar_as_long_as_its_share_of_the_biggest(qtbot, isolate_screentime):
+    screentime_store.add_domain_seconds("youtube.com", 40 * 60, when=date.today())
+    screentime_store.add_domain_seconds("netflix.com", 10 * 60, when=date.today())
+    tab = screentime_tab.ScreenTimeTab()
+    qtbot.addWidget(tab)
+    section = tab._sections_layout.itemAt(0).widget()
+    bars = section.findChildren(screentime_tab._MiniBar)
+    assert sorted(round(b._fraction, 2) for b in bars) == [0.25, 1.0]
+
+
+def test_a_section_names_its_category_in_its_first_label(qtbot, isolate_screentime):
+    screentime_store.add_app_seconds("code.exe", 20 * 60, when=date.today())
+    tab = screentime_tab.ScreenTimeTab()
+    qtbot.addWidget(tab)
+    section = tab._sections_layout.itemAt(0).widget()
+    assert section.findChild(screentime_tab.QLabel).text() == "Tools"

@@ -27,4 +27,5 @@ def test_history_tab_lists_sessions(qtbot, monkeypatch):
     monkeypatch.setattr(history_viewer.session_history, "load_all", lambda: [{"startTime": "2026-01-01T10:00:00", "endTime": "2026-01-01T10:30:00"}])
     tab = history_viewer.HistoryTab()
     qtbot.addWidget(tab)
-    assert "2026-01-01" in tab._text.toPlainText()
+    tab._set_window(None)
+    assert len(tab._cards) == 1 and tab._cards[0].time_label.text() == "10:00 – 10:30"

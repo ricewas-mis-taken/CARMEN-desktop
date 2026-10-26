@@ -29,27 +29,85 @@ QWidget#ContentArea QDialog QLabel {
 /* Standalone popup windows (dialogs, pickers, viewers) that aren't part of
    the main window's ContentArea -- the enforcer overlay and the delete-undo
    toast intentionally keep their own dark styling (always-on-top over
-   arbitrary apps) and don't use this class. */
+   arbitrary apps) and don't use this class.
+
+   One look for all of them: a white sheet, a title (and a line under it), small grey field
+   labels, soft grey inputs that turn white with an ink outline when focused, ink primary
+   buttons, grey secondary ones. Labels pick their role from a "role" property: title,
+   subtitle, field, hint, error (qt_ui/ui_kit.py: dialog_title, field_label). */
 QWidget#PopupBg {
-    background: #F7F7F8;
+    background: #FFFFFF;
 }
 
 QWidget#PopupBg QLabel,
 QWidget#PopupBg QCheckBox,
 QWidget#PopupBg QRadioButton {
-    color: #1F2328;
+    color: #1B2230;
     font-size: 13px;
+    background: transparent;
+}
+
+QWidget#PopupBg QLabel[role="title"] {
+    font-size: 21px;
+    font-weight: 700;
+}
+
+QWidget#PopupBg QLabel[role="subtitle"] {
+    font-size: 13px;
+    color: #667085;
+}
+
+QWidget#PopupBg QLabel[role="field"] {
+    font-size: 12.5px;
+    font-weight: 650;
+    color: #667085;
+}
+
+QWidget#PopupBg QLabel[role="hint"] {
+    font-size: 12px;
+    color: #98A2B3;
+}
+
+QWidget#PopupBg QLabel[role="error"] {
+    font-size: 12.5px;
+    color: #B42318;
 }
 
 QWidget#PopupBg QLineEdit,
 QWidget#PopupBg QTextEdit,
+QWidget#PopupBg QPlainTextEdit,
 QWidget#PopupBg QComboBox,
+QWidget#PopupBg QSpinBox,
+QWidget#PopupBg QDoubleSpinBox,
 QWidget#PopupBg QListWidget {
-    background: #FAFBFC;
-    border: 1px solid #E3E5E9;
-    border-radius: 8px;
-    padding: 4px 6px;
-    color: #1F2328;
+    background: #F7F8FA;
+    border: 1px solid #E6E9EF;
+    border-radius: 10px;
+    padding: 7px 10px;
+    color: #1B2230;
+    font-size: 13.5px;
+    selection-background-color: #1B2230;
+    selection-color: #FFFFFF;
+    placeholder-text-color: #98A2B3;
+}
+
+QWidget#PopupBg QLineEdit:focus,
+QWidget#PopupBg QComboBox:focus,
+QWidget#PopupBg QSpinBox:focus {
+    background: #FFFFFF;
+    border: 1.5px solid #1B2230;
+}
+
+/* Text areas keep their fill on focus: their inner viewport would not follow the change and a
+   lighter rectangle would show inside the outline. */
+QWidget#PopupBg QTextEdit:focus,
+QWidget#PopupBg QPlainTextEdit:focus {
+    border: 1.5px solid #1B2230;
+}
+
+QWidget#PopupBg QComboBox::drop-down {
+    border: none;
+    width: 26px;
 }
 
 /* The dropdown list a QComboBox pops open is a separate top-level widget,
@@ -60,73 +118,220 @@ QWidget#PopupBg QListWidget {
    app (subject picker, task-link picker, etc.) needs the same fix. */
 QComboBox QAbstractItemView {
     background: #FFFFFF;
-    color: #1F2328;
-    selection-background-color: #5B8DEF;
+    color: #1B2230;
+    border: 1px solid #E6E9EF;
+    selection-background-color: #1B2230;
     selection-color: #FFFFFF;
     outline: none;
+    padding: 4px;
 }
 
 QWidget#PopupBg QPushButton {
-    background: #F1F3F6;
-    color: #1F2328;
+    background: #F2F4F7;
+    color: #1B2230;
     border: none;
-    border-radius: 8px;
-    padding: 6px 14px;
-}
-
-QWidget#PopupBg QPushButton:hover {
-    background: #E6E9EE;
-}
-
-QWidget#PopupBg QPushButton.AccentButton {
-    background: #5B8DEF;
-    color: white;
+    border-radius: 10px;
+    padding: 8px 16px;
+    font-size: 13px;
     font-weight: 600;
 }
 
-QWidget#PopupBg QPushButton.AccentButton:hover {
-    background: #4A7CDE;
+QWidget#PopupBg QPushButton:hover {
+    background: #E7EAF0;
 }
 
-/* Without this, QWidget#PopupBg QPushButton's plain background rule above
-   (an ID selector) outranks QPushButton.SecondaryButton:checked's blue
-   background (class + pseudo, no ID) -- a checked day-of-week/recurrence
-   toggle inside a popup dialog would keep its bold text but lose the blue
-   fill entirely. */
-QWidget#PopupBg QPushButton.SecondaryButton:checked {
-    background: #5B8DEF;
+QWidget#PopupBg QPushButton:disabled {
+    background: #F2F4F7;
+    color: #A3ABB8;
+}
+
+QWidget#PopupBg QPushButton.AccentButton {
+    background: #1B2230;
     color: #FFFFFF;
     font-weight: 600;
 }
 
+QWidget#PopupBg QPushButton.AccentButton:hover {
+    background: #2B3445;
+}
+
+QWidget#PopupBg QPushButton.AccentButton:disabled {
+    background: #EEF0F4;
+    color: #A3ABB8;
+}
+
+QWidget#PopupBg QPushButton.DangerButton {
+    background: #FEF3F2;
+    color: #B42318;
+}
+
+QWidget#PopupBg QPushButton.DangerButton:hover {
+    background: #FEE4E2;
+}
+
+/* Without this, QWidget#PopupBg QPushButton's plain background rule above
+   (an ID selector) outranks QPushButton.SecondaryButton:checked's fill
+   (class + pseudo, no ID) -- a checked day-of-week/recurrence toggle inside
+   a popup dialog would keep its bold text but lose the fill entirely. */
+QWidget#PopupBg QPushButton.SecondaryButton:checked,
+QWidget#PopupBg QPushButton:checked {
+    background: #1B2230;
+    color: #FFFFFF;
+    font-weight: 600;
+}
+
+QWidget#PopupBg QRadioButton {
+    spacing: 8px;
+}
+
+QWidget#PopupBg QRadioButton::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1.5px solid #B8BFCC;
+    border-radius: 9px;
+    background: #FFFFFF;
+}
+
+QWidget#PopupBg QRadioButton::indicator:checked {
+    border: 1.5px solid #1B2230;
+    background: qradialgradient(cx: 0.5, cy: 0.5, radius: 0.5, fx: 0.5, fy: 0.5,
+        stop: 0 #1B2230, stop: 0.45 #1B2230, stop: 0.55 #FFFFFF, stop: 1 #FFFFFF);
+}
+
+QWidget#PopupBg QTabWidget::pane {
+    border: none;
+    background: transparent;
+}
+
+QWidget#PopupBg QTabBar::tab {
+    background: #F2F4F7;
+    color: #667085;
+    border-radius: 12px;
+    padding: 7px 18px;
+    margin: 0 6px 10px 0;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+QWidget#PopupBg QTabBar::tab:selected {
+    background: #1B2230;
+    color: #FFFFFF;
+}
+
+QWidget#PopupBg QTabBar::tab:hover:!selected {
+    background: #E7EAF0;
+}
+
+QWidget#PopupBg QScrollBar:vertical {
+    width: 10px;
+    background: transparent;
+    margin: 2px;
+}
+
+QWidget#PopupBg QScrollBar::handle:vertical {
+    background: #D0D5DD;
+    border-radius: 4px;
+    min-height: 28px;
+}
+
+QWidget#PopupBg QScrollBar::add-line:vertical,
+QWidget#PopupBg QScrollBar::sub-line:vertical {
+    height: 0;
+}
+
+/* Message boxes (confirmations, warnings) and anything else the app pops up through Qt's
+   standard dialogs: a white sheet, ink text, the same buttons. They are children of the main
+   window, so spell the colours out instead of inheriting ContentArea's. */
+QMessageBox,
+QInputDialog,
+QColorDialog,
+QFileDialog {
+    background: #FFFFFF;
+}
+
+QMessageBox QLabel,
+QInputDialog QLabel {
+    color: #1B2230;
+    font-size: 14px;
+    background: transparent;
+}
+
+QMessageBox QPushButton,
+QInputDialog QPushButton {
+    background: #F2F4F7;
+    color: #1B2230;
+    border: none;
+    border-radius: 10px;
+    padding: 8px 20px;
+    min-width: 76px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+QMessageBox QPushButton:hover,
+QInputDialog QPushButton:hover {
+    background: #E7EAF0;
+}
+
+QMessageBox QPushButton:default,
+QInputDialog QPushButton:default {
+    background: #1B2230;
+    color: #FFFFFF;
+}
+
+QInputDialog QLineEdit {
+    background: #F7F8FA;
+    border: 1px solid #E6E9EF;
+    border-radius: 10px;
+    padding: 7px 10px;
+    color: #1B2230;
+}
+
+QToolTip {
+    background: #1B2230;
+    color: #FFFFFF;
+    border: none;
+    padding: 6px 9px;
+    font-size: 12.5px;
+}
+
 QWidget#Sidebar {
-    background: #20242C;
+    background: #161B26;
 }
 
 QLabel#SidebarTitle {
-    color: #E8EAED;
-    font-size: 14px;
+    color: #F2F4F8;
+    font-size: 15px;
+    font-weight: 700;
+    background: transparent;
+}
+
+QLabel#SidebarGroup {
+    color: #6F7A90;
+    font-size: 11.5px;
     font-weight: 600;
-    padding: 22px 18px 20px 18px;
+    padding: 14px 22px 4px 22px;
+    background: transparent;
 }
 
 QPushButton.NavButton {
     background: transparent;
-    color: #C7CAD3;
+    color: #AEB6C6;
     border: none;
-    border-radius: 8px;
+    border-radius: 10px;
     text-align: left;
-    padding: 9px 14px;
-    font-size: 13px;
-    margin: 0px 12px;
+    padding: 9px 12px;
+    font-size: 13.5px;
+    margin: 1px 12px;
 }
 
 QPushButton.NavButton:hover {
-    background: #2B3140;
+    background: #212839;
+    color: #FFFFFF;
 }
 
 QPushButton.NavButton:checked {
-    background: #3A4256;
+    background: #2C3550;
     color: #FFFFFF;
     font-weight: 600;
 }
@@ -153,67 +358,18 @@ QPushButton.SecondaryButton:checked {
     font-weight: 600;
 }
 
-/* "Until I burnout" button on a task's Start overlay -- immediately starts a
-   burnout-duration session on click (not a toggle), styled with a black
-   label and a red box so it reads as a distinct, deliberate action. A task's
-   own card can itself be a red pastel fill (task color picked as red), which
-   made a borderless red button blend straight into the card background --
-   the border guarantees an edge against any card color, not just the ones
-   that happen to contrast with red. */
-QPushButton#burnoutButton {
-    background: #A93226;
-    color: #FFFFFF;
-    border: 2px solid #A93226;
-    font-weight: 600;
-}
-
-QPushButton#burnoutButton:hover {
-    background: #8F2A20;
-}
-
-/* "Pomodoro" button on a task's Start overlay -- same solid-fill/white-text/
-   colored-border treatment as #burnoutButton right next to it (so a task
-   card of any color can't swallow either button), but a distinct purple
-   fill so the two are never confused for the same action at a glance. */
-QPushButton#pomodoroButton {
-    background: #6C3FA8;
-    color: #FFFFFF;
-    border: 2px solid #6C3FA8;
-    font-weight: 600;
-}
-
-QPushButton#pomodoroButton:hover {
-    background: #5A3389;
-}
-
-/* Start Task button on a task's Start overlay -- black text on a green
-   outline (not filled), since the shared .AccentButton fill made the white
-   text unreadable against this card's own background. */
-QPushButton#startTaskButton {
-    background: #FFFFFF;
-    color: #1F2328;
-    border: 2px solid #2E8B57;
-    border-radius: 8px;
-    padding: 6px 13px;
-    font-weight: 600;
-}
-
-QPushButton#startTaskButton:hover {
-    background: #EAF6EF;
-}
-
 QPushButton.AccentButton {
-    background: #5B8DEF;
+    background: #1B2230;
     color: white;
     border: none;
-    border-radius: 8px;
-    padding: 7px 16px;
-    font-size: 12px;
+    border-radius: 10px;
+    padding: 8px 16px;
+    font-size: 13px;
     font-weight: 600;
 }
 
 QPushButton.AccentButton:hover {
-    background: #4A7CDE;
+    background: #2B3445;
 }
 
 QLabel#MonthLabel {
@@ -307,28 +463,6 @@ QSplitter::handle:vertical {
     height: 6px;
 }
 
-QFrame.TaskCard {
-    /* Background is set per-card in tasks_tab.py (tinted with the task's
-       own color) via an instance stylesheet, which takes precedence over
-       this rule -- this is just the fallback/border. */
-    background: #FFFFFF;
-    border: 1px solid #ECEEF1;
-    border-radius: 12px;
-}
-
-QFrame.TaskCard:hover {
-    border: 1px solid #5B8DEF;
-}
-
-QFrame.TaskCard[locked="true"] {
-    background: #FAFBFC;
-    border: 1px solid #ECEEF1;
-}
-
-QWidget#TasksGridBg {
-    background: #FFFFFF;
-}
-
 QPushButton.TaskDescriptionButton {
     text-align: left;
     border: none;
@@ -341,16 +475,6 @@ QPushButton.TaskDescriptionButton {
 QPushButton.TaskDescriptionButton:hover {
     color: #1F2328;
     text-decoration: underline;
-}
-
-QProgressBar.TaskProgressBar {
-    background: #F1F3F6;
-    border: none;
-    border-radius: 5px;
-}
-
-QProgressBar.TaskProgressBar::chunk {
-    border-radius: 5px;
 }
 
 /* Start button in the Review tab's problem table -- flat blue text, no
@@ -467,10 +591,57 @@ QFrame.InlineForm {
 
 QFrame.BoardCard {
     background: #FFFFFF;
-    border: 1px solid #ECEEF1;
-    border-radius: 12px;
+    border: 1px solid #E6E9EF;
+    border-radius: 16px;
 }
 
 QFrame.BoardCard:hover {
-    border: 1px solid #5B8DEF;
+    border: 1px solid #C9CED8;
+}
+
+/* Every checkbox, everywhere: a green box with a white tick when checked. @CHECK@ is
+   replaced with the path of the tick picture when the stylesheet is loaded
+   (qt_ui/ui_kit.py: with_check_icon). */
+QCheckBox::indicator,
+QListView::indicator,
+QMenu::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1.5px solid #B8BFCC;
+    border-radius: 5px;
+    background: #FFFFFF;
+}
+
+QCheckBox::indicator:hover,
+QListView::indicator:hover {
+    border-color: #2F9E44;
+}
+
+QCheckBox::indicator:checked,
+QListView::indicator:checked,
+QMenu::indicator:checked {
+    background: #2F9E44;
+    border-color: #2F9E44;
+    image: url(@CHECK@);
+}
+
+QCheckBox::indicator:checked:hover,
+QListView::indicator:checked:hover {
+    background: #278A3B;
+    border-color: #278A3B;
+}
+
+QCheckBox::indicator:disabled {
+    background: #EEF0F4;
+    border-color: #D5D9E0;
+}
+
+QMenu::indicator {
+    margin-left: 6px;
+}
+
+/* Home page: the soft page colour behind its cards (the scroll area's own viewport is
+   transparent otherwise and shows the system background). */
+QScrollArea#HomeScroll, QWidget#HomePage {
+    background: #F7F7F8;
 }
