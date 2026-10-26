@@ -109,6 +109,7 @@ def main():
     # window, a lock overlay auto-closing, etc.) must never exit the
     # process on its own — only "Quit" from the tray menu should.
     app.setQuitOnLastWindowClosed(False)
+    ui_kit.force_light_scheme()
     _load_stylesheet(app)
     _check_accessibility_trust()
 
