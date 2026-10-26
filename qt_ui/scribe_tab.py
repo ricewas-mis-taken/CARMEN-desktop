@@ -6,7 +6,6 @@ background, zoom and position on the board. Every change is written to
 private/scribe.json a moment later (see scribe_store.py), and again when the tab
 is hidden or the app quits. Shape maths lives in scribe_geometry.py.
 """
-import copy
 import math
 import time
 
@@ -104,6 +103,7 @@ class ScribeCanvas(QWidget):
         self._band = None
         self._cursor_world = None
         self._images = {}
+        self._bbox_cache = {}
         self._last_edit = None
         self._update_cursor()
 
@@ -140,7 +140,12 @@ class ScribeCanvas(QWidget):
 
     # ---- undo ------------------------------------------------------------
     def _snapshot(self):
-        return copy.deepcopy(self.doc["layers"]), self.doc["activeLayer"]
+        """The layers as they are now, for undo. Each item dict is copied but the
+        point lists inside are shared: they are only ever replaced (moving a shape
+        builds a new list), never edited in place. A full deep copy cost ~20 ms and
+        ~4 MB per step on a 1,400-stroke board, and 100 steps are kept."""
+        layers = [dict(layer, items=[dict(item) for item in layer["items"]]) for layer in self.doc["layers"]]
+        return layers, self.doc["activeLayer"]
 
     def _push_undo(self):
         self._undo.append(self._snapshot())
@@ -390,12 +395,16 @@ class ScribeCanvas(QWidget):
         p.translate(width / 2, height / 2)
         p.scale(zoom, zoom)
         p.translate(-cx, -cy)
+        view = (cx - width / 2 / zoom, cy - height / 2 / zoom, cx + width / 2 / zoom, cy + height / 2 / zoom)
+        bbox_cache = {}
         for layer in self.doc["layers"]:
             if not layer["visible"]:
                 continue
             p.setOpacity(layer["opacity"] / 100)
             for item in layer["items"]:
-                self._paint_item(p, item, zoom)
+                if self._in_view(item, view, zoom, bbox_cache):
+                    self._paint_item(p, item, zoom)
+        self._bbox_cache = bbox_cache   # only the items that exist now
         p.setOpacity(1)
         if ui:
             if self._draft:
@@ -412,6 +421,33 @@ class ScribeCanvas(QWidget):
                 p.setBrush(QColor(59, 130, 246, 40))
                 p.drawRect(QRectF(QPointF(ax, ay), QPointF(bx, by)).normalized())
         p.restore()
+
+    def _item_bbox(self, item, cache):
+        """(x0, y0, x1, y1) of an item in board coordinates. A stroke's box is
+        remembered between paints (its points only change when it is moved)."""
+        if item["type"] != "stroke":
+            return geo.bounds(item)
+        pts = item["pts"]
+        stamp = (len(pts), pts[0][0], pts[0][1], pts[-1][0], pts[-1][1])
+        known = self._bbox_cache.get(id(item))
+        if known is not None and known[0] is item and known[1] == stamp:
+            cache[id(item)] = known
+            return known[2]
+        xs, ys = [q[0] for q in pts], [q[1] for q in pts]
+        box = (min(xs), min(ys), max(xs), max(ys))
+        cache[id(item)] = (item, stamp, box)
+        return box
+
+    def _in_view(self, item, view, zoom, cache):
+        """False only for an item wholly outside the painted area. Painting every
+        stroke of a big board on every mouse move made drawing lag; off-screen
+        ones cost nothing now. Padded generously for pen width and arrow heads."""
+        x0, y0, x1, y1 = self._item_bbox(item, cache)
+        width = item.get("width", 1)
+        if not item.get("scale", True):
+            width /= zoom
+        pad = 16 + 6 * width
+        return not (x1 + pad < view[0] or x0 - pad > view[2] or y1 + pad < view[1] or y0 - pad > view[3])
 
     def _paint_item(self, p, item, zoom):
         kind = item["type"]

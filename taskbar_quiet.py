@@ -21,14 +21,15 @@ import threading
 import time
 
 from calendar_log import logger
+import paths
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-SAVED_PATH = os.path.join(_HERE, "private", "taskbar_quiet_settings.json")   # originals of what is held off
+SAVED_PATH = paths.private_path("taskbar_quiet_settings.json")   # originals of what is held off
 # Files of the registry-based version. Their "originals" can be a leftover off, so they are
 # never trusted: anything it was holding is put back to Windows' default (on).
-LEGACY_PATHS = [os.path.join(_HERE, "private", "taskbar_quiet_saved.json"),
-                os.path.join(_HERE, "private", "taskbar_quiet_user.json")]
-PENDING_PATH = os.path.join(_HERE, "private", "taskbar_quiet_pending.json")  # written by the script before it changes anything
+LEGACY_PATHS = [paths.private_path("taskbar_quiet_saved.json"),
+                paths.private_path("taskbar_quiet_user.json")]
+PENDING_PATH = paths.private_path("taskbar_quiet_pending.json")  # written by the script before it changes anything
 SCRIPT_PATH = os.path.join(_HERE, "taskbar_quiet.ps1")
 
 # PARKED (2026-10-14): flipping the Settings toggles never got clean enough (the Settings

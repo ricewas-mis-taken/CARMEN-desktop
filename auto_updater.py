@@ -23,6 +23,19 @@ REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 _restart_requested = threading.Event()
 
+# The last failure message logged. The check runs every minute, so a fetch that
+# keeps failing the same way (the branch was deleted on the remote, or there is no
+# network) wrote one identical warning a minute -- 17,000 lines of
+# private/calendar_errors.log. Only a new message is logged; success resets it.
+_last_failure = None
+
+
+def _log_failure_once(message):
+    global _last_failure
+    if message != _last_failure:
+        _last_failure = message
+        logger.warning("auto_updater: %s", message)
+
 
 def restart_was_requested():
     return _restart_requested.is_set()
@@ -59,8 +72,10 @@ def _check_and_pull():
 
     fetch = _run_git("fetch", "origin", branch)
     if fetch.returncode != 0:
-        logger.warning("auto_updater: git fetch failed: %s", fetch.stderr.strip())
+        _log_failure_once(f"git fetch failed: {fetch.stderr.strip()}")
         return False
+    global _last_failure
+    _last_failure = None
 
     local = _run_git("rev-parse", "HEAD")
     remote = _run_git("rev-parse", f"origin/{branch}")
@@ -85,7 +100,7 @@ def _check_and_pull():
 
     pull = _run_git("pull", "--ff-only", "origin", branch)
     if pull.returncode != 0:
-        logger.warning("auto_updater: git pull --ff-only failed: %s", pull.stderr.strip())
+        _log_failure_once(f"git pull --ff-only failed: {pull.stderr.strip()}")
         return False
 
     logger.info("auto_updater: pulled update on %s, restarting", branch)

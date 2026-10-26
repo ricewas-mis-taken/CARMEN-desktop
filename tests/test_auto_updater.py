@@ -107,3 +107,27 @@ def test_loop_sets_restart_flag_and_calls_callback_once_then_stops(repo_pair, tm
     assert not thread.is_alive()
     assert calls == [1]
     assert auto_updater.restart_was_requested() is True
+
+
+def test_repeated_fetch_failure_is_logged_once(repo_pair, caplog, monkeypatch):
+    """A branch that no longer exists on the remote fails the same way every
+    minute; that used to log an identical warning each time, forever."""
+    origin, clone = repo_pair
+    monkeypatch.setattr(auto_updater, "REPO_ROOT", str(clone))
+    _git(clone, "checkout", "-q", "-b", "gone-branch")
+    auto_updater._last_failure = None
+    with caplog.at_level("WARNING", logger="carmen_calendar"):
+        for _ in range(3):
+            assert auto_updater._check_and_pull() is False
+    warnings = [r for r in caplog.records if "fetch failed" in r.getMessage()]
+    assert len(warnings) == 1
+
+
+def test_a_changed_failure_is_logged_again(repo_pair, caplog):
+    origin, clone = repo_pair
+    auto_updater._last_failure = None
+    with caplog.at_level("WARNING", logger="carmen_calendar"):
+        auto_updater._log_failure_once("git fetch failed: a")
+        auto_updater._log_failure_once("git fetch failed: a")
+        auto_updater._log_failure_once("git fetch failed: b")
+    assert len([r for r in caplog.records if "fetch failed" in r.getMessage()]) == 2

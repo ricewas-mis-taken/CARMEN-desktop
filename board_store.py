@@ -29,13 +29,14 @@ from datetime import date, datetime, timedelta
 import device_id
 import sync_trigger
 from tasks_store import WEEKDAY_CODES
+import paths
 
-BOARD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "board.json")
+BOARD_PATH = paths.private_path("board.json")
 
 # Guards every read-modify-write sequence below against a lost-update race --
 # the Flask API thread and the Qt thread can both call into this module.
 _lock = threading.Lock()
-PHOTOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "data", "board_photos")
+PHOTOS_DIR = paths.private_path("data", "board_photos")
 
 RECURRENCE_PATTERNS = ("days", "weekly", "monthly", "yearly")
 
@@ -121,8 +122,15 @@ def load_board(include_deleted=False):
         if include_deleted:
             raise BoardLoadError(f"failed to read {BOARD_PATH}: {exc}") from exc
         return []
-    tasks = data.get("tasks", []) if isinstance(data, dict) else []
-    tasks = [t for t in tasks if isinstance(t, dict)]
+    raw = data.get("tasks", []) if isinstance(data, dict) else None
+    if not isinstance(raw, list):
+        # Valid JSON of the wrong shape. A display read shows nothing, but a
+        # read-modify-write must refuse: treating it as "no tasks" would let the
+        # next save replace whatever the file really holds.
+        if include_deleted:
+            raise BoardLoadError(f"{BOARD_PATH} does not hold a task list")
+        return []
+    tasks = [t for t in raw if isinstance(t, dict)]
 
     # Not any(...) -- that would short-circuit on the first task that
     # actually needs backfilling and leave every task after it unmigrated.

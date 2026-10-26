@@ -70,6 +70,7 @@ import sync_cloud
 import sync_photos
 import tasks_store
 from calendar_log import logger as calendar_logger
+import paths
 
 logger = logging.getLogger("carmen_sync")
 
@@ -115,7 +116,7 @@ class _log_record_failure:
 # sync_client gets this for free instead of each needing its own fix.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", ".env")
+ENV_PATH = paths.private_path(".env")
 load_dotenv(ENV_PATH)
 
 # How often sync_scheduler.py's background timer calls sync_now(). A named
@@ -123,20 +124,20 @@ load_dotenv(ENV_PATH)
 # from the module that actually defines what "syncing" means.
 SYNC_INTERVAL_SECONDS = 5 * 60
 
-LAST_SYNC_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "last_sync.txt")
+LAST_SYNC_PATH = paths.private_path("last_sync.txt")
 _cached_last_sync = None
 
 # The pull cursor is a timestamp the SERVER wrote (server_updated_at of the
 # newest row seen), kept apart from the watermark above, which is this
 # device's own clock and only decides what is worth pushing.
-PULL_CURSOR_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "pull_cursor.txt")
+PULL_CURSOR_PATH = paths.private_path("pull_cursor.txt")
 
 # Which account the local data (and the last_sync watermark above) belongs
 # to. Without this, signing out and into a different account on the same
 # install pushes the first account's edited records into the second
 # account's cloud storage and pulls with the first account's watermark, so
 # the second account's older cloud data is never delivered.
-SYNC_OWNER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "sync_owner.txt")
+SYNC_OWNER_PATH = paths.private_path("sync_owner.txt")
 
 
 def _check_sync_owner(user_id):

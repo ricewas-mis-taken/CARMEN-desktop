@@ -1,4 +1,4 @@
-"""Daily backup of all Carmen Focus data files.
+r"""Daily backup of all Carmen Focus data files.
 
 Run directly (`python backup.py`) or via Windows Task Scheduler.
 Keeps the last 30 daily snapshots in %USERPROFILE%\CarmenBackups\.
@@ -8,8 +8,9 @@ import shutil
 from datetime import datetime, timedelta
 
 import calendar_store
+import paths
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private")
+DATA_DIR = paths.PRIVATE
 BACKUP_ROOT = os.path.join(os.path.expanduser("~"), "CarmenBackups")
 KEEP_DAYS = 30
 
@@ -24,6 +25,10 @@ FILES = [
     "board.json",
     "config.json",
     "screentime.json",
+    # The Scribe board stays on this computer (it is not synced), so a backup
+    # is the only second copy of it that exists.
+    "scribe.json",
+    "quicknote.json",
     os.path.join("data", "daily_summaries.json"),
 ]
 
@@ -33,6 +38,7 @@ FILES = [
 DIRS = [
     os.path.join("data", "board_photos"),
     os.path.join("data", "review_photos"),
+    "scribe_images",  # pictures attached to the Scribe board
 ]
 
 

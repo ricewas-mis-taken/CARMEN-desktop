@@ -16,8 +16,9 @@ import shutil
 import threading
 import time
 from datetime import datetime, timedelta
+import paths
 
-STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "screentime.json")
+STATE_PATH = paths.private_path("screentime.json")
 
 _lock = threading.Lock()
 _data = {}
@@ -185,7 +186,7 @@ def get_range(start_date_str, end_date_str, device=None):
 # Each computer only ever writes its own days; what other computers sent is
 # kept apart, per device, so the tab can show them one at a time or together.
 
-REMOTE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "screentime_remote.json")
+REMOTE_PATH = paths.private_path("screentime_remote.json")
 _remote = None            # {deviceId: {"name": str, "days": {day: {"apps": {}, "domains": {}}}}}
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _SAFE_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")

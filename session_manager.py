@@ -15,8 +15,9 @@ from datetime import datetime, timedelta
 import server_clock
 import session_history
 import state_events
+import paths
 
-STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "session_state.json")
+STATE_PATH = paths.private_path("session_state.json")
 
 _lock = threading.Lock()
 
@@ -329,6 +330,10 @@ def _load():
         # A corrupt/truncated file (e.g. from a crash mid-write before the
         # atomic-save fix above) must not crash the whole app at import
         # time — fall back to the in-memory defaults instead.
+        return
+    if not isinstance(data, dict):
+        # Valid JSON that is not a session object (null, a list...) would make
+        # update() raise at import and stop the whole app starting.
         return
     _state.update(data)
     if _state["isActive"] and not _state.get("sessionId"):
@@ -816,6 +821,10 @@ def _get_status_locked():
                     seconds_remaining = max(0, int((new_end_time - datetime.now()).total_seconds()))
             else:
                 _pending_natural_end["value"] = _finalize_to_history_locked(end_time, end_type="natural")
+                if _state["isActive"] and _state["isPaused"]:
+                    # A waiting session just came back (paused): report its
+                    # frozen time, not the 0 the expired one ran out at.
+                    seconds_remaining = _state["frozenSecondsRemaining"] or 0
     return {
         "isActive": _state["isActive"],
         "isPaused": _state["isPaused"],
