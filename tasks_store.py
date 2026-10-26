@@ -19,8 +19,9 @@ from datetime import date, datetime, timedelta
 
 import device_id
 import sync_trigger
+import paths
 
-TASKS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "tasks.json")
+TASKS_PATH = paths.private_path("tasks.json")
 
 # Guards every read-modify-write sequence below (create/update/delete/cash_in)
 # against a lost-update race -- the Flask API thread and the Qt thread can

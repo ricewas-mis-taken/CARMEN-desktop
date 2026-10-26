@@ -9,10 +9,16 @@ without its own isolation wrote into the owner's real private/ files.
 import logging
 import os
 import sys
+import tempfile
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Before ANY app module is imported (this file is loaded first): every data path in
+# the app is built from paths.PRIVATE, so pointing it at a throwaway folder means no
+# test can reach the owner's real private/ folder, whatever it forgets to patch.
+os.environ.setdefault("CARMEN_PRIVATE_DIR", tempfile.mkdtemp(prefix="carmen-test-private-"))
 
 
 @pytest.fixture(scope="session", autouse=True)

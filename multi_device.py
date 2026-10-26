@@ -10,8 +10,9 @@ import os
 import time
 
 import device_id
+import paths
 
-SEEN_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "other_device_seen.txt")
+SEEN_PATH = paths.private_path("other_device_seen.txt")
 MAX_AGE_DAYS = 30
 
 

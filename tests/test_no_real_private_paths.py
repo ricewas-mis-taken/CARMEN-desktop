@@ -35,3 +35,12 @@ def test_every_data_path_is_redirected_during_tests():
                 if os.path.normcase(value).startswith(os.path.normcase(REAL_PRIVATE)):
                     offenders.append(f"{name}.{attr}")
     assert not offenders, f"still pointing at the real private/ folder: {offenders}"
+
+
+def test_the_whole_app_is_pointed_at_a_throwaway_data_folder():
+    """paths.PRIVATE comes from CARMEN_PRIVATE_DIR, which the root conftest sets
+    before anything is imported -- so even a path nobody patched stays away from
+    the owner's real private/ folder."""
+    import paths
+    assert os.path.normcase(paths.PRIVATE) != os.path.normcase(REAL_PRIVATE)
+    assert os.environ.get("CARMEN_PRIVATE_DIR") == paths.PRIVATE

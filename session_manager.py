@@ -15,8 +15,9 @@ from datetime import datetime, timedelta
 import server_clock
 import session_history
 import state_events
+import paths
 
-STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "session_state.json")
+STATE_PATH = paths.private_path("session_state.json")
 
 _lock = threading.Lock()
 

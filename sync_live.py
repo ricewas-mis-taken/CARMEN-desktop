@@ -38,6 +38,7 @@ import session_manager
 import sync_client
 import sync_cloud
 from calendar_log import logger
+import paths
 
 HISTORY_TABLE = "session_history"
 LIVE_TABLE = "live_session"
@@ -47,7 +48,7 @@ LANE_TABLES = sync_cloud.FAST_LANE_TABLES
 POLL_SECONDS = 5
 MAX_BACKOFF_SECONDS = 60
 
-_PRIVATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private")
+_PRIVATE = paths.PRIVATE
 CURSOR_PATH = os.path.join(_PRIVATE, "live_cursor.txt")
 HISTORY_PUSHED_PATH = os.path.join(_PRIVATE, "live_history_pushed.txt")
 LIVE_PUSHED_PATH = os.path.join(_PRIVATE, "live_state_pushed.txt")

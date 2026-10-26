@@ -9,8 +9,9 @@ instead of inline with a user-triggered action.
 """
 import logging
 import os
+import paths
 
-LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "private", "calendar_errors.log")
+LOG_PATH = paths.private_path("calendar_errors.log")
 
 logger = logging.getLogger("carmen_calendar")
 logger.setLevel(logging.WARNING)
