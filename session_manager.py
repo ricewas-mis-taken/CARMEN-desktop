@@ -331,6 +331,10 @@ def _load():
         # atomic-save fix above) must not crash the whole app at import
         # time — fall back to the in-memory defaults instead.
         return
+    if not isinstance(data, dict):
+        # Valid JSON that is not a session object (null, a list...) would make
+        # update() raise at import and stop the whole app starting.
+        return
     _state.update(data)
     if _state["isActive"] and not _state.get("sessionId"):
         _state["sessionId"] = uuid.uuid4().hex   # a session from before sessions had ids
