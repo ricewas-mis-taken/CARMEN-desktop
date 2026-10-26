@@ -681,6 +681,17 @@ def vacation_balance_minutes(task, sessions, today=None):
     if is_period_task(task):
         return max(0.0, _period_surplus(task, sessions, today) - sum(cashed_in_dates.values()))
 
+    entries = _task_history_entries(task["id"], sessions)
+    start_days = set()
+    for entry in entries:
+        day = datetime.fromisoformat(entry["startTime"]).date()
+        if day < today and is_scheduled_on(task, day):
+            start_days.add(day)
+    # One pass over the history. Asking logged_seconds_for_date() once per day
+    # re-walked every session each time (quadratic): this runs for every task card
+    # every second on the window thread, and a year of sessions made it freeze.
+    logged_by_day = _logged_seconds_by_day(entries, start_days)
+
     total_earned = 0.0
     for day in start_days:
         logged_minutes = logged_by_day.get(day, 0) / 60
