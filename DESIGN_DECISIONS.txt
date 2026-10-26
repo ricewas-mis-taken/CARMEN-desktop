@@ -640,3 +640,18 @@ tick only while visible, restyle only when the look changes). Old TaskCard/burno
   and the hero card was wider than the page below 640 px. Fixes: minimum cell height, plain labels
   where text must not shrink, hero stacks its ring above its text when narrow, two columns from 900 px.
   Window minimum height raised to 600 so the sidebar footer is not clipped.
+
+2026-10-25  Per-weekday times and custom-length goal periods
+  Per-day times: dayMinutes {"MO": 30, ...} on a "weekly_days" task. A ticked day without an entry uses
+  targetMinutes, so "the same every day" is simply no entries.
+  Fork: a second per-day history list vs. putting dayMinutes inside the existing targetMinutesHistory
+  entries. Chose the entries: one history, one lookup (_target_minutes_for_date), so changing Monday's
+  time today can't reach back and change past surplus. An entry only carries dayMinutes when there are
+  some, or when they were just removed, so tasks that never used the feature keep an unchanged history.
+  Custom period: recurrence "custom_total" with periodDays (2-366, anything else reads as 7) counted
+  from periodAnchor, which is the day it was saved (not a Monday like the 2-week goal). Everything that
+  already handled week/2-week/month goals (progress, vacation surplus, days left) works unchanged
+  because they all go through period_bounds.
+  Sync: both fields are cleaned on pull (sync_client._clean_day_minutes). A computer on the old version
+  ignores them and shows every ticked day at targetMinutes, which the editor sets to the first ticked
+  day's time. Not done: a per-day time for the daily kind (every day is already "each day").
