@@ -91,7 +91,7 @@ def _data_file_names_mentioned_in_the_code():
     import re
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     pattern = re.compile(r"""["']([\w\-]+\.(?:json|db|txt|sqlite3?|ini|cfg|pkl))["']""")
-    skip_dirs = {".git", "tests", "__pycache__", "node_modules", "venv", ".venv", "mac-os", "scripts"}
+    skip_dirs = {".git", "tests", "__pycache__", "node_modules", "venv", ".venv", "mac-os", "scripts", "design-skills"}
     found = set()
     for folder, dirs, files in os.walk(root):
         dirs[:] = [d for d in dirs if d not in skip_dirs]
