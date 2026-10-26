@@ -681,7 +681,7 @@ def list_subjects(topic_id):
         try:
             conn = _get_conn()
             rows = conn.execute(
-                "SELECT * FROM review_subjects WHERE topic_id = ? ORDER BY name", (topic_id,)
+                "SELECT * FROM review_subjects WHERE topic_id = ? AND is_deleted = 0 ORDER BY name", (topic_id,)
             ).fetchall()
             return [_row_to_subject(r) for r in rows]
         except Exception:
@@ -694,12 +694,12 @@ def create_subject(topic_id, name, color, linked_task_id=None):
         try:
             conn = _get_conn()
             if conn.execute(
-                "SELECT id FROM review_subjects WHERE topic_id = ? AND LOWER(name) = LOWER(?)",
+                "SELECT id FROM review_subjects WHERE is_deleted = 0 AND topic_id = ? AND LOWER(name) = LOWER(?)",
                 (topic_id, name),
             ).fetchone():
                 raise DuplicateNameError(f'A subject named "{name}" already exists in this topic.')
             if conn.execute(
-                "SELECT id FROM review_subjects WHERE LOWER(color) = LOWER(?)", (color,),
+                "SELECT id FROM review_subjects WHERE is_deleted = 0 AND LOWER(color) = LOWER(?)", (color,),
             ).fetchone():
                 raise DuplicateColorError("Another subject is already using this color.")
             cur = conn.execute(
@@ -719,6 +719,74 @@ def create_subject(topic_id, name, color, linked_task_id=None):
             return None
     sync_trigger.note_change()
     return _row_to_subject(row)
+
+
+def _evict_reviews_of(problem_ids):
+    """Drops any running or set-aside review of these problems (see delete_topic).
+    Call with _lock held."""
+    dead = [token for token, entry in _active_sessions.items() if entry["problem_id"] in problem_ids]
+    for token in dead:
+        _active_sessions.pop(token, None)
+    if dead:
+        _save_active_sessions()
+    dead_parked = [token for token, entry in _parked_reviews.items() if entry["problem_id"] in problem_ids]
+    for token in dead_parked:
+        _parked_reviews.pop(token, None)
+    if dead_parked:
+        _save_parked()
+
+
+def delete_problem(problem_id):
+    """Removes one problem from every list. A tombstone, not a DELETE, so the removal
+    reaches the other computers; its past review sessions stay in the log. Returns
+    True if there was such a problem."""
+    _ensure_active_sessions_loaded()
+    with _lock:
+        try:
+            conn = _get_conn()
+            cur = conn.execute(
+                "UPDATE review_problems SET is_deleted = 1, updated_at = ?, device_id = ? "
+                "WHERE id = ? AND is_deleted = 0",
+                (datetime.now().isoformat(), device_id.get_device_id(), problem_id),
+            )
+            conn.commit()
+            if not cur.rowcount:
+                return False
+            _evict_reviews_of({problem_id})
+        except Exception:
+            logger.exception("review_store.delete_problem failed for %s", problem_id)
+            return False
+    sync_trigger.note_change()
+    return True
+
+
+def delete_subject(subject_id):
+    """Removes a category and every problem in it (tombstones, as delete_problem).
+    Returns how many problems went with it, or None if there was no such category."""
+    _ensure_active_sessions_loaded()
+    with _lock:
+        try:
+            conn = _get_conn()
+            now, dev = datetime.now().isoformat(), device_id.get_device_id()
+            problem_ids = {
+                row[0] for row in conn.execute(
+                    "SELECT id FROM review_problems WHERE subject_id = ? AND is_deleted = 0", (subject_id,)).fetchall()
+            }
+            cur = conn.execute(
+                "UPDATE review_subjects SET is_deleted = 1, updated_at = ?, device_id = ? "
+                "WHERE id = ? AND is_deleted = 0", (now, dev, subject_id))
+            if not cur.rowcount:
+                return None
+            conn.execute(
+                "UPDATE review_problems SET is_deleted = 1, updated_at = ?, device_id = ? "
+                "WHERE subject_id = ? AND is_deleted = 0", (now, dev, subject_id))
+            conn.commit()
+            _evict_reviews_of(problem_ids)
+        except Exception:
+            logger.exception("review_store.delete_subject failed for %s", subject_id)
+            return None
+    sync_trigger.note_change()
+    return len(problem_ids)
 
 
 def update_subject_link(subject_id, task_id):
@@ -741,7 +809,7 @@ def list_problems(topic_id, due_only=True):
     with _lock:
         try:
             conn = _get_conn()
-            where = "WHERE p.topic_id = ?"
+            where = "WHERE p.is_deleted = 0 AND p.topic_id = ?"
             params = [topic_id]
             if due_only:
                 where += " AND p.next_review_date <= ?"
@@ -760,7 +828,7 @@ def get_problem(problem_id):
     with _lock:
         try:
             conn = _get_conn()
-            row = conn.execute(f"{_PROBLEM_SELECT} WHERE p.id = ?", (problem_id,)).fetchone()
+            row = conn.execute(f"{_PROBLEM_SELECT} WHERE p.id = ? AND p.is_deleted = 0", (problem_id,)).fetchone()
             return _row_to_problem(row) if row else None
         except Exception:
             logger.exception("review_store.get_problem failed for %s", problem_id)
@@ -817,7 +885,7 @@ def create_problem(
         try:
             conn = _get_conn()
             if conn.execute(
-                "SELECT id FROM review_problems WHERE subject_id = ? AND LOWER(name) = LOWER(?)",
+                "SELECT id FROM review_problems WHERE is_deleted = 0 AND subject_id = ? AND LOWER(name) = LOWER(?)",
                 (subject_id, name),
             ).fetchone():
                 raise DuplicateNameError(f'A problem named "{name}" already exists in this subject.')
@@ -884,7 +952,7 @@ def update_problem(
         try:
             conn = _get_conn()
             if conn.execute(
-                "SELECT id FROM review_problems WHERE subject_id = ? AND LOWER(name) = LOWER(?) AND id != ?",
+                "SELECT id FROM review_problems WHERE is_deleted = 0 AND subject_id = ? AND LOWER(name) = LOWER(?) AND id != ?",
                 (subject_id, name, problem_id),
             ).fetchone():
                 raise DuplicateNameError(f'A problem named "{name}" already exists in this subject.')
@@ -996,7 +1064,7 @@ def start_review(problem_id):
         # just call get_problem() again (it would deadlock on _lock).
         try:
             conn = _get_conn()
-            row = conn.execute(f"{_PROBLEM_SELECT} WHERE p.id = ?", (problem_id,)).fetchone()
+            row = conn.execute(f"{_PROBLEM_SELECT} WHERE p.id = ? AND p.is_deleted = 0", (problem_id,)).fetchone()
         except Exception:
             logger.exception("review_store.start_review failed re-checking %s", problem_id)
             return None
