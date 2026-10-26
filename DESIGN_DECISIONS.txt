@@ -631,3 +631,12 @@ tick only while visible, restyle only when the look changes). Old TaskCard/burno
   drawn line icons), copy that says what happens ("Log it", "End session") not "Submit".
   Not applied: the larger frameworks (scroll animation, 3D, marketing-page kits): wrong for a desktop tool.
   Not done and said plainly: I did not run each skill's full workflow; I took their rules, not their tooling.
+
+2026-10-25  Colours moved from Home to Options; Home resize fix
+  Colours are set once and rarely again, so they live in an Options popup (profile menu when signed in,
+  an Options button under Sign In when not) and Home keeps only what changes daily.
+  Resize bugs found by measuring minimum sizes at 560, 800 and 1400 px: the stat cells had no minimum
+  height and overlapped, a right-hand label had zero width (an Ignored size policy with no stretch),
+  and the hero card was wider than the page below 640 px. Fixes: minimum cell height, plain labels
+  where text must not shrink, hero stacks its ring above its text when narrow, two columns from 900 px.
+  Window minimum height raised to 600 so the sidebar footer is not clipped.
