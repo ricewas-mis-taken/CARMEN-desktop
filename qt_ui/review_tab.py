@@ -1,7 +1,7 @@
 import os
 import re
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QFontMetrics, QPainter, QPalette, QPixmap
@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 from qt_ui.wrap_edit import WrapEdit
 
 import review_store
+import session_history
 import session_manager
 from qt_ui import confirm_dialog
 import tasks_store
@@ -1950,8 +1951,41 @@ class _ReviewBanner(QWidget):
             )
         if end_session:
             _end_session_for_problem(problem)
+        else:
+            _file_untimed_review(problem, elapsed)
         self._finishing = False
         self._on_finished()
+
+
+def _file_untimed_review(problem, seconds, now=None):
+    """A review that ran without a session of its own (another kind of session was running,
+    so none could start) is still time on its task. Session History and the task's
+    count both read finished sessions, so this files the review as one. Skipped when a
+    session of the same task is running, because that session already counts it."""
+    topic = review_store.get_topic((problem or {}).get("topicId")) if (problem or {}).get("topicId") else None
+    task = tasks_store.get_task(topic["linkedTaskId"]) if topic and topic.get("linkedTaskId") else None
+    if task is None or seconds < 1:
+        return None
+    status = session_manager.get_status()
+    if status.get("isActive") and status.get("source") in ("task", "review") and status.get("eventId") == task["id"]:
+        return None
+    now = now or datetime.now()
+    first_attempt = problem.get("id") is None
+    subject = None if first_attempt else problem.get("subjectName")
+    entry = {
+        "startTime": (now - timedelta(seconds=seconds)).isoformat(),
+        "endTime": now.isoformat(),
+        "endType": "manual", "reason": None, "lockMode": task.get("lockMode", "soft"),
+        "processBlocklist": [], "domainWhitelist": [], "violationCount": 0, "violationLog": [],
+        "domainWhitelistAdditions": [], "processBlocklistExceptions": [],
+        "source": "review", "eventId": task["id"],
+        "eventTitle": f"{task['name']} - " + ("first attempt" if first_attempt else f"{subject} review"),
+        "reviewProblemName": session_manager.FIRST_ATTEMPT_NAME if first_attempt else problem["name"],
+        "reviewSubjectName": subject,
+        "pomodoro": None, "sessionId": "untimed-" + uuid.uuid4().hex,
+    }
+    session_history.append_entry(entry)
+    return entry
 
 
 def _can_drive_over(status):
