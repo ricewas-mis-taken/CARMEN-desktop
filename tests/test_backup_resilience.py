@@ -48,3 +48,19 @@ def test_screentime_history_is_backed_up(env):
 
     snapshot = next(p for p in root.iterdir() if p.name != "2000-01-01")
     assert (snapshot / "screentime.json").exists()
+
+
+def test_scribe_board_and_its_images_are_backed_up(env):
+    """The Scribe board is local-only, so the backup is its only second copy."""
+    data, root, old = env
+    (data / "scribe.json").write_text("{}", encoding="utf-8")
+    (data / "quicknote.json").write_text("{}", encoding="utf-8")
+    images = data / "scribe_images"
+    images.mkdir()
+    (images / "a.png").write_bytes(b"png")
+    backup.run_backup()
+
+    snapshot = next(p for p in root.iterdir() if p.name != "2000-01-01")
+    assert (snapshot / "scribe.json").exists()
+    assert (snapshot / "quicknote.json").exists()
+    assert (snapshot / "scribe_images" / "a.png").read_bytes() == b"png"

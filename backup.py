@@ -24,6 +24,10 @@ FILES = [
     "board.json",
     "config.json",
     "screentime.json",
+    # The Scribe board stays on this computer (it is not synced), so a backup
+    # is the only second copy of it that exists.
+    "scribe.json",
+    "quicknote.json",
     os.path.join("data", "daily_summaries.json"),
 ]
 
@@ -33,6 +37,7 @@ FILES = [
 DIRS = [
     os.path.join("data", "board_photos"),
     os.path.join("data", "review_photos"),
+    "scribe_images",  # pictures attached to the Scribe board
 ]
 
 
