@@ -98,6 +98,11 @@ class AccountArea(QWidget):
         self._signin_button.clicked.connect(self._open_auth_dialog)
         layout.addWidget(self._signin_button)
 
+        self._options_button = QPushButton("Options")
+        self._options_button.setProperty("class", "NavButton")
+        self._options_button.clicked.connect(self._open_options)
+        layout.addWidget(self._options_button)
+
         self._account_row = _AccountRow(on_click=self._open_account_menu)
         layout.addWidget(self._account_row)
 
@@ -136,6 +141,7 @@ class AccountArea(QWidget):
         on construction (app startup) and after any login/logout."""
         logged_in = auth_manager.is_logged_in()
         self._signin_button.setVisible(not logged_in)
+        self._options_button.setVisible(not logged_in)
         self._account_row.setVisible(logged_in)
         if logged_in:
             user = auth_manager.get_current_user()
@@ -191,9 +197,14 @@ class AccountArea(QWidget):
 
     def _open_account_menu(self):
         menu = QMenu(self)
+        menu.addAction("Options...").triggered.connect(self._open_options)
         menu.addAction("Sync now").triggered.connect(self._manual_sync)
         menu.addAction("Log out").triggered.connect(self._logout)
         menu.exec(self._account_row.mapToGlobal(self._account_row.rect().bottomLeft()))
+
+    def _open_options(self):
+        from qt_ui.options_dialog import OptionsDialog
+        _register_popup(OptionsDialog())
 
     def _manual_sync(self):
         self._set_status("Syncing…")
