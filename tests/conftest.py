@@ -42,27 +42,6 @@ def disable_sync_trigger(monkeypatch):
     monkeypatch.setattr(sync_trigger, "note_change", lambda: None)
 
 
-@pytest.fixture(scope="session", autouse=True)
-def no_real_log_files():
-    """The app's two file loggers (calendar_errors.log, api_requests.log) write
-    to private/ next to the real data. Every test's logged errors and every
-    Flask test-client request landed in the owner's real logs when the suite
-    ran from the real checkout. Detach the file handlers for the whole session."""
-    import logging
-
-    detached = []
-    for name in ("carmen_calendar", "carmen_api_requests"):
-        log = logging.getLogger(name)
-        for handler in list(log.handlers):
-            if isinstance(handler, logging.FileHandler):
-                log.removeHandler(handler)
-                detached.append((log, handler))
-        log.addHandler(logging.NullHandler())
-    yield
-    for log, handler in detached:
-        log.addHandler(handler)
-
-
 class _NullNotifier:
     """Stands in for WinRT's ToastNotifier so the REAL show_toast() code runs
     in tests but nothing ever appears on the owner's screen."""
