@@ -324,7 +324,20 @@ def _nav_pixmap(key, color):
     pen = QPen(QColor(color), 1.7, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
     p.setPen(pen)
     p.setBrush(Qt.NoBrush)
-    if key == "focus":       # a target: ring, ring, dot
+    if key == "home":        # a house
+        roof = QPainterPath(QPointF(4.5, 11.5))
+        roof.lineTo(12, 5)
+        roof.lineTo(19.5, 11.5)
+        p.drawPath(roof)
+        walls = QPainterPath(QPointF(6.5, 10.2))
+        walls.lineTo(6.5, 19)
+        walls.lineTo(17.5, 19)
+        walls.lineTo(17.5, 10.2)
+        p.drawPath(walls)
+        p.drawLine(QPointF(10.2, 19), QPointF(10.2, 14.5))
+        p.drawLine(QPointF(10.2, 14.5), QPointF(13.8, 14.5))
+        p.drawLine(QPointF(13.8, 14.5), QPointF(13.8, 19))
+    elif key == "focus":       # a target: ring, ring, dot
         p.drawEllipse(QPointF(12, 12), 8, 8)
         p.drawEllipse(QPointF(12, 12), 3.6, 3.6)
     elif key == "tasks":     # a tick in a ring

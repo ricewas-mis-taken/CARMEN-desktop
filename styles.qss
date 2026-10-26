@@ -639,3 +639,9 @@ QCheckBox::indicator:disabled {
 QMenu::indicator {
     margin-left: 6px;
 }
+
+/* Home page: the soft page colour behind its cards (the scroll area's own viewport is
+   transparent otherwise and shows the system background). */
+QScrollArea#HomeScroll, QWidget#HomePage {
+    background: #F7F7F8;
+}

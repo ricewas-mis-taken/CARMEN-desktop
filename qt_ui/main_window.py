@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from qt_ui.account_widget import AccountArea
+from qt_ui.home_tab import HomeTab
 from qt_ui.ui_kit import LogoMark, nav_icon
 from qt_ui.board_tab import BoardTab
 from qt_ui.focus_tab import FocusTab
@@ -177,6 +178,7 @@ class _MainWindow(QWidget):
         root_layout.addWidget(content, 1)
 
         self._pages = {}
+        self._add_page("home", HomeTab(on_navigate=self._show_tab))
         self._add_page("focus", FocusTab())
         self._add_page("tasks", TasksTab())
         self._add_page("board", BoardTab())
@@ -185,7 +187,7 @@ class _MainWindow(QWidget):
         self._add_page("screentime", ScreenTimeTab())
         self._add_page("history", HistoryTab())
 
-        self._show_tab("focus")
+        self._show_tab("home")
 
     def _add_page(self, key, widget):
         self._pages[key] = widget
@@ -209,10 +211,12 @@ class _MainWindow(QWidget):
         brand_row.addWidget(title, 1)
         layout.addWidget(brand)
 
+        self._nav_buttons = {}
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
         # (page key, label) in groups; a group's heading is the line above it.
         nav_groups = [
+            ("Today", [("home", "Home")]),
             ("Work", [("focus", "Focus"), ("tasks", "Tasks"), ("board", "The Board")]),
             ("Study", [("review", "Review"), ("scribe", "Scribe")]),
             ("Look back", [("screentime", "Screen Time"), ("history", "Session History")]),
@@ -233,7 +237,8 @@ class _MainWindow(QWidget):
             button.clicked.connect(lambda checked, k=key: self._show_tab(k))
             layout.addWidget(button)
             self._nav_group.addButton(button)
-            if key == "focus":
+            self._nav_buttons[key] = button
+            if key == "home":
                 button.setChecked(True)
 
         layout.addStretch(1)
@@ -245,6 +250,9 @@ class _MainWindow(QWidget):
 
     def _show_tab(self, key):
         self._stack.setCurrentWidget(self._pages[key])
+        button = self._nav_buttons.get(key)
+        if button is not None:
+            button.setChecked(True)
 
     def changeEvent(self, event):
         # Qt restores a "restore down" (un-maximize) click to whatever
