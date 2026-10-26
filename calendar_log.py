@@ -22,6 +22,8 @@ if not logger.handlers:
     # its parent directory itself -- without this, the very first import of
     # this module would crash the whole app before anything else even runs.
     os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
-    handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
+    # Rotated: this one log collects every background thread's failures and used to
+    # grow without limit (2 MB and 17,000 lines of repeats was seen).
+    handler = RotatingFileHandler(LOG_PATH, maxBytes=1_000_000, backupCount=2, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     logger.addHandler(handler)
