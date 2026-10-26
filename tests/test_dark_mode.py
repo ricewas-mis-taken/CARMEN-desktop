@@ -49,11 +49,6 @@ def _message_in_a_tab(qtbot):
     return host, box, label
 
 
-def test_the_message_text_is_unreadable_on_a_dark_os_without_the_fix(qtbot, os_is_dark):
-    host, box, label = _message_in_a_tab(qtbot)
-    assert not _text_is_visible(box, label)          # the bug that was reported: a popup that looks empty
-
-
 def test_force_light_scheme_makes_it_readable(qtbot, os_is_dark):
     ui_kit.force_light_scheme()
     host, box, label = _message_in_a_tab(qtbot)

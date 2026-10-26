@@ -1150,3 +1150,15 @@ def test_score_dialog_rejects_bad_numbers_and_schedules(qtbot, isolate_review_db
     dialog._correct.setText("10")
     dialog._save()
     assert review_store.get_problem(problem["id"])["reviewCount"] == 1
+
+
+def test_adding_a_problem_shows_it_even_though_it_is_not_due(qtbot, isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    view = tab._topic_views[topic["id"]]
+    problem = review_store.create_problem(topic["id"], subject["id"], "Fresh", 5, "text", description_text="")
+    view._after_add_problem(problem)
+    assert view._due_only is False
+    assert [r.name_label.text() for r in view._rows] == ["Fresh"]
+    assert "Added" in view._summary_label.text() and problem["nextReviewDate"] in view._summary_label.text()

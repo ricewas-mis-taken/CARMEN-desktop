@@ -1015,7 +1015,7 @@ class _TopicView(QWidget):
                     # dialog -- without one, Finish > Submit saved nothing.
                     # A fresh, still-hidden dialog takes its place.
                     dialog = _register_popup(_AddProblemDialog(
-                        self._topic_id, on_added=lambda _p: self.refresh(),
+                        self._topic_id, on_added=self._after_add_problem,
                         on_start_first_attempt=self._start_first_attempt,
                     ))
                     done, cancelled = self._first_attempt_callbacks(dialog)
@@ -1125,6 +1125,13 @@ class _TopicView(QWidget):
         self.refresh()
         if message:
             self._summary_label.setText(message)
+
+    def _after_add_problem(self, problem):
+        """A new problem is not due yet either, so show it instead of an unchanged list."""
+        if problem and problem.get("name"):
+            self._after_quick_add(f'Added "{problem["name"]}". First review on {problem.get("nextReviewDate")}.')
+        else:
+            self.refresh()
 
     def _set_due_only(self, due_only):
         self._due_only = due_only
@@ -1405,7 +1412,7 @@ class _TopicView(QWidget):
 
     def _open_add_problem(self):
         _register_popup(_AddProblemDialog(
-            self._topic_id, on_added=lambda _p: self.refresh(),
+            self._topic_id, on_added=self._after_add_problem,
             on_start_first_attempt=self._start_first_attempt,
         ))
 
