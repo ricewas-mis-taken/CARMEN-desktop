@@ -36,3 +36,25 @@ def test_a_review_of_another_task_does_not_count(isolate_state, tmp_path, monkey
     other = {"source": "review", "eventId": "someone-else", "violationLog": [],
              "startTime": (datetime.now() - timedelta(minutes=30)).isoformat(), "endTime": datetime.now().isoformat()}
     assert tasks_store.logged_seconds_for_date(task, date.today(), [other]) == 0
+
+
+def test_a_first_attempt_counts_too(isolate_state, tmp_path, monkeypatch):
+    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
+    task = tasks_store.create_task({"name": "usaco", "color": "#112233", "targetMinutes": 60})
+    # started exactly the way the Review tab starts one (no problem exists yet)
+    session_manager.start_session(
+        duration_minutes=tasks_store.BURNOUT_MINUTES, lock_mode="soft", process_blocklist=[], domain_whitelist=[],
+        source="review", event_id=task["id"], event_title="usaco - first attempt",
+        review_problem_name=session_manager.FIRST_ATTEMPT_NAME, review_subject_name=None,
+    )
+    status = session_manager.get_status()
+    assert session_manager.is_first_attempt(status)
+    status = dict(status, startTime=(datetime.now() - timedelta(minutes=15)).isoformat())
+    assert 14.5 < tasks_store.logged_seconds_for_date(task, date.today(), [], live_status=status) / 60 < 15.5
+
+    done = [{
+        "source": "review", "eventId": task["id"], "violationLog": [], "reviewProblemName": "First attempt",
+        "startTime": (datetime.now() - timedelta(minutes=40)).isoformat(),
+        "endTime": (datetime.now() - timedelta(minutes=10)).isoformat(),
+    }]
+    assert 29.5 < tasks_store.logged_seconds_for_date(task, date.today(), done) / 60 < 30.5
