@@ -600,3 +600,34 @@ tick only while visible, restyle only when the look changes). Old TaskCard/burno
   under 60% needs-answers, hardcoded). Why: new columns change the sync contract and old devices
   would drop or reset them. Cost: the raw score (e.g. 8/10) is not stored, only its effect.
   Skipped: global hotkey, undo for a batch, per-topic thresholds.
+
+2026-10-25  Shared colour themes (counterpart: carmen-extension DESIGN_DECISIONS.txt, same date)
+  A theme is six colours (ink, muted, faint, accent, page, sidebar); the rest is derived, so a custom
+  theme can't produce unreadable text. Five named themes, each picked for an effect, not a fashion:
+  Paper (neutral default), Deep work (navy; blue is tied to sustained attention), Moss (green, restful
+  for long review), Clay (warm; pushes you to start a task you avoid), Graphite (almost no colour).
+  "Make your own" edits all six. Saved in config.json, per computer, not synced (the extension reads it
+  from the local GET /theme instead).
+  Fork: rewrite styles.qss around variables vs. swap its literal colours at load. Swapped at load
+  (theme.apply_to_stylesheet): QSS has no variables and a rewrite would touch 640 lines for no visible gain.
+  Cost: colours written directly into a widget's own style (ink buttons, numerals, Home's cards) only
+  change on the next launch; the stylesheet part changes immediately.
+  Cards stay white in every theme, so there is no dark theme. A dark theme needs every white-on-ink label
+  swapped as well. Still dark regardless of theme: quicknote, mini timer, lock overlay.
+
+2026-10-25  Home page
+  Opens first. Order is the decision: what to do now (the open task with the most time left, one
+  Start button), then three numbers (focused today, tasks open, reviews due), then the week as bars,
+  then colours. No streaks, badges or quotes: nothing there rewards opening the app for its own sake.
+  Falls back to "reviews are due" or "nothing is waiting" so the top card never shows an empty box.
+
+2026-10-25  Design references used
+  Cloned (reference only, nothing executed, git-ignored in design-skills/): anthropics/skills,
+  nextlevelbuilder/ui-ux-pro-max-skill, pbakaus/impeccable, vercel-labs/agent-skills,
+  Owl-Listener/designer-skills, LovroPodobnik/refactoring-ui-skill, Leonxlnx/taste-skill.
+  What was actually applied, from Refactoring UI and Impeccable's critique rules: a fixed spacing
+  scale (4/8/12/16/24/32), hierarchy by weight and colour not size alone, one accent per screen,
+  shadows only at two elevations, no decorative gradients or emoji icons (the sidebar's emoji became
+  drawn line icons), copy that says what happens ("Log it", "End session") not "Submit".
+  Not applied: the larger frameworks (scroll animation, 3D, marketing-page kits): wrong for a desktop tool.
+  Not done and said plainly: I did not run each skill's full workflow; I took their rules, not their tooling.
