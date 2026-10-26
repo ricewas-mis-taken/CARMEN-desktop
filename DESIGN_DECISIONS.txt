@@ -655,3 +655,21 @@ tick only while visible, restyle only when the look changes). Old TaskCard/burno
   Sync: both fields are cleaned on pull (sync_client._clean_day_minutes). A computer on the old version
   ignores them and shows every ticked day at targetMinutes, which the editor sets to the first ticked
   day's time. Not done: a per-day time for the daily kind (every day is already "each day").
+
+2026-10-25  Reviews that ran without their own session
+  Session History and a task's time both read finished sessions; the review database is a separate
+  record. When a review could not start its own session (some other kind of session was running), its
+  time reached the review database only, so it showed in neither (found on 4 real reviews of 2026-10-25).
+  Fork: make Session History also read the review database vs. file a normal history entry when such a
+  review finishes. Chose the entry: Session History's file keeps one shape, the task math needs no
+  second source, and it syncs like any other session. Entry ids start "untimed-". Skipped when a session
+  of the same task is running, because that session already counts the time (no double count).
+  Not recovered: the 4 reviews of 2026-10-25 that already happened. Their time is in the review
+  database but not in history.
+
+2026-10-25  Review delete, categories and a confirm popup of our own
+  Deleting a problem or category is a tombstone (is_deleted), like topics, so it syncs; sync now sends
+  deleted problems and categories (before, only topics were deleted, and children were hard-removed).
+  QMessageBox takes its colours from the operating system: dark mode gave a dark box with dark text,
+  which looked like an empty popup. The Review tab now asks through qt_ui/confirm_dialog.py, drawn by
+  the app. Other tabs still use QMessageBox (board, scribe, tasks, task editor, pickers).
