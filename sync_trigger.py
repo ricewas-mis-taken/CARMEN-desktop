@@ -52,7 +52,10 @@ def note_change():
     """Call after a meaningful local write completes. No-op if
     push-on-change is disabled or nobody's logged in -- no point
     debouncing a sync that can't happen."""
-    if not _enabled or not auth_manager.is_logged_in():
+    # Local check only: this runs on the caller's thread (often the window thread, on
+    # every save), and is_logged_in() can block on a network token refresh. The sync
+    # itself runs on the timer's own thread, where that refresh is harmless.
+    if not _enabled or not auth_manager.may_be_logged_in():
         return
     with _lock:
         global _timer

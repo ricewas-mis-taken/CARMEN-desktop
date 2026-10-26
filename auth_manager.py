@@ -254,6 +254,14 @@ def is_logged_in():
     return _refresh_session(force=False)
 
 
+def may_be_logged_in():
+    """True if signed in, or a saved sign-in could be resumed. Local checks only:
+    is_logged_in() may exchange the saved token over the network, which is not
+    something to do on the window thread just to decide whether a save is worth
+    a background sync."""
+    return bool((_access_token and _current_user) or has_saved_login())
+
+
 def get_current_user():
     """Returns {"id": ..., "email": ...} if logged in, else None."""
     if not is_logged_in():
