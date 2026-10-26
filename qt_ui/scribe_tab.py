@@ -6,7 +6,6 @@ background, zoom and position on the board. Every change is written to
 private/scribe.json a moment later (see scribe_store.py), and again when the tab
 is hidden or the app quits. Shape maths lives in scribe_geometry.py.
 """
-import copy
 import math
 import time
 
@@ -141,7 +140,12 @@ class ScribeCanvas(QWidget):
 
     # ---- undo ------------------------------------------------------------
     def _snapshot(self):
-        return copy.deepcopy(self.doc["layers"]), self.doc["activeLayer"]
+        """The layers as they are now, for undo. Each item dict is copied but the
+        point lists inside are shared: they are only ever replaced (moving a shape
+        builds a new list), never edited in place. A full deep copy cost ~20 ms and
+        ~4 MB per step on a 1,400-stroke board, and 100 steps are kept."""
+        layers = [dict(layer, items=[dict(item) for item in layer["items"]]) for layer in self.doc["layers"]]
+        return layers, self.doc["activeLayer"]
 
     def _push_undo(self):
         self._undo.append(self._snapshot())
