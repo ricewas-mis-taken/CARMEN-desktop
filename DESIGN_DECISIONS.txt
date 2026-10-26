@@ -591,3 +591,12 @@ tick only while visible, restyle only when the look changes). Old TaskCard/burno
 
 [2026-10-25] Session History redesigned on top of the same file
   session_history.json and session_history.load_all() are untouched; the page only reads them. Pause-aware worked time comes from tasks_store.worked_seconds, as the Tasks cards use. format_session_html() stays for anything that wants the old text.
+
+2026-10-25  Review quick entry (miss log, paste a list, score a set)
+  Fork: add new columns (miss_count, set kind, session score) vs. build on existing fields.
+  Chose existing fields. A miss is a problem in a "Mistakes" subject (logging it again raises its
+  stars one step and is not a duplicate); a batch is many ordinary problems; a set's score becomes
+  the same solved/shaky/checked-answer outcome a timed review gives (90%+ solid, 60-89% shaky,
+  under 60% needs-answers, hardcoded). Why: new columns change the sync contract and old devices
+  would drop or reset them. Cost: the raw score (e.g. 8/10) is not stored, only its effect.
+  Skipped: global hotkey, undo for a batch, per-topic thresholds.

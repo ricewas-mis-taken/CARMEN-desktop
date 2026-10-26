@@ -422,11 +422,12 @@ class _ProblemRow(QFrame):
     one quiet line, and the Start button. Click anywhere else to read its description;
     right-click to edit."""
 
-    def __init__(self, problem, is_current, on_start, on_open, on_edit):
+    def __init__(self, problem, is_current, on_start, on_open, on_edit, on_score=None):
         super().__init__()
         self.problem = problem
         self._on_open = on_open
         self._on_edit = on_edit
+        self._on_score = on_score
         self.setObjectName("ProblemRow")
         self.setStyleSheet(
             "QFrame#ProblemRow{background:#FFFFFF;border:1px solid #E6E9EF;border-radius:14px;}"
@@ -482,8 +483,14 @@ class _ProblemRow(QFrame):
     def contextMenuEvent(self, event):
         menu = QMenu(self)
         edit_action = menu.addAction("Edit Problem")
-        if menu.exec(event.globalPos()) == edit_action:
+        score_action = menu.addAction("Score as a set...") if self._on_score else None
+        chosen = menu.exec(event.globalPos())
+        if chosen is None:
+            return
+        if chosen == edit_action:
             self._on_edit(self.problem)
+        elif chosen == score_action:
+            self._on_score(self.problem)
 
 
 class ReviewTab(QWidget):
@@ -1066,6 +1073,18 @@ class _TopicView(QWidget):
 
         header.addStretch(1)
 
+        missed_button = button("I missed this", SECONDARY_STYLE, height=36)
+        missed_button.setToolTip("Log a problem you got wrong in a few seconds. It comes back tomorrow.")
+        missed_button.clicked.connect(
+            lambda: _register_popup(_MissDialog(self._topic_id, on_done=self.refresh)))
+        header.addWidget(missed_button)
+
+        paste_button = button("Paste a list", SECONDARY_STYLE, height=36)
+        paste_button.setToolTip("Add many problems at once from a list, a spreadsheet column or a range.")
+        paste_button.clicked.connect(
+            lambda: _register_popup(_BatchDialog(self._topic_id, on_done=self.refresh)))
+        header.addWidget(paste_button)
+
         add_button = button("+ Add problem", _PRIMARY_INK, height=36)
         add_button.clicked.connect(self._open_add_problem)
         header.addWidget(add_button)
@@ -1202,7 +1221,8 @@ class _TopicView(QWidget):
         for problem in self._problems:
             row = _ProblemRow(
                 problem, is_current=problem["id"] == current_id, on_start=self._start_problem,
-                on_open=lambda p: _DescriptionPopup(p), on_edit=self._open_edit_problem)
+                on_open=lambda p: _DescriptionPopup(p), on_edit=self._open_edit_problem,
+                on_score=lambda p: _register_popup(_ScoreDialog(p, on_done=self.refresh)))
             self._rows.append(row)
             self._list_layout.addWidget(row)
         if not self._rows:
@@ -2275,6 +2295,202 @@ class _DescriptionPopup(QWidget):
 
         self.show()
         _register_popup(self)
+
+
+class _MissDialog(QWidget):
+    """One line, Enter, done. A trailing ! makes it harder (!! hardest)."""
+
+    def __init__(self, topic_id, on_done):
+        super().__init__(None, Qt.WindowStaysOnTopHint)
+        self.setObjectName("PopupBg")
+        self.setWindowTitle("I missed this")
+        self.resize(440, 260)
+        self._topic_id = topic_id
+        self._on_done = on_done
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(8)
+        layout.addWidget(dialog_title("I missed this", "It goes under Mistakes and comes back tomorrow."))
+        layout.addWidget(field_label("What was it?"))
+        self._edit = QLineEdit()
+        self._edit.setPlaceholderText("Ch 7 #14   (add ! if it was hard)")
+        self._edit.returnPressed.connect(self._save)
+        layout.addWidget(self._edit)
+        layout.addStretch(1)
+        self._status = role_label("", "hint", wrap=True)
+        layout.addWidget(self._status)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.close)
+        row.addWidget(cancel)
+        save = accent(QPushButton("Log it"))
+        save.clicked.connect(self._save)
+        row.addWidget(save)
+        layout.addLayout(row)
+        self.show()
+
+    def _save(self):
+        import review_quicklog
+        result = review_quicklog.log_miss(self._topic_id, self._edit.text())
+        if result is None:
+            self._status.setText("Type what you missed first.")
+            return
+        self.close()
+        self._on_done()
+
+
+class _BatchDialog(QWidget):
+    """Paste names (one per line, a spreadsheet column, or a range like
+    'Ch 7 problems 1-30') and see exactly what will be added first."""
+
+    def __init__(self, topic_id, on_done):
+        super().__init__(None, Qt.WindowStaysOnTopHint)
+        self.setObjectName("PopupBg")
+        self.setWindowTitle("Paste a list")
+        self.resize(520, 640)
+        self._topic_id = topic_id
+        self._on_done = on_done
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(8)
+        layout.addWidget(dialog_title("Paste a list", "One problem per line. 'Ch 7 problems 1-30' becomes thirty."))
+
+        layout.addWidget(field_label("Add to"))
+        self._subject = QComboBox()
+        for subject in review_store.list_subjects(topic_id):
+            self._subject.addItem(subject["name"], subject["id"])
+        layout.addWidget(self._subject)
+
+        layout.addWidget(field_label("Stars (5 is hardest)"))
+        self._stars = _StarPicker(3)
+        layout.addWidget(self._stars)
+
+        layout.addWidget(field_label("The list"))
+        self._text = WrapEdit()
+        self._text.setMinimumHeight(150)
+        self._text.textChanged.connect(self._preview)
+        layout.addWidget(self._text, 1)
+
+        self._summary = role_label("", "hint", wrap=True)
+        layout.addWidget(self._summary)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.close)
+        row.addWidget(cancel)
+        self._add = accent(QPushButton("Add"))
+        self._add.clicked.connect(self._save)
+        row.addWidget(self._add)
+        layout.addLayout(row)
+        self._preview()
+        self.show()
+
+    def _names(self):
+        import review_quicklog
+        return review_quicklog.parse_batch(self._text.toPlainText())
+
+    def _preview(self):
+        names = self._names()
+        if self._subject.count() == 0:
+            self._summary.setText("Make a category in the side panel first, then paste.")
+            self._add.setEnabled(False)
+            return
+        self._add.setEnabled(bool(names))
+        if not names:
+            self._summary.setText("Nothing to add yet.")
+            return
+        shown = ", ".join(names[:4]) + (" ..." if len(names) > 4 else "")
+        self._summary.setText(f"{len(names)} to add: {shown}")
+        self._add.setText(f"Add {len(names)}")
+
+    def _save(self):
+        import review_quicklog
+        names = self._names()
+        if not names:
+            return
+        created, skipped = review_quicklog.add_batch(
+            self._topic_id, self._subject.currentData(), names, self._stars.value())
+        if skipped:
+            QMessageBox.information(self, "Paste a list", f"Added {created}. {skipped} were already there.")
+        self.close()
+        self._on_done()
+
+
+class _ScoreDialog(QWidget):
+    """A set of questions scored as one: the result feeds the usual schedule
+    (90%+ solid, 60-89% shaky, under 60% counts as needing the answers)."""
+
+    def __init__(self, problem, on_done):
+        super().__init__(None, Qt.WindowStaysOnTopHint)
+        self.setObjectName("PopupBg")
+        self.setWindowTitle("Score a set")
+        self.resize(420, 330)
+        self._problem = problem
+        self._on_done = on_done
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(8)
+        layout.addWidget(dialog_title(problem["name"], "How did the set go?"))
+
+        score_row = QHBoxLayout()
+        self._correct = QLineEdit()
+        self._correct.setPlaceholderText("right")
+        self._total = QLineEdit()
+        self._total.setPlaceholderText("out of")
+        for edit in (self._correct, self._total):
+            edit.textChanged.connect(self._preview)
+            edit.returnPressed.connect(self._save)
+            score_row.addWidget(edit)
+        layout.addLayout(score_row)
+
+        self._status = role_label("", "hint", wrap=True)
+        layout.addWidget(self._status)
+        layout.addStretch(1)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.close)
+        row.addWidget(cancel)
+        save = accent(QPushButton("Save score"))
+        save.clicked.connect(self._save)
+        row.addWidget(save)
+        layout.addLayout(row)
+        self.show()
+
+    def _numbers(self):
+        try:
+            return int(self._correct.text()), int(self._total.text())
+        except ValueError:
+            return None
+
+    def _preview(self):
+        import review_quicklog
+        numbers = self._numbers()
+        outcome = review_quicklog.outcome_for_score(*numbers) if numbers and numbers[0] <= numbers[1] else None
+        if outcome is None:
+            self._status.setText("")
+        elif not outcome[0]:
+            self._status.setText("Counts as needing the answers: back to the start of the schedule.")
+        elif outcome[1] <= 2:
+            self._status.setText("Shaky: it comes back sooner than usual.")
+        else:
+            self._status.setText("Solid: it moves to the next, longer interval.")
+
+    def _save(self):
+        import review_quicklog
+        numbers = self._numbers()
+        if not numbers or review_quicklog.score_set(self._problem["id"], *numbers) is None:
+            self._status.setText("Enter how many you got right and how many there were.")
+            return
+        self.close()
+        self._on_done()
 
 
 _popup_refs = set()

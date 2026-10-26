@@ -1012,3 +1012,40 @@ def test_counts_follow_the_due_or_all_view(qtbot, isolate_review_db):
     view, _i, _l = _view_with_problems(qtbot)
     view._set_due_only(True)
     assert view._category_buttons[None]._count == len(view._problems)
+
+
+def test_miss_dialog_logs_and_closes(qtbot, isolate_review_db):
+    topic = review_store.create_topic("Math")["id"]
+    done = []
+    dialog = review_tab._MissDialog(topic, on_done=lambda: done.append(1))
+    qtbot.addWidget(dialog)
+    dialog._edit.setText("Ch7 #14!")
+    dialog._save()
+    assert done == [1]
+    assert review_store.list_problems(topic, due_only=False)[0]["stars"] == 4
+
+
+def test_batch_dialog_previews_then_adds(qtbot, isolate_review_db):
+    topic = review_store.create_topic("Math")["id"]
+    review_store.create_subject(topic, "Algebra", "#112233")
+    dialog = review_tab._BatchDialog(topic, on_done=lambda: None)
+    qtbot.addWidget(dialog)
+    dialog._text.setPlainText("Ch 7 problems 1-3")
+    assert "3 to add" in dialog._summary.text()
+    dialog._save()
+    assert len(review_store.list_problems(topic, due_only=False)) == 3
+
+
+def test_score_dialog_rejects_bad_numbers_and_schedules(qtbot, isolate_review_db):
+    topic = review_store.create_topic("Math")["id"]
+    subject = review_store.create_subject(topic, "Sets", "#334455")
+    problem = review_store.create_problem(topic, subject["id"], "Set 1", 3, "text", description_text="")
+    dialog = review_tab._ScoreDialog(problem, on_done=lambda: None)
+    qtbot.addWidget(dialog)
+    dialog._correct.setText("12")
+    dialog._total.setText("10")
+    dialog._save()
+    assert review_store.get_problem(problem["id"])["reviewCount"] == 0
+    dialog._correct.setText("10")
+    dialog._save()
+    assert review_store.get_problem(problem["id"])["reviewCount"] == 1
