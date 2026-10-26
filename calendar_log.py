@@ -8,6 +8,7 @@ actually diagnosable, since they run unattended in a background thread
 instead of inline with a user-triggered action.
 """
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import paths
 
