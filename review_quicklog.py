@@ -40,14 +40,20 @@ def parse_miss(text):
     return name, min(5, 3 + min(bangs, 2))
 
 
-def log_miss(topic_id, text):
-    """Adds the miss as a problem due tomorrow. Logging the same name again
-    raises its stars one step and brings it back to the start of the schedule.
-    Returns {'problem': ..., 'repeat': bool} or None for empty text."""
-    name, stars = parse_miss(text)
+def log_miss(topic_id, text, subject_id=None, stars=None):
+    """Adds the miss as a problem that comes back for review soon. Logging the same
+    name again raises its stars one step. `subject_id` is the category to file it
+    under (the "Mistakes" category when None); `stars` is how hard it was (3, or
+    what trailing !s say, when None). Returns {'problem': ..., 'repeat': bool}
+    or None for empty text."""
+    name, bang_stars = parse_miss(text)
     if not name:
         return None
-    subject = _mistakes_subject(topic_id)
+    stars = stars or bang_stars
+    if subject_id is None:
+        subject = _mistakes_subject(topic_id)
+    else:
+        subject = next((x for x in review_store.list_subjects(topic_id) if x["id"] == subject_id), None)
     if subject is None:
         return None
     for existing in review_store.list_problems(topic_id, due_only=False):

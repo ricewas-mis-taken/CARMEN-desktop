@@ -1014,26 +1014,127 @@ def test_counts_follow_the_due_or_all_view(qtbot, isolate_review_db):
     assert view._category_buttons[None]._count == len(view._problems)
 
 
-def test_miss_dialog_logs_and_closes(qtbot, isolate_review_db):
+def test_miss_dialog_files_it_under_the_chosen_category_with_the_chosen_stars(qtbot, isolate_review_db):
     topic = review_store.create_topic("Math")["id"]
-    done = []
-    dialog = review_tab._MissDialog(topic, on_done=lambda: done.append(1))
+    subject = review_store.create_subject(topic, "Algebra", "#112233")
+    said = []
+    dialog = review_tab._MissDialog(topic, on_done=said.append)
     qtbot.addWidget(dialog)
-    dialog._edit.setText("Ch7 #14!")
+    dialog._edit.setText("Ch7 #14")
+    dialog._category.setCurrentIndex(dialog._category.findData(subject["id"]))
+    dialog._stars._value = 4
     dialog._save()
-    assert done == [1]
-    assert review_store.list_problems(topic, due_only=False)[0]["stars"] == 4
+    problem = review_store.list_problems(topic, due_only=False)[0]
+    assert (problem["subjectName"], problem["stars"]) == ("Algebra", 4)
+    assert 'Added "Ch7 #14"' in said[0] and problem["nextReviewDate"] in said[0]
 
 
-def test_batch_dialog_previews_then_adds(qtbot, isolate_review_db):
+def test_miss_dialog_with_no_category_makes_mistakes_and_needs_a_name(qtbot, isolate_review_db):
+    topic = review_store.create_topic("Math")["id"]
+    dialog = review_tab._MissDialog(topic, on_done=lambda m: None)
+    qtbot.addWidget(dialog)
+    dialog._save()
+    assert "first" in dialog._status.text()
+    dialog._edit.setText("x")
+    dialog._save()
+    assert review_store.list_problems(topic, due_only=False)[0]["subjectName"] == "Mistakes"
+
+
+def test_a_quick_add_switches_to_all_so_the_new_problem_is_visible(qtbot, isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    view = tab._topic_views[topic["id"]]
+    assert view._due_only is True
+    review_store.create_problem(topic["id"], subject["id"], "fresh", 5, "text", description_text="")
+    view._after_quick_add("Added fresh.")
+    assert view._due_only is False and len(view._rows) == 1
+    assert view._summary_label.text() == "Added fresh."
+
+
+def test_batch_dialog_takes_new_lines_previews_then_adds(qtbot, isolate_review_db):
     topic = review_store.create_topic("Math")["id"]
     review_store.create_subject(topic, "Algebra", "#112233")
-    dialog = review_tab._BatchDialog(topic, on_done=lambda: None)
+    said = []
+    dialog = review_tab._BatchDialog(topic, on_done=said.append)
     qtbot.addWidget(dialog)
-    dialog._text.setPlainText("Ch 7 problems 1-3")
-    assert "3 to add" in dialog._summary.text()
+    dialog.show()
+    dialog._text.setFocus()
+    qtbot.keyClicks(dialog._text, "Fence")
+    qtbot.keyClick(dialog._text, review_tab.Qt.Key_Return)
+    qtbot.keyClicks(dialog._text, "Cows")
+    assert dialog._text.toPlainText() == "Fence\nCows"
+    assert "2 to add" in dialog._summary.text()
     dialog._save()
-    assert len(review_store.list_problems(topic, due_only=False)) == 3
+    assert len(review_store.list_problems(topic, due_only=False)) == 2
+    assert said == ["Added 2 problems to Algebra."]
+
+
+def test_batch_dialog_without_a_category_says_so_and_can_make_one(qtbot, isolate_review_db):
+    topic = review_store.create_topic("Math")["id"]
+    dialog = review_tab._BatchDialog(topic, on_done=lambda m: None)
+    qtbot.addWidget(dialog)
+    dialog._text.setPlainText("a")
+    assert not dialog._add.isEnabled() and "category" in dialog._summary.text()
+    subject = review_store.create_subject(topic, "Sorting", "#445566")
+    dialog._category_made(subject)
+    assert dialog._add.isEnabled() and dialog._subject.currentText() == "Sorting"
+
+
+def test_new_category_dialog_creates_one_and_rejects_a_repeat(qtbot, isolate_review_db):
+    topic = review_store.create_topic("Math")["id"]
+    made = []
+    dialog = review_tab._NewCategoryDialog(topic, on_done=made.append)
+    qtbot.addWidget(dialog)
+    dialog._save()
+    assert "name" in dialog._status.text() and made == []
+    dialog._name.setText("Sorting")
+    dialog._save()
+    assert made[0]["name"] == "Sorting"
+    again = review_tab._NewCategoryDialog(topic, on_done=made.append)
+    qtbot.addWidget(again)
+    again._name.setText("sorting")
+    again._save()
+    assert "already" in again._status.text() and len(made) == 1
+
+
+def test_the_sidebar_can_make_and_delete_a_category(qtbot, isolate_review_db, monkeypatch):
+    topic, subject = _make_topic_and_subject()
+    review_store.create_problem(topic["id"], subject["id"], "p", 3, "text", description_text="")
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    view = tab._topic_views[topic["id"]]
+    monkeypatch.setattr(review_tab.confirm_dialog, "ask", lambda *a, **k: True)
+    view._delete_category(subject["id"], subject["name"], 1)
+    assert review_store.list_subjects(topic["id"]) == []
+    assert review_store.list_problems(topic["id"], due_only=False) == []
+
+
+def test_a_problem_can_be_deleted_after_confirming(qtbot, isolate_review_db, monkeypatch):
+    topic, subject = _make_topic_and_subject()
+    problem = review_store.create_problem(topic["id"], subject["id"], "p", 3, "text", description_text="")
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    view = tab._topic_views[topic["id"]]
+    monkeypatch.setattr(review_tab.confirm_dialog, "ask", lambda *a, **k: False)
+    view._delete_problem(problem)
+    assert review_store.get_problem(problem["id"]) is not None          # said no: still there
+    monkeypatch.setattr(review_tab.confirm_dialog, "ask", lambda *a, **k: True)
+    view._delete_problem(problem)
+    assert review_store.get_problem(problem["id"]) is None
+
+
+def test_the_confirm_popup_is_our_own_and_answers_yes_or_no(qtbot):
+    from qt_ui import confirm_dialog
+    box = confirm_dialog.ConfirmDialog(None, "Delete problem", "Sure?", yes="Delete", risky=True)
+    qtbot.addWidget(box)
+    assert box.objectName() == "PopupBg" and box.yes_button.text() == "Delete"
+    box.yes_button.click()
+    assert box.result() == confirm_dialog.QDialog.Accepted
+    other = confirm_dialog.ConfirmDialog(None, "t", "x")
+    qtbot.addWidget(other)
+    other.no_button.click()
+    assert other.result() == confirm_dialog.QDialog.Rejected
 
 
 def test_score_dialog_rejects_bad_numbers_and_schedules(qtbot, isolate_review_db):
