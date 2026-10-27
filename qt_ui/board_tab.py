@@ -175,6 +175,15 @@ _CHIP_STYLE = (
     f"QPushButton:checked{{background:{INK};color:#FFFFFF;border:1px solid {INK};}}")
 
 
+def _drop_layout(layout):
+    while layout.count():
+        item = layout.takeAt(0)
+        if item.widget():
+            item.widget().deleteLater()
+        elif item.layout():
+            _drop_layout(item.layout())
+
+
 class BoardTab(QWidget):
     def __init__(self):
         super().__init__()
@@ -231,24 +240,87 @@ class BoardTab(QWidget):
         super().showEvent(event)
 
     def _refresh_notes(self):
-        """The whole QuickNote list, kept under the board."""
+        """The whole QuickNote list under the board: add a line at the top, tick lines off (they
+        strike through), and clear the ticked ones, which saves the list."""
+        from qt_ui.quicknote import _Tick
         while self._notes_layout.count():
             item = self._notes_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+            elif item.layout():
+                _drop_layout(item.layout())
+        top = QHBoxLayout()
         head = QLabel("QuickNote")
         head.setStyleSheet(f"font-size: 17px; font-weight: 700; color: {INK}; background: transparent;")
-        self._notes_layout.addWidget(head)
+        top.addWidget(head)
+        top.addStretch(1)
+        self._clear_button = QPushButton("Clear ticked")
+        self._clear_button.setCursor(Qt.PointingHandCursor)
+        self._clear_button.setStyleSheet(SECONDARY_STYLE)
+        self._clear_button.setFixedHeight(30)
+        self._clear_button.clicked.connect(self._clear_ticked)
+        top.addWidget(self._clear_button)
+        self._notes_layout.addLayout(top)
+
+        adder = QHBoxLayout()
+        self._note_input = WrapEdit(boxed=False, max_rows=3)
+        self._note_input.setPlaceholderText("Add a line, then Enter")
+        self._note_input.setStyleSheet(
+            f"QPlainTextEdit#WrapEdit{{background:#F7F8FA;color:{INK};border:1px solid #E6E9EF;"
+            "border-radius:10px;padding:4px 8px;font-size:14px;}"
+            "QPlainTextEdit#WrapEdit:focus{border:1px solid #5B8DEF;}")
+        self._note_input.returnPressed.connect(self._add_note)
+        adder.addWidget(self._note_input, 1)
+        add = QPushButton("Add")
+        add.setCursor(Qt.PointingHandCursor)
+        add.setStyleSheet(SECONDARY_STYLE)
+        add.setFixedHeight(34)
+        add.clicked.connect(self._add_note)
+        adder.addWidget(add)
+        self._notes_layout.addLayout(adder)
+
+        self._note_rows = []
         notes = [n.strip() for n in quicknote_store.load()[0] if n.strip()]
         if not notes:
             empty = QLabel("Nothing jotted down yet.")
             empty.setStyleSheet(f"color: {MUTED}; font-size: 14px; background: transparent;")
             self._notes_layout.addWidget(empty)
         for text in notes:
-            line = QLabel("•  " + text)
-            line.setWordWrap(True)
-            line.setStyleSheet(f"color: {INK}; font-size: 14.5px; background: transparent;")
-            self._notes_layout.addWidget(line)
+            line = QHBoxLayout()
+            line.setSpacing(10)
+            tick = _Tick()
+            tick.setFixedSize(20, 20)
+            label = QLabel(text)
+            label.setWordWrap(True)
+            self._style_note(label, False)
+            tick.toggled.connect(lambda on, lab=label: self._style_note(lab, on))
+            line.addWidget(tick, 0, Qt.AlignTop)
+            line.addWidget(label, 1)
+            self._notes_layout.addLayout(line)
+            self._note_rows.append((tick, label, text))
+
+    @staticmethod
+    def _style_note(label, ticked):
+        label.setStyleSheet(
+            f"color: {'#98A2B3' if ticked else INK}; font-size: 14.5px; background: transparent;"
+            + ("text-decoration: line-through;" if ticked else ""))
+        font = label.font()
+        font.setStrikeOut(ticked)
+        label.setFont(font)
+
+    def _add_note(self):
+        text = self._note_input.text().strip()
+        if not text:
+            return
+        items = [n for n in quicknote_store.load()[0] if n.strip()]
+        quicknote_store.save(items + [text])
+        self._refresh_notes()
+        self._note_input.setFocus()
+
+    def _clear_ticked(self):
+        keep = [text for tick, _label, text in self._note_rows if not tick.isChecked()]
+        quicknote_store.save(keep)
+        self._refresh_notes()
 
     def _board_signature(self):
         return (

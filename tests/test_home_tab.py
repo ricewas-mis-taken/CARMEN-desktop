@@ -150,3 +150,15 @@ def test_milestones_and_welcome_lines():
     assert home.next_milestone(0) == 3 and home.next_milestone(7) == 14 and home.next_milestone(400) == 500
     assert all(home.welcome_line(datetime(2026, 10, 14, h)) for h in (2, 9, 15, 21))
     assert home.importance_colour(10) != home.importance_colour(1)
+
+
+def test_a_running_task_session_counts_toward_today_as_it_goes(isolate_state, tmp_path, monkeypatch):
+    import session_manager as sm
+    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
+    task = tasks_store.create_task({"name": "Essay", "targetMinutes": 60})
+    sm.start_session(25, "soft", [], [], source="task", event_id=task["id"], event_title="Essay")
+    sm._state["startTime"] = (datetime.now() - __import__("datetime").timedelta(minutes=20)).isoformat()
+    status = sm.get_status()
+    idle = home.summary([task], [], 0, date.today())["open"][0]
+    live = home.summary([task], [], 0, date.today(), 20, status)["open"][0]
+    assert live["logged"] > idle["logged"] + 15 and live["left"] < idle["left"] - 15
