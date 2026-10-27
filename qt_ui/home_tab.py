@@ -16,7 +16,7 @@ import random
 from datetime import date, datetime, timedelta
 
 from PySide6.QtCore import QElapsedTimer, QPointF, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetricsF, QLinearGradient, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFont, QFontMetricsF, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
@@ -34,6 +34,7 @@ from qt_ui.mini_timer import describe as describe_session
 from qt_ui.ui_kit import (
     BREAK_COLOR, FAINT, INK, MUTED, SECONDARY_STYLE, ElidedLabel, Ring, button, format_minutes, safe_color, tint,
 )
+from qt_ui import mond_letters
 from qt_ui.wrap_edit import WrapEdit
 
 WIDE_FROM = 900          # page width where the two-column layout starts
@@ -369,27 +370,18 @@ def _banner_font(pixels, spacing, weight=QFont.Light):
     return font
 
 
-def _paint_droplets(p, width, height, seed=7):
-    """Rain on a window: a scatter of small glassy drops, the same every time."""
-    rnd = random.Random(seed)
-    for _ in range(max(30, int(width * height / 5500))):
-        r = rnd.choice((2.5, 3, 3.5, 4, 5, 6, 8, 11))
-        x, y = rnd.uniform(0, width), rnd.uniform(0, height)
-        fill = QColor(30, 20, 70, 34)
-        p.setPen(QPen(QColor(255, 255, 255, 70), 1))
-        p.setBrush(fill)
-        p.drawEllipse(QPointF(x, y), r, r)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(255, 255, 255, 90))
-        p.drawEllipse(QPointF(x - r * 0.3, y - r * 0.35), r * 0.28, r * 0.28)
-
-
-def _paint_sky(p, rect):
+def _paint_sky(p, rect, drift=0.0):
+    """Dusk purple with two slow, soft glows (no clutter: the lettering is the picture)."""
     gradient = QLinearGradient(0, rect.top(), 0, rect.bottom())
     gradient.setColorAt(0, QColor(_PURPLE_TOP))
     gradient.setColorAt(1, QColor(_PURPLE_BOTTOM))
     p.fillRect(rect, gradient)
-    _paint_droplets(p, rect.width(), rect.height())
+    w, h = rect.width(), rect.height()
+    for cx, cy, radius, alpha in ((0.22 + 0.04 * drift, 0.15, 0.55, 70), (0.82 - 0.05 * drift, 0.95, 0.6, 60)):
+        glow = QRadialGradient(QPointF(rect.left() + w * cx, rect.top() + h * cy), max(w, h) * radius)
+        glow.setColorAt(0, QColor(190, 160, 255, alpha))
+        glow.setColorAt(1, QColor(190, 160, 255, 0))
+        p.fillRect(rect, glow)
 
 
 def _paint_spaced(p, x, baseline, text, font, colour, reveal=1.0, rise=14):
@@ -415,14 +407,14 @@ def _spaced_width(text, font):
 
 
 class _Banner(QWidget):
-    """The welcome: the weekday in wide thin capitals over rain-streaked purple, the date and
-    the time under it, and a line to start the day with."""
+    """The welcome: the weekday in Mond lettering, centred, with the date, the time and a line
+    to start the day under it."""
 
     def __init__(self, now, reveal=1.0):
         super().__init__()
         self._now = now
         self.reveal = reveal
-        self.setFixedHeight(252)
+        self.setFixedHeight(250)
         self.setMinimumWidth(0)
         self._tick = QTimer(self)
         self._tick.setInterval(20000)
@@ -439,55 +431,63 @@ class _Banner(QWidget):
         clip = QPainterPath()
         clip.addRoundedRect(QRectF(self.rect()), 22, 22)
         p.setClipPath(clip)
-        _paint_sky(p, self.rect())
+        _paint_sky(p, QRectF(self.rect()))
         white = QColor("#FFFFFF")
         now = self._now
-        size = 52 if self.width() >= 760 else 38 if self.width() >= 520 else 28
-        day_font = _banner_font(size, size * 0.62)
         day = now.strftime("%A").upper()
-        while _spaced_width(day, day_font) > self.width() - 80 and size > 18:
-            size -= 2
-            day_font = _banner_font(size, size * 0.62)
-        _paint_spaced(p, 40, 40 + size, day, day_font, white, self.reveal)
-        date_font = _banner_font(17, 3, QFont.DemiBold)
-        _paint_spaced(p, 42, 40 + size + 44, f"{now.day}  {now.strftime('%B').upper()}, {now.year}.", date_font,
-                      white, self.reveal)
-        time_text = now.strftime("%I:%M %p").lstrip("0")
-        _paint_spaced(p, 42, 40 + size + 84, f"- {time_text} -", _banner_font(16, 2, QFont.DemiBold), white,
-                      self.reveal)
-        line = QColor("#E6DCFF")
-        line.setAlphaF(0.9 * max(0.0, min(1.0, (self.reveal - 0.6) / 0.4)) if self.reveal < 1 else 0.9)
-        p.setPen(line)
-        text_font = QFont()
-        text_font.setPixelSize(15)
-        p.setFont(text_font)
-        p.drawText(QRectF(42, self.height() - 46, self.width() - 84, 26), Qt.AlignLeft | Qt.AlignVCenter,
-                   welcome_line(now))
+        height = 64
+        tracking = 1.9
+        while mond_letters.text_width(day, height, tracking) > self.width() - 80 and height > 22:
+            height -= 3
+        x = (self.width() - mond_letters.text_width(day, height, tracking)) / 2
+        top = 38
+        mond_letters.draw_text(p, day, x, top, height, white, tracking, self.reveal)
+
+        def centred(text, baseline, font, colour, amount):
+            width = _spaced_width(text, font)
+            _paint_spaced(p, (self.width() - width) / 2, baseline, text, font, colour, amount, rise=8)
+
+        late = max(0.0, min(1.0, (self.reveal - 0.45) / 0.55)) if self.reveal < 1 else 1.0
+        centred(f"{now.day}  {now.strftime('%B').upper()},  {now.year}.", top + height + 46,
+                _banner_font(17, 3.5, QFont.DemiBold), white, late)
+        centred(f"- {now.strftime('%I:%M %p').lstrip('0')} -", top + height + 80,
+                _banner_font(15, 2.5, QFont.DemiBold), white, late)
+        soft = QColor("#E6DCFF")
+        soft.setAlphaF(0.92 * max(0.0, min(1.0, (self.reveal - 0.7) / 0.3)) if self.reveal < 1 else 0.92)
+        p.setPen(soft)
+        line_font = QFont()
+        line_font.setPixelSize(15)
+        p.setFont(line_font)
+        p.drawText(QRectF(20, self.height() - 52, self.width() - 40, 28), Qt.AlignCenter, welcome_line(now))
 
 
 class _Boot(QWidget):
-    """The opening: the app's name appears letter by letter on the rain, holds for a beat, then
-    lifts away to the page. Runs once each time Carmen starts."""
-    DURATION = 2.9
+    """The opening, about six seconds: dusk fades up, CARMEN writes itself stroke by stroke in
+    Mond lettering, a rule opens beneath, FOCUS and a promise appear, then the cover lifts and the
+    banner writes its own weekday. A click or key skips straight to the lift."""
+    LIFT_AT, DURATION = 4.9, 5.9
 
     def __init__(self, parent, on_progress, on_done):
         super().__init__(parent)
         self._on_progress, self._on_done = on_progress, on_done
+        self._skipped_to = 0.0
         self._clock = QElapsedTimer()
         self._clock.start()
         self._timer = QTimer(self)
         self._timer.setInterval(16)
         self._timer.timeout.connect(self._step)
         self._timer.start()
-        self.setAttribute(Qt.WA_StyledBackground, False)
         self.raise_()
 
     def _t(self):
-        return self._clock.elapsed() / 1000.0
+        return self._clock.elapsed() / 1000.0 + self._skipped_to
+
+    def mousePressEvent(self, event):
+        self._skipped_to = max(self._skipped_to, self.LIFT_AT - self._clock.elapsed() / 1000.0)
 
     def _step(self):
         t = self._t()
-        self._on_progress(max(0.0, min(1.0, (t - 1.9) / 1.0)))     # the banner's own letters, as the cover lifts
+        self._on_progress(max(0.0, min(1.0, (t - self.LIFT_AT) / 1.0)))
         if t >= self.DURATION:
             self._timer.stop()
             self._on_done()
@@ -495,27 +495,44 @@ class _Boot(QWidget):
             return
         self.update()
 
+    @staticmethod
+    def _ramp(t, start, end):
+        return max(0.0, min(1.0, (t - start) / (end - start)))
+
     def paintEvent(self, _event):
         t = self._t()
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        lift = max(0.0, min(1.0, (t - 1.9) / 0.9))
-        p.setOpacity(1.0 - lift)
-        p.translate(0, -lift * 40)
-        _paint_sky(p, QRectF(0, 0, self.width(), self.height() + 40))
-        name = "CARMEN FOCUS"
-        size = 46 if self.width() >= 640 else 28
-        font = _banner_font(size, size * 0.55)
-        x = (self.width() - _spaced_width(name, font)) / 2
-        y = self.height() / 2
-        _paint_spaced(p, x, y, name, font, QColor("#FFFFFF"), max(0.0, min(1.0, t / 1.3)))
-        sub = QColor("#E6DCFF")
-        sub.setAlphaF(max(0.0, min(1.0, (t - 1.0) / 0.5)) * 0.9)
-        p.setPen(sub)
-        small = QFont()
-        small.setPixelSize(15)
-        p.setFont(small)
-        p.drawText(QRectF(0, y + 18, self.width(), 30), Qt.AlignCenter, "Focus on what matters.")
+        lift = self._ramp(t, self.LIFT_AT, self.DURATION)
+        p.setOpacity(1.0 - lift ** 2)
+        p.translate(0, -lift * 60)
+        _paint_sky(p, QRectF(0, -60, self.width(), self.height() + 60), drift=min(1.0, t / 5))
+        p.setOpacity(min(1.0, t / 0.6) * (1.0 - lift ** 2))
+        white = QColor("#FFFFFF")
+        height = max(40, min(120, self.width() // 9))
+        name = "CARMEN"
+        width = mond_letters.text_width(name, height, 1.8)
+        left, top = (self.width() - width) / 2, self.height() / 2 - height * 0.9
+        mond_letters.draw_text(p, name, left, top, height, white, 1.8, self._ramp(t, 0.5, 3.0))
+        rule = self._ramp(t, 2.9, 3.7)
+        if rule > 0:
+            ease = 1 - (1 - rule) ** 3
+            p.setPen(QPen(QColor(255, 255, 255, 140), 1.5))
+            half = width * 0.5 * ease
+            y = top + height + height * 0.32
+            p.drawLine(QPointF(self.width() / 2 - half, y), QPointF(self.width() / 2 + half, y))
+            focus = "F O C U S"
+            font = _banner_font(max(14, height // 5), 6, QFont.DemiBold)
+            fw = _spaced_width(focus, font)
+            amount = self._ramp(t, 3.1, 3.9)
+            _paint_spaced(p, (self.width() - fw) / 2, y + height * 0.42, focus, font, white, amount, rise=10)
+            tag = QColor("#E6DCFF")
+            tag.setAlphaF(0.9 * self._ramp(t, 3.8, 4.5))
+            p.setPen(tag)
+            small = QFont()
+            small.setPixelSize(15)
+            p.setFont(small)
+            p.drawText(QRectF(0, y + height * 0.62, self.width(), 30), Qt.AlignCenter, "Focus on what matters.")
 
 
 class _Flame(QWidget):
