@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 from qt_ui.wrap_edit import WrapEdit
 
+from calendar_log import logger as calendar_logger
 import review_store
 import session_history
 import session_manager
@@ -1477,6 +1478,9 @@ class _TopicView(QWidget):
         return _on_first_attempt_done, _on_first_attempt_cancelled
 
 
+GONE_TICKS_BEFORE_ABANDON = 4     # seconds a banner's session must stay missing before it counts as ended
+
+
 class _ReviewBanner(QWidget):
     def __init__(self, on_finished, on_changed=None):
         super().__init__()
@@ -1491,6 +1495,7 @@ class _ReviewBanner(QWidget):
         self._first_attempt_callback = None
         self._first_attempt_cancelled_callback = None
         self._first_attempt_started_at = None
+        self._gone_ticks = 0
         self._auto_paused = False
         self._was_on_break = False
 
@@ -1783,6 +1788,14 @@ class _ReviewBanner(QWidget):
 
     def _tick(self):
         if self._end_session_on_finish and not self._linked_view()[0].get("isActive"):
+            # A sync landing or the app still settling can make the session look gone
+            # for a moment; only a session that stays gone counts as ended elsewhere.
+            self._gone_ticks += 1
+            if self._gone_ticks < GONE_TICKS_BEFORE_ABANDON:
+                return
+            calendar_logger.warning(
+                "review banner: its session is gone, abandoning (problem=%s, status=%s)",
+                self._problem, session_manager.get_status())
             # The linked task session was ended from somewhere else entirely
             # -- the Tasks tab's "End Task", the Focus tab's Nuclear End, a
             # natural timeout, or a direct API call -- none of which know or
@@ -1795,6 +1808,7 @@ class _ReviewBanner(QWidget):
             # again until the app was restarted.
             self._abandon_after_external_end()
             return
+        self._gone_ticks = 0
         if self._is_independent_review():
             # Finished, abandoned or replaced from another computer (or any
             # other path): nothing left here to time.
