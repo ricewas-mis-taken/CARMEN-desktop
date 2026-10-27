@@ -13,10 +13,10 @@ column when there isn't.
 """
 from datetime import date, datetime, timedelta
 
-from PySide6.QtCore import QRectF, QSize, Qt, QTimer
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QToolTip, QVBoxLayout, QWidget,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
 import board_store
@@ -36,7 +36,7 @@ from qt_ui.wrap_edit import WrapEdit
 
 WIDE_FROM = 900          # page width where the two-column layout starts
 COMPACT_BELOW = 640      # under this the big ring sits above its text instead of beside it
-GRID_WEEKS = 8
+GRID_WEEKS = 53          # a whole year of days, like a contribution graph
 TIMER_MS = 1000
 _GRID_BLUE = "#5B8DEF"
 _NOTE_HINT = "Add to QuickNote, then Enter"
@@ -127,13 +127,25 @@ def summary(tasks, sessions, due_reviews, today):
         snap = tasks_store.goal_snapshot(task, today, sessions)
         if snap["required"] <= 0:
             continue
-        total_required += snap["required"]
-        total_logged += min(snap["logged"], snap["required"])
-        left = snap["required"] - snap["logged"]
+        required, logged, period_left = snap["required"], snap["logged"], None
+        if snap["isPeriod"]:
+            # A week / month goal is shown as what today has to bring in to stay on pace:
+            # what is still missing at the start of today, spread over the days left.
+            logged_today = min(logged, tasks_store.logged_seconds_for_date(task, today, sessions) / 60)
+            period_left = max(0.0, snap["required"] - logged)
+            before_today = logged - logged_today
+            required = max(0.0, snap["required"] - before_today) / max(1, snap["daysLeft"])
+            logged = logged_today
+            if period_left <= 0.5:
+                required = logged = 0.0
+        total_required += required
+        total_logged += min(logged, required)
+        left = required - logged
         if left > 0.5:
             open_tasks.append({
-                "task": task, "left": left, "required": snap["required"],
-                "logged": snap["logged"], "phrase": snap["phrase"],
+                "task": task, "left": left, "required": required, "logged": logged,
+                "phrase": "today" if snap["isPeriod"] else snap["phrase"],
+                "period_left": period_left, "period_phrase": snap["phrase"], "days_left": snap["daysLeft"],
             })
         else:
             done_tasks.append(task)
@@ -168,8 +180,8 @@ def _card():
 
 
 def _heading(text):
-    label = ElidedLabel(text.upper())
-    label.setStyleSheet(f"color:{FAINT};font-size:11px;font-weight:700;letter-spacing:1px;background:transparent;")
+    label = ElidedLabel(text)
+    label.setStyleSheet(f"color:{MUTED};font-size:13px;font-weight:600;background:transparent;")
     return label
 
 
@@ -214,22 +226,72 @@ class _Bar(QWidget):
 
 
 class _Grid(QWidget):
-    """Eight weeks of days, one square each, darker the more focus that day (hover for numbers)."""
-    CELL, GAP = 22, 5
+    """A year of days, one square each, darker the more focus that day, months along the top.
+    Hover a day to read it (the line under the grid and the tooltip both say it)."""
+    hovered = Signal(str)
+    MAX_STEP, LEFT, TOP = 17, 30, 20
 
     def __init__(self, columns):
         super().__init__()
         self._columns = columns
         self._peak = max([m for col in columns for _d, m in col] + [1])
-        step = self.CELL + self.GAP
-        self.setFixedSize(len(columns) * step - self.GAP, 7 * step - self.GAP)
+        self._hover = None
+        self.setMouseTracking(True)
+        self.setMinimumWidth(0)
+        self.setFixedHeight(self.TOP + 7 * self.MAX_STEP)
+
+    def _step(self):
+        return max(4.0, min(float(self.MAX_STEP), (self.width() - self.LEFT) / len(self._columns)))
+
+    def _cell_at(self, pos):
+        step = self._step()
+        x, y = int((pos.x() - self.LEFT) // step), int((pos.y() - self.TOP) // step)
+        if 0 <= x < len(self._columns) and 0 <= y < 7 and self._columns[x][y][0] is not None:
+            return x, y
+        return None
+
+    def _describe(self, cell):
+        day, minutes = self._columns[cell[0]][cell[1]]
+        return f"{day.strftime('%A, %B %d')}: {format_minutes(minutes) if minutes >= 1 else 'no focus'}"
+
+    def mouseMoveEvent(self, ev):
+        cell = self._cell_at(ev.position())
+        if cell != self._hover:
+            self._hover = cell
+            self.hovered.emit(self._describe(cell) if cell else "")
+            self.setToolTip(self._describe(cell) if cell else "")
+            self.update()
+        super().mouseMoveEvent(ev)
+
+    def leaveEvent(self, ev):
+        if self._hover is not None:
+            self._hover = None
+            self.hovered.emit("")
+            self.update()
+        super().leaveEvent(ev)
 
     def paintEvent(self, _event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(Qt.NoPen)
+        step = self._step()
+        side = step - max(2.0, step * 0.2)
+        radius = max(1.5, side * 0.25)
         today = date.today()
-        step = self.CELL + self.GAP
+        font = p.font()
+        font.setPixelSize(11)
+        p.setFont(font)
+        p.setPen(QColor(FAINT))
+        for row, name in ((0, "Mon"), (2, "Wed"), (4, "Fri")):
+            p.drawText(QRectF(0, self.TOP + row * step - 1, self.LEFT - 6, step), Qt.AlignRight | Qt.AlignVCenter, name)
+        last_month = None
+        for x, column in enumerate(self._columns):
+            first_day = next((d for d, _m in column if d is not None), None)
+            if first_day and first_day.month != last_month:
+                if last_month is not None or first_day.day <= 7:
+                    p.setPen(QColor(MUTED))
+                    p.drawText(QRectF(self.LEFT + x * step, 0, step * 4, self.TOP - 4), Qt.AlignLeft | Qt.AlignVCenter,
+                               first_day.strftime("%b"))
+                last_month = first_day.month
         for x, column in enumerate(self._columns):
             for y, (day, minutes) in enumerate(column):
                 if day is None:
@@ -237,26 +299,14 @@ class _Grid(QWidget):
                 colour = QColor(_GRID_BLUE) if minutes >= 1 else QColor("#E9ECF2")
                 if minutes >= 1:
                     colour.setAlphaF(0.25 + 0.75 * min(1.0, minutes / self._peak))
-                rect = QRectF(x * step, y * step, self.CELL, self.CELL)
+                rect = QRectF(self.LEFT + x * step, self.TOP + y * step, side, side)
                 p.setPen(Qt.NoPen)
                 p.setBrush(colour)
-                p.drawRoundedRect(rect, 4, 4)
-                if day == today:
+                p.drawRoundedRect(rect, radius, radius)
+                if day == today or (x, y) == self._hover:
                     p.setBrush(Qt.NoBrush)
                     p.setPen(QColor(INK))
-                    p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 4, 4)
-
-    def event(self, ev):
-        if ev.type() == ev.Type.ToolTip:
-            step = self.CELL + self.GAP
-            x, y = int(ev.pos().x() // step), int(ev.pos().y() // step)
-            if 0 <= x < len(self._columns) and 0 <= y < 7 and self._columns[x][y][0] is not None:
-                day, minutes = self._columns[x][y]
-                QToolTip.showText(
-                    ev.globalPos(),
-                    f"{day.strftime('%a %b %d')}: {format_minutes(minutes) if minutes >= 1 else 'no focus'}", self)
-                return True
-        return super().event(ev)
+                    p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
 
 
 class HomeTab(QWidget):
@@ -366,15 +416,15 @@ class HomeTab(QWidget):
             self._grid.addWidget(hero, 1, 0, 1, 2)
             self._grid.addWidget(today, 2, 0)
             self._grid.addWidget(needs, 2, 1)
-            self._grid.addWidget(capture, 3, 0)
-            self._grid.addWidget(consistency, 3, 1)
+            self._grid.addWidget(capture, 3, 0, 1, 2)
+            self._grid.addWidget(consistency, 4, 0, 1, 2)
             self._grid.setColumnStretch(0, 3)
             self._grid.setColumnStretch(1, 2)
         else:
             for row, block in enumerate((header, hero, needs, today, capture, consistency)):
                 self._grid.addWidget(block, row, 0)
             self._grid.setColumnStretch(0, 1)
-        self._grid.setRowStretch(6, 1)
+        self._grid.setRowStretch(7, 1)
         for block in self._blocks:
             block.show()
 
@@ -440,6 +490,11 @@ class HomeTab(QWidget):
             text.addWidget(_heading("Start with"))
             text.addWidget(self._big(top["task"].get("name", "Task")))
             text.addWidget(_text(f"{format_minutes(top['logged'])} of {format_minutes(top['required'])} {top['phrase']}"))
+            if top["period_left"] is not None:
+                days = top["days_left"]
+                text.addWidget(_text(
+                    f"{format_minutes(top['period_left'])} left {top['period_phrase']}, over {days} day{'s' if days != 1 else ''}",
+                    13, FAINT))
             action = button("Start a session", _PRIMARY, height=44)
             action.clicked.connect(lambda: self._go("focus"))
             actions.addWidget(action)
@@ -499,14 +554,14 @@ class HomeTab(QWidget):
             line = QHBoxLayout()
             line.setSpacing(12)
             dot = QLabel()
-            dot.setFixedSize(10, 10)
-            dot.setStyleSheet(f"background:{colour};border-radius:5px;")
+            dot.setFixedSize(12, 12)
+            dot.setStyleSheet(f"background:{colour};border-radius:6px;")
             line.addWidget(dot)
             name = ElidedLabel(item["task"].get("name", "Task"))
-            name.setStyleSheet(f"color:{INK};font-size:14px;font-weight:600;background:transparent;")
+            name.setStyleSheet(f"color:{INK};font-size:17px;font-weight:600;background:transparent;")
             line.addWidget(name, 1)
             left = QLabel(f"{format_minutes(item['left'])} left")
-            left.setStyleSheet(f"color:{MUTED};font-size:12.5px;background:transparent;")
+            left.setStyleSheet(f"color:{MUTED};font-size:14px;background:transparent;")
             line.addWidget(left)
             layout.addLayout(line)
             layout.addWidget(_Bar(item["logged"] / item["required"], colour))
@@ -554,9 +609,9 @@ class HomeTab(QWidget):
         texts = QVBoxLayout()
         texts.setSpacing(0)
         name = ElidedLabel(title)
-        name.setStyleSheet(f"color:{INK};font-size:14px;font-weight:600;background:transparent;")
+        name.setStyleSheet(f"color:{INK};font-size:16px;font-weight:600;background:transparent;")
         texts.addWidget(name)
-        texts.addWidget(_text(caption, 12))
+        texts.addWidget(_text(caption, 13))
         line.addLayout(texts, 1)
         if action:
             go = button(action, SECONDARY_STYLE, height=32)
@@ -618,14 +673,24 @@ class HomeTab(QWidget):
     def _consistency(self, data):
         card = _card()
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(22, 18, 22, 18)
-        layout.setSpacing(10)
+        layout.setContentsMargins(22, 18, 22, 16)
+        layout.setSpacing(8)
         streak = data["streak"]
-        layout.addWidget(_heading(f"Last {GRID_WEEKS} weeks"))
-        layout.addWidget(_text(
-            f"{streak}-day streak" if streak else "No streak yet: one session today starts it", 15, INK, 600))
-        layout.addWidget(_Grid(data["grid"]), 0, Qt.AlignLeft)
-        total = sum(m for col in data["grid"] for _d, m in col)
-        layout.addWidget(_text(f"{format_minutes(total)} focused", 12.5, FAINT))
-        layout.addStretch(1)
+        days = [(d, m) for col in data["grid"] for d, m in col if d is not None]
+        active = sum(1 for _d, m in days if m >= 1)
+        total = sum(m for _d, m in days)
+        head = QHBoxLayout()
+        head.addWidget(_text(
+            f"{streak}-day streak" if streak else "No streak yet: one session today starts it", 17, INK, 700))
+        head.addStretch(1)
+        totals = QLabel(f"{active} active days  ·  {format_minutes(total)} this year")
+        totals.setStyleSheet(f"color:{MUTED};font-size:13px;background:transparent;")
+        head.addWidget(totals)
+        layout.addLayout(head)
+        grid = _Grid(data["grid"])
+        layout.addWidget(grid)
+        readout = _text(" ", 13, MUTED)
+        readout.setMinimumHeight(20)
+        grid.hovered.connect(lambda text: readout.setText(text or " "))
+        layout.addWidget(readout)
         return card

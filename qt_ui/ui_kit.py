@@ -122,7 +122,9 @@ class Ring(QWidget):
         big.setPixelSize(26 if len(self._big) < 6 else 22)
         p.setFont(big)
         p.setPen(QColor(FAINT if self._dim else INK))
-        p.drawText(QRectF(0, self.height() / 2 - 22, self.width(), 30), Qt.AlignCenter, self._big)
+        # With a caption under it the numerals sit a little high; alone they are centred in the ring.
+        top = self.height() / 2 - 22 if self._small else self.height() / 2 - 15
+        p.drawText(QRectF(0, top, self.width(), 30), Qt.AlignCenter, self._big)
         small = QFont(TEXT_FONT)
         small.setPixelSize(11)
         p.setFont(small)
