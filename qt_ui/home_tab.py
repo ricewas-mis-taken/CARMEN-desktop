@@ -683,9 +683,7 @@ class HomeTab(QWidget):
         head.addWidget(_text(
             f"{streak}-day streak" if streak else "No streak yet: one session today starts it", 17, INK, 700))
         head.addStretch(1)
-        totals = QLabel(f"{active} active days  ·  {format_minutes(total)} this year")
-        totals.setStyleSheet(f"color:{MUTED};font-size:13px;background:transparent;")
-        head.addWidget(totals)
+        head.addWidget(_text(f"{active} active days  ·  {format_minutes(total)} this year", 13, MUTED))
         layout.addLayout(head)
         grid = _Grid(data["grid"])
         layout.addWidget(grid)

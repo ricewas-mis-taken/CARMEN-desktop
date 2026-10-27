@@ -1,7 +1,16 @@
 """The Scribe board is shared between computers: layers by last change, images as photos."""
+import pytest
+
 import scribe_store
+import server_clock
 import sync_live
 import sync_photos
+
+
+@pytest.fixture(autouse=True)
+def _fresh_clock(monkeypatch):
+    monkeypatch.setattr(server_clock, "_last_stamp", None)
+    monkeypatch.setattr(server_clock, "_offset_seconds", 0.0)
 
 
 def _doc_with(text):
