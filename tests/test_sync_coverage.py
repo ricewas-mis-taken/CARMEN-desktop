@@ -51,14 +51,14 @@ RECEIVER_STAMPED = {
 # Files under private/ that hold data. Synced ones are covered by the JSON
 # tests below or the SQLite tests above; the rest stay on the device by design
 # (see FEATURE_IMPLEMENT.txt item 7: the running session and history sync through sync_live).
-SYNCED_FILES = {"tasks.json", "board.json", "calendar.db", "session_history.json", "session_state.json", "quicknote.json"}
+SYNCED_FILES = {"tasks.json", "board.json", "calendar.db", "session_history.json", "session_state.json", "quicknote.json", "scribe.json"}
 LOCAL_ONLY_FILES = {
     "config.json", "screentime.json",
     "daily_summaries.json", "active_review.json", "device_id.txt", "last_sync.txt",
     "pull_cursor.txt", "sync_owner.txt", "uploaded_photos.json", "taskbar_quiet_settings.json", "taskbar_quiet_saved.json", "taskbar_quiet_user.json",
     "live_cursor.txt", "live_history_pushed.txt", "live_state_pushed.txt",
     "live_review_pushed.txt", "live_screentime_pushed.json", "live_settings_pushed.txt", "live_quicknote_pushed.txt", "hang_trace.txt", "taskbar_quiet_pending.json", "other_device_seen.txt", "screentime_remote.json", "parked_reviews.json",
-    "scribe.json",  # the Scribe board: local on purpose, it can hold large attached images
+    "scribe_stamp.txt", "live_scribe_pushed.txt",
 }
 # Reference data that ships with the app, not something a user creates.
 SHIPPED_REFERENCE_FILES = {"screentime_domains.json", "screentime_domains_curated.json"}
