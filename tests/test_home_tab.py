@@ -136,3 +136,17 @@ def test_year_grid_reports_the_hovered_day(qtbot):
     assert cell == (0, 0)
     assert "no focus" in grid._describe(cell)
     assert step <= grid.MAX_STEP
+
+
+def test_a_running_session_counts_toward_the_streak_at_once():
+    d = date(2026, 10, 14)
+    from datetime import timedelta
+    days = [(d - timedelta(days=i), 30 if i else 0) for i in reversed(range(3))]
+    assert home.streak_days(days) == 2
+    assert home.streak_days(home._with_live(days, 5)) == 3
+
+
+def test_milestones_and_welcome_lines():
+    assert home.next_milestone(0) == 3 and home.next_milestone(7) == 14 and home.next_milestone(400) == 500
+    assert all(home.welcome_line(datetime(2026, 10, 14, h)) for h in (2, 9, 15, 21))
+    assert home.importance_colour(10) != home.importance_colour(1)
