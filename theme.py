@@ -26,19 +26,19 @@ TOKENS = ("ink", "muted", "faint", "accent", "page", "sidebar")
 THEMES = {
     "Dusk": dict(
         label="Dusk", why="Violet evening. Calm and a little dreamy, easy on the eyes for long sessions.",
-        ink="#241B4F", muted="#6B6196", faint="#A59DC9", accent="#7B5FD3", page="#F1EDFB", sidebar="#221A52",
+        ink="#241B4F", muted="#6B6196", faint="#A59DC9", accent="#7B5FD3", page="#E4DDF7", sidebar="#221A52",
         sky=("#2A2060", "#4C3A8C", "#7A62B4")),
     "Ember": dict(
         label="Ember", why="Glowing coals at dusk. Warm colours push you to start the task you are avoiding.",
-        ink="#3A1B20", muted="#85555A", faint="#C29A98", accent="#E2603B", page="#FCF0EA", sidebar="#3A1822",
+        ink="#3A1B20", muted="#85555A", faint="#C29A98", accent="#E2603B", page="#F9E0D4", sidebar="#3A1822",
         sky=("#3A1232", "#8A2F46", "#E8805F")),
     "Tide": dict(
         label="Tide", why="Deep teal water. Cool and steady, good for reading and review.",
-        ink="#0E2F3A", muted="#4F7782", faint="#93B7BE", accent="#1E9FAA", page="#EAF6F7", sidebar="#0D2D3C",
+        ink="#0E2F3A", muted="#4F7782", faint="#93B7BE", accent="#1E9FAA", page="#D6EDEF", sidebar="#0D2D3C",
         sky=("#0A2742", "#14607B", "#3DB6B0")),
     "Aurora": dict(
         label="Aurora", why="Northern lights over a dark sky. Green is restful and keeps the page lively.",
-        ink="#10301F", muted="#4F7A62", faint="#93BBA4", accent="#33B787", page="#EBF8F1", sidebar="#0F2A26",
+        ink="#10301F", muted="#4F7A62", faint="#93BBA4", accent="#33B787", page="#D8F1E4", sidebar="#0F2A26",
         sky=("#0D1F3C", "#1A5A6A", "#47C79C")),
 }
 DEFAULT_THEME = "Dusk"
