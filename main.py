@@ -261,6 +261,18 @@ def main():
         # moment to actually free up before the fresh interpreter tries to
         # rebind it.
         time.sleep(0.3)
+        if sys.platform == "win32":
+            # os.execv on Windows does not replace the process: it starts a child and the
+            # parent exits at once, and the child could lose the race for the lock or the
+            # port, leaving nothing running ("Carmen quit by itself after an update").
+            # Release the lock, start the new copy detached, and only then leave.
+            import subprocess
+            singleinstance.release()
+            subprocess.Popen(
+                [sys.executable] + sys.argv, close_fds=True, cwd=os.getcwd(),
+                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+            )
+            os._exit(0)
         os.execv(sys.executable, [sys.executable] + sys.argv)
     singleinstance.release()
     os._exit(exit_code)
