@@ -10,6 +10,7 @@ import pytest
 
 import config
 import quicknote_store
+import scribe_store
 import device_id
 import calendar_store
 import review_store
@@ -79,6 +80,10 @@ def device(tmp_path, monkeypatch):
         monkeypatch.setattr(sync_live, "_last_screentime_push", 0.0)
         monkeypatch.setattr(quicknote_store, "PATH", str(base / "quicknote.json"))
         monkeypatch.setattr(sync_live, "QUICKNOTE_PUSHED_PATH", str(base / "live_quicknote_pushed.txt"))
+        monkeypatch.setattr(sync_live, "SCRIBE_PUSHED_PATH", str(base / "live_scribe_pushed.txt"))
+        monkeypatch.setattr(scribe_store, "PATH", str(base / "scribe.json"))
+        monkeypatch.setattr(scribe_store, "STAMP_PATH", str(base / "scribe_stamp.txt"))
+        monkeypatch.setattr(scribe_store, "IMAGES_DIR", str(base / "scribe_images"))
         monkeypatch.setattr(config, "CONFIG_PATH", str(base / "config.json"))
         monkeypatch.setattr(sync_live, "SETTINGS_PUSHED_PATH", str(base / "live_settings_pushed.txt"))
         return states[name]

@@ -18,11 +18,12 @@ import time
 
 import board_store
 import review_store
+import scribe_store
 import sync_cloud
 from calendar_log import logger
 import paths
 
-KINDS = ("board", "review")
+KINDS = ("board", "review", "scribe")
 
 # Photos known to be in the cloud bucket (remembered across restarts so a
 # photo is uploaded once, however old its record is), and photos the server
@@ -34,6 +35,8 @@ MISSING_RETRY_SECONDS = 3600
 
 
 def _photos_dir(kind):
+    if kind == "scribe":
+        return scribe_store.IMAGES_DIR
     return board_store.PHOTOS_DIR if kind == "board" else review_store.PHOTOS_DIR
 
 
@@ -134,6 +137,12 @@ def _referenced_photos():
                 found.append(("review", name))
     except Exception:
         logger.warning("sync_photos: couldn't list review photos", exc_info=True)
+    try:
+        for name in scribe_store.image_names():
+            if sync_cloud.is_safe_photo_name(name):
+                found.append(("scribe", name))
+    except Exception:
+        logger.warning("sync_photos: couldn't list scribe images", exc_info=True)
     return found
 
 

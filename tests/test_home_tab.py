@@ -75,13 +75,13 @@ def test_streak_counts_back_from_today_or_yesterday():
     assert home.streak_days([(d, 0)]) == 0
 
 
-def test_grid_is_eight_weeks_ending_this_week():
+def test_grid_is_a_year_ending_this_week():
     today = date(2026, 10, 14)                       # a Wednesday
     columns = home.grid_cells([], today)
-    assert len(columns) == 8 and all(len(c) == 7 for c in columns)
+    assert len(columns) == 53 and all(len(c) == 7 for c in columns)
     assert columns[-1][2][0] == today                # Mon, Tue, then Wed
     assert columns[-1][3][0] is None                 # tomorrow is not drawn
-    assert columns[0][0][0] == date(2026, 8, 24)
+    assert columns[0][0][0] == date(2025, 10, 13)
 
 
 def test_home_shows_a_running_session_with_pause_and_resume(qtbot, isolate_state, tmp_path, monkeypatch):
@@ -110,3 +110,29 @@ def test_quick_capture_adds_a_quicknote_bullet(qtbot, isolate_state, tmp_path, m
     edit.returnPressed.emit()
     assert saved == [["old", "buy milk"]]
     assert edit.text() == ""
+
+
+def test_a_weekly_goal_shows_today_share_not_the_whole_week(isolate_state, tmp_path, monkeypatch):
+    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
+    task = tasks_store.create_task({"name": "Weekly", "targetMinutes": 600, "recurrence": "biweekly_total"})
+    today = date.today()
+    data = home.summary([task], [], 0, today)
+    item = data["open"][0]
+    days = tasks_store.days_left_in_period(task, today)
+    assert round(item["required"], 3) == round(600 / days, 3)
+    assert item["period_left"] == 600 and item["days_left"] == days
+
+
+def test_year_grid_reports_the_hovered_day(qtbot):
+    from PySide6.QtCore import QPointF
+    columns = home.grid_cells([], date(2026, 10, 14))
+    grid = home._Grid(columns)
+    qtbot.addWidget(grid)
+    grid.resize(900, grid.height())
+    seen = []
+    grid.hovered.connect(seen.append)
+    step = grid._step()
+    cell = grid._cell_at(QPointF(grid.LEFT + 5, grid.TOP + 3))
+    assert cell == (0, 0)
+    assert "no focus" in grid._describe(cell)
+    assert step <= grid.MAX_STEP

@@ -1201,9 +1201,13 @@ class _PaperChip(QPushButton):
 
 
 class ScribeTab(QWidget):
+    _remote_arrived = Signal()      # emitted from the sync thread; handled on the GUI thread
+
     def __init__(self):
         super().__init__()
         self._dirty = False
+        self._remote_arrived.connect(self._reload_shared)
+        scribe_store.add_remote_listener(self._remote_arrived.emit)
         self.canvas = ScribeCanvas(scribe_store.load())
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
@@ -1256,6 +1260,24 @@ class ScribeTab(QWidget):
             self._show_saved(True)
         except OSError:
             pass  # stays dirty; the next change (or quit) tries again
+
+    def _reload_shared(self):
+        """The other computer's drawing (or its images) arrived. Anything not yet saved here
+        wins for now and is shared by the next save."""
+        if self._dirty:
+            return
+        fresh = scribe_store.load()
+        canvas = self.canvas
+        canvas.doc["layers"] = fresh["layers"]
+        canvas.doc["activeLayer"] = min(canvas.doc["activeLayer"], len(fresh["layers"]) - 1)
+        canvas._images.clear()
+        canvas._bbox_cache.clear()
+        canvas._undo.clear()
+        canvas._redo.clear()
+        canvas._sel = []
+        canvas._draft = None
+        canvas.layersChanged.emit()
+        canvas.update()
 
     def _show_saved(self, saved):
         self._saved_label.setText("Saved" if saved else "Saving…")
@@ -1595,7 +1617,8 @@ class ScribeTab(QWidget):
             dot.setChecked(color.lower() == stroke)
 
     def _show_zoom(self, zoom):
-        self._zoom_label.setText(f"{zoom * 100:.0f}%")
+        percent = zoom * 100
+        self._zoom_label.setText(f"{percent:.0f}%" if percent >= 10 else f"{percent:.2g}%" if percent >= 0.01 else "<0.01%")
 
     def _show_tool(self, tool):
         button = self._tool_buttons.get(tool)

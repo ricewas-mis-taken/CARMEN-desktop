@@ -30,6 +30,8 @@ import config
 import device_id
 import multi_device
 import quicknote_store
+import scribe_store
+import sync_photos
 import review_store
 import screentime_store
 import server_clock
@@ -56,6 +58,8 @@ REVIEW_PUSHED_PATH = os.path.join(_PRIVATE, "live_review_pushed.txt")
 SETTINGS_TABLE = "settings"       # the saved block/allow lists and Start-dialog defaults
 QUICKNOTE_TABLE = "quicknote"     # the one shared bullet-point note
 QUICKNOTE_PUSHED_PATH = os.path.join(_PRIVATE, "live_quicknote_pushed.txt")
+SCRIBE_TABLE = "scribe"           # the Scribe board's layers (its images go as photos)
+SCRIBE_PUSHED_PATH = os.path.join(_PRIVATE, "live_scribe_pushed.txt")
 SETTINGS_PUSHED_PATH = os.path.join(_PRIVATE, "live_settings_pushed.txt")
 SCREENTIME_PUSHED_PATH = os.path.join(_PRIVATE, "live_screentime_pushed.json")
 SCREENTIME_TABLE = "screentime"   # one row per computer per day; each computer writes only its own
@@ -333,6 +337,48 @@ def _apply_quicknote(records):
             logger.exception("sync_live: could not apply the shared QuickNote")
 
 
+# --- gather / apply: the Scribe board ---
+
+_scribe_images_wanted = False     # set when new layers arrived: their images still have to be fetched
+
+
+def _gather_scribe():
+    exported = scribe_store.export()
+    if not exported:
+        return [], None
+    stamp = exported["updatedAt"]
+    if not server_clock.is_newer(stamp, _read(SCRIBE_PUSHED_PATH)):
+        return [], None
+    return [{
+        "table_name": SCRIBE_TABLE, "sync_id": "board", "data": {"layers": exported["layers"]},
+        "device_id": device_id.get_device_id(), "updated_at": stamp, "is_deleted": False,
+    }], stamp
+
+
+def _apply_scribe(records):
+    global _scribe_images_wanted
+    for record in records:
+        data = record.get("data")
+        if record.get("sync_id") != "board" or not isinstance(data, dict):
+            continue
+        try:
+            if scribe_store.apply_remote(data.get("layers"), record.get("updated_at")):
+                _write(SCRIBE_PUSHED_PATH, record["updated_at"])
+                _scribe_images_wanted = True
+        except Exception:
+            logger.exception("sync_live: could not apply the shared Scribe board")
+
+
+def _fetch_scribe_images(client, token, user_id):
+    """Images of newly arrived layers: fetched now, then the board repaints."""
+    global _scribe_images_wanted
+    if not _scribe_images_wanted:
+        return
+    _scribe_images_wanted = False
+    sync_photos.download_missing(client, token, user_id)
+    scribe_store.notify_remote()
+
+
 # --- gather / apply: saved defaults ---
 
 def _gather_settings():
@@ -431,6 +477,7 @@ def _apply(records):
     _apply_screentime(by_table.get(SCREENTIME_TABLE, []))
     _apply_settings(by_table.get(SETTINGS_TABLE, []))
     _apply_quicknote(by_table.get(QUICKNOTE_TABLE, []))
+    _apply_scribe(by_table.get(SCRIBE_TABLE, []))
 
 
 def tick():
@@ -451,6 +498,8 @@ def tick():
     push_records += settings_records
     note_records, note_stamp = _gather_quicknote()
     push_records += note_records
+    scribe_records, scribe_stamp = _gather_scribe()
+    push_records += scribe_records
     screentime_records, screentime_fingerprints = _gather_screentime()
     push_records += screentime_records
     refreshed = False
@@ -458,6 +507,8 @@ def tick():
         try:
             with httpx.Client(timeout=15.0) as client:
                 sync_cloud.ensure_ready(client, token)
+                if scribe_records:
+                    sync_photos.upload_missing(client, token, user["id"])   # images before the layers that use them
                 sync_cloud.push(client, token, user["id"], push_records)
                 records, cursor = sync_cloud.pull(client, token, _read(CURSOR_PATH), tables=LANE_TABLES)
             break
@@ -482,8 +533,16 @@ def tick():
         _write(SETTINGS_PUSHED_PATH, settings_stamp)
     if note_stamp:
         _write(QUICKNOTE_PUSHED_PATH, note_stamp)
+    if scribe_stamp:
+        _write(SCRIBE_PUSHED_PATH, scribe_stamp)
     _remember_screentime_sent(screentime_fingerprints)
     _apply(records)
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            _fetch_scribe_images(client, token, user["id"])
+    except httpx.HTTPError:
+        global _scribe_images_wanted
+        _scribe_images_wanted = True        # try again next pass
     if cursor:
         _write(CURSOR_PATH, cursor)
     return None
@@ -495,6 +554,7 @@ session_manager.add_change_listener(lambda: _wake.set())
 review_store.add_change_listener(lambda: _wake.set())
 config.add_change_listener(lambda: _wake.set())
 quicknote_store.add_change_listener(lambda: _wake.set())
+scribe_store.add_change_listener(lambda: _wake.set())
 
 
 def enable():
