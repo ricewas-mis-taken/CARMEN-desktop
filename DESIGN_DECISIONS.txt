@@ -655,3 +655,36 @@ tick only while visible, restyle only when the look changes). Old TaskCard/burno
   Sync: both fields are cleaned on pull (sync_client._clean_day_minutes). A computer on the old version
   ignores them and shows every ticked day at targetMinutes, which the editor sets to the first ticked
   day's time. Not done: a per-day time for the daily kind (every day is already "each day").
+
+2026-10-25  Reviews that ran without their own session
+  Session History and a task's time both read finished sessions; the review database is a separate
+  record. When a review could not start its own session (some other kind of session was running), its
+  time reached the review database only, so it showed in neither (found on 4 real reviews of 2026-10-25).
+  Fork: make Session History also read the review database vs. file a normal history entry when such a
+  review finishes. Chose the entry: Session History's file keeps one shape, the task math needs no
+  second source, and it syncs like any other session. Entry ids start "untimed-". Skipped when a session
+  of the same task is running, because that session already counts the time (no double count).
+  Not recovered: the 4 reviews of 2026-10-25 that already happened. Their time is in the review
+  database but not in history.
+
+2026-10-25  Review delete, categories and a confirm popup of our own
+  Deleting a problem or category is a tombstone (is_deleted), like topics, so it syncs; sync now sends
+  deleted problems and categories (before, only topics were deleted, and children were hard-removed).
+  QMessageBox takes its colours from the operating system: dark mode gave a dark box with dark text,
+  which looked like an empty popup. The Review tab now asks through qt_ui/confirm_dialog.py, drawn by
+  the app. Other tabs still use QMessageBox (board, scribe, tasks, task editor, pickers).
+
+2026-10-25  Light colour scheme forced; whole-repo bug sweep
+  The stylesheet paints light backgrounds, but any widget with no colour of its own takes its text
+  colour from the system palette. On a dark-mode Windows that gave white text on white (QMessageBox
+  text, some labels): popups that looked empty. board_tab.py had already worked around it once with
+  click-again buttons instead of QMessageBox. Fork: patch each popup vs. fix the cause. Fixed the
+  cause: ui_kit.force_light_scheme() at startup (Qt 6.8+ setColorScheme). The app has no dark theme
+  today, so nothing is lost; a real dark theme would replace this call.
+  Sweep done (nothing else found): undefined names across the repo (pyflakes: none, so no more
+  merge leftovers), buttons never connected (none), WrapEdit where a multi-line box was needed (none
+  left), invisible text in 30 windows and every tab under a dark OS (only the two popups above, plus
+  a label the check cannot judge), resize of every tab at 4 widths (review sidebar stuck out at 600px
+  and now hides under 760px; Scribe still needs ~990px and is clipped when narrower).
+  Not changed: unused imports (harmless), 25 broad try/except-pass blocks (enforcement and background
+  code that must not crash; the two in review_store only guard a rollback and change listeners).

@@ -87,3 +87,18 @@ def is_newer(candidate, than):
         return False
     than_dt = parse(than)
     return than_dt is None or candidate_dt > than_dt
+
+
+def local_stamp(at_least=None):
+    """next_stamp() for the JSON stores (tasks, board), which keep this computer's
+    local time without a timezone: the cloud's now, and always later than the
+    version being edited (`at_least`, local text), so an edit made on top of a
+    version can never lose to it, however far apart the two clocks are."""
+    floor = None
+    if at_least:
+        try:
+            floor = datetime.fromisoformat(at_least).astimezone(timezone.utc)
+        except ValueError:
+            floor = None
+    stamp = parse(next_stamp(floor))
+    return stamp.astimezone().replace(tzinfo=None).isoformat()

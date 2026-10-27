@@ -402,3 +402,17 @@ class LogoMark(QWidget):
         rect = QRectF(width / 2, width / 2, self.width() - width, self.height() - width)
         p.setPen(QPen(self._color, width, Qt.SolidLine, Qt.RoundCap))
         p.drawArc(rect, 10 * 16, 292 * 16)
+
+
+def force_light_scheme():
+    """Make the app's own palette light whatever the operating system is set to.
+
+    The stylesheet paints light backgrounds, but a widget with no colour of its own takes
+    its text colour from the system palette. On a computer in dark mode that gave white
+    text on white boxes: message popups, menus and some labels looked empty. The app has
+    no dark theme, so it asks Qt for the light scheme. A no-op on a Qt that predates it."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QGuiApplication
+    hints = QGuiApplication.styleHints()
+    if hasattr(hints, "setColorScheme"):
+        hints.setColorScheme(Qt.ColorScheme.Light)
