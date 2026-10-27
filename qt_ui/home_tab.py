@@ -193,19 +193,19 @@ def importance_colour(n):
     return "#5B8DEF" if n <= 3 else "#14B8A6" if n <= 5 else "#F5A524" if n <= 7 else "#F97316" if n <= 9 else "#E5484D"
 
 
-def summary(tasks, sessions, due_reviews, today, live_minutes=0.0):
+def summary(tasks, sessions, due_reviews, today, live_minutes=0.0, status=None):
     """Everything Home shows, as plain data (so it can be tested without a window)."""
     open_tasks, done_tasks = [], []
     total_required = total_logged = 0.0
     for task in tasks:
-        snap = tasks_store.goal_snapshot(task, today, sessions)
+        snap = tasks_store.goal_snapshot(task, today, sessions, live_status=status)
         if snap["required"] <= 0:
             continue
         required, logged, period_left = snap["required"], snap["logged"], None
         if snap["isPeriod"]:
             # A week / month goal is shown as what today has to bring in to stay on pace:
             # what is still missing at the start of today, spread over the days left.
-            logged_today = min(logged, tasks_store.logged_seconds_for_date(task, today, sessions) / 60)
+            logged_today = min(logged, tasks_store.logged_seconds_for_date(task, today, sessions, live_status=status) / 60)
             period_left = max(0.0, snap["required"] - logged)
             before_today = logged - logged_today
             required = max(0.0, snap["required"] - before_today) / max(1, snap["daysLeft"])
@@ -532,10 +532,10 @@ class _Banner(QWidget):
 
 
 class _Boot(QWidget):
-    """The opening, about eleven seconds: the dusk fades up, CARMEN is traced by a glowing pen and
+    """The opening, about ten seconds: the dusk fades up, CARMEN is traced by a glowing pen and
     then filled, a rule opens beneath, FOCUS and a promise arrive, the cover lifts and the weekday
     writes itself on the page. A click or a key skips to the lift."""
-    LIFT_AT, DURATION = 10.4, 11.6
+    LIFT_AT, DURATION = 9.2, 10.4
 
     def __init__(self, parent, on_progress, on_done):
         super().__init__(parent)
@@ -580,28 +580,29 @@ class _Boot(QWidget):
         _paint_sky(p, QRectF(0, -70, self.width(), self.height() + 70))
         p.setOpacity(min(1.0, t / 0.8) * (1.0 - lift ** 2))
         white = QColor("#FFFFFF")
-        size = max(44, min(150, self.width() // 9))
+        size = max(60, min(190, self.width() // 6))
         if self._cache is None or self._cache[0] != size:
-            self._cache = (size, inkwrite.Lettering("CARMEN", inkwrite.make_font(size, size * 0.22)))
+            self._cache = (size, inkwrite.Lettering("Carmen", inkwrite.make_font(size, 0, light=False, script=True)))
         lettering = self._cache[1]
         left = (self.width() - lettering.width) / 2
-        baseline = self.height() / 2 + lettering.ascent * 0.25
-        inkwrite.draw(p, lettering, left, baseline, white, self._ramp(t, 0.9, 8.2), stroke=max(1.6, size / 38),
-                      stagger=0.8)
-        rule = self._ramp(t, 7.9, 9.0)
+        baseline = self.height() / 2 + lettering.ascent * 0.3
+        inkwrite.draw_signature(p, lettering, left, baseline, white, self._ramp(t, 0.9, 6.6),
+                                stroke=max(1.6, size / 50))
+        width = lettering.width
+        rule = self._ramp(t, 6.4, 7.4)
         if rule > 0:
             ease = 1 - (1 - rule) ** 3
             p.setPen(QPen(QColor(255, 255, 255, 150), 1.5))
-            half = lettering.width * 0.5 * ease
+            half = width * 0.5 * ease
             y = baseline + size * 0.34
             p.drawLine(QPointF(self.width() / 2 - half, y), QPointF(self.width() / 2 + half, y))
             focus = "F O C U S"
             font = _banner_font(max(14, size // 5), 7, QFont.DemiBold)
             fw = _spaced_width(focus, font)
             _paint_spaced(p, (self.width() - fw) / 2, y + size * 0.42, focus, font, white,
-                          self._ramp(t, 8.3, 9.4), rise=10)
+                          self._ramp(t, 7.0, 8.0), rise=10)
             tag = QColor("#E6DCFF")
-            tag.setAlphaF(0.92 * self._ramp(t, 9.2, 10.0))
+            tag.setAlphaF(0.92 * self._ramp(t, 7.8, 8.6))
             p.setPen(tag)
             small = QFont()
             small.setPixelSize(15)
@@ -733,7 +734,8 @@ class HomeTab(QWidget):
     def _tick(self):
         """Once a second: rebuild if the session changed, otherwise just move the clock."""
         status = session_manager.get_status()
-        if self._signature_of(status) != self._signature:
+        self._ticks = getattr(self, "_ticks", 0) + 1
+        if self._signature_of(status) != self._signature or (status.get("isActive") and self._ticks % 10 == 0 and not self._typing()):
             self.refresh()
             return
         if self._live is not None and status.get("isActive"):
@@ -741,6 +743,10 @@ class HomeTab(QWidget):
             _label, clock, fraction, _can_pause = describe_session(status)
             paused = bool(status.get("isPaused"))
             ring.set_state(colour, fraction or 0.0, clock, "paused" if paused else "", dim=paused)
+
+    def _typing(self):
+        widget = self.focusWidget()
+        return isinstance(widget, WrapEdit) and widget.hasFocus()
 
     def refresh(self, width=None):
         _apply_theme()
@@ -756,7 +762,7 @@ class HomeTab(QWidget):
         live = 0.0
         if status.get("isActive") and status.get("startTime") and not status.get("isBreak"):
             live = tasks_store.worked_seconds(status["startTime"], None, status.get("violationLog")) / 60
-        data = summary(tasks_store.load_tasks(), session_history.load_all(), due_review_count(), date.today(), live)
+        data = summary(tasks_store.load_tasks(), session_history.load_all(), due_review_count(), date.today(), live, status)
         self._blocks = [
             _Banner(now, self._reveal),
             self._hero(data, status),

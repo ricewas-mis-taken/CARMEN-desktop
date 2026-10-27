@@ -170,3 +170,20 @@ def test_details_button_toggles_between_details_and_hide(qtbot, isolate_board):
     assert card._details_button.text() == "Hide"
     card._collapse()
     assert card._details_button.text() == "Details"
+
+
+def test_quicknote_on_the_board_adds_ticks_and_clears(qtbot, tmp_path, monkeypatch):
+    import quicknote_store
+    import qt_ui.board_tab as board_tab
+    saved = []
+    notes = ["one", "two"]
+    monkeypatch.setattr(quicknote_store, "load", lambda: (list(notes), "x"))
+    monkeypatch.setattr(quicknote_store, "save", lambda items: saved.append(list(items)) or notes.__setitem__(slice(None), items) or True)
+    tab = board_tab.BoardTab()
+    qtbot.addWidget(tab)
+    tab._note_input.setText("three")
+    tab._add_note()
+    assert saved[-1] == ["one", "two", "three"]
+    tab._note_rows[0][0].setChecked(True)
+    tab._clear_ticked()
+    assert saved[-1] == ["two", "three"]
