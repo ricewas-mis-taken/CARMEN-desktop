@@ -461,6 +461,9 @@ def test_review_banner_recovers_when_linked_session_ends_externally(
     session_manager.end_session(end_type="manual")
 
     view._review_banner._tick()
+    assert view._review_banner.is_running(), "one missed tick (a sync blip) must not drop the review"
+    for _ in range(review_tab.GONE_TICKS_BEFORE_ABANDON):
+        view._review_banner._tick()
 
     assert not view._review_banner.isVisible()
     assert tab.can_start_review(), "a stale banner must not lock out starting new reviews"
