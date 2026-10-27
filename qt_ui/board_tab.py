@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 from qt_ui.wrap_edit import WrapEdit
 
 import board_store
+import quicknote_store
 from qt_ui.safe_link import make_link_label
 from qt_ui.ui_kit import (
     DANGER_STYLE, INK, MUTED, NUM_FONTS, SECONDARY_STYLE, accent, button, dialog_title, field_label, link_button,
@@ -200,6 +201,22 @@ class BoardTab(QWidget):
         scroll.setWidget(self._list_container)
         layout.addWidget(scroll, 1)
 
+        self._notes_card = QFrame()
+        self._notes_card.setObjectName("BoardNotes")
+        self._notes_card.setStyleSheet(
+            "QFrame#BoardNotes{background:#FFFFFF;border:1px solid #E6E9EF;border-radius:16px;}")
+        self._notes_layout = QVBoxLayout(self._notes_card)
+        self._notes_layout.setContentsMargins(20, 14, 20, 14)
+        self._notes_layout.setSpacing(6)
+        self._notes_scroll = QScrollArea()
+        self._notes_scroll.setWidgetResizable(True)
+        self._notes_scroll.setFrameShape(QScrollArea.NoFrame)
+        self._notes_scroll.setMaximumHeight(190)
+        self._notes_scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
+        self._notes_scroll.setWidget(self._notes_card)
+        layout.addWidget(self._notes_scroll)
+        self._refresh_notes()
+
         self.refresh()
 
         # Recurring board tasks reactivate on their next scheduled weekday --
@@ -208,6 +225,30 @@ class BoardTab(QWidget):
         self._reactivate_timer = QTimer(self)
         self._reactivate_timer.timeout.connect(self._refresh_if_changed)
         self._reactivate_timer.start(REACTIVATE_CHECK_MS)
+
+    def showEvent(self, event):
+        self._refresh_notes()
+        super().showEvent(event)
+
+    def _refresh_notes(self):
+        """The whole QuickNote list, kept under the board."""
+        while self._notes_layout.count():
+            item = self._notes_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        head = QLabel("QuickNote")
+        head.setStyleSheet(f"font-size: 17px; font-weight: 700; color: {INK}; background: transparent;")
+        self._notes_layout.addWidget(head)
+        notes = [n.strip() for n in quicknote_store.load()[0] if n.strip()]
+        if not notes:
+            empty = QLabel("Nothing jotted down yet.")
+            empty.setStyleSheet(f"color: {MUTED}; font-size: 14px; background: transparent;")
+            self._notes_layout.addWidget(empty)
+        for text in notes:
+            line = QLabel("•  " + text)
+            line.setWordWrap(True)
+            line.setStyleSheet(f"color: {INK}; font-size: 14.5px; background: transparent;")
+            self._notes_layout.addWidget(line)
 
     def _board_signature(self):
         return (

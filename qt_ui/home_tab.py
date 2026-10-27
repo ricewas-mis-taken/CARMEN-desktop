@@ -532,10 +532,10 @@ class _Banner(QWidget):
 
 
 class _Boot(QWidget):
-    """The opening, about seven seconds: the dusk fades up, CARMEN is traced by a glowing pen and
+    """The opening, about eleven seconds: the dusk fades up, CARMEN is traced by a glowing pen and
     then filled, a rule opens beneath, FOCUS and a promise arrive, the cover lifts and the weekday
     writes itself on the page. A click or a key skips to the lift."""
-    LIFT_AT, DURATION = 5.6, 6.8
+    LIFT_AT, DURATION = 10.4, 11.6
 
     def __init__(self, parent, on_progress, on_done):
         super().__init__(parent)
@@ -586,9 +586,9 @@ class _Boot(QWidget):
         lettering = self._cache[1]
         left = (self.width() - lettering.width) / 2
         baseline = self.height() / 2 + lettering.ascent * 0.25
-        inkwrite.draw(p, lettering, left, baseline, white, self._ramp(t, 0.7, 4.2), stroke=max(1.6, size / 38),
-                      stagger=0.7)
-        rule = self._ramp(t, 3.9, 4.8)
+        inkwrite.draw(p, lettering, left, baseline, white, self._ramp(t, 0.9, 8.2), stroke=max(1.6, size / 38),
+                      stagger=0.8)
+        rule = self._ramp(t, 7.9, 9.0)
         if rule > 0:
             ease = 1 - (1 - rule) ** 3
             p.setPen(QPen(QColor(255, 255, 255, 150), 1.5))
@@ -599,9 +599,9 @@ class _Boot(QWidget):
             font = _banner_font(max(14, size // 5), 7, QFont.DemiBold)
             fw = _spaced_width(focus, font)
             _paint_spaced(p, (self.width() - fw) / 2, y + size * 0.42, focus, font, white,
-                          self._ramp(t, 4.1, 5.0), rise=10)
+                          self._ramp(t, 8.3, 9.4), rise=10)
             tag = QColor("#E6DCFF")
-            tag.setAlphaF(0.92 * self._ramp(t, 4.8, 5.5))
+            tag.setAlphaF(0.92 * self._ramp(t, 9.2, 10.0))
             p.setPen(tag)
             small = QFont()
             small.setPixelSize(15)
@@ -823,8 +823,15 @@ class HomeTab(QWidget):
             self._live = (ring, colour)
             row.addWidget(ring, 0, Qt.AlignLeft if self._compact else Qt.AlignVCenter)
             text.addStretch(1)
-            text.addWidget(_heading("Paused" if paused else "Right now"))
-            text.addWidget(self._big(label))
+            title = QHBoxLayout()
+            title.setSpacing(10)
+            title.addWidget(self._big(label), 1)
+            pill = QLabel("Paused" if paused else "Live")
+            pill.setStyleSheet(
+                f"color:{'#FFFFFF'};background:{FAINT if paused else '#2FB67C'};border-radius:11px;"
+                "padding:3px 12px;font-size:12.5px;font-weight:700;")
+            title.addWidget(pill, 0, Qt.AlignVCenter)
+            text.addLayout(title)
             if can_pause:
                 toggle = button("Resume" if paused else "Pause", _PRIMARY, height=44)
                 toggle.clicked.connect(self._toggle_pause)
@@ -841,7 +848,6 @@ class HomeTab(QWidget):
                 format_minutes(top["left"]), "left")
             row.addWidget(ring, 0, Qt.AlignLeft if self._compact else Qt.AlignVCenter)
             text.addStretch(1)
-            text.addWidget(_heading("Start with"))
             text.addWidget(self._big(top["task"].get("name", "Task")))
             text.addWidget(_text(f"{format_minutes(top['logged'])} of {format_minutes(top['required'])} {top['phrase']}"))
             if top["period_left"] is not None:
@@ -853,7 +859,6 @@ class HomeTab(QWidget):
             action.clicked.connect(lambda: self._go("focus"))
             actions.addWidget(action)
         elif data["due_reviews"]:
-            text.addWidget(_heading("Start with"))
             text.addWidget(self._big(f"{data['due_reviews']} reviews are due"))
             text.addWidget(_text("Every task goal for today is met."))
             action = button("Open Review", _PRIMARY, height=44)
@@ -1005,27 +1010,6 @@ class HomeTab(QWidget):
             inner.addWidget(rank)
             row.clicked.connect(lambda _c=False: self._go("board"))
             layout.addWidget(row)
-        layout.addSpacing(10)
-        layout.addWidget(_heading("QuickNote"))
-        notes, _stamp = quicknote_store.load()
-        notes = [n.strip() for n in notes if n.strip()]
-        if not notes:
-            layout.addWidget(_text("Nothing jotted down yet.", 15))
-        for text in notes[:30]:
-            line = QHBoxLayout()
-            line.setSpacing(10)
-            dot = QLabel("•")
-            dot.setStyleSheet(f"color:{ACCENT};font-size:18px;background:transparent;")
-            dot.setFixedWidth(14)
-            line.addWidget(dot, 0, Qt.AlignTop)
-            label = QLabel(text)
-            label.setWordWrap(True)
-            label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-            label.setStyleSheet(f"color:{INK};font-size:15px;background:transparent;")
-            line.addWidget(label, 1)
-            layout.addLayout(line)
-        if len(notes) > 30:
-            layout.addWidget(_text(f"and {len(notes) - 30} more", 13, FAINT))
         layout.addStretch(1)
         return card
 
