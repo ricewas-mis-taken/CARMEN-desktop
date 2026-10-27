@@ -63,3 +63,50 @@ def test_home_survives_every_window_width(qtbot, isolate_state, tmp_path, monkey
         qtbot.wait(20)
         assert tab.minimumSizeHint().width() == 0
         assert tab._body.width() <= width   # never wider than the window: no sideways scrolling
+
+
+def test_streak_counts_back_from_today_or_yesterday():
+    d = date(2026, 10, 14)
+    days = [(d - __import__("datetime").timedelta(days=i), m) for i, m in reversed(list(enumerate([30, 20, 10, 0, 40])))]
+    # oldest first: 40, 0, 10, 20, 30 -> today (30), 20, 10 then a gap
+    assert home.streak_days(days) == 3
+    empty_today = days[:-1] + [(d, 0)]
+    assert home.streak_days(empty_today) == 2      # today still empty: count back from yesterday
+    assert home.streak_days([(d, 0)]) == 0
+
+
+def test_grid_is_eight_weeks_ending_this_week():
+    today = date(2026, 10, 14)                       # a Wednesday
+    columns = home.grid_cells([], today)
+    assert len(columns) == 8 and all(len(c) == 7 for c in columns)
+    assert columns[-1][2][0] == today                # Mon, Tue, then Wed
+    assert columns[-1][3][0] is None                 # tomorrow is not drawn
+    assert columns[0][0][0] == date(2026, 8, 24)
+
+
+def test_home_shows_a_running_session_with_pause_and_resume(qtbot, isolate_state, tmp_path, monkeypatch):
+    import session_manager as sm
+    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
+    sm.start_session(25, "soft", [], [], source="task", event_id="a", event_title="Maths")
+    tab = home.HomeTab()
+    qtbot.addWidget(tab)
+    tab.show()
+    labels = {b.text() for b in tab.findChildren(home.QPushButton)}
+    assert "Pause" in labels and "Open Focus" in labels and "Start a session" not in labels
+    next(b for b in tab.findChildren(home.QPushButton) if b.text() == "Pause").click()
+    assert sm.get_status()["isPaused"]
+    assert "Resume" in {b.text() for b in tab.findChildren(home.QPushButton)}
+
+
+def test_quick_capture_adds_a_quicknote_bullet(qtbot, isolate_state, tmp_path, monkeypatch):
+    import quicknote_store
+    saved = []
+    monkeypatch.setattr(quicknote_store, "load", lambda: (["old", ""], "x"))
+    monkeypatch.setattr(quicknote_store, "save", lambda items: saved.append(items) or True)
+    tab = home.HomeTab()
+    qtbot.addWidget(tab)
+    edit = tab.findChild(home.WrapEdit)
+    edit.setText("buy milk")
+    edit.returnPressed.emit()
+    assert saved == [["old", "buy milk"]]
+    assert edit.text() == ""
