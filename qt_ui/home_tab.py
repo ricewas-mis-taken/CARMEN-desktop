@@ -11,12 +11,14 @@ which is what fights the window while it is dragged), and every text is an Elide
 that gives way instead of pushing the page wider. Two columns when there is room, one
 column when there isn't.
 """
+import os
+import random
 from datetime import date, datetime, timedelta
 
-from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtCore import QElapsedTimer, QPointF, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetricsF, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 import board_store
@@ -39,6 +41,7 @@ COMPACT_BELOW = 640      # under this the big ring sits above its text instead o
 GRID_WEEKS = 53          # a whole year of days, like a contribution graph
 TIMER_MS = 1000
 _GRID_BLUE = "#5B8DEF"
+_BOOTED = False          # the opening animation plays once per launch
 _NOTE_HINT = "Add to QuickNote, then Enter"
 _CARD = "QFrame#HomeCard{background:#FFFFFF;border:1px solid #E7EAF0;border-radius:18px;}"
 _PRIMARY = (
@@ -73,7 +76,7 @@ def streak_days(minutes):
     return run
 
 
-def grid_cells(sessions, today, weeks=GRID_WEEKS):
+def grid_cells(sessions, today, weeks=GRID_WEEKS, live_minutes=0.0):
     """[[(date or None, minutes)]]: `weeks` columns of 7 days (Monday first), the last column this
     week. Days after today are (None, 0)."""
     monday = today - timedelta(days=today.weekday())
@@ -85,7 +88,8 @@ def grid_cells(sessions, today, weeks=GRID_WEEKS):
         column = []
         for d in range(7):
             day = first + timedelta(weeks=w, days=d)
-            column.append((day, by_day.get(day, 0.0)) if day <= today else (None, 0.0))
+            minutes = by_day.get(day, 0.0) + (live_minutes if day == today else 0.0)
+            column.append((day, minutes) if day <= today else (None, 0.0))
         columns.append(column)
     return columns
 
@@ -119,7 +123,45 @@ def waiting_sessions(status):
     return out
 
 
-def summary(tasks, sessions, due_reviews, today):
+def _with_live(minutes, live_minutes):
+    """The running session counts toward today at once, so the streak lights up while you work."""
+    if not minutes or live_minutes <= 0:
+        return minutes
+    day, value = minutes[-1]
+    return minutes[:-1] + [(day, value + live_minutes)]
+
+
+MILESTONES = (3, 7, 14, 30, 60, 100, 200, 365)
+
+
+def next_milestone(streak):
+    return next((m for m in MILESTONES if m > streak), streak + 100)
+
+
+_WELCOME = {
+    "night": ["Still up. Make it count, then rest.", "Quiet hours. One focused block, then sleep."],
+    "morning": ["Fresh start. Pick one thing and begin.", "The day is empty. Fill it on purpose.",
+                "Early focus is the cheapest focus."],
+    "afternoon": ["Halfway there. Protect the next hour.", "Pick up where you left off.",
+                  "A good afternoon starts with one session."],
+    "evening": ["Wind down strong. One more block?", "Look how far today went. Finish it well.",
+                "Evening focus counts the same."],
+}
+
+
+def welcome_line(now):
+    hour = now.hour
+    key = "night" if hour < 5 else "morning" if hour < 12 else "afternoon" if hour < 18 else "evening"
+    lines = _WELCOME[key]
+    return lines[now.timetuple().tm_yday % len(lines)]
+
+
+def importance_colour(n):
+    n = n or 0
+    return "#5B8DEF" if n <= 3 else "#14B8A6" if n <= 5 else "#F5A524" if n <= 7 else "#F97316" if n <= 9 else "#E5484D"
+
+
+def summary(tasks, sessions, due_reviews, today, live_minutes=0.0):
     """Everything Home shows, as plain data (so it can be tested without a window)."""
     open_tasks, done_tasks = [], []
     total_required = total_logged = 0.0
@@ -160,8 +202,8 @@ def summary(tasks, sessions, due_reviews, today):
         "total_logged": total_logged,
         "due_reviews": due_reviews,
         "week": week,
-        "streak": streak_days(minutes_by_day(sessions, 60, today=today)),
-        "grid": grid_cells(sessions, today),
+        "streak": streak_days(_with_live(minutes_by_day(sessions, 60, today=today), live_minutes)),
+        "grid": grid_cells(sessions, today, live_minutes=live_minutes),
     }
 
 
@@ -229,7 +271,7 @@ class _Grid(QWidget):
     """A year of days, one square each, darker the more focus that day, months along the top.
     Hover a day to read it (the line under the grid and the tooltip both say it)."""
     hovered = Signal(str)
-    MAX_STEP, LEFT, TOP = 17, 30, 20
+    MAX_STEP, LEFT, TOP = 26, 30, 20
 
     def __init__(self, columns):
         super().__init__()
@@ -238,10 +280,15 @@ class _Grid(QWidget):
         self._hover = None
         self.setMouseTracking(True)
         self.setMinimumWidth(0)
-        self.setFixedHeight(self.TOP + 7 * self.MAX_STEP)
+        self.setFixedHeight(self.TOP + 7 * 14)
 
     def _step(self):
         return max(4.0, min(float(self.MAX_STEP), (self.width() - self.LEFT) / len(self._columns)))
+
+    def resizeEvent(self, event):
+        self.setFixedHeight(int(self.TOP + 7 * self._step()) + 2)
+        self.updateGeometry()
+        super().resizeEvent(event)
 
     def _cell_at(self, pos):
         step = self._step()
@@ -309,6 +356,202 @@ class _Grid(QWidget):
                     p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
 
 
+_PURPLE_TOP, _PURPLE_BOTTOM = "#35296B", "#7F66AE"
+_BANNER_FONT = ("Bahnschrift Light", "Bahnschrift", "Segoe UI Light", "Segoe UI")
+
+
+def _banner_font(pixels, spacing, weight=QFont.Light):
+    font = QFont()
+    font.setFamilies(list(_BANNER_FONT))
+    font.setPixelSize(pixels)
+    font.setWeight(weight)
+    font.setLetterSpacing(QFont.AbsoluteSpacing, spacing)
+    return font
+
+
+def _paint_droplets(p, width, height, seed=7):
+    """Rain on a window: a scatter of small glassy drops, the same every time."""
+    rnd = random.Random(seed)
+    for _ in range(max(30, int(width * height / 5500))):
+        r = rnd.choice((2.5, 3, 3.5, 4, 5, 6, 8, 11))
+        x, y = rnd.uniform(0, width), rnd.uniform(0, height)
+        fill = QColor(30, 20, 70, 34)
+        p.setPen(QPen(QColor(255, 255, 255, 70), 1))
+        p.setBrush(fill)
+        p.drawEllipse(QPointF(x, y), r, r)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(255, 255, 255, 90))
+        p.drawEllipse(QPointF(x - r * 0.3, y - r * 0.35), r * 0.28, r * 0.28)
+
+
+def _paint_sky(p, rect):
+    gradient = QLinearGradient(0, rect.top(), 0, rect.bottom())
+    gradient.setColorAt(0, QColor(_PURPLE_TOP))
+    gradient.setColorAt(1, QColor(_PURPLE_BOTTOM))
+    p.fillRect(rect, gradient)
+    _paint_droplets(p, rect.width(), rect.height())
+
+
+def _paint_spaced(p, x, baseline, text, font, colour, reveal=1.0, rise=14):
+    """Draws `text` one letter at a time; `reveal` (0..1) fades each letter in left to right."""
+    metrics = QFontMetricsF(font)
+    spacing = font.letterSpacing()
+    count = max(1, len(text))
+    p.setFont(font)
+    for i, ch in enumerate(text):
+        amount = max(0.0, min(1.0, reveal * (count + 3) - i - 1)) if reveal < 1 else 1.0
+        if amount > 0:
+            c = QColor(colour)
+            c.setAlphaF(c.alphaF() * amount)
+            p.setPen(c)
+            p.drawText(QPointF(x, baseline + (1 - amount) * rise), ch)
+        x += metrics.horizontalAdvance(ch) + spacing
+    return x
+
+
+def _spaced_width(text, font):
+    metrics = QFontMetricsF(font)
+    return sum(metrics.horizontalAdvance(ch) + font.letterSpacing() for ch in text)
+
+
+class _Banner(QWidget):
+    """The welcome: the weekday in wide thin capitals over rain-streaked purple, the date and
+    the time under it, and a line to start the day with."""
+
+    def __init__(self, now, reveal=1.0):
+        super().__init__()
+        self._now = now
+        self.reveal = reveal
+        self.setFixedHeight(252)
+        self.setMinimumWidth(0)
+        self._tick = QTimer(self)
+        self._tick.setInterval(20000)
+        self._tick.timeout.connect(self._clock)
+        self._tick.start()
+
+    def _clock(self):
+        self._now = datetime.now()
+        self.update()
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(self.rect()), 22, 22)
+        p.setClipPath(clip)
+        _paint_sky(p, self.rect())
+        white = QColor("#FFFFFF")
+        now = self._now
+        size = 52 if self.width() >= 760 else 38 if self.width() >= 520 else 28
+        day_font = _banner_font(size, size * 0.62)
+        day = now.strftime("%A").upper()
+        while _spaced_width(day, day_font) > self.width() - 80 and size > 18:
+            size -= 2
+            day_font = _banner_font(size, size * 0.62)
+        _paint_spaced(p, 40, 40 + size, day, day_font, white, self.reveal)
+        date_font = _banner_font(17, 3, QFont.DemiBold)
+        _paint_spaced(p, 42, 40 + size + 44, f"{now.day}  {now.strftime('%B').upper()}, {now.year}.", date_font,
+                      white, self.reveal)
+        time_text = now.strftime("%I:%M %p").lstrip("0")
+        _paint_spaced(p, 42, 40 + size + 84, f"- {time_text} -", _banner_font(16, 2, QFont.DemiBold), white,
+                      self.reveal)
+        line = QColor("#E6DCFF")
+        line.setAlphaF(0.9 * max(0.0, min(1.0, (self.reveal - 0.6) / 0.4)) if self.reveal < 1 else 0.9)
+        p.setPen(line)
+        text_font = QFont()
+        text_font.setPixelSize(15)
+        p.setFont(text_font)
+        p.drawText(QRectF(42, self.height() - 46, self.width() - 84, 26), Qt.AlignLeft | Qt.AlignVCenter,
+                   welcome_line(now))
+
+
+class _Boot(QWidget):
+    """The opening: the app's name appears letter by letter on the rain, holds for a beat, then
+    lifts away to the page. Runs once each time Carmen starts."""
+    DURATION = 2.9
+
+    def __init__(self, parent, on_progress, on_done):
+        super().__init__(parent)
+        self._on_progress, self._on_done = on_progress, on_done
+        self._clock = QElapsedTimer()
+        self._clock.start()
+        self._timer = QTimer(self)
+        self._timer.setInterval(16)
+        self._timer.timeout.connect(self._step)
+        self._timer.start()
+        self.setAttribute(Qt.WA_StyledBackground, False)
+        self.raise_()
+
+    def _t(self):
+        return self._clock.elapsed() / 1000.0
+
+    def _step(self):
+        t = self._t()
+        self._on_progress(max(0.0, min(1.0, (t - 1.9) / 1.0)))     # the banner's own letters, as the cover lifts
+        if t >= self.DURATION:
+            self._timer.stop()
+            self._on_done()
+            self.deleteLater()
+            return
+        self.update()
+
+    def paintEvent(self, _event):
+        t = self._t()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        lift = max(0.0, min(1.0, (t - 1.9) / 0.9))
+        p.setOpacity(1.0 - lift)
+        p.translate(0, -lift * 40)
+        _paint_sky(p, QRectF(0, 0, self.width(), self.height() + 40))
+        name = "CARMEN FOCUS"
+        size = 46 if self.width() >= 640 else 28
+        font = _banner_font(size, size * 0.55)
+        x = (self.width() - _spaced_width(name, font)) / 2
+        y = self.height() / 2
+        _paint_spaced(p, x, y, name, font, QColor("#FFFFFF"), max(0.0, min(1.0, t / 1.3)))
+        sub = QColor("#E6DCFF")
+        sub.setAlphaF(max(0.0, min(1.0, (t - 1.0) / 0.5)) * 0.9)
+        p.setPen(sub)
+        small = QFont()
+        small.setPixelSize(15)
+        p.setFont(small)
+        p.drawText(QRectF(0, y + 18, self.width(), 30), Qt.AlignCenter, "Focus on what matters.")
+
+
+class _Flame(QWidget):
+    """A small painted fire: lit when there is a streak, grey when there is not."""
+
+    def __init__(self, lit, size=46):
+        super().__init__()
+        self._lit = lit
+        self.setFixedSize(size, size)
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        outer = QPainterPath()
+        outer.moveTo(w * 0.5, h * 0.04)
+        outer.cubicTo(w * 0.62, h * 0.30, w * 0.92, h * 0.40, w * 0.86, h * 0.68)
+        outer.cubicTo(w * 0.82, h * 0.92, w * 0.62, h * 0.98, w * 0.5, h * 0.98)
+        outer.cubicTo(w * 0.34, h * 0.98, w * 0.14, h * 0.90, w * 0.14, h * 0.66)
+        outer.cubicTo(w * 0.14, h * 0.46, w * 0.30, h * 0.40, w * 0.36, h * 0.24)
+        outer.cubicTo(w * 0.42, h * 0.14, w * 0.46, h * 0.08, w * 0.5, h * 0.04)
+        gradient = QLinearGradient(0, 0, 0, h)
+        gradient.setColorAt(0, QColor("#FFB020" if self._lit else "#D5D9E2"))
+        gradient.setColorAt(1, QColor("#F2542D" if self._lit else "#B8BECB"))
+        p.setPen(Qt.NoPen)
+        p.setBrush(gradient)
+        p.drawPath(outer)
+        inner = QPainterPath()
+        inner.moveTo(w * 0.5, h * 0.50)
+        inner.cubicTo(w * 0.62, h * 0.64, w * 0.70, h * 0.72, w * 0.62, h * 0.86)
+        inner.cubicTo(w * 0.58, h * 0.94, w * 0.42, h * 0.94, w * 0.38, h * 0.84)
+        inner.cubicTo(w * 0.32, h * 0.70, w * 0.44, h * 0.62, w * 0.5, h * 0.50)
+        p.setBrush(QColor("#FFE08A" if self._lit else "#EEF0F5"))
+        p.drawPath(inner)
+
+
 class HomeTab(QWidget):
     def __init__(self, on_navigate=None):
         super().__init__()
@@ -317,6 +560,8 @@ class HomeTab(QWidget):
         self._compact = None
         self._signature = None
         self._live = None            # (ring, colour) while a live session is on show
+        self._reveal = 1.0           # how much of the banner lettering has appeared (the boot animation)
+        self._boot = None
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         scroll = QScrollArea()
@@ -343,15 +588,34 @@ class HomeTab(QWidget):
         return QSize(0, 0)
 
     def showEvent(self, event):
+        global _BOOTED
+        if not _BOOTED and "PYTEST_CURRENT_TEST" not in os.environ:
+            _BOOTED = True
+            self._reveal = 0.0
+            self._boot = _Boot(self, self._set_reveal, self._boot_done)
+            self._boot.setGeometry(self.rect())
+            self._boot.show()
         self.refresh()
         self._timer.start()
         super().showEvent(event)
+
+    def _set_reveal(self, value):
+        self._reveal = value
+        if self._blocks and isinstance(self._blocks[0], _Banner):
+            self._blocks[0].reveal = value
+            self._blocks[0].update()
+
+    def _boot_done(self):
+        self._boot = None
+        self._set_reveal(1.0)
 
     def hideEvent(self, event):
         self._timer.stop()
         super().hideEvent(event)
 
     def resizeEvent(self, event):
+        if self._boot is not None:
+            self._boot.setGeometry(self.rect())
         width = event.size().width()
         compact = width < COMPACT_BELOW
         if compact != self._compact:
@@ -392,58 +656,51 @@ class HomeTab(QWidget):
         status = session_manager.get_status()
         self._signature = self._signature_of(status)
         self._live = None
-        data = summary(tasks_store.load_tasks(), session_history.load_all(), due_review_count(), date.today())
+        live = 0.0
+        if status.get("isActive") and status.get("startTime") and not status.get("isBreak"):
+            live = tasks_store.worked_seconds(status["startTime"], None, status.get("violationLog")) / 60
+        data = summary(tasks_store.load_tasks(), session_history.load_all(), due_review_count(), date.today(), live)
         self._blocks = [
-            self._header(now, data),
+            _Banner(now, self._reveal),
             self._hero(data, status),
             self._today(data),
             self._needs_you(data, status, now),
             self._capture_card(),
             self._consistency(data),
+            self._streak_card(data),
+            self._board_card(),
         ]
         self._place(width >= WIDE_FROM)
 
     def _place(self, wide):
-        """Wide: header and hero across the top, then two columns. Narrow: one column."""
+        """Wide: banner across the top, the working cards on the left, streak / board / needs-you
+        down the right side, the year underneath. Narrow: one column."""
         self._wide = wide
-        header, hero, today, needs, capture, consistency = self._blocks
+        banner, hero, today, needs, capture, consistency, streak, board = self._blocks
         for block in self._blocks:
             self._grid.removeWidget(block)
         for column in range(2):
             self._grid.setColumnStretch(column, 0)
         if wide:
-            self._grid.addWidget(header, 0, 0, 1, 2)
-            self._grid.addWidget(hero, 1, 0, 1, 2)
+            self._grid.addWidget(banner, 0, 0, 1, 2)
+            self._grid.addWidget(hero, 1, 0)
             self._grid.addWidget(today, 2, 0)
-            self._grid.addWidget(needs, 2, 1)
-            self._grid.addWidget(capture, 3, 0, 1, 2)
+            self._grid.addWidget(capture, 3, 0)
+            self._grid.addWidget(streak, 1, 1)
+            self._grid.addWidget(board, 2, 1)
+            self._grid.addWidget(needs, 3, 1)
             self._grid.addWidget(consistency, 4, 0, 1, 2)
             self._grid.setColumnStretch(0, 3)
             self._grid.setColumnStretch(1, 2)
         else:
-            for row, block in enumerate((header, hero, needs, today, capture, consistency)):
+            for row, block in enumerate((banner, hero, streak, today, capture, board, needs, consistency)):
                 self._grid.addWidget(block, row, 0)
             self._grid.setColumnStretch(0, 1)
-        self._grid.setRowStretch(7, 1)
+        self._grid.setRowStretch(8, 1)
         for block in self._blocks:
             block.show()
 
     # ---- blocks ----------------------------------------------------------------------
-
-    def _header(self, now, data):
-        box = QWidget()
-        layout = QVBoxLayout(box)
-        layout.setContentsMargins(0, 0, 0, 4)
-        layout.setSpacing(2)
-        title = ElidedLabel(greeting(now))
-        title.setStyleSheet(f"font-size:30px;font-weight:700;color:{INK};background:transparent;")
-        title.setMinimumHeight(40)
-        layout.addWidget(title)
-        line = now.strftime("%A, %B ") + str(now.day)
-        if data["streak"] >= 2:
-            line += f"   ·   {data['streak']}-day streak"
-        layout.addWidget(_text(line, 14))
-        return box
 
     def _big(self, text):
         label = ElidedLabel(text)
@@ -633,31 +890,62 @@ class HomeTab(QWidget):
             "QPlainTextEdit#WrapEdit:focus{border:1px solid #5B8DEF;}")
         edit.returnPressed.connect(lambda: self._capture_note(edit))
         layout.addWidget(edit)
-        board = board_store.list_active_tasks()[:3]
-        if board:
-            layout.addSpacing(4)
-            layout.addWidget(_heading("Top of the board"))
-            for item in board:
-                row = QPushButton()
-                row.setFlat(True)
-                row.setCursor(Qt.PointingHandCursor)
-                row.setStyleSheet("QPushButton{background:transparent;border:none;text-align:left;padding:2px 0;}")
-                inner = QHBoxLayout(row)
-                inner.setContentsMargins(0, 0, 0, 0)
-                inner.setSpacing(10)
-                rank = QLabel(str(item.get("importance", "")))
-                rank.setFixedWidth(22)
-                rank.setAlignment(Qt.AlignCenter)
-                rank.setAttribute(Qt.WA_TransparentForMouseEvents)
-                rank.setStyleSheet(f"color:{INK};background:#EEF1F6;border-radius:6px;font-size:12px;font-weight:700;")
-                inner.addWidget(rank)
-                name = ElidedLabel(item.get("name", "Task"))
-                name.setAttribute(Qt.WA_TransparentForMouseEvents)
-                name.setStyleSheet(f"color:{INK};font-size:13.5px;background:transparent;")
-                inner.addWidget(name, 1)
-                row.clicked.connect(lambda _c=False: self._go("board"))
-                layout.addWidget(row)
         layout.addStretch(1)
+        return card
+
+    def _board_card(self):
+        card = _card()
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(22, 18, 22, 18)
+        layout.setSpacing(8)
+        layout.addWidget(_heading("Top of the board"))
+        board = board_store.list_active_tasks()[:4]
+        if not board:
+            layout.addWidget(_text("Nothing on the board yet."))
+        for item in board:
+            colour = importance_colour(item.get("importance"))
+            row = QPushButton()
+            row.setCursor(Qt.PointingHandCursor)
+            row.setFixedHeight(46)
+            row.setStyleSheet(
+                f"QPushButton{{background:{tint(colour, 0.10)};border:none;border-left:5px solid {colour};"
+                f"border-radius:12px;text-align:left;}}QPushButton:hover{{background:{tint(colour, 0.20)};}}")
+            inner = QHBoxLayout(row)
+            inner.setContentsMargins(14, 0, 12, 0)
+            inner.setSpacing(10)
+            name = ElidedLabel(item.get("name", "Task"))
+            name.setAttribute(Qt.WA_TransparentForMouseEvents)
+            name.setStyleSheet(f"color:{INK};font-size:15px;font-weight:600;background:transparent;")
+            inner.addWidget(name, 1)
+            rank = QLabel(str(item.get("importance", "")))
+            rank.setFixedSize(28, 24)
+            rank.setAlignment(Qt.AlignCenter)
+            rank.setAttribute(Qt.WA_TransparentForMouseEvents)
+            rank.setStyleSheet(f"color:#FFFFFF;background:{colour};border-radius:12px;font-size:12px;font-weight:700;")
+            inner.addWidget(rank)
+            row.clicked.connect(lambda _c=False: self._go("board"))
+            layout.addWidget(row)
+        layout.addStretch(1)
+        return card
+
+    def _streak_card(self, data):
+        card = _card()
+        row = QHBoxLayout(card)
+        row.setContentsMargins(22, 18, 22, 18)
+        row.setSpacing(16)
+        streak = data["streak"]
+        row.addWidget(_Flame(streak > 0, 54), 0, Qt.AlignVCenter)
+        col = QVBoxLayout()
+        col.setSpacing(2)
+        big = QLabel(str(streak))
+        big.setStyleSheet(f"color:{INK};font-size:38px;font-weight:700;background:transparent;")
+        col.addWidget(big)
+        col.addWidget(_text("day streak", 14, MUTED))
+        goal = next_milestone(streak)
+        col.addSpacing(4)
+        col.addWidget(_Bar(streak / goal, "#F2842D", height=8))
+        col.addWidget(_text(f"{goal - streak} more to reach {goal}" if streak else "Focus today to light it", 12.5, FAINT))
+        row.addLayout(col, 1)
         return card
 
     def _capture_note(self, edit):
@@ -680,10 +968,14 @@ class HomeTab(QWidget):
         active = sum(1 for _d, m in days if m >= 1)
         total = sum(m for _d, m in days)
         head = QHBoxLayout()
-        head.addWidget(_text(
-            f"{streak}-day streak" if streak else "No streak yet: one session today starts it", 17, INK, 700))
-        head.addStretch(1)
-        head.addWidget(_text(f"{active} active days  ·  {format_minutes(total)} this year", 13, MUTED))
+        for text, size, colour, weight, align in (
+                (f"{streak}-day streak" if streak else "No streak yet: one session today starts it", 17, INK, 700, Qt.AlignLeft),
+                (f"{active} active days  ·  {format_minutes(total)} this year", 13, MUTED, 400, Qt.AlignRight)):
+            label = QLabel(text)
+            label.setAlignment(align | Qt.AlignVCenter)
+            label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)     # shrinks with the window
+            label.setStyleSheet(f"color:{colour};font-size:{size}px;font-weight:{weight};background:transparent;")
+            head.addWidget(label, 1)
         layout.addLayout(head)
         grid = _Grid(data["grid"])
         layout.addWidget(grid)
