@@ -10,7 +10,7 @@ with unreadable text on a card:
     page     the soft background behind the cards
     sidebar  the navigation column
 
-Cards stay white in every theme. Dark themes would need every white-on-ink label
+Cards stay white in every theme; the Home page sky (see sky()) follows the theme too. Dark themes would need every white-on-ink label
 swapped too, which this stylesheet does not do yet, so there are none.
 
 The stylesheet (styles.qss) was written against the first theme's literal colours.
@@ -24,28 +24,28 @@ TOKENS = ("ink", "muted", "faint", "accent", "page", "sidebar")
 
 # Why these: each is a colour with a known effect on how people work, not a fashion.
 THEMES = {
-    "Paper": dict(
-        label="Paper", why="Cool grey and ink blue. Neutral, so nothing competes with the work.",
-        ink="#1B2230", muted="#667085", faint="#98A2B3", accent="#5B8DEF", page="#F7F7F8", sidebar="#161B26"),
-    "Deep work": dict(
-        label="Deep work", why="Navy and steel. Blue is the colour most tied to sustained attention.",
-        ink="#14213D", muted="#5A6785", faint="#94A0BA", accent="#2F5DA8", page="#F5F7FB", sidebar="#0F1A33"),
-    "Moss": dict(
-        label="Moss", why="Sage and warm white. Green is restful, good for long review sessions.",
-        ink="#1F2A24", muted="#62705F", faint="#9AA796", accent="#4F8A6B", page="#F6F7F3", sidebar="#17211C"),
-    "Clay": dict(
-        label="Clay", why="Terracotta on warm paper. Warm hues push you to start, good for a task you are avoiding.",
-        ink="#2A1F1B", muted="#7A6A63", faint="#B09F97", accent="#C2623F", page="#FAF6F2", sidebar="#231915"),
-    "Graphite": dict(
-        label="Graphite", why="Grey with almost no colour. The quietest option, for when everything else is loud.",
-        ink="#202124", muted="#6B6F76", faint="#A1A5AB", accent="#4B5563", page="#F6F6F6", sidebar="#1A1B1E"),
+    "Dusk": dict(
+        label="Dusk", why="Violet evening. Calm and a little dreamy, easy on the eyes for long sessions.",
+        ink="#241B4F", muted="#6B6196", faint="#A59DC9", accent="#7B5FD3", page="#F1EDFB", sidebar="#221A52",
+        sky=("#2A2060", "#4C3A8C", "#7A62B4")),
+    "Ember": dict(
+        label="Ember", why="Glowing coals at dusk. Warm colours push you to start the task you are avoiding.",
+        ink="#3A1B20", muted="#85555A", faint="#C29A98", accent="#E2603B", page="#FCF0EA", sidebar="#3A1822",
+        sky=("#3A1232", "#8A2F46", "#E8805F")),
+    "Tide": dict(
+        label="Tide", why="Deep teal water. Cool and steady, good for reading and review.",
+        ink="#0E2F3A", muted="#4F7782", faint="#93B7BE", accent="#1E9FAA", page="#EAF6F7", sidebar="#0D2D3C",
+        sky=("#0A2742", "#14607B", "#3DB6B0")),
+    "Aurora": dict(
+        label="Aurora", why="Northern lights over a dark sky. Green is restful and keeps the page lively.",
+        ink="#10301F", muted="#4F7A62", faint="#93BBA4", accent="#33B787", page="#EBF8F1", sidebar="#0F2A26",
+        sky=("#0D1F3C", "#1A5A6A", "#47C79C")),
 }
-DEFAULT_THEME = "Paper"
+DEFAULT_THEME = "Dusk"
 
 _HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 # The literals styles.qss uses, and which token (plus a darkening for the tints) each stands for.
-_BASE = THEMES[DEFAULT_THEME]
 _QSS_MAP = {
     "#1B2230": ("ink", 0), "#1F2328": ("ink", 0),
     "#667085": ("muted", 0), "#5A6070": ("muted", 0), "#5B6472": ("muted", 0),
@@ -82,6 +82,24 @@ def resolve(setting):
             if _valid(custom.get(key)):
                 colours[key] = custom[key].upper()
     return colours
+
+
+def sky(setting=None):
+    """(top, middle, bottom) colours of the animated Home sky for a saved setting. A custom theme
+    gets one made from its own sidebar and accent."""
+    setting = setting if isinstance(setting, dict) else {}
+    base = THEMES.get(setting.get("name"), THEMES[DEFAULT_THEME])
+    colours = resolve(setting)
+    if isinstance(setting.get("custom"), dict) and setting["custom"]:
+        return colours["sidebar"], darken(colours["accent"], 0.35), colours["accent"]
+    return base["sky"]
+
+
+def current_sky():
+    try:
+        return sky(load_setting())
+    except Exception:
+        return sky(None)
 
 
 def apply_to_stylesheet(qss, colours):

@@ -28,7 +28,7 @@ def test_summary_orders_open_tasks_by_time_left(isolate_state, tmp_path, monkeyp
 
 def test_home_tab_renders_and_navigates(qtbot, isolate_state, tmp_path, monkeypatch):
     monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
-    monkeypatch.setattr(theme, "load_setting", lambda: {"name": "Paper"})
+    monkeypatch.setattr(theme, "load_setting", lambda: {"name": "Dusk"})
     tasks_store.create_task({"name": "Chinese", "targetMinutes": 45, "color": "#e53935"})
     went = []
     tab = home.HomeTab(on_navigate=went.append)
@@ -43,13 +43,13 @@ def test_home_tab_renders_and_navigates(qtbot, isolate_state, tmp_path, monkeypa
 def test_options_dialog_saves_a_theme(qtbot, monkeypatch):
     import qt_ui.options_dialog as options
     saved = []
-    monkeypatch.setattr(theme, "load_setting", lambda: saved[-1] if saved else {"name": "Paper"})
+    monkeypatch.setattr(theme, "load_setting", lambda: saved[-1] if saved else {"name": "Dusk"})
     monkeypatch.setattr(theme, "save_setting", saved.append)
     monkeypatch.setattr(options, "reapply_stylesheet", lambda: None)
     dialog = options.OptionsDialog()
     qtbot.addWidget(dialog)
-    dialog._choose("Moss")
-    assert saved == [{"name": "Moss"}]
+    dialog._choose("Aurora")
+    assert saved == [{"name": "Aurora"}]
 
 
 def test_home_survives_every_window_width(qtbot, isolate_state, tmp_path, monkeypatch):
