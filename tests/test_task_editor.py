@@ -203,21 +203,41 @@ def test_target_forms(text, minutes):
     assert task_editor.parse_minutes(text) == minutes
 
 
-def test_each_ticked_day_can_get_its_own_time(qtbot, isolate_tasks):
+def test_a_box_appears_under_each_ticked_day_and_copies_the_others(qtbot, isolate_tasks):
     win = _editor(qtbot)
     win.show()
     _pick(win, "weekly_days")
+    assert win._target_edit.isHidden() and win._day_edits["MO"].isHidden()
     win._weekday_checks["MO"].setChecked(True)
-    win._weekday_checks["WE"].setChecked(True)
-    win._per_day_check.setChecked(True)
-    assert not win._per_day_row.isHidden() and win._target_edit.isHidden()
-    assert win._day_edits["MO"].isEnabled() and not win._day_edits["TU"].isEnabled()
+    assert not win._day_edits["MO"].isHidden() and win._day_edits["TU"].isHidden()
     win._day_edits["MO"].setText("20")
+    win._weekday_checks["WE"].setChecked(True)
+    assert win._day_edits["WE"].text() == "20"            # nothing typed there: it follows the others
     win._day_edits["WE"].setText("1h 30m")
+    win._day_typed("WE")
     win._save()
     saved = tasks_store.load_tasks()[0]
-    assert saved["dayMinutes"] == {"MO": 20, "WE": 90}
-    assert saved["weekdays"] == ["MO", "WE"]
+    assert saved["dayMinutes"] == {"MO": 20, "WE": 90} and saved["weekdays"] == ["MO", "WE"]
+
+
+def test_enter_twice_offers_the_new_time_to_days_that_matched(qtbot, isolate_tasks, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    win = _editor(qtbot)
+    _pick(win, "weekly_days")
+    for code in ("MO", "TU", "FR"):
+        win._weekday_checks[code].setChecked(True)
+    win._day_edits["MO"].setText("30")
+    win._committed["MO"] = "30"
+    win._day_edits["TU"].setText("30")
+    win._day_edits["FR"].setText("45")
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(a[2]) or QMessageBox.Yes)
+    win._day_edits["MO"].setText("60")
+    win._day_typed("MO")
+    win._day_enter("MO")
+    assert win._day_edits["TU"].text() == "30" and not asked        # one Enter: just this day
+    win._day_enter("MO")
+    assert asked and win._day_edits["TU"].text() == "60" and win._day_edits["FR"].text() == "45"
 
 
 def test_a_ticked_day_left_blank_is_asked_for(qtbot, isolate_tasks):
@@ -225,8 +245,9 @@ def test_a_ticked_day_left_blank_is_asked_for(qtbot, isolate_tasks):
     _pick(win, "weekly_days")
     win._weekday_checks["MO"].setChecked(True)
     win._weekday_checks["WE"].setChecked(True)
-    win._per_day_check.setChecked(True)
     win._day_edits["MO"].setText("20")
+    win._day_edits["WE"].setText("")
+    win._day_typed("WE")
     win._save()
     assert "WE" in win._status_label.text()
     assert tasks_store.load_tasks() == []
@@ -236,7 +257,7 @@ def test_same_time_each_day_saves_no_per_day_times(qtbot, isolate_tasks):
     win = _editor(qtbot)
     _pick(win, "weekly_days")
     win._weekday_checks["MO"].setChecked(True)
-    win._target_edit.setText("30")
+    win._day_edits["MO"].setText("30")
     win._save()
     assert tasks_store.load_tasks()[0]["dayMinutes"] == {}
 
@@ -260,5 +281,4 @@ def test_editing_a_task_with_per_day_times_shows_them(qtbot, isolate_tasks):
         "targetMinutes": 20, "dayMinutes": {"MO": 20, "FR": 45}})
     win = task_editor._TaskEditor(task, on_saved=None)
     qtbot.addWidget(win)
-    assert win._per_day_check.isChecked()
     assert win._day_edits["FR"].text() == "45"
