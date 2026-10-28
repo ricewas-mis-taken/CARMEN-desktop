@@ -30,7 +30,7 @@ MAX_PHOTO_BYTES = 10 * 1024 * 1024
 
 # Table names handled by sync_live's fast lane; the slower lane in sync_client
 # leaves them out of its own pulls.
-FAST_LANE_TABLES = ("session_history", "live_session", "live_review", "screentime", "settings", "quicknote")
+FAST_LANE_TABLES = ("session_history", "live_session", "live_review", "screentime", "settings", "quicknote", "scribe")
 
 RECORD_FIELDS = ("table_name", "sync_id", "data", "device_id", "updated_at", "is_deleted")
 
@@ -151,7 +151,7 @@ def pull(client, token, cursor, tables=None, exclude=None):
 
 # --- photos (Supabase Storage, private bucket, one folder per user) ---
 
-_SAFE_PHOTO_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}\.(png|jpe?g|gif|bmp)$")
+_SAFE_PHOTO_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}\.(png|jpe?g|gif|bmp|webp)$")
 
 
 def is_safe_photo_name(name):

@@ -1,7 +1,7 @@
 import os
 import re
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QFontMetrics, QPainter, QPalette, QPixmap
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QStackedWidget,
@@ -29,8 +30,11 @@ from PySide6.QtWidgets import (
 )
 from qt_ui.wrap_edit import WrapEdit
 
+from calendar_log import logger as calendar_logger
 import review_store
+import session_history
 import session_manager
+from qt_ui import confirm_dialog
 import tasks_store
 from qt_ui.safe_link import make_link_label
 from qt_ui.ui_kit import (
@@ -50,6 +54,7 @@ from qt_ui.ui_kit import (
     ElidedLabel,
     button,
     chip,
+    link_button,
 )
 
 COLOR_PALETTE = [
@@ -338,9 +343,10 @@ SORT_CHOICES = (("due", "Due first"), ("hardest", "Hardest first"), ("newest", "
 class _CategoryRow(QPushButton):
     """A category in the sidebar: colour dot, name, how many problems. The chosen one is filled."""
 
-    def __init__(self, name, color, count, checked=False):
+    def __init__(self, name, color, count, checked=False, on_delete=None):
         super().__init__()
         self._name, self._color, self._count = name, color, count
+        self._on_delete = on_delete
         self.setCheckable(True)
         self.setChecked(checked)
         self.setFixedHeight(34)
@@ -390,6 +396,14 @@ class _CategoryRow(QPushButton):
         self.update()
         super().leaveEvent(event)
 
+    def contextMenuEvent(self, event):
+        if self._on_delete is None:
+            return
+        menu = QMenu(self)
+        delete_action = menu.addAction("Delete category")
+        if menu.exec(event.globalPos()) == delete_action:
+            self._on_delete()
+
 
 def _next_review_pill(problem):
     """(text, tone) for the "when is it due" pill on a problem's row."""
@@ -422,12 +436,14 @@ class _ProblemRow(QFrame):
     one quiet line, and the Start button. Click anywhere else to read its description;
     right-click to edit."""
 
-    def __init__(self, problem, is_current, on_start, on_open, on_edit, on_score=None):
+    def __init__(self, problem, is_current, on_start, on_open, on_edit, on_score=None, on_delete=None):
         super().__init__()
         self.problem = problem
         self._on_open = on_open
         self._on_edit = on_edit
         self._on_score = on_score
+        self._on_delete = on_delete
+        self._is_current = is_current
         self.setObjectName("ProblemRow")
         self.setStyleSheet(
             "QFrame#ProblemRow{background:#FFFFFF;border:1px solid #E6E9EF;border-radius:14px;}"
@@ -484,6 +500,13 @@ class _ProblemRow(QFrame):
         menu = QMenu(self)
         edit_action = menu.addAction("Edit Problem")
         score_action = menu.addAction("Score as a set...") if self._on_score else None
+        delete_action = None
+        if self._on_delete:
+            menu.addSeparator()
+            delete_action = menu.addAction("Delete problem")
+            if self._is_current:
+                delete_action.setEnabled(False)
+                delete_action.setToolTip("You are reviewing this one right now")
         chosen = menu.exec(event.globalPos())
         if chosen is None:
             return
@@ -491,6 +514,8 @@ class _ProblemRow(QFrame):
             self._on_edit(self.problem)
         elif chosen == score_action:
             self._on_score(self.problem)
+        elif chosen == delete_action:
+            self._on_delete(self.problem)
 
 
 class ReviewTab(QWidget):
@@ -819,14 +844,10 @@ class ReviewTab(QWidget):
 
     def _delete_topic(self, topic_id):
         name = self._topic_names.get(topic_id, "this topic")
-        confirm = QMessageBox.question(
-            self,
-            "Delete topic",
-            f'Delete "{name}" and all its subjects and problems? This cannot be undone.',
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if confirm != QMessageBox.Yes:
+        if not confirm_dialog.ask(
+                self, "Delete topic",
+                f'Delete "{name}" and all its categories and problems? This cannot be undone.',
+                yes="Delete", risky=True):
             return
         review_store.delete_topic(topic_id)
         self.refresh()
@@ -955,6 +976,12 @@ class _TopicView(QWidget):
 
         self.refresh()
 
+    SIDEBAR_FROM = 760       # narrower than this the list needs the room more than the sidebar does
+
+    def resizeEvent(self, event):
+        self._side_card.setVisible(event.size().width() >= self.SIDEBAR_FROM)
+        super().resizeEvent(event)
+
     def _show_banner_for_linked_session(self):
         if not self._review_banner.is_running():
             self._resume_linked_session() or self._resume_independent_review()
@@ -992,7 +1019,7 @@ class _TopicView(QWidget):
                     # dialog -- without one, Finish > Submit saved nothing.
                     # A fresh, still-hidden dialog takes its place.
                     dialog = _register_popup(_AddProblemDialog(
-                        self._topic_id, on_added=lambda _p: self.refresh(),
+                        self._topic_id, on_added=self._after_add_problem,
                         on_start_first_attempt=self._start_first_attempt,
                     ))
                     done, cancelled = self._first_attempt_callbacks(dialog)
@@ -1084,16 +1111,16 @@ class _TopicView(QWidget):
         self._filters_button.hide()
         header.addWidget(self._filters_button)
 
-        missed_button = button("I missed this", SECONDARY_STYLE, height=36)
-        missed_button.setToolTip("Log a problem you got wrong in a few seconds. It comes back tomorrow.")
+        missed_button = button("Log a mistake", SECONDARY_STYLE, height=36)
+        missed_button.setToolTip("Add a problem you got wrong. It comes back for review soon.")
         missed_button.clicked.connect(
-            lambda: _register_popup(_MissDialog(self._topic_id, on_done=self.refresh)))
+            lambda: _register_popup(_MissDialog(self._topic_id, on_done=self._after_quick_add)))
         header.addWidget(missed_button)
 
         paste_button = button("Paste a list", SECONDARY_STYLE, height=36)
         paste_button.setToolTip("Add many problems at once from a list, a spreadsheet column or a range.")
         paste_button.clicked.connect(
-            lambda: _register_popup(_BatchDialog(self._topic_id, on_done=self.refresh)))
+            lambda: _register_popup(_BatchDialog(self._topic_id, on_done=self._after_quick_add)))
         header.addWidget(paste_button)
 
         add_button = button("+ Add problem", _PRIMARY_INK, height=36)
@@ -1135,6 +1162,21 @@ class _TopicView(QWidget):
         card.move(anchor.x() - card.width(), anchor.y() + 6)
         card.show()
 
+    def _after_quick_add(self, message=None):
+        """New problems are not due yet, so the "Due" view would hide what was just added.
+        Show everything and say what happened."""
+        self._all_button.setChecked(True)
+        self.refresh()
+        if message:
+            self._summary_label.setText(message)
+
+    def _after_add_problem(self, problem):
+        """A new problem is not due yet either, so show it instead of an unchanged list."""
+        if problem and problem.get("name"):
+            self._after_quick_add(f'Added "{problem["name"]}". First review on {problem.get("nextReviewDate")}.')
+        else:
+            self.refresh()
+
     def _set_due_only(self, due_only):
         self._due_only = due_only
         self.refresh()
@@ -1168,7 +1210,13 @@ class _TopicView(QWidget):
         box.addWidget(self._search_edit)
 
         box.addSpacing(6)
-        box.addWidget(heading("Category"))
+        category_head = QHBoxLayout()
+        category_head.addWidget(heading("Category"), 1)
+        new_category = link_button("+ New")
+        new_category.setToolTip("Make a category to sort problems into. Right-click one to delete it.")
+        new_category.clicked.connect(lambda: self._new_category())
+        category_head.addWidget(new_category)
+        box.addLayout(category_head)
         self._category_box = QVBoxLayout()
         self._category_box.setSpacing(2)
         box.addLayout(self._category_box)
@@ -1213,7 +1261,10 @@ class _TopicView(QWidget):
         entries = [(None, "All categories", None, len(base))] + [
             (sub["id"], sub["name"], sub["color"], counts.get(sub["id"], 0)) for sub in subjects]
         for subject_id, name, color, count in entries:
-            row = _CategoryRow(name, color, count, checked=subject_id == self._subject_filter)
+            row = _CategoryRow(
+                name, color, count, checked=subject_id == self._subject_filter,
+                on_delete=None if subject_id is None else
+                (lambda sid=subject_id, n=name, c=count: self._delete_category(sid, n, c)))
             row.clicked.connect(lambda _c=False, sid=subject_id: self._set_subject_filter(sid))
             self._category_buttons[subject_id] = row
             self._category_box.addWidget(row)
@@ -1266,7 +1317,8 @@ class _TopicView(QWidget):
             row = _ProblemRow(
                 problem, is_current=problem["id"] == current_id, on_start=self._start_problem,
                 on_open=lambda p: _DescriptionPopup(p), on_edit=self._open_edit_problem,
-                on_score=lambda p: _register_popup(_ScoreDialog(p, on_done=self.refresh)))
+                on_score=lambda p: _register_popup(_ScoreDialog(p, on_done=self.refresh)),
+                on_delete=self._delete_problem)
             self._rows.append(row)
             self._list_layout.addWidget(row)
         if not self._rows:
@@ -1283,6 +1335,29 @@ class _TopicView(QWidget):
                 f"color: {MUTED}; font-size: 14px; background: #FFFFFF; border: 1px dashed #D0D5DD;"
                 "border-radius: 16px; padding: 32px 24px;")
             self._list_layout.addWidget(empty)
+
+    def _delete_problem(self, problem):
+        if not confirm_dialog.ask(
+                self, "Delete problem",
+                f'Delete "{problem["name"]}"? Its review history goes with it. This cannot be undone.',
+                yes="Delete", risky=True):
+            return
+        review_store.delete_problem(problem["id"])
+        self.refresh()
+
+    def _new_category(self, on_done=None):
+        _register_popup(_NewCategoryDialog(self._topic_id, on_done=on_done or (lambda _subject: self.refresh())))
+
+    def _delete_category(self, subject_id, name, count):
+        extra = f" and its {count} problem{'s' if count != 1 else ''}" if count else ""
+        if not confirm_dialog.ask(
+                self, "Delete category", f'Delete "{name}"{extra}? This cannot be undone.',
+                yes="Delete", risky=True):
+            return
+        if self._subject_filter == subject_id:
+            self._subject_filter = None
+        review_store.delete_subject(subject_id)
+        self.refresh()
 
     def _open_edit_problem(self, problem):
         _register_popup(_AddProblemDialog(self._topic_id, on_added=lambda _p: self.refresh(), problem=problem))
@@ -1381,7 +1456,7 @@ class _TopicView(QWidget):
 
     def _open_add_problem(self):
         _register_popup(_AddProblemDialog(
-            self._topic_id, on_added=lambda _p: self.refresh(),
+            self._topic_id, on_added=self._after_add_problem,
             on_start_first_attempt=self._start_first_attempt,
         ))
 
@@ -1446,6 +1521,9 @@ class _TopicView(QWidget):
         return _on_first_attempt_done, _on_first_attempt_cancelled
 
 
+GONE_TICKS_BEFORE_ABANDON = 4     # seconds a banner's session must stay missing before it counts as ended
+
+
 class _ReviewBanner(QWidget):
     def __init__(self, on_finished, on_changed=None):
         super().__init__()
@@ -1460,6 +1538,7 @@ class _ReviewBanner(QWidget):
         self._first_attempt_callback = None
         self._first_attempt_cancelled_callback = None
         self._first_attempt_started_at = None
+        self._gone_ticks = 0
         self._auto_paused = False
         self._was_on_break = False
 
@@ -1752,6 +1831,14 @@ class _ReviewBanner(QWidget):
 
     def _tick(self):
         if self._end_session_on_finish and not self._linked_view()[0].get("isActive"):
+            # A sync landing or the app still settling can make the session look gone
+            # for a moment; only a session that stays gone counts as ended elsewhere.
+            self._gone_ticks += 1
+            if self._gone_ticks < GONE_TICKS_BEFORE_ABANDON:
+                return
+            calendar_logger.warning(
+                "review banner: its session is gone, abandoning (problem=%s, status=%s)",
+                self._problem, session_manager.get_status())
             # The linked task session was ended from somewhere else entirely
             # -- the Tasks tab's "End Task", the Focus tab's Nuclear End, a
             # natural timeout, or a direct API call -- none of which know or
@@ -1764,6 +1851,7 @@ class _ReviewBanner(QWidget):
             # again until the app was restarted.
             self._abandon_after_external_end()
             return
+        self._gone_ticks = 0
         if self._is_independent_review():
             # Finished, abandoned or replaced from another computer (or any
             # other path): nothing left here to time.
@@ -1934,8 +2022,41 @@ class _ReviewBanner(QWidget):
             )
         if end_session:
             _end_session_for_problem(problem)
+        else:
+            _file_untimed_review(problem, elapsed)
         self._finishing = False
         self._on_finished()
+
+
+def _file_untimed_review(problem, seconds, now=None):
+    """A review that ran without a session of its own (another kind of session was running,
+    so none could start) is still time on its task. Session History and the task's
+    count both read finished sessions, so this files the review as one. Skipped when a
+    session of the same task is running, because that session already counts it."""
+    topic = review_store.get_topic((problem or {}).get("topicId")) if (problem or {}).get("topicId") else None
+    task = tasks_store.get_task(topic["linkedTaskId"]) if topic and topic.get("linkedTaskId") else None
+    if task is None or seconds < 1:
+        return None
+    status = session_manager.get_status()
+    if status.get("isActive") and status.get("source") in ("task", "review") and status.get("eventId") == task["id"]:
+        return None
+    now = now or datetime.now()
+    first_attempt = problem.get("id") is None
+    subject = None if first_attempt else problem.get("subjectName")
+    entry = {
+        "startTime": (now - timedelta(seconds=seconds)).isoformat(),
+        "endTime": now.isoformat(),
+        "endType": "manual", "reason": None, "lockMode": task.get("lockMode", "soft"),
+        "processBlocklist": [], "domainWhitelist": [], "violationCount": 0, "violationLog": [],
+        "domainWhitelistAdditions": [], "processBlocklistExceptions": [],
+        "source": "review", "eventId": task["id"],
+        "eventTitle": f"{task['name']} - " + ("first attempt" if first_attempt else f"{subject} review"),
+        "reviewProblemName": session_manager.FIRST_ATTEMPT_NAME if first_attempt else problem["name"],
+        "reviewSubjectName": subject,
+        "pomodoro": None, "sessionId": "untimed-" + uuid.uuid4().hex,
+    }
+    session_history.append_entry(entry)
+    return entry
 
 
 def _can_drive_over(status):
@@ -1962,8 +2083,7 @@ def _make_room_for(task):
 
 
 def _confirm(parent, title, text):
-    return QMessageBox.question(
-        parent, title, text, QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes
+    return confirm_dialog.ask(parent, title, text, yes="Yes", no="No")
 
 
 class _ParkedStrip(QWidget):
@@ -2359,49 +2479,174 @@ class _DescriptionPopup(QWidget):
         _register_popup(self)
 
 
-class _MissDialog(QWidget):
-    """One line, Enter, done. A trailing ! makes it harder (!! hardest)."""
+class _NewCategoryDialog(QWidget):
+    """A name and a colour. Reached from the sidebar, the paste dialog and the mistake dialog,
+    so a category never needs the Add problem form."""
 
-    def __init__(self, topic_id, on_done):
+    def __init__(self, topic_id, on_done, name=""):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
-        self.setWindowTitle("I missed this")
-        self.resize(440, 260)
+        self.setWindowTitle("New category")
+        self.resize(440, 340)
         self._topic_id = topic_id
         self._on_done = on_done
+        used = {s["color"].lower() for s in review_store.list_subjects(topic_id)}
+        self._color = next((c for c in COLOR_PALETTE if c.lower() not in used), COLOR_PALETTE[0])
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(8)
-        layout.addWidget(dialog_title("I missed this", "It goes under Mistakes and comes back tomorrow."))
-        layout.addWidget(field_label("What was it?"))
-        self._edit = QLineEdit()
-        self._edit.setPlaceholderText("Ch 7 #14   (add ! if it was hard)")
-        self._edit.returnPressed.connect(self._save)
-        layout.addWidget(self._edit)
-        layout.addStretch(1)
-        self._status = role_label("", "hint", wrap=True)
+        layout.addWidget(dialog_title("New category", "A group of problems, like Sorting or Chapter 7."))
+        layout.addWidget(field_label("Name"))
+        self._name = QLineEdit(name)
+        self._name.setPlaceholderText("Sorting")
+        self._name.returnPressed.connect(self._save)
+        layout.addWidget(self._name)
+        layout.addWidget(field_label("Colour"))
+        swatches = QHBoxLayout()
+        self._swatches = {}
+        for hexval in COLOR_PALETTE:
+            swatch = QPushButton()
+            swatch.setFixedSize(26, 26)
+            swatch.setCursor(Qt.PointingHandCursor)
+            swatch.clicked.connect(lambda _c=False, h=hexval: self._pick(h))
+            self._swatches[hexval] = swatch
+            swatches.addWidget(swatch)
+        swatches.addStretch(1)
+        layout.addLayout(swatches)
+        self._pick(self._color)
+        self._status = role_label("", "error", wrap=True)
         layout.addWidget(self._status)
-
+        layout.addStretch(1)
         row = QHBoxLayout()
         row.addStretch(1)
         cancel = QPushButton("Cancel")
         cancel.clicked.connect(self.close)
         row.addWidget(cancel)
-        save = accent(QPushButton("Log it"))
+        save = accent(QPushButton("Create"))
         save.clicked.connect(self._save)
         row.addWidget(save)
         layout.addLayout(row)
         self.show()
+        self._name.setFocus()
+
+    def _pick(self, hexval):
+        self._color = hexval
+        for h, swatch in self._swatches.items():
+            border = "3px solid #1B2230" if h == hexval else "1px solid #0002"
+            swatch.setStyleSheet(f"background:{h};border:{border};border-radius:13px;padding:0;")
+
+    def _save(self):
+        name = self._name.text().strip()
+        if not name:
+            self._status.setText("Give it a name.")
+            return
+        try:
+            subject = review_store.create_subject(self._topic_id, name, self._color)
+        except (review_store.DuplicateNameError, review_store.DuplicateColorError) as e:
+            self._status.setText(str(e))
+            return
+        if subject is None:
+            self._status.setText("Could not create the category.")
+            return
+        self.close()
+        self._on_done(subject)
+
+
+def _category_combo(topic_id, select_id=None, include_mistakes=False):
+    """A combo of the topic's categories. Index data is the category id; the last entry
+    (data "new") means "make a new one"."""
+    combo = QComboBox()
+    for subject in review_store.list_subjects(topic_id):
+        combo.addItem(subject["name"], subject["id"])
+    if include_mistakes and combo.findText("Mistakes") < 0:
+        combo.insertItem(0, "Mistakes (made for you)", None)
+    combo.addItem("+ New category...", "new")
+    index = combo.findData(select_id) if select_id is not None else 0
+    combo.setCurrentIndex(max(0, index))
+    return combo
+
+
+class _MissDialog(QWidget):
+    """Log a problem you got wrong: what it was, where to file it, how hard it was."""
+
+    def __init__(self, topic_id, on_done):
+        super().__init__(None, Qt.WindowStaysOnTopHint)
+        self.setObjectName("PopupBg")
+        self.setWindowTitle("Log a mistake")
+        self.resize(460, 480)
+        self._topic_id = topic_id
+        self._on_done = on_done
+        self._previous = 0
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(8)
+        layout.addWidget(dialog_title(
+            "Log a mistake", "Add a problem you got wrong. It comes back for review soon, "
+            "and sooner the harder you say it was."))
+        layout.addWidget(field_label("Problem"))
+        self._edit = QLineEdit()
+        self._edit.setPlaceholderText("Ch 7 #14, or Fence Painting")
+        self._edit.returnPressed.connect(self._save)
+        layout.addWidget(self._edit)
+
+        layout.addWidget(field_label("Category"))
+        self._category = _category_combo(topic_id, include_mistakes=True)
+        self._category.activated.connect(self._category_picked)
+        layout.addWidget(self._category)
+
+        layout.addWidget(field_label("How hard was it? (5 is hardest)"))
+        self._stars = _StarPicker(3)
+        layout.addWidget(self._stars)
+
+        layout.addStretch(1)
+        self._status = role_label("", "hint", wrap=True)
+        layout.addWidget(self._status)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.close)
+        row.addWidget(cancel)
+        save = accent(QPushButton("Add to review"))
+        save.clicked.connect(self._save)
+        row.addWidget(save)
+        layout.addLayout(row)
+        self.show()
+        self._edit.setFocus()
+
+    def _category_picked(self, index):
+        if self._category.itemData(index) != "new":
+            return
+        self._category.setCurrentIndex(0)
+        _register_popup(_NewCategoryDialog(self._topic_id, on_done=self._category_made))
+
+    def _category_made(self, subject):
+        self._category.blockSignals(True)
+        while self._category.count():
+            self._category.removeItem(0)
+        for item in review_store.list_subjects(self._topic_id):
+            self._category.addItem(item["name"], item["id"])
+        self._category.addItem("+ New category...", "new")
+        self._category.setCurrentIndex(self._category.findData(subject["id"]))
+        self._category.blockSignals(False)
 
     def _save(self):
         import review_quicklog
-        result = review_quicklog.log_miss(self._topic_id, self._edit.text())
-        if result is None:
-            self._status.setText("Type what you missed first.")
+        text = self._edit.text()
+        if not text.strip():
+            self._status.setText("Type which problem it was first.")
             return
+        result = review_quicklog.log_miss(
+            self._topic_id, text, subject_id=self._category.currentData() if self._category.currentData() != "new" else None,
+            stars=self._stars.value())
+        if result is None:
+            self._status.setText("Could not add it.")
+            return
+        problem = result["problem"]
+        verb = "Logged again" if result["repeat"] else "Added"
         self.close()
-        self._on_done()
+        self._on_done(f'{verb} "{problem["name"]}" ({problem["stars"]} stars). Back for review on {problem["nextReviewDate"]}.')
 
 
 class _BatchDialog(QWidget):
@@ -2412,27 +2657,28 @@ class _BatchDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle("Paste a list")
-        self.resize(520, 640)
+        self.resize(520, 660)
         self._topic_id = topic_id
         self._on_done = on_done
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(8)
-        layout.addWidget(dialog_title("Paste a list", "One problem per line. 'Ch 7 problems 1-30' becomes thirty."))
+        layout.addWidget(dialog_title(
+            "Paste a list", "One problem per line. 'Ch 7 problems 1-30' becomes thirty."))
 
-        layout.addWidget(field_label("Add to"))
-        self._subject = QComboBox()
-        for subject in review_store.list_subjects(topic_id):
-            self._subject.addItem(subject["name"], subject["id"])
+        layout.addWidget(field_label("Add to category"))
+        self._subject = _category_combo(topic_id)
+        self._subject.activated.connect(self._category_picked)
         layout.addWidget(self._subject)
 
-        layout.addWidget(field_label("Stars (5 is hardest)"))
+        layout.addWidget(field_label("How hard? (5 is hardest)"))
         self._stars = _StarPicker(3)
         layout.addWidget(self._stars)
 
         layout.addWidget(field_label("The list"))
-        self._text = WrapEdit()
+        self._text = QPlainTextEdit()
+        self._text.setPlaceholderText("Fence Painting\nSleepy Cow Herding\nCh 7 problems 1-30")
         self._text.setMinimumHeight(150)
         self._text.textChanged.connect(self._preview)
         layout.addWidget(self._text, 1)
@@ -2452,19 +2698,41 @@ class _BatchDialog(QWidget):
         self._preview()
         self.show()
 
+    def _category_picked(self, index):
+        if self._subject.itemData(index) != "new":
+            return
+        self._subject.setCurrentIndex(0)
+        _register_popup(_NewCategoryDialog(self._topic_id, on_done=self._category_made))
+
+    def _category_made(self, subject):
+        self._subject.blockSignals(True)
+        while self._subject.count():
+            self._subject.removeItem(0)
+        for item in review_store.list_subjects(self._topic_id):
+            self._subject.addItem(item["name"], item["id"])
+        self._subject.addItem("+ New category...", "new")
+        self._subject.setCurrentIndex(self._subject.findData(subject["id"]))
+        self._subject.blockSignals(False)
+        self._preview()
+
     def _names(self):
         import review_quicklog
         return review_quicklog.parse_batch(self._text.toPlainText())
 
+    def _chosen_subject(self):
+        data = self._subject.currentData()
+        return data if isinstance(data, int) else None
+
     def _preview(self):
         names = self._names()
-        if self._subject.count() == 0:
-            self._summary.setText("Make a category in the side panel first, then paste.")
+        if self._chosen_subject() is None:
+            self._summary.setText("Make a category first (pick '+ New category...' above), then paste.")
             self._add.setEnabled(False)
             return
         self._add.setEnabled(bool(names))
         if not names:
-            self._summary.setText("Nothing to add yet.")
+            self._summary.setText("Nothing to add yet. Press Enter for a new line.")
+            self._add.setText("Add")
             return
         shown = ", ".join(names[:4]) + (" ..." if len(names) > 4 else "")
         self._summary.setText(f"{len(names)} to add: {shown}")
@@ -2473,14 +2741,15 @@ class _BatchDialog(QWidget):
     def _save(self):
         import review_quicklog
         names = self._names()
-        if not names:
+        subject_id = self._chosen_subject()
+        if not names or subject_id is None:
             return
-        created, skipped = review_quicklog.add_batch(
-            self._topic_id, self._subject.currentData(), names, self._stars.value())
+        created, skipped = review_quicklog.add_batch(self._topic_id, subject_id, names, self._stars.value())
+        message = f"Added {created} problem{'s' if created != 1 else ''} to {self._subject.currentText()}."
         if skipped:
-            QMessageBox.information(self, "Paste a list", f"Added {created}. {skipped} were already there.")
+            message += f" {skipped} already there."
         self.close()
-        self._on_done()
+        self._on_done(message)
 
 
 class _ScoreDialog(QWidget):

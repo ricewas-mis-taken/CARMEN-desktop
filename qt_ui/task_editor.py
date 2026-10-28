@@ -152,40 +152,44 @@ class _TaskEditor(QWidget):
         self._repeat_combo.setCurrentIndex(self._repeat_combo.findData(saved_kind))
         layout.addWidget(self._repeat_combo)
 
+        # "On specific days": tick a day and a small minutes box appears under it. A box nobody
+        # has typed in follows the other days' time; Enter twice in a box offers to change
+        # every other day that had the same time.
         self._weekday_row = QWidget()
         weekday_layout = QHBoxLayout(self._weekday_row)
         weekday_layout.setContentsMargins(0, 4, 0, 0)
+        weekday_layout.setSpacing(8)
         saved_weekdays = set((task or {}).get("weekdays", []))
-        self._weekday_checks = {}
-        for code in tasks_store.WEEKDAY_CODES:
-            check = QCheckBox(code)
-            check.setChecked(code in saved_weekdays)
-            self._weekday_checks[code] = check
-            weekday_layout.addWidget(check)
-        layout.addWidget(self._weekday_row)
-
-        # "On specific days": the same time on each, or a time for each day.
         saved_day_minutes = (task or {}).get("dayMinutes") or {}
-        self._per_day_check = QCheckBox("A different time for each day")
-        self._per_day_check.setChecked(bool(saved_day_minutes))
-        layout.addWidget(self._per_day_check)
-        self._per_day_row = QWidget()
-        per_day_layout = QHBoxLayout(self._per_day_row)
-        per_day_layout.setContentsMargins(0, 0, 0, 0)
-        per_day_layout.setSpacing(6)
+        default_minutes = (task or {}).get("targetMinutes")
+        self._weekday_checks = {}
         self._day_edits = {}
+        self._touched = set()
+        self._enter_at = {}
+        self._committed = {}
+        self._previous = {}
         for code in tasks_store.WEEKDAY_CODES:
             column = QVBoxLayout()
             column.setSpacing(2)
-            column.addWidget(role_label(code, "hint"))
+            check = QCheckBox(code)
+            check.setChecked(code in saved_weekdays)
+            self._weekday_checks[code] = check
+            column.addWidget(check)
             edit = QLineEdit()
             edit.setPlaceholderText("min")
+            edit.setFixedWidth(58)
+            minutes = saved_day_minutes.get(code, default_minutes if code in saved_weekdays else None)
+            if minutes:
+                edit.setText(format_target(minutes, False))
             if code in saved_day_minutes:
-                edit.setText(format_target(saved_day_minutes[code], False))
+                self._touched.add(code)
+            self._committed[code] = edit.text().strip()
+            edit.textEdited.connect(lambda _t, c=code: self._day_typed(c))
+            edit.returnPressed.connect(lambda c=code: self._day_enter(c))
             self._day_edits[code] = edit
             column.addWidget(edit)
-            per_day_layout.addLayout(column)
-        layout.addWidget(self._per_day_row)
+            weekday_layout.addLayout(column)
+        layout.addWidget(self._weekday_row)
 
         # "A total over a number of days": how many.
         self._length_row = QWidget()
@@ -209,7 +213,6 @@ class _TaskEditor(QWidget):
         self._repeat_hint = role_label("", "hint", wrap=True)
         layout.addWidget(self._repeat_hint)
         self._repeat_combo.currentIndexChanged.connect(self._on_repeat_changed)
-        self._per_day_check.toggled.connect(self._on_repeat_changed)
         for chk in self._weekday_checks.values():
             chk.toggled.connect(self._on_repeat_changed)
         self._on_repeat_changed()
@@ -293,16 +296,55 @@ class _TaskEditor(QWidget):
         self._target_label.setText(label)
         self._repeat_hint.setText(hint)
         # "isHidden", not isVisible: the editor may not be shown yet.
-        self._weekday_row.setVisible(kind == "weekly_days")
-        self._per_day_check.setVisible(kind == "weekly_days")
-        per_day = kind == "weekly_days" and self._per_day_check.isChecked()
-        self._per_day_row.setVisible(per_day)
+        per_day = kind == "weekly_days"
+        self._weekday_row.setVisible(per_day)
         self._length_row.setVisible(kind == "custom_total")
-        # With a time for each day the single target box has nothing to say.
+        # With a box under each day the single target box has nothing to say.
         self._target_label.setVisible(not per_day)
         self._target_edit.setVisible(not per_day)
         for code, edit in self._day_edits.items():
-            edit.setEnabled(self._weekday_checks[code].isChecked())
+            ticked = self._weekday_checks[code].isChecked()
+            if ticked and not edit.text().strip() and code not in self._touched:
+                edit.setText(self._shared_minutes(code))
+            edit.setVisible(per_day and ticked)
+
+    def _shared_minutes(self, except_code):
+        """The time the other ticked days have (or the target box's), for a day just ticked."""
+        for code, edit in self._day_edits.items():
+            if code != except_code and self._weekday_checks[code].isChecked() and edit.text().strip():
+                return edit.text().strip()
+        return self._target_edit.text().strip() or "45"
+
+    def _day_typed(self, code):
+        self._touched.add(code)
+
+    def _day_enter(self, code):
+        """One Enter keeps the time for this day. A second Enter right after offers it to every
+        other ticked day that still has the time this one had."""
+        import time
+        now = time.monotonic()
+        edit = self._day_edits[code]
+        text = edit.text().strip()
+        if text != self._committed.get(code, ""):
+            self._previous[code] = self._committed.get(code, "")
+            self._committed[code] = text
+        double = now - self._enter_at.get(code, 0) < 0.6
+        self._enter_at[code] = now
+        if not double:
+            return
+        old = self._previous.get(code)
+        new = text
+        others = [c for c, e in self._day_edits.items()
+                  if c != code and self._weekday_checks[c].isChecked() and old and e.text().strip() == old]
+        if not others or not new or new == old:
+            return
+        from PySide6.QtWidgets import QMessageBox
+        names = ", ".join(others)
+        if QMessageBox.question(
+                self, "Change other days",
+                f"{names} also {'has' if len(others) == 1 else 'have'} {old}. Change to {new}?") == QMessageBox.Yes:
+            for other in others:
+                self._day_edits[other].setText(new)
 
     def _pick_color(self, hexval):
         self._color = hexval
@@ -349,15 +391,19 @@ class _TaskEditor(QWidget):
             if not weekdays:
                 self._status_label.setText("Pick at least one weekday.")
                 return
-            if self._per_day_check.isChecked():
-                for code in weekdays:
-                    minutes = parse_minutes(self._day_edits[code].text())
-                    if minutes is None:
-                        self._status_label.setText(f"Give {code} a time, like 45, 90m or 1h 30m.")
-                        return
-                    day_minutes[code] = minutes
+            for code in weekdays:
+                minutes = parse_minutes(self._day_edits[code].text())
+                if minutes is None:
+                    self._status_label.setText(f"Give {code} a time, like 45, 90m or 1h 30m.")
+                    return
+                day_minutes[code] = minutes
+            if len(set(day_minutes.values())) == 1:
+                target_minutes = day_minutes[weekdays[0]]      # the same time every day: no per-day times
+                day_minutes = {}
         if day_minutes:
             target_minutes = day_minutes[weekdays[0]]      # what a day without its own time would use
+        elif recurrence_kind == "weekly_days":
+            pass
         else:
             target_minutes = parse_minutes(self._target_edit.text())
             if target_minutes is None:

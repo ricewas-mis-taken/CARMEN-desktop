@@ -675,3 +675,51 @@ tick only while visible, restyle only when the look changes). Old TaskCard/burno
   longer divides by the Retina scale factor there (it had shrunk the soft-lock cover to a quarter).
   Extension: no counterpart change; it reads domains, not process names, so nothing to
   cross-reference in carmen-extension.
+
+2026-10-25  Reviews that ran without their own session
+  Session History and a task's time both read finished sessions; the review database is a separate
+  record. When a review could not start its own session (some other kind of session was running), its
+  time reached the review database only, so it showed in neither (found on 4 real reviews of 2026-10-25).
+  Fork: make Session History also read the review database vs. file a normal history entry when such a
+  review finishes. Chose the entry: Session History's file keeps one shape, the task math needs no
+  second source, and it syncs like any other session. Entry ids start "untimed-". Skipped when a session
+  of the same task is running, because that session already counts the time (no double count).
+  Not recovered: the 4 reviews of 2026-10-25 that already happened. Their time is in the review
+  database but not in history.
+
+2026-10-25  Review delete, categories and a confirm popup of our own
+  Deleting a problem or category is a tombstone (is_deleted), like topics, so it syncs; sync now sends
+  deleted problems and categories (before, only topics were deleted, and children were hard-removed).
+  QMessageBox takes its colours from the operating system: dark mode gave a dark box with dark text,
+  which looked like an empty popup. The Review tab now asks through qt_ui/confirm_dialog.py, drawn by
+  the app. Other tabs still use QMessageBox (board, scribe, tasks, task editor, pickers).
+
+2026-10-25  Light colour scheme forced; whole-repo bug sweep
+  The stylesheet paints light backgrounds, but any widget with no colour of its own takes its text
+  colour from the system palette. On a dark-mode Windows that gave white text on white (QMessageBox
+  text, some labels): popups that looked empty. board_tab.py had already worked around it once with
+  click-again buttons instead of QMessageBox. Fork: patch each popup vs. fix the cause. Fixed the
+  cause: ui_kit.force_light_scheme() at startup (Qt 6.8+ setColorScheme). The app has no dark theme
+  today, so nothing is lost; a real dark theme would replace this call.
+  Sweep done (nothing else found): undefined names across the repo (pyflakes: none, so no more
+  merge leftovers), buttons never connected (none), WrapEdit where a multi-line box was needed (none
+  left), invisible text in 30 windows and every tab under a dark OS (only the two popups above, plus
+  a label the check cannot judge), resize of every tab at 4 widths (review sidebar stuck out at 600px
+  and now hides under 760px; Scribe still needs ~990px and is clipped when narrower).
+  Not changed: unused imports (harmless), 25 broad try/except-pass blocks (enforcement and background
+  code that must not crash; the two in review_store only guard a rollback and change listeners).
+
+2026-10-26 -- Scribe board syncs (it was local-only)
+Fork: keep the Scribe board on one computer (large images, small cloud rows), or share it.
+Chose to share the layers through the fast lane (table "scribe", one record "board", last
+change wins, stamped in cloud time like the QuickNote) and the attached images as photos
+(kind "scribe", uploaded before the layers that use them, fetched after they arrive).
+View, zoom and tool options stay per computer, so panning never overwrites the other screen.
+Only a change to the layers is stamped. A board over 6 MB is not sent. Cost: two computers
+drawing at once means the later save wins whole, not stroke by stroke. Zoom-out floor is
+now 1e-6 (effectively none).
+
+2026-10-26 -- Home: week/month goals show today's share
+A weekly or monthly total is shown on Home as what today must bring in to stay on pace
+(what is still missing at the start of today / days left in the period), with the period
+total as a second line, instead of the whole stretch as one big number.

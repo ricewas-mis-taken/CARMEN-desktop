@@ -88,7 +88,16 @@ class Ring(QWidget):
         self._big = ""
         self._small = ""
         self._dim = False
+        self._ink, self._muted, self._faint = INK, MUTED, FAINT
         self.setFixedSize(size, size)
+
+    def set_text_colors(self, ink, muted, faint):
+        """Numeral / caption / dimmed colours, for themes whose cards are not white."""
+        colors = (ink, muted, faint)
+        if colors == (self._ink, self._muted, self._faint):
+            return
+        self._ink, self._muted, self._faint = colors
+        self.update()
 
     def set_state(self, color, fraction, big, small, dim=False):
         fraction = round(max(0.0, fraction), 4)
@@ -121,12 +130,14 @@ class Ring(QWidget):
         big.setFamilies(NUM_FONTS)
         big.setPixelSize(26 if len(self._big) < 6 else 22)
         p.setFont(big)
-        p.setPen(QColor(FAINT if self._dim else INK))
-        p.drawText(QRectF(0, self.height() / 2 - 22, self.width(), 30), Qt.AlignCenter, self._big)
+        p.setPen(QColor(self._faint if self._dim else self._ink))
+        # With a caption under it the numerals sit a little high; alone they are centred in the ring.
+        top = self.height() / 2 - 22 if self._small else self.height() / 2 - 15
+        p.drawText(QRectF(0, top, self.width(), 30), Qt.AlignCenter, self._big)
         small = QFont(TEXT_FONT)
         small.setPixelSize(11)
         p.setFont(small)
-        p.setPen(QColor(FAINT if self._dim else MUTED))
+        p.setPen(QColor(self._faint if self._dim else self._muted))
         p.drawText(QRectF(0, self.height() / 2 + 6, self.width(), 18), Qt.AlignCenter, self._small)
 
 
@@ -421,3 +432,17 @@ class LogoMark(QWidget):
         rect = QRectF(width / 2, width / 2, self.width() - width, self.height() - width)
         p.setPen(QPen(self._color, width, Qt.SolidLine, Qt.RoundCap))
         p.drawArc(rect, 10 * 16, 292 * 16)
+
+
+def force_light_scheme():
+    """Make the app's own palette light whatever the operating system is set to.
+
+    The stylesheet paints light backgrounds, but a widget with no colour of its own takes
+    its text colour from the system palette. On a computer in dark mode that gave white
+    text on white boxes: message popups, menus and some labels looked empty. The app has
+    no dark theme, so it asks Qt for the light scheme. A no-op on a Qt that predates it."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QGuiApplication
+    hints = QGuiApplication.styleHints()
+    if hasattr(hints, "setColorScheme"):
+        hints.setColorScheme(Qt.ColorScheme.Light)

@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 from qt_ui.wrap_edit import WrapEdit
 
 import board_store
+import quicknote_store
 from qt_ui.safe_link import make_link_label
 from qt_ui.ui_kit import (
     DANGER_STYLE, INK, MUTED, NUM_FONTS, SECONDARY_STYLE, accent, button, dialog_title, field_label, link_button,
@@ -175,6 +176,15 @@ _CHIP_STYLE = (
     f"QPushButton:checked{{background:{INK};color:#FFFFFF;border:1px solid {INK};}}")
 
 
+def _drop_layout(layout):
+    while layout.count():
+        item = layout.takeAt(0)
+        if item.widget():
+            item.widget().deleteLater()
+        elif item.layout():
+            _drop_layout(item.layout())
+
+
 class BoardTab(QWidget):
     def __init__(self):
         super().__init__()
@@ -201,6 +211,7 @@ class BoardTab(QWidget):
         scroll.setWidget(self._list_container)
         layout.addWidget(scroll, 1)
 
+        self._notes_widget = None
         self.refresh()
 
         # Recurring board tasks reactivate on their next scheduled weekday --
@@ -209,6 +220,113 @@ class BoardTab(QWidget):
         self._reactivate_timer = QTimer(self)
         self._reactivate_timer.timeout.connect(self._refresh_if_changed)
         self._reactivate_timer.start(REACTIVATE_CHECK_MS)
+
+    def showEvent(self, event):
+        self._refresh_notes()
+        super().showEvent(event)
+
+    def _refresh_notes(self):
+        """QuickNote starts where the board ends: a thick rule, then one plain list. Add a line,
+        tick lines off (they strike through), clear the ticked ones (that saves the list)."""
+        from qt_ui.quicknote import _Tick
+        if self._notes_widget is not None:
+            self._list_layout.removeWidget(self._notes_widget)
+            self._notes_widget.deleteLater()
+        box = QWidget()
+        box.setObjectName("BoardNotes")
+        box.setStyleSheet("QWidget#BoardNotes{background:transparent;}")
+        column = QVBoxLayout(box)
+        column.setContentsMargins(2, 18, 6, 12)
+        column.setSpacing(10)
+
+        rule = QFrame()
+        rule.setFixedHeight(5)
+        rule.setStyleSheet(f"background:{INK};border:none;")
+        column.addWidget(rule)
+
+        top = QHBoxLayout()
+        head = QLabel("QuickNote")
+        head.setStyleSheet(f"font-size: 22px; font-weight: 700; color: {INK}; background: transparent;")
+        top.addWidget(head)
+        top.addStretch(1)
+        self._clear_button = QPushButton("Clear ticked")
+        self._clear_button.setCursor(Qt.PointingHandCursor)
+        self._clear_button.setFlat(True)
+        self._clear_button.setStyleSheet(
+            f"QPushButton{{color:{MUTED};font-size:13.5px;font-weight:600;border:none;background:transparent;"
+            f"text-decoration:underline;}}QPushButton:hover{{color:{INK};}}")
+        self._clear_button.clicked.connect(self._clear_ticked)
+        top.addWidget(self._clear_button)
+        column.addLayout(top)
+
+        adder = QHBoxLayout()
+        adder.setSpacing(12)
+        self._note_input = WrapEdit(boxed=False, max_rows=3)
+        self._note_input.setPlaceholderText("Add a line")
+        self._note_input.setStyleSheet(
+            f"QPlainTextEdit#WrapEdit{{background:transparent;color:{INK};border:none;"
+            f"border-bottom:2px solid {INK};padding:4px 2px;font-size:15px;}}"
+            "QPlainTextEdit#WrapEdit:focus{border-bottom:2px solid #5B8DEF;}")
+        self._note_input.returnPressed.connect(self._add_note)
+        adder.addWidget(self._note_input, 1)
+        add = QPushButton("Add")
+        add.setCursor(Qt.PointingHandCursor)
+        add.setFlat(True)
+        add.setStyleSheet(
+            f"QPushButton{{color:{INK};font-size:14.5px;font-weight:700;border:none;background:transparent;}}"
+            "QPushButton:hover{color:#5B8DEF;}")
+        add.clicked.connect(self._add_note)
+        adder.addWidget(add)
+        column.addLayout(adder)
+
+        self._note_rows = []
+        notes = [n.strip() for n in quicknote_store.load()[0] if n.strip()]
+        if not notes:
+            empty = QLabel("Nothing jotted down yet.")
+            empty.setStyleSheet(f"color: {MUTED}; font-size: 14.5px; background: transparent;")
+            column.addWidget(empty)
+        for text in notes:
+            hair = QFrame()
+            hair.setFixedHeight(1)
+            hair.setStyleSheet("background:#E3E6EC;border:none;")
+            column.addWidget(hair)
+            line = QHBoxLayout()
+            line.setSpacing(12)
+            tick = _Tick()
+            tick.setFixedSize(22, 22)
+            label = QLabel(text)
+            label.setWordWrap(True)
+            self._style_note(label, False)
+            tick.toggled.connect(lambda on, lab=label: self._style_note(lab, on))
+            line.addWidget(tick, 0, Qt.AlignTop)
+            line.addWidget(label, 1)
+            column.addLayout(line)
+            self._note_rows.append((tick, label, text))
+        self._notes_widget = box
+        self._list_layout.addWidget(box)
+
+    @staticmethod
+    def _style_note(label, ticked):
+        label.setStyleSheet(
+            f"color: {'#98A2B3' if ticked else INK}; font-size: 16px; background: transparent;"
+            + ("text-decoration: line-through;" if ticked else ""))
+        font = label.font()
+        font.setStrikeOut(ticked)
+        label.setFont(font)
+
+    def _add_note(self):
+        text = self._note_input.text().strip()
+        if not text:
+            return
+        items = [n for n in quicknote_store.load()[0] if n.strip()]
+        quicknote_store.save(items + [text])
+        self._refresh_notes()
+        self._note_input.setFocus()
+
+    def _clear_ticked(self):
+        keep = [text for tick, _label, text in self._note_rows if not tick.isChecked()]
+        quicknote_store.save(keep)
+        self._refresh_notes()
 
     def _board_signature(self):
         return (
@@ -345,6 +463,8 @@ class BoardTab(QWidget):
             self._list_layout.addWidget(empty_label)
         for task in tasks:
             self._list_layout.addWidget(_BoardCard(task, on_changed=self.refresh))
+        self._notes_widget = None
+        self._refresh_notes()
 
         finished_count = len(board_store.list_finished_tasks())
         self._finished_button.setText(f"Finished ({finished_count})" if finished_count else "Finished")

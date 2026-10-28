@@ -401,7 +401,7 @@ def _gather_review_topics(conn, cutoff_local):
 
 
 def _gather_review_subjects(conn, cutoff_local):
-    rows = conn.execute("SELECT * FROM review_subjects WHERE is_deleted = 0").fetchall()
+    rows = conn.execute("SELECT * FROM review_subjects").fetchall()      # deleted ones too: that is how a delete syncs
     records = []
     for row in rows:
         needs_meta = not row["sync_id"] or not row["updated_at"] or not row["device_id"]
@@ -424,7 +424,7 @@ def _gather_review_subjects(conn, cutoff_local):
 
 
 def _gather_review_problems(conn, cutoff_local):
-    rows = conn.execute("SELECT * FROM review_problems WHERE is_deleted = 0").fetchall()
+    rows = conn.execute("SELECT * FROM review_problems").fetchall()      # deleted ones too: that is how a delete syncs
     records = []
     for row in rows:
         needs_meta = not row["sync_id"] or not row["updated_at"] or not row["device_id"]

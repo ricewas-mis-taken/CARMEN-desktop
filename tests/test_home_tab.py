@@ -28,7 +28,7 @@ def test_summary_orders_open_tasks_by_time_left(isolate_state, tmp_path, monkeyp
 
 def test_home_tab_renders_and_navigates(qtbot, isolate_state, tmp_path, monkeypatch):
     monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
-    monkeypatch.setattr(theme, "load_setting", lambda: {"name": "Paper"})
+    monkeypatch.setattr(theme, "load_setting", lambda: {"name": "Dusk"})
     tasks_store.create_task({"name": "Chinese", "targetMinutes": 45, "color": "#e53935"})
     went = []
     tab = home.HomeTab(on_navigate=went.append)
@@ -43,13 +43,13 @@ def test_home_tab_renders_and_navigates(qtbot, isolate_state, tmp_path, monkeypa
 def test_options_dialog_saves_a_theme(qtbot, monkeypatch):
     import qt_ui.options_dialog as options
     saved = []
-    monkeypatch.setattr(theme, "load_setting", lambda: saved[-1] if saved else {"name": "Paper"})
+    monkeypatch.setattr(theme, "load_setting", lambda: saved[-1] if saved else {"name": "Dusk"})
     monkeypatch.setattr(theme, "save_setting", saved.append)
     monkeypatch.setattr(options, "reapply_stylesheet", lambda: None)
     dialog = options.OptionsDialog()
     qtbot.addWidget(dialog)
-    dialog._choose("Moss")
-    assert saved == [{"name": "Moss"}]
+    dialog._choose("Aurora")
+    assert saved == [{"name": "Aurora"}]
 
 
 def test_home_survives_every_window_width(qtbot, isolate_state, tmp_path, monkeypatch):
@@ -63,3 +63,102 @@ def test_home_survives_every_window_width(qtbot, isolate_state, tmp_path, monkey
         qtbot.wait(20)
         assert tab.minimumSizeHint().width() == 0
         assert tab._body.width() <= width   # never wider than the window: no sideways scrolling
+
+
+def test_streak_counts_back_from_today_or_yesterday():
+    d = date(2026, 10, 14)
+    days = [(d - __import__("datetime").timedelta(days=i), m) for i, m in reversed(list(enumerate([30, 20, 10, 0, 40])))]
+    # oldest first: 40, 0, 10, 20, 30 -> today (30), 20, 10 then a gap
+    assert home.streak_days(days) == 3
+    empty_today = days[:-1] + [(d, 0)]
+    assert home.streak_days(empty_today) == 2      # today still empty: count back from yesterday
+    assert home.streak_days([(d, 0)]) == 0
+
+
+def test_grid_is_a_year_ending_this_week():
+    today = date(2026, 10, 14)                       # a Wednesday
+    columns = home.grid_cells([], today)
+    assert len(columns) == 53 and all(len(c) == 7 for c in columns)
+    assert columns[-1][2][0] == today                # Mon, Tue, then Wed
+    assert columns[-1][3][0] is None                 # tomorrow is not drawn
+    assert columns[0][0][0] == date(2025, 10, 13)
+
+
+def test_home_shows_a_running_session_with_pause_and_resume(qtbot, isolate_state, tmp_path, monkeypatch):
+    import session_manager as sm
+    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
+    sm.start_session(25, "soft", [], [], source="task", event_id="a", event_title="Maths")
+    tab = home.HomeTab()
+    qtbot.addWidget(tab)
+    tab.show()
+    labels = {b.text() for b in tab.findChildren(home.QPushButton)}
+    assert "Pause" in labels and "Open Focus" in labels and "Start a session" not in labels
+    next(b for b in tab.findChildren(home.QPushButton) if b.text() == "Pause").click()
+    assert sm.get_status()["isPaused"]
+    assert "Resume" in {b.text() for b in tab.findChildren(home.QPushButton)}
+
+
+def test_quick_capture_adds_a_quicknote_bullet(qtbot, isolate_state, tmp_path, monkeypatch):
+    import quicknote_store
+    saved = []
+    monkeypatch.setattr(quicknote_store, "load", lambda: (["old", ""], "x"))
+    monkeypatch.setattr(quicknote_store, "save", lambda items: saved.append(items) or True)
+    tab = home.HomeTab()
+    qtbot.addWidget(tab)
+    edit = tab.findChild(home.WrapEdit)
+    edit.setText("buy milk")
+    edit.returnPressed.emit()
+    assert saved == [["old", "buy milk"]]
+    assert edit.text() == ""
+
+
+def test_a_weekly_goal_shows_today_share_not_the_whole_week(isolate_state, tmp_path, monkeypatch):
+    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
+    task = tasks_store.create_task({"name": "Weekly", "targetMinutes": 600, "recurrence": "biweekly_total"})
+    today = date.today()
+    data = home.summary([task], [], 0, today)
+    item = data["open"][0]
+    days = tasks_store.days_left_in_period(task, today)
+    assert round(item["required"], 3) == round(600 / days, 3)
+    assert item["period_left"] == 600 and item["days_left"] == days
+
+
+def test_year_grid_reports_the_hovered_day(qtbot):
+    from PySide6.QtCore import QPointF
+    columns = home.grid_cells([], date(2026, 10, 14))
+    grid = home._Grid(columns)
+    qtbot.addWidget(grid)
+    grid.resize(900, grid.height())
+    seen = []
+    grid.hovered.connect(seen.append)
+    step = grid._step()
+    cell = grid._cell_at(QPointF(grid.LEFT + 5, grid.TOP + 3))
+    assert cell == (0, 0)
+    assert "no focus" in grid._describe(cell)
+    assert step <= grid.MAX_STEP
+
+
+def test_a_running_session_counts_toward_the_streak_at_once():
+    d = date(2026, 10, 14)
+    from datetime import timedelta
+    days = [(d - timedelta(days=i), 30 if i else 0) for i in reversed(range(3))]
+    assert home.streak_days(days) == 2
+    assert home.streak_days(home._with_live(days, 5)) == 3
+
+
+def test_milestones_and_welcome_lines():
+    assert home.next_milestone(0) == 3 and home.next_milestone(7) == 14 and home.next_milestone(400) == 500
+    assert all(home.welcome_line(datetime(2026, 10, 14, h)) for h in (2, 9, 15, 21))
+    assert home.importance_colour(10) != home.importance_colour(1)
+
+
+def test_a_running_task_session_counts_toward_today_as_it_goes(isolate_state, tmp_path, monkeypatch):
+    import session_manager as sm
+    monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
+    task = tasks_store.create_task({"name": "Essay", "targetMinutes": 60})
+    sm.start_session(25, "soft", [], [], source="task", event_id=task["id"], event_title="Essay")
+    sm._state["startTime"] = (datetime.now() - __import__("datetime").timedelta(minutes=20)).isoformat()
+    status = sm.get_status()
+    idle = home.summary([task], [], 0, date.today())["open"][0]
+    live = home.summary([task], [], 0, date.today(), 20, status)["open"][0]
+    assert live["logged"] > idle["logged"] + 15 and live["left"] < idle["left"] - 15

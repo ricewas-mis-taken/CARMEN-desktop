@@ -27,6 +27,7 @@ import uuid
 from datetime import date, datetime, timedelta
 
 import device_id
+import server_clock
 import sync_trigger
 from tasks_store import WEEKDAY_CODES
 import paths
@@ -237,7 +238,7 @@ def update_task(
                     task["descriptionPhotoPath"] = None
                 if photo_bytes is not None:
                     task["descriptionPhotoPath"] = save_photo_bytes(photo_bytes, photo_filename)
-                task["updatedAt"] = datetime.now().isoformat()
+                task["updatedAt"] = server_clock.local_stamp(task.get("updatedAt"))
         save_board(tasks)
         sync_trigger.note_change()
         return get_task(task_id)
@@ -255,7 +256,7 @@ def delete_task(task_id):
         for task in tasks:
             if task["id"] == task_id and not task.get("isDeleted"):
                 task["isDeleted"] = True
-                task["updatedAt"] = datetime.now().isoformat()
+                task["updatedAt"] = server_clock.local_stamp(task.get("updatedAt"))
                 task["deviceId"] = device_id.get_device_id()
                 found = True
         if found:
@@ -270,7 +271,7 @@ def update_importance(task_id, importance):
         for task in tasks:
             if task["id"] == task_id:
                 task["importance"] = max(1, min(10, int(importance)))
-                task["updatedAt"] = datetime.now().isoformat()
+                task["updatedAt"] = server_clock.local_stamp(task.get("updatedAt"))
         save_board(tasks)
         sync_trigger.note_change()
         return get_task(task_id)
@@ -286,7 +287,7 @@ def mark_opened(task_id):
         for task in tasks:
             if task["id"] == task_id and not task.get("firstOpenedAt"):
                 task["firstOpenedAt"] = datetime.now().isoformat()
-                task["updatedAt"] = task["firstOpenedAt"]
+                task["updatedAt"] = server_clock.local_stamp(task.get("updatedAt"))
                 changed = True
         if changed:
             save_board(tasks)
@@ -337,7 +338,7 @@ def finish_task(task_id):
             if task["id"] == task_id:
                 task["finished"] = True
                 task["finishedAt"] = datetime.now().isoformat()
-                task["updatedAt"] = task["finishedAt"]
+                task["updatedAt"] = server_clock.local_stamp(task.get("updatedAt"))
                 pattern = task.get("recurrencePattern") or ("days" if task.get("recurringDays") else "none")
                 if pattern == "days" and task.get("recurringDays"):
                     task["nextDueDate"] = _next_weekday_date(task["recurringDays"], today).isoformat()
@@ -369,7 +370,7 @@ def reactivate_due_recurring():
                     task["finishedAt"] = None
                     task["nextDueDate"] = None
                     task["firstOpenedAt"] = None
-                    task["updatedAt"] = datetime.now().isoformat()
+                    task["updatedAt"] = server_clock.local_stamp(task.get("updatedAt"))
                     changed = True
         if changed:
             save_board(tasks)

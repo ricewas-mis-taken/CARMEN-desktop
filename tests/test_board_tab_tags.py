@@ -41,15 +41,15 @@ def test_hiding_a_tag_removes_matching_tasks_from_refresh(qtbot, isolate_board):
 
     tab = board_tab.BoardTab()
     qtbot.addWidget(tab)
-    assert tab._list_layout.count() == 2
+    assert tab._list_layout.count() - 1 == 2
 
     tab._toggle_hidden_tag("shopping", True)
-    assert tab._list_layout.count() == 1
+    assert tab._list_layout.count() - 1 == 1
     remaining = tab._list_layout.itemAt(0).widget()
     assert remaining._task["name"] == "Plan trip"
 
     tab._toggle_hidden_tag("shopping", False)
-    assert tab._list_layout.count() == 2
+    assert tab._list_layout.count() - 1 == 2
 
 
 def test_hiding_unlabeled_removes_tagless_tasks(qtbot, isolate_board):
@@ -58,10 +58,10 @@ def test_hiding_unlabeled_removes_tagless_tasks(qtbot, isolate_board):
 
     tab = board_tab.BoardTab()
     qtbot.addWidget(tab)
-    assert tab._list_layout.count() == 2
+    assert tab._list_layout.count() - 1 == 2
 
     tab._toggle_hidden_tag("unlabeled", True)
-    assert tab._list_layout.count() == 1
+    assert tab._list_layout.count() - 1 == 1
     remaining = tab._list_layout.itemAt(0).widget()
     assert remaining._task["name"] == "Tagged task"
 
@@ -98,7 +98,7 @@ def test_timer_tick_rebuilds_when_a_task_appears(qtbot, isolate_board):
     board_store.create_task("Second", importance=6)
 
     tab._refresh_if_changed()
-    assert tab._list_layout.count() == 2
+    assert tab._list_layout.count() - 1 == 2
 
 
 def test_add_dialog_survives_photo_deleted_before_save(qtbot, isolate_board, tmp_path):
@@ -141,12 +141,12 @@ def test_clicking_a_tag_chip_shows_only_that_tag_and_all_resets(qtbot, isolate_b
     board_store.create_task("Trip", importance=5, tags=["long-term"])
     tab = board_tab.BoardTab()
     qtbot.addWidget(tab)
-    assert tab._list_layout.count() == 2 and tab._tag_chips["all"].isChecked()
+    assert tab._list_layout.count() - 1 == 2 and tab._tag_chips["all"].isChecked()
     tab._tag_chips["shopping"].click()
-    assert tab._list_layout.count() == 1 and tab._list_layout.itemAt(0).widget()._task["name"] == "Milk"
+    assert tab._list_layout.count() - 1 == 1 and tab._list_layout.itemAt(0).widget()._task["name"] == "Milk"
     assert tab._tag_chips["shopping"].isChecked() and not tab._tag_chips["all"].isChecked()
     tab._tag_chips["all"].click()
-    assert tab._list_layout.count() == 2
+    assert tab._list_layout.count() - 1 == 2
 
 
 def test_the_subtitle_counts_what_is_shown(qtbot, isolate_board):
@@ -170,3 +170,20 @@ def test_details_button_toggles_between_details_and_hide(qtbot, isolate_board):
     assert card._details_button.text() == "Hide"
     card._collapse()
     assert card._details_button.text() == "Details"
+
+
+def test_quicknote_on_the_board_adds_ticks_and_clears(qtbot, tmp_path, monkeypatch):
+    import quicknote_store
+    import qt_ui.board_tab as board_tab
+    saved = []
+    notes = ["one", "two"]
+    monkeypatch.setattr(quicknote_store, "load", lambda: (list(notes), "x"))
+    monkeypatch.setattr(quicknote_store, "save", lambda items: saved.append(list(items)) or notes.__setitem__(slice(None), items) or True)
+    tab = board_tab.BoardTab()
+    qtbot.addWidget(tab)
+    tab._note_input.setText("three")
+    tab._add_note()
+    assert saved[-1] == ["one", "two", "three"]
+    tab._note_rows[0][0].setChecked(True)
+    tab._clear_ticked()
+    assert saved[-1] == ["two", "three"]

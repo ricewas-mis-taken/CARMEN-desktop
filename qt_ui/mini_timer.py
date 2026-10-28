@@ -188,8 +188,15 @@ class MiniTimer(QWidget):
         if sys.platform == "win32":
             try:
                 import ctypes
+                user32 = ctypes.windll.user32
+                hwnd = int(self.winId())
+                if not user32.IsWindowVisible(hwnd) or user32.IsIconic(hwnd):
+                    # Windows hid it behind Qt's back (a toast or another app); Qt still thinks it is shown.
+                    logger.warning("mini timer was hidden by the system (visible=%s, minimised=%s); showing it again",
+                                   bool(user32.IsWindowVisible(hwnd)), bool(user32.IsIconic(hwnd)))
+                    user32.ShowWindow(hwnd, 4)                                # SW_SHOWNOACTIVATE
                 HWND_TOPMOST, FLAGS = -1, 0x0001 | 0x0002 | 0x0010 | 0x0040   # nosize nomove noactivate showwindow
-                ctypes.windll.user32.SetWindowPos(int(self.winId()), HWND_TOPMOST, 0, 0, 0, 0, FLAGS)
+                user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, FLAGS)
             except Exception:
                 pass
 

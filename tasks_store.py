@@ -18,6 +18,7 @@ import uuid
 from datetime import date, datetime, timedelta
 
 import device_id
+import server_clock
 import sync_trigger
 import paths
 
@@ -264,7 +265,7 @@ def update_task(task_id, data):
                     task["targetMinutesHistory"] = history
                 task.update(data)
                 _ensure_period_anchor(task)
-                task["updatedAt"] = datetime.now().isoformat()
+                task["updatedAt"] = server_clock.local_stamp(task.get("updatedAt"))
                 updated = task
                 break
         if updated is not None:
@@ -303,7 +304,7 @@ def add_domains_to_whitelist(task_id, domains):
                         existing.append(domain)
                         existing_lower.add(domain.lower())
                 task["domainWhitelist"] = existing
-                task["updatedAt"] = datetime.now().isoformat()
+                task["updatedAt"] = server_clock.local_stamp(task.get("updatedAt"))
                 updated = task
                 break
         if updated is not None:
@@ -324,7 +325,7 @@ def delete_task(task_id):
         for task in tasks:
             if task["id"] == task_id and not task.get("isDeleted"):
                 task["isDeleted"] = True
-                task["updatedAt"] = datetime.now().isoformat()
+                task["updatedAt"] = server_clock.local_stamp(task.get("updatedAt"))
                 task["deviceId"] = device_id.get_device_id()
                 found = True
         if found:
