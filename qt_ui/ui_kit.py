@@ -405,6 +405,11 @@ def _nav_pixmap(key, color):
             p.setBrush(QColor(color))
             p.drawEllipse(QPointF(5.6, y), 1.1, 1.1)
             p.setBrush(Qt.NoBrush)
+    elif key == "openings":    # a play triangle in a frame
+        p.drawRoundedRect(QRectF(3.5, 5.5, 17, 13), 2.5, 2.5)
+        p.setBrush(QColor(color))
+        p.drawPolygon([QPointF(10.2, 9), QPointF(15, 12), QPointF(10.2, 15)])
+        p.setBrush(Qt.NoBrush)
     p.end()
     return QPixmap.fromImage(image)
 

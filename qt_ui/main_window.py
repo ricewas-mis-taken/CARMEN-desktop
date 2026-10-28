@@ -33,6 +33,7 @@ from qt_ui.ui_kit import LogoMark, nav_icon
 from qt_ui.board_tab import BoardTab
 from qt_ui.focus_tab import FocusTab
 from qt_ui.history_viewer import HistoryTab
+from qt_ui.openings_tab import OpeningsTab
 from qt_ui.review_tab import ReviewTab
 from qt_ui.scribe_tab import ScribeTab
 from qt_ui.screentime_tab import ScreenTimeTab
@@ -139,7 +140,7 @@ _NORMAL_SIZE = (800, 800)
 # squeezed until buttons and titles lost their text. Content widths, beside the sidebar.
 _PAGE_MIN_WIDTH = {
     "home": 480, "focus": 630, "tasks": 520, "board": 600,
-    "review": 640, "scribe": 640, "screentime": 480, "history": 830,
+    "review": 640, "scribe": 640, "screentime": 480, "history": 830, "openings": 640,
 }
 _MIN_HEIGHT = 560
 _SIDEBAR_FULL = 180
@@ -238,6 +239,7 @@ class _MainWindow(QWidget):
         self._add_page("scribe", _scrolling(ScribeTab()))
         self._add_page("screentime", ScreenTimeTab())
         self._add_page("history", HistoryTab())
+        self._add_page("openings", OpeningsTab())
 
         self._show_tab("home")
 
@@ -276,6 +278,7 @@ class _MainWindow(QWidget):
             ("Work", [("focus", "Focus"), ("tasks", "Tasks"), ("board", "The Board")]),
             ("Study", [("review", "Review"), ("scribe", "Scribe")]),
             ("Look back", [("screentime", "Screen Time"), ("history", "Session History")]),
+            ("Extras", [("openings", "Openings")]),
         ]
         nav_items = [item for _heading, items in nav_groups for item in items]
         group_starts = {items[0][0]: heading for heading, items in nav_groups}
