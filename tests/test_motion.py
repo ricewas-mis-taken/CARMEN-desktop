@@ -95,3 +95,28 @@ def test_every_tab_shares_the_themed_page_background(window):
         colour = image.pixelColor(window.width() - 3, 3)
         expected = expected or colour.name()
         assert colour.name() == expected, key
+
+
+def test_count_up_sets_text_straight_away_when_motion_is_off(qtbot):
+    from PySide6.QtWidgets import QLabel
+    label = QLabel()
+    qtbot.addWidget(label)
+    motion.count_up(label, "12")
+    assert label.text() == "12"
+
+
+def test_count_up_lands_on_the_value(qtbot, moving):
+    from PySide6.QtWidgets import QLabel
+    label = QLabel()
+    qtbot.addWidget(label)
+    motion.count_up(label, "40%")
+    qtbot.waitUntil(lambda: label.text() == "40%", timeout=2000)
+
+
+def test_dialogs_fade_in_and_end_fully_opaque(qtbot, window, moving):
+    from PySide6.QtWidgets import QDialog
+    motion.install()
+    dialog = QDialog()
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.waitUntil(lambda: dialog.windowOpacity() == 1.0, timeout=2000)

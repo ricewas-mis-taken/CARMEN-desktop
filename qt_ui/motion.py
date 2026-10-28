@@ -194,6 +194,56 @@ def reveal(page):
     page._motion_anim = tween(page, 0.0, 1.0, total, step, done, QEasingCurve(QEasingCurve.Linear))
 
 
+def appear(widget):
+    """One widget fading in (a card that was just added), over the colour behind it."""
+    if not enabled() or widget is None:
+        return
+
+    def go():
+        try:
+            if not widget.isVisible() or widget.width() < 8:
+                return
+            window = widget.window()
+            image = window.grab().toImage()
+            ratio = image.devicePixelRatio()
+            origin = widget.mapTo(window, QPoint(0, 0))
+            sx = max(0, min(image.width() - 1, int((origin.x() - 5) * ratio)))
+            sy = max(0, min(image.height() - 1, int((origin.y() + widget.height() // 2) * ratio)))
+            veil = _Veil(widget.parentWidget(), widget.geometry(), image.pixelColor(sx, sy), _radius_of(widget))
+            tween(veil, 1.0, 0.0, SMALL_MS, veil.set_alpha, veil.deleteLater)
+        except RuntimeError:
+            pass
+    from PySide6.QtCore import QTimer
+    QTimer.singleShot(0, go)
+
+
+def count_up(label, text, ms=MEDIUM_MS):
+    """Sets a label to `text`; if it starts with a number, counts up to it. Anything else (an
+    "1h 20m" style value) is set straight away."""
+    match = re.match(r"^(\d+)(.*)$", str(text))
+    if not enabled() or not match or int(match.group(1)) < 2:
+        label.setText(str(text))
+        return
+    target, rest = int(match.group(1)), match.group(2)
+    stop(getattr(label, "_count_anim", None))
+    label._count_anim = tween(label, 0, target, ms, lambda v: label.setText(f"{round(v)}{rest}"),
+                              lambda: label.setText(str(text)))
+
+
+class _DialogFade(QObject):
+    """Dialogs and message boxes fade in (140 ms) instead of popping."""
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Show and enabled():
+            from PySide6.QtWidgets import QDialog
+            if isinstance(obj, QDialog) and obj.isWindow() and not getattr(obj, "_faded", False):
+                obj._faded = True
+                obj.setWindowOpacity(0.0)
+                tween(obj, 0.0, 1.0, HOVER_MS, lambda v: obj.setWindowOpacity(v), lambda: obj.setWindowOpacity(1.0),
+                      QEasingCurve(QEasingCurve.OutCubic))
+        return False
+
+
 # --- buttons: lift on hover, press in --------------------------------------------------------------
 
 class ButtonMotion(QObject):
@@ -260,3 +310,5 @@ def install(app=None):
         return
     _button_motion = ButtonMotion(app)
     app.installEventFilter(_button_motion)
+    app._dialog_fade = _DialogFade(app)
+    app.installEventFilter(app._dialog_fade)
