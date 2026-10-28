@@ -15,7 +15,8 @@ if sys.platform != "darwin":
     import win32gui
 
 from PySide6.QtCore import Qt
-from PySide6.QtCore import QEvent, QSize
+from PySide6.QtCore import QEvent, QSize, QTimer
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QFrame,
     QButtonGroup,
@@ -27,6 +28,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import theme
+from qt_ui import motion
 from qt_ui.account_widget import AccountArea
 from qt_ui.home_tab import HomeTab
 from qt_ui.ui_kit import LogoMark, nav_icon
@@ -85,7 +88,10 @@ def _scrolling(page):
     area = QScrollArea()
     area.setWidgetResizable(True)
     area.setFrameShape(QFrame.NoFrame)
+    area.setStyleSheet("QScrollArea{background:transparent;}")     # the themed page colour shows through
+    area.viewport().setAutoFillBackground(False)
     area.setWidget(page)
+    page.setAutoFillBackground(False)                              # setWidget turns it on
     area.refresh = getattr(page, "refresh", lambda: None)
     return area
 
@@ -146,6 +152,44 @@ _MIN_HEIGHT = 560
 _SIDEBAR_FULL = 180
 _SIDEBAR_COMPACT = 64
 _COMPACT_BELOW = 900   # window width under which the sidebar shows icons only
+
+
+_NO_ENTRANCE = {"scribe", "openings"}      # a canvas and a web view: nothing card-like to stagger
+
+
+class _NavMarker(QWidget):
+    """The accent bar beside the current tab. It glides to the next tab instead of jumping."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setFixedWidth(4)
+        self._anim = None
+        self._colour = QColor("#9D8CE6")
+        self.hide()
+
+    def glide_to(self, y, height, animated=True):
+        self._colour = QColor(theme.current_colours()["accent"]).lighter(135)
+        start_y, start_h = (self.y(), self.height()) if self.isVisible() else (y, height)
+        self.move(3, start_y)
+        self.setFixedHeight(start_h)
+        self.show()
+        self.raise_()
+        motion.stop(self._anim)
+        if not animated or not motion.enabled() or (start_y, start_h) == (y, height):
+            self.move(3, y)
+            self.setFixedHeight(height)
+            return
+        self._anim = motion.tween(
+            self, 0.0, 1.0, motion.MEDIUM_MS,
+            lambda f: (self.move(3, round(start_y + (y - start_y) * f)), self.setFixedHeight(round(start_h + (height - start_h) * f))))
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        p.setBrush(self._colour)
+        p.drawRoundedRect(self.rect(), 2, 2)
 
 
 class _PagesStack(QStackedWidget):
@@ -241,7 +285,13 @@ class _MainWindow(QWidget):
         self._add_page("history", HistoryTab())
         self._add_page("openings", OpeningsTab())
 
+        motion.install()
         self._show_tab("home")
+        QTimer.singleShot(0, lambda: self._move_marker(animated=False))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, lambda: self._move_marker(animated=False))
 
     def _add_page(self, key, widget):
         self._pages[key] = widget
@@ -303,6 +353,7 @@ class _MainWindow(QWidget):
                 button.setChecked(True)
 
         layout.addStretch(1)
+        self._marker = _NavMarker(sidebar)
 
         self._account_area = AccountArea()
         layout.addWidget(self._account_area)
@@ -310,12 +361,23 @@ class _MainWindow(QWidget):
         return sidebar
 
     def _show_tab(self, key):
+        changed = getattr(self, "_current_key", None) != key
         self._stack.setCurrentWidget(self._pages[key])
         self._current_key = key
         button = self._nav_buttons.get(key)
         if button is not None:
             button.setChecked(True)
         self._apply_min_size()
+        self._move_marker(animated=changed)
+        if changed and key not in _NO_ENTRANCE:
+            motion.reveal(self._pages[key])
+
+    def _move_marker(self, animated=True):
+        marker = getattr(self, "_marker", None)
+        button = self._nav_buttons.get(getattr(self, "_current_key", ""))
+        if marker is None or button is None or not button.isVisible():
+            return
+        marker.glide_to(button.y() + 9, max(8, button.height() - 18), animated)
 
     def _sidebar_width(self):
         return _SIDEBAR_COMPACT if self._compact else _SIDEBAR_FULL
@@ -343,6 +405,7 @@ class _MainWindow(QWidget):
         self._sidebar.setStyleSheet(
             "QPushButton.NavButton { margin: 1px 8px; padding: 9px 0px; }" if compact else "")
         self._apply_min_size()
+        QTimer.singleShot(0, lambda: self._move_marker(animated=False))
 
     def changeEvent(self, event):
         # Qt restores a "restore down" (un-maximize) click to whatever
