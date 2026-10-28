@@ -723,3 +723,17 @@ now 1e-6 (effectively none).
 A weekly or monthly total is shown on Home as what today must bring in to stay on pace
 (what is still missing at the start of today / days left in the period), with the period
 total as a second line, instead of the whole stretch as one big number.
+
+2026-10-27 -- Motion: one module, veils instead of effects, off when the OS says so
+All UI motion lives in qt_ui/motion.py and follows the interaction-design skill (wshobson/agents)
+and Emil Kowalski's guidance: motion confirms or orients, never decorates; 100-150 ms for
+hover/press, 200-300 ms for small changes, ~420 ms for rings/bars/the nav marker; ease-out
+(0.16, 1, 0.3, 1); only the first eight cards of a page are staggered; no loops.
+Chose a "veil" (a transparent-to-opaque widget in the colour behind a card, fading out) for the
+page entrance, not QGraphicsOpacityEffect: the cards already use a graphics effect for their
+shadow, and a widget can only have one. The colour is sampled from a grab of the whole window,
+so it also matches the Home sky. Widgets that animate themselves (Ring, the Screen Time bar,
+the Home year grid) set replay_on_enter and are replayed on tab entry. Motion is off under
+pytest and when Windows "animation effects" are off. Also: Tasks and Scribe now sit on the
+shared themed page colour like the other tabs (Tasks had its own hard-coded grey, Scribe's
+scroll viewport was the system colour), and the Openings gallery is given the theme's sky.
