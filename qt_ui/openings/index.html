@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Carmen Openings</title>
+<style>
+  :root { --bg:#0c0a14; --ink:#f3eefc; --mute:#a79fc4; --line:#2a2440; }
+  * { box-sizing:border-box; margin:0; }
+  html,body { height:100%; background:var(--bg); color:var(--ink); font-family:"Segoe UI Variable","Segoe UI",system-ui,sans-serif; overflow:hidden; }
+  #gallery { position:absolute; inset:0; overflow:auto; padding:56px max(24px,6vw); }
+  h1 { font-weight:300; font-size:clamp(34px,5vw,64px); letter-spacing:.02em; }
+  .lede { color:var(--mute); margin:10px 0 40px; max-width:62ch; line-height:1.55; font-size:17px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:22px; }
+  .card { text-align:left; border:1px solid var(--line); background:#14101f; color:inherit; padding:0; border-radius:6px; cursor:pointer; overflow:hidden; font:inherit; transition:border-color .2s, transform .2s; }
+  .card:hover,.card:focus-visible { border-color:#8b74e0; transform:translateY(-3px); outline:none; }
+  .card canvas { display:block; width:100%; aspect-ratio:16/9; background:#000; }
+  .card .meta { padding:16px 18px 20px; }
+  .card .no { color:var(--mute); font-size:13px; margin-bottom:4px; }
+  .card h2 { font-weight:600; font-size:22px; margin-bottom:6px; }
+  .card p { color:var(--mute); font-size:14.5px; line-height:1.5; }
+  .notes { margin-top:42px; color:var(--mute); font-size:14.5px; line-height:1.7; max-width:78ch; }
+  .notes b { color:var(--ink); font-weight:600; }
+  #player { position:absolute; inset:0; background:#000; display:none; }
+  #player.on { display:block; }
+  #stage { position:absolute; inset:0; width:100%; height:100%; }
+  #bar { position:absolute; left:0; right:0; bottom:0; padding:18px 24px 22px; display:flex; gap:18px; align-items:center;
+         background:linear-gradient(transparent,rgba(0,0,0,.72)); opacity:0; transition:opacity .35s; }
+  #player.show #bar, #bar:hover { opacity:1; }
+  #bar button { background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.25); color:#fff; border-radius:999px; padding:9px 18px; font:inherit; font-size:14px; cursor:pointer; }
+  #bar button:hover { background:rgba(255,255,255,.24); }
+  #track { flex:1; height:22px; display:flex; align-items:center; cursor:pointer; }
+  #rail { width:100%; height:4px; background:rgba(255,255,255,.25); border-radius:2px; position:relative; }
+  #fill { position:absolute; left:0; top:0; bottom:0; width:0; background:#fff; border-radius:2px; }
+  #name { color:#fff; font-size:14px; min-width:9ch; opacity:.85; }
+  #hint { position:absolute; top:18px; right:24px; color:rgba(255,255,255,.55); font-size:13px; opacity:0; transition:opacity .35s; }
+  #player.show #hint { opacity:1; }
+</style>
+</head>
+<body>
+<section id="gallery">
+  <h1>Carmen: twenty openings</h1>
+  <p class="lede">Twenty title sequences for Carmen Focus. Each one starts from an idea taken from focus itself (a lens, a shadow, sand, a pendulum, a countdown) and keeps to one palette. Click one to watch it, replay it, or drag the line at the bottom to scrub through it.</p>
+  <div class="grid" id="grid"></div>
+  <p class="notes"><b>What the research said.</b> Saul Bass treated the title as part of the film itself, using flat cut-paper shapes and type that moves with them. Kyle Cooper's <i>Se7en</i> made the lettering the story: scratched, jittering, cut hard to a beat. Both are about restraint: one idea per sequence, a clear start and a clear end, and type that earns its place. Every opening below takes one idea and commits to it.</p>
+</section>
+
+<section id="player">
+  <canvas id="stage"></canvas>
+  <div id="hint">Space: pause · R: replay · Esc: back</div>
+  <div id="bar">
+    <button id="back">← All openings</button>
+    <button id="pp">Pause</button>
+    <button id="replay">↻ Replay</button>
+    <div id="track"><div id="rail"><div id="fill"></div></div></div>
+    <span id="name"></span>
+  </div>
+</section>
+
+<script>
+"use strict";
+/* ---------- helpers ---------- */
+const clamp=(x,a=0,b=1)=>Math.min(b,Math.max(a,x));
+const ramp=(t,a,b)=>clamp((t-a)/(b-a));
+const eio=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
+const eout=t=>1-Math.pow(1-t,3);
+const eoutQ=t=>1-Math.pow(1-t,5);
+const lerp=(a,b,t)=>a+(b-a)*t;
+function rng(seed){ let s=seed>>>0||1; return ()=>{ s^=s<<13; s>>>=0; s^=s>>>17; s^=s<<5; s>>>=0; return s/4294967296; }; }
+function para(c,x,y,w,h,skew){ c.beginPath(); c.moveTo(x+skew,y); c.lineTo(x+w+skew,y); c.lineTo(x+w,y+h); c.lineTo(x,y+h); c.closePath(); c.fill(); }
+function spaced(c,text,cx,y,track){ // centred text with letter spacing
+  const ws=[...text].map(ch=>c.measureText(ch).width); const total=ws.reduce((a,b)=>a+b,0)+track*(text.length-1);
+  let x=cx-total/2; [...text].forEach((ch,i)=>{ c.fillText(ch,x,y); x+=ws[i]+track; }); return total; }
+function spacedWidth(c,text,track){ return [...text].reduce((a,ch)=>a+c.measureText(ch).width,0)+track*(text.length-1); }
+
+/* ---------- the four sequences: each draws one frame as a pure function of time ---------- */
+
+/* 1. Cut paper (Saul Bass) */
+const paper = { id:"paper", title:"Cut paper", by:"After Saul Bass", dur:13,
+  blurb:"Flat orange, black and cream shapes sweep across the screen and cut together into the name, with credits written like a film.",
+  draw(c,t,w,h){
+    const u=Math.min(w,h*1.6)/1000, cx=w/2, cy=h/2;
+    c.fillStyle="#EBE1C9"; c.fillRect(0,0,w,h);
+    // paper grain
+    const r=rng(77); c.fillStyle="rgba(120,100,60,.05)"; for(let i=0;i<500;i++) c.fillRect(r()*w,r()*h,1.4,1.4);
+    const ORANGE="#E4501B", BLACK="#15110d";
+    // act 1: bars sweep
+    const bars=[[0,-260,1700,110,150,BLACK,.2],[.35,-140,1700,70,-190,ORANGE,.2],[.7,-40,1700,150,200,ORANGE,.2],[1.05,120,1700,60,-170,BLACK,.2],[1.4,200,1700,100,160,ORANGE,.2]];
+    const out=ramp(t,8.6,10.2);
+    bars.forEach(([s,y,len,th,sk,col])=>{
+      const p=eoutQ(ramp(t,s+.4,s+2.0)), q=eio(out);
+      const x=lerp(-len*u*1.1, 0, p)+ q*(w*1.3);
+      c.fillStyle=col; para(c,x-200*u,cy+y*u,len*u,th*u,sk*u);
+    });
+    // act 2: the circle (a clock face) wipes in
+    const circ=eio(ramp(t,3.2,5.0))*(1-eio(ramp(t,9.3,10.4)));
+    if(circ>0){ c.save(); c.translate(cx,cy); c.fillStyle=BLACK; c.beginPath(); c.arc(0,0,250*u*circ,0,7); c.fill();
+      c.fillStyle="#EBE1C9"; c.beginPath(); c.arc(0,0,214*u*circ,0,7); c.fill();
+      c.fillStyle=ORANGE; const a=-Math.PI/2+eio(ramp(t,4.2,6.4))*Math.PI*2; c.beginPath(); c.moveTo(0,0); c.arc(0,0,214*u*circ,-Math.PI/2,a); c.closePath(); c.fill();
+      c.restore(); }
+    // a cream plate gives the title a clean ground
+    const plate=eoutQ(ramp(t,5.0,6.0))*(1-eio(ramp(t,9.6,10.4)));
+    if(plate>0){ c.fillStyle="#EBE1C9"; const pw=Math.min(w*.9,1180*u)*plate; c.fillRect(cx-pw/2,cy-230*u,pw,610*u); c.fillStyle=BLACK; c.fillRect(cx-pw/2,cy-230*u,pw,7*u); c.fillRect(cx-pw/2,cy+373*u,pw,7*u); }
+    // act 3: the title cuts in
+    const tin=ramp(t,5.4,6.8), tout=eio(ramp(t,9.8,10.8));
+    if(tin>0&&tout<1){
+      c.save(); c.translate(cx,cy+8*u);
+      c.font=`900 ${210*u}px Impact,"Arial Black",sans-serif`; c.textBaseline="alphabetic"; c.textAlign="center";
+      const word="CARMEN"; c.save(); c.beginPath(); c.rect(-w,-170*u,2*w,200*u); c.clip();
+      c.fillStyle=BLACK; [...word].forEach((ch,i)=>{ const d=eoutQ(ramp(tin*1.6-i*.12,0,1)); const wd=c.measureText(word).width, cw=c.measureText(ch).width;
+        const pre=c.measureText(word.slice(0,i)).width; c.fillText(ch,-wd/2+pre+cw/2, 0+(1-d)*220*u + tout*260*u); });
+      c.restore();
+      c.font=`700 ${64*u}px Impact,"Arial Black",sans-serif`; c.fillStyle=ORANGE;
+      const f=eoutQ(ramp(t,6.4,7.6)); c.globalAlpha=f; spaced(c,"F O C U S",0,90*u+(1-f)*30*u,20*u); c.globalAlpha=1;
+      c.restore(); }
+    // credits
+    const cred=[[7.2,8.8,"A WORK SESSION BY"],[7.9,9.5,"YOU"]];
+    c.fillStyle=BLACK; c.textAlign="center"; c.font=`600 ${26*u}px "Segoe UI",sans-serif`;
+    if(t>cred[0][0]&&t<9.9){ c.globalAlpha=eout(ramp(t,7.2,7.8))*(1-ramp(t,9.2,9.9)); spaced(c,"A WORK SESSION BY",cx,cy+250*u,8*u); c.globalAlpha=1; }
+    if(t>7.9&&t<10.2){ c.globalAlpha=eout(ramp(t,7.9,8.5))*(1-ramp(t,9.4,10.1)); c.font=`900 ${44*u}px Impact,sans-serif`; spaced(c,"YOU",cx,cy+305*u,14*u); c.globalAlpha=1; }
+    // end card
+    const end=eout(ramp(t,10.6,12.0));
+    if(end>0){ c.fillStyle=ORANGE; c.fillRect(0,0,w,h*end); c.fillStyle=BLACK; para(c,w*.5-300*u,cy-6*u,600*u*end,12*u,40*u);
+      c.globalAlpha=ramp(t,11.3,12.2); c.fillStyle="#15110d"; c.font=`900 ${110*u}px Impact,sans-serif`; c.textAlign="center"; c.letterSpacing=`${10*u}px`; c.fillText("CARMEN FOCUS",cx,cy-40*u); c.letterSpacing="0px"; c.globalAlpha=1; }
+  }};
+
+/* 2. Scratch (Kyle Cooper, Se7en) */
+const scratch = { id:"scratch", title:"Scratch", by:"After Kyle Cooper",
+  dur:12,
+  blurb:"Hard cuts on a beat, film grain, flicker and scratched lettering. The type is the drama.",
+  draw(c,t,w,h){
+    const u=Math.min(w,h*1.6)/1000, cx=w/2, cy=h/2;
+    const frame=Math.floor(t*24), R=rng(frame*977+13);
+    c.fillStyle="#0a0908"; c.fillRect(0,0,w,h);
+    const beats=[[0.6,1.5,"ATTENTION"],[1.7,2.6,"IS"],[2.8,3.5,"A"],[3.7,5.2,"CHOICE"],[5.6,6.6,"MADE"],[6.8,7.9,"ONE"],[8.1,9.2,"HOUR"],[9.4,12,"CARMEN"]];
+    let cur=null; for(const b of beats) if(t>=b[0]&&t<b[1]) cur=b;
+    // light leak flicker
+    const fl=.55+.45*R(); c.fillStyle=`rgba(255,235,200,${.03*fl})`; c.fillRect(0,0,w,h);
+    if(cur){
+      const jit=()=>(R()-.5)*7*u, big=cur[2]==="CARMEN";
+      const sz=(big?175:cur[2].length>4?250:330)*u;
+      c.save(); c.translate(cx+jit(),cy+jit()); c.rotate((R()-.5)*.012);
+      c.textAlign="center"; c.textBaseline="middle"; c.font=`${big?700:600} ${sz}px "Segoe Print","Ink Free","Segoe Script",serif`;
+      const age=t-cur[0], appear=ramp(age,0,.12);
+      // ghosts
+      for(let i=0;i<4;i++){ c.fillStyle=`rgba(226,214,190,${.10})`; c.fillText(cur[2],(R()-.5)*18*u,(R()-.5)*14*u); }
+      c.fillStyle=`rgba(236,226,204,${.92*appear})`; c.fillText(cur[2],0,0);
+      // scratches over the letters
+      c.strokeStyle="rgba(10,9,8,.85)"; c.lineWidth=2.2*u;
+      for(let i=0;i<14;i++){ const x=(R()-.5)*c.measureText(cur[2]).width*1.1, y=(R()-.5)*sz*.9; c.beginPath(); c.moveTo(x,y); c.lineTo(x+(R()-.5)*160*u,y+(R()-.5)*60*u); c.stroke(); }
+      c.restore();
+      if(big){ const l=eout(ramp(age,.5,1.6)); c.strokeStyle="#b3201a"; c.lineWidth=5*u; c.beginPath();
+        const y=cy+170*u; c.moveTo(cx-330*u,y); c.lineTo(cx-330*u+660*u*l,y+(R()-.5)*3); c.stroke();
+        c.globalAlpha=ramp(age,1.4,2.2); c.fillStyle="#cfc6b0"; c.font=`500 ${34*u}px "Segoe UI",sans-serif`; c.textAlign="center"; spaced(c,"F O C U S",cx,cy+232*u,10*u); c.globalAlpha=1; }
+    }
+    // white flash on each cut
+    for(const b of beats){ const d=t-b[0]; if(d>=0&&d<.07){ c.fillStyle=`rgba(255,250,240,${.55*(1-d/.07)})`; c.fillRect(0,0,w,h); } }
+    // vertical film scratches
+    c.strokeStyle="rgba(240,230,210,.35)"; c.lineWidth=1;
+    for(let i=0;i<3;i++){ if(R()<.45){ const x=R()*w; c.beginPath(); c.moveTo(x,0); c.lineTo(x+(R()-.5)*6,h); c.stroke(); } }
+    // dust + grain
+    for(let i=0;i<260;i++){ const a=R()*.22; c.fillStyle=`rgba(255,250,235,${a})`; c.fillRect(R()*w,R()*h,1+R()*1.5,1+R()*1.5); }
+    for(let i=0;i<6;i++){ c.fillStyle="rgba(0,0,0,.6)"; c.beginPath(); c.arc(R()*w,R()*h,1+R()*3,0,7); c.fill(); }
+    // vignette
+    const g=c.createRadialGradient(cx,cy,Math.min(w,h)*.3,cx,cy,Math.max(w,h)*.75); g.addColorStop(0,"rgba(0,0,0,0)"); g.addColorStop(1,"rgba(0,0,0,.78)"); c.fillStyle=g; c.fillRect(0,0,w,h);
+    // fade out
+    const fo=ramp(t,11.2,12); if(fo>0){ c.fillStyle=`rgba(0,0,0,${fo})`; c.fillRect(0,0,w,h); }
+  }};
+
+/* 3. Anamorphic light */
+const light = { id:"light", title:"First light", by:"After lens-flare title design",
+  dur:14,
+  blurb:"A single point of light in the dark grows into a wide anamorphic streak and reveals the name as it passes.",
+  draw(c,t,w,h){
+    const u=Math.min(w,h*1.6)/1000, cx=w/2, cy=h/2;
+    c.fillStyle="#04030a"; c.fillRect(0,0,w,h);
+    // distant dust
+    const R=rng(5); for(let i=0;i<90;i++){ const x=R()*w,y=R()*h,s=.4+R()*1.6,ph=R()*6; const a=ramp(t,1,4)*(.18+.18*Math.sin(t*.9+ph)); c.fillStyle=`rgba(190,170,255,${a})`; c.beginPath(); c.arc(x+Math.sin(t*.15+ph)*14*u,y-t*3*u*s,s*u*1.2,0,7); c.fill(); }
+    const born=eout(ramp(t,.6,3.2)), spread=eio(ramp(t,3.6,7.2)), settle=ramp(t,9.5,12);
+    // the glow
+    const rad=lerp(6,150,born)*u*(1+.25*Math.sin(t*2)*(1-spread));
+    let g=c.createRadialGradient(cx,cy,0,cx,cy,rad*3.4); g.addColorStop(0,`rgba(255,255,255,${born})`); g.addColorStop(.12,`rgba(214,196,255,${.8*born})`); g.addColorStop(.4,`rgba(120,86,230,${.28*born})`); g.addColorStop(1,"rgba(60,30,140,0)");
+    c.fillStyle=g; c.fillRect(0,0,w,h);
+    // anamorphic streak
+    const L=lerp(.05,1.15,spread)*w, thick=lerp(1.5,5,spread)*u*(1-.4*settle);
+    c.save(); c.globalCompositeOperation="lighter";
+    let sg=c.createLinearGradient(cx-L/2,0,cx+L/2,0); sg.addColorStop(0,"rgba(110,140,255,0)"); sg.addColorStop(.5,`rgba(210,200,255,${.95*born})`); sg.addColorStop(1,"rgba(110,140,255,0)");
+    c.fillStyle=sg; c.fillRect(cx-L/2,cy-thick/2,L,thick);
+    sg=c.createLinearGradient(cx-L/2,0,cx+L/2,0); sg.addColorStop(0,"rgba(90,70,220,0)"); sg.addColorStop(.5,`rgba(130,100,255,${.35*born})`); sg.addColorStop(1,"rgba(90,70,220,0)");
+    c.fillStyle=sg; c.fillRect(cx-L/2,cy-thick*5,L,thick*10);
+    c.restore();
+    // title revealed by the streak
+    const reveal=eio(ramp(t,5.2,9.4)), word="CARMEN", fs=190*u;
+    c.save(); c.font=`200 ${fs}px "Bahnschrift","Segoe UI Light","Segoe UI",sans-serif`; c.textAlign="left"; c.textBaseline="middle";
+    const track=fs*.28, tw=spacedWidth(c,word,track), x0=cx-tw/2;
+    const half=reveal*tw/2+30*u; c.beginPath(); c.rect(cx-half,0,half*2,h); c.clip();
+    c.fillStyle=`rgba(244,240,255,${.96})`; let x=x0; [...word].forEach(ch=>{ c.fillText(ch,x,cy-6*u); x+=c.measureText(ch).width+track; });
+    c.restore();
+    // streak flare edges + subtitle
+    if(reveal>0&&reveal<1){ for(const s of [-1,1]){ const ex=cx+s*(reveal*tw/2+30*u); const eg=c.createRadialGradient(ex,cy,0,ex,cy,60*u); eg.addColorStop(0,"rgba(255,255,255,.85)"); eg.addColorStop(1,"rgba(160,130,255,0)"); c.fillStyle=eg; c.fillRect(ex-60*u,cy-60*u,120*u,120*u); } }
+    c.globalAlpha=eout(ramp(t,9.6,11.2)); c.fillStyle="#cbbff2"; c.font=`400 ${30*u}px "Segoe UI",sans-serif`; c.textAlign="center";
+    spaced(c,"F O C U S",cx,cy+150*u+(1-c.globalAlpha)*14*u,16*u); c.globalAlpha=1;
+    // vignette + fade
+    const v=c.createRadialGradient(cx,cy,Math.min(w,h)*.35,cx,cy,Math.max(w,h)*.8); v.addColorStop(0,"rgba(0,0,0,0)"); v.addColorStop(1,"rgba(0,0,0,.7)"); c.fillStyle=v; c.fillRect(0,0,w,h);
+    const fo=ramp(t,13,14); if(fo>0){ c.fillStyle=`rgba(4,3,10,${fo})`; c.fillRect(0,0,w,h); }
+  }};
+
+/* 4. Countdown */
+const clock = { id:"clock", title:"Twenty-five minutes", by:"After countdown leaders",
+  dur:14,
+  blurb:"A timer ring draws itself, ticks fill in, a pomodoro counts down in a blink, and the zero becomes the name.",
+  draw(c,t,w,h){
+    const u=Math.min(w,h*1.6)/1000, cx=w/2, cy=h/2, R0=235*u;
+    const bg=c.createLinearGradient(0,0,0,h); bg.addColorStop(0,"#120d2e"); bg.addColorStop(1,"#2b1f5e"); c.fillStyle=bg; c.fillRect(0,0,w,h);
+    const R=rng(3); for(let i=0;i<70;i++){ const x=R()*w,y=R()*h,ph=R()*6; c.fillStyle=`rgba(255,255,255,${.1+.12*Math.sin(t+ph)})`; c.fillRect(x,y,1.5,1.5); }
+    const shrink=eio(ramp(t,8.6,9.8)), flash=ramp(t,9.7,10.0)*(1-ramp(t,10.0,11.0));
+    const ringIn=eio(ramp(t,.4,4.0)), scale=1-.0*shrink;
+    c.save(); c.translate(cx,cy);
+    const alpha=1-ramp(t,9.4,10.2);
+    c.globalAlpha=alpha;
+    // ticks
+    for(let i=0;i<60;i++){ const a=i/60*Math.PI*2-Math.PI/2, on=ramp(t,1.2+i*.04,1.6+i*.04); if(on<=0) continue; const major=i%5===0;
+      const r1=R0*(1.07), r2=r1+(major?26:13)*u*on; c.strokeStyle=major?"rgba(255,255,255,.95)":"rgba(190,175,255,.6)"; c.lineWidth=(major?3:1.5)*u;
+      c.beginPath(); c.moveTo(Math.cos(a)*r1,Math.sin(a)*r1); c.lineTo(Math.cos(a)*r2,Math.sin(a)*r2); c.stroke(); }
+    // ring drawn on
+    c.lineCap="round"; c.strokeStyle="rgba(180,160,255,.22)"; c.lineWidth=14*u; c.beginPath(); c.arc(0,0,R0,0,7); c.stroke();
+    const count=eio(ramp(t,3.6,8.2)); // 0..1 over the countdown
+    c.strokeStyle="#d8ccff"; c.lineWidth=14*u; c.shadowColor="rgba(160,130,255,.9)"; c.shadowBlur=26*u;
+    c.beginPath(); c.arc(0,0,R0,-Math.PI/2,-Math.PI/2+Math.PI*2*Math.min(ringIn,1-count+.0001)); c.stroke(); c.shadowBlur=0;
+    // sweeping hand
+    const ha=-Math.PI/2+Math.PI*2*(ramp(t,3.6,8.2)>0?count*8:ringIn*1);
+    if(t>1&&t<9){ c.strokeStyle="rgba(255,255,255,.85)"; c.lineWidth=3*u; c.beginPath(); c.moveTo(0,0); c.lineTo(Math.cos(ha)*R0*.92,Math.sin(ha)*R0*.92); c.stroke(); c.fillStyle="#fff"; c.beginPath(); c.arc(0,0,8*u,0,7); c.fill(); }
+    // digits
+    const secs=Math.round(lerp(25*60,0,count));
+    const mm=String(Math.floor(secs/60)).padStart(2,"0"), ss=String(secs%60).padStart(2,"0");
+    const dig=eout(ramp(t,2.2,3.4));
+    c.globalAlpha=alpha*dig; c.fillStyle="#fff"; c.textAlign="center"; c.textBaseline="middle"; c.font=`200 ${150*u}px "Bahnschrift","Segoe UI Light",sans-serif`;
+    c.fillText(`${mm}:${ss}`,0,-6*u);
+    c.font=`400 ${24*u}px "Segoe UI",sans-serif`; c.fillStyle="#cbbff2"; spaced(c,"F O C U S",0,92*u,10*u);
+    c.restore();
+    // the zero becomes light
+    const p=ramp(t,8.8,9.9);
+    if(p>0&&t<11){ const rr=lerp(R0*.18,Math.max(w,h),eout(ramp(t,9.4,10.6))); const g=c.createRadialGradient(cx,cy,0,cx,cy,rr); g.addColorStop(0,`rgba(255,255,255,${flash+.0})`); g.addColorStop(.4,`rgba(190,165,255,${.6*flash})`); g.addColorStop(1,"rgba(120,90,230,0)"); c.fillStyle=g; c.fillRect(0,0,w,h); }
+    // the name arrives
+    const tin=ramp(t,10.2,13.0);
+    if(tin>0){ c.save(); c.translate(cx,cy); c.fillStyle="#fff"; c.textAlign="left"; c.textBaseline="middle"; const fs=130*u; c.font=`200 ${fs}px "Bahnschrift","Segoe UI Light",sans-serif`;
+      const track=lerp(fs*.9,fs*.22,eout(tin)); const word="CARMEN"; const tw=spacedWidth(c,word,track); let x=-tw/2; c.globalAlpha=eout(ramp(t,10.2,11.4));
+      [...word].forEach(ch=>{ c.fillText(ch,x,-8*u); x+=c.measureText(ch).width+track; });
+      c.globalAlpha=eout(ramp(t,11.4,12.6)); c.fillStyle="#cbbff2"; c.textAlign="center"; c.font=`400 ${28*u}px "Segoe UI",sans-serif`; spaced(c,"F O C U S",0,96*u,16*u);
+      c.fillStyle="rgba(255,255,255,.55)"; c.fillRect(-tw/2,56*u,tw*eout(ramp(t,11.0,12.4)),2*u);
+      c.restore(); }
+  }};
+
+paper.still=8.4; scratch.still=10.6; light.still=11.5; clock.still=12.6;
+const SEQS=[paper,scratch,light,clock];
+</script>
+<script src="more.js"></script>
+<script>
+
+/* ---------- gallery ---------- */
+const grid=document.getElementById("grid");
+SEQS.forEach((s,i)=>{
+  const b=document.createElement("button"); b.className="card"; b.type="button";
+  b.innerHTML=`<canvas width="640" height="360"></canvas><div class="meta"><div class="no">${s.by}</div><h2>${s.title}</h2><p>${s.blurb}</p></div>`;
+  b.onclick=()=>open(i); grid.appendChild(b);
+  const cv=b.querySelector("canvas"), cc=cv.getContext("2d"); try{ s.draw(cc,s.still||s.dur*.7,640,360); }catch(e){ console.error(s.id,e); }
+});
+
+/* ---------- player ---------- */
+const player=document.getElementById("player"), stage=document.getElementById("stage"), sc=stage.getContext("2d");
+const fill=document.getElementById("fill"), pp=document.getElementById("pp"), nameEl=document.getElementById("name");
+let cur=null, t0=0, pausedAt=null, raf=0, hideTimer=0;
+function fit(){ const d=Math.min(2,devicePixelRatio||1); stage.width=innerWidth*d; stage.height=innerHeight*d; }
+addEventListener("resize",()=>{ if(cur) fit(); });
+function time(){ return pausedAt!==null?pausedAt:(performance.now()-t0)/1000; }
+function open(i){ cur=SEQS[i]; player.classList.add("on"); fit(); nameEl.textContent=cur.title; restart(); wake(); }
+function restart(){ t0=performance.now(); pausedAt=null; pp.textContent="Pause"; cancelAnimationFrame(raf); loop(); }
+function loop(){ const t=Math.min(cur.dur,time()); cur.draw(sc,t,stage.width,stage.height); fill.style.width=(t/cur.dur*100)+"%";
+  if(t>=cur.dur&&pausedAt===null){ pausedAt=cur.dur; pp.textContent="Play"; } raf=requestAnimationFrame(loop); }
+function toggle(){ if(pausedAt!==null){ if(pausedAt>=cur.dur){ restart(); return; } t0=performance.now()-pausedAt*1000; pausedAt=null; pp.textContent="Pause"; } else { pausedAt=time(); pp.textContent="Play"; } }
+function close(){ cancelAnimationFrame(raf); player.classList.remove("on"); cur=null; }
+function wake(){ player.classList.add("show"); clearTimeout(hideTimer); hideTimer=setTimeout(()=>player.classList.remove("show"),2600); }
+document.getElementById("back").onclick=close;
+document.getElementById("replay").onclick=restart;
+pp.onclick=toggle;
+document.getElementById("track").onclick=e=>{ const r=e.currentTarget.getBoundingClientRect(); const f=clamp((e.clientX-r.left)/r.width); const t=f*cur.dur; const was=pausedAt!==null; t0=performance.now()-t*1000; if(was) pausedAt=t; };
+player.addEventListener("mousemove",wake);
+addEventListener("keydown",e=>{ if(!cur) return; if(e.key==="Escape") close(); else if(e.key===" "){ e.preventDefault(); toggle(); } else if(e.key.toLowerCase()==="r") restart(); });
+</script>
+</body>
+</html>
