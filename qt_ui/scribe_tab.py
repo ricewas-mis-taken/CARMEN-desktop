@@ -389,6 +389,54 @@ class ScribeCanvas(QWidget):
         oy = rect.top() + pad + ((rect.height() - 2 * pad) - (y1 - y0) * scale) / 2 - y0 * scale
         return scale, ox, oy
 
+    HEAT_CELL = 6    # minimap pixels per heat cell
+
+    def _heat(self, rect, scale, ox, oy):
+        """{(col, row): weight}: how much is drawn in each cell of the map, so busy areas glow."""
+        cell = self.HEAT_CELL
+        cols, rows = int(rect.width() // cell) + 1, int(rect.height() // cell) + 1
+        heat = {}
+
+        def mark(mx, my, amount=1.0):
+            c, r = int((mx - rect.left()) // cell), int((my - rect.top()) // cell)
+            if 0 <= c < cols and 0 <= r < rows:
+                heat[(c, r)] = heat.get((c, r), 0.0) + amount
+
+        for layer in self.doc["layers"]:
+            if not layer["visible"]:
+                continue
+            for item in layer["items"]:
+                if item.get("type") == "stroke" and len(item["pts"]) > 1:
+                    pts = item["pts"]
+                    for a, b in zip(pts, pts[1:]):
+                        ax, ay, bx, by = a[0] * scale + ox, a[1] * scale + oy, b[0] * scale + ox, b[1] * scale + oy
+                        steps = max(1, int(max(abs(bx - ax), abs(by - ay)) // (cell / 2)))
+                        for i in range(steps):
+                            t = i / steps
+                            mark(ax + (bx - ax) * t, ay + (by - ay) * t, 0.5)
+                    continue
+                x0, y0, x1, y1 = geo.bounds(item)
+                c0, r0 = int((x0 * scale + ox - rect.left()) // cell), int((y0 * scale + oy - rect.top()) // cell)
+                c1, r1 = int((x1 * scale + ox - rect.left()) // cell), int((y1 * scale + oy - rect.top()) // cell)
+                for c in range(max(c0, 0), min(c1, cols - 1) + 1):
+                    for r in range(max(r0, 0), min(r1, rows - 1) + 1):
+                        heat[(c, r)] = heat.get((c, r), 0.0) + 1.5
+        return heat
+
+    def _paint_heat(self, p, rect, scale, ox, oy):
+        heat = self._heat(rect, scale, ox, oy)
+        if not heat:
+            return
+        peak = max(heat.values())
+        cell = self.HEAT_CELL
+        p.setPen(Qt.NoPen)
+        for (c, r), value in heat.items():
+            t = min(1.0, (value / peak) ** 0.6)
+            # pale yellow where there is a little, through orange to deep red where it is packed
+            colour = QColor.fromHsvF(max(0.0, 0.14 * (1 - t)), 0.35 + 0.65 * t, 1.0 - 0.25 * t, 0.35 + 0.6 * t)
+            p.setBrush(colour)
+            p.drawRect(QRectF(rect.left() + c * cell, rect.top() + r * cell, cell, cell))
+
     def _paint_minimap(self, p):
         rect = self._minimap_rect()
         if rect is None:
@@ -400,25 +448,7 @@ class ScribeCanvas(QWidget):
         p.setBrush(QColor(255, 255, 255, 232))
         p.drawRoundedRect(rect, 10, 10)
         p.setClipRect(rect.adjusted(1, 1, -1, -1))
-        for layer in self.doc["layers"]:
-            if not layer["visible"]:
-                continue
-            for item in layer["items"]:
-                colour = QColor(item.get("stroke", "#333333"))
-                colour.setAlpha(210)
-                if item.get("type") == "stroke" and len(item["pts"]) > 1:
-                    p.setPen(QPen(colour, 1.2))
-                    pts = item["pts"]
-                    step = max(1, len(pts) // 40)
-                    for a, b in zip(pts[::step], pts[step::step]):
-                        p.drawLine(QPointF(a[0] * scale + ox, a[1] * scale + oy), QPointF(b[0] * scale + ox, b[1] * scale + oy))
-                    continue
-                x0, y0, x1, y1 = geo.bounds(item)
-                r = QRectF(x0 * scale + ox, y0 * scale + oy, max(2.0, (x1 - x0) * scale), max(2.0, (y1 - y0) * scale))
-                p.setPen(Qt.NoPen)
-                colour.setAlpha(item.get("type") == "image" and 120 or 170)
-                p.setBrush(colour)
-                p.drawRect(r)
+        self._paint_heat(p, rect, scale, ox, oy)
         w, h, z = self.width(), self.height(), self.zoom
         vx0, vy0 = self.view["x"] - w / 2 / z, self.view["y"] - h / 2 / z
         view = QRectF(vx0 * scale + ox, vy0 * scale + oy, w / z * scale, h / z * scale)
