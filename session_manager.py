@@ -16,6 +16,7 @@ import server_clock
 import session_history
 import state_events
 import paths
+import process_aliases
 
 STATE_PATH = paths.private_path("session_state.json")
 
@@ -145,6 +146,11 @@ def add_change_listener(listener):
 # is_blocked_browser_profile() applies to windows from these, keyed by the
 # window's own AppUserModelID rather than its process name/pid.
 MULTI_PROFILE_BROWSER_PROCESSES = {"chrome.exe", "msedge.exe"}
+
+
+def is_multi_profile_browser(process_name):
+    """True for either OS's spelling (chrome.exe / Google Chrome)."""
+    return process_aliases.is_multi_profile_browser(process_name)
 
 # Index into violationLog of the most recent still-unresolved violation of
 # each kind ("process" / "domain"), so record_acceptable()/
@@ -1203,7 +1209,12 @@ def is_blocked(process_name):
         return False
     with _lock:
         blocklist_lower = [p.lower() for p in _state["processBlocklist"]]
-        return process_name.lower() in blocklist_lower
+        if process_name.lower() in blocklist_lower:
+            return True
+        # Same app, other OS's spelling ("chrome.exe" vs "Google Chrome") --
+        # see process_aliases.py.
+        key = process_aliases.canonical(process_name)
+        return any(process_aliases.canonical(p) == key for p in _state["processBlocklist"])
 
 
 def is_blocked_browser_profile(aumi):
