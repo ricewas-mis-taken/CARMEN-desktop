@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from qt_ui import motion
 from qt_ui.wrap_edit import WrapEdit
 
 import board_store
@@ -461,8 +462,13 @@ class BoardTab(QWidget):
                 f"color: {MUTED}; font-size: 14px; background: #FFFFFF; border: 1px dashed #D0D5DD; "
                 "border-radius: 16px; padding: 36px 24px;")
             self._list_layout.addWidget(empty_label)
+        known = getattr(self, "_seen_task_ids", None)
+        self._seen_task_ids = {t.get("id") for t in tasks}
         for task in tasks:
-            self._list_layout.addWidget(_BoardCard(task, on_changed=self.refresh))
+            card = _BoardCard(task, on_changed=self.refresh)
+            self._list_layout.addWidget(card)
+            if known is not None and task.get("id") not in known:
+                motion.appear(card)          # only what is new fades in, not the whole board again
         self._notes_widget = None
         self._refresh_notes()
 
