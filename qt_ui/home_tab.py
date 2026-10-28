@@ -324,9 +324,23 @@ class _Grid(QWidget):
         self._columns = columns
         self._peak = max([m for col in columns for _d, m in col] + [1])
         self._hover = None
+        self._wave = 1.0
+        self._anim = None
         self.setMouseTracking(True)
         self.setMinimumWidth(0)
         self.setFixedHeight(self.TOP + 7 * 14)
+
+    replay_on_enter = True
+
+    def replay(self):
+        """The year fills in as a wave from the left, the way a contribution graph loads."""
+        from qt_ui import motion
+        motion.stop(self._anim)
+        self._anim = motion.tween(self, 0.0, 1.0, 1100, self._set_wave)
+
+    def _set_wave(self, value):
+        self._wave = value
+        self.update()
 
     def _step(self):
         return max(4.0, min(float(self.MAX_STEP), (self.width() - self.LEFT) / len(self._columns)))
@@ -385,7 +399,9 @@ class _Grid(QWidget):
                     p.drawText(QRectF(self.LEFT + x * step, 0, step * 4, self.TOP - 4), Qt.AlignLeft | Qt.AlignVCenter,
                                first_day.strftime("%b"))
                 last_month = first_day.month
+        count = max(1, len(self._columns))
         for x, column in enumerate(self._columns):
+            p.setOpacity(max(0.0, min(1.0, (self._wave * 1.5 - x / count) * 6)))
             for y, (day, minutes) in enumerate(column):
                 if day is None:
                     continue
