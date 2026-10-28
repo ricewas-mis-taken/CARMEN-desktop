@@ -89,7 +89,28 @@ class Ring(QWidget):
         self._small = ""
         self._dim = False
         self._ink, self._muted, self._faint = INK, MUTED, FAINT
+        self._shown = 0.0              # what is drawn: eases toward _fraction
+        self._sweep = None
         self.setFixedSize(size, size)
+
+    replay_on_enter = True
+
+    def replay(self):
+        """Draws the arc again from empty (when the tab is opened)."""
+        self._ease_to(self._fraction, from_zero=True)
+
+    def _ease_to(self, target, from_zero=False):
+        from qt_ui import motion
+
+        def show(value):
+            self._shown = value
+            self.update()
+        motion.stop(self._sweep)
+        start = 0.0 if from_zero else self._shown
+        if abs(start - target) < 0.0005:
+            show(target)
+            return
+        self._sweep = motion.tween(self, start, target, motion.MEDIUM_MS, show)
 
     def set_text_colors(self, ink, muted, faint):
         """Numeral / caption / dimmed colours, for themes whose cards are not white."""
@@ -104,7 +125,10 @@ class Ring(QWidget):
         if (QColor(color).name(), fraction, big, small, dim) == (
                 self._color.name(), self._fraction, self._big, self._small, self._dim):
             return
+        before = self._fraction
         self._color, self._fraction, self._big, self._small, self._dim = QColor(color), fraction, big, small, dim
+        if fraction != before:
+            self._ease_to(fraction)
         self.update()
 
     def paintEvent(self, _event):
@@ -116,12 +140,12 @@ class Ring(QWidget):
         track.setAlphaF(0.15)
         p.setPen(QPen(track, width, Qt.SolidLine, Qt.RoundCap))
         p.drawEllipse(rect)
-        if self._fraction > 0:
+        if self._shown > 0:
             arc = QColor(self._color)
             if self._dim:
                 arc.setAlphaF(0.4)
             p.setPen(QPen(arc, width, Qt.SolidLine, Qt.RoundCap))
-            span = min(self._fraction, 1.0) * 360
+            span = min(self._shown, 1.0) * 360
             if span >= 359.5:
                 p.drawEllipse(rect)
             else:
