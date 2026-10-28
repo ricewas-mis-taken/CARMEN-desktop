@@ -574,6 +574,23 @@ class ScribeCanvas(QWidget):
         pad = 16 + 6 * width
         return not (x1 + pad < view[0] or x0 - pad > view[2] or y1 + pad < view[1] or y0 - pad > view[3])
 
+    @staticmethod
+    def _smooth_path(pts, closed=False):
+        """Freehand points as a smooth curve: quadratic segments through the midpoints, so the
+        stroke stays round at any zoom instead of showing its straight pieces."""
+        path = QPainterPath(QPointF(*pts[0]))
+        if len(pts) < 3:
+            for x, y in pts[1:]:
+                path.lineTo(QPointF(x, y))
+        else:
+            for i in range(1, len(pts) - 1):
+                mx, my = (pts[i][0] + pts[i + 1][0]) / 2, (pts[i][1] + pts[i + 1][1]) / 2
+                path.quadTo(QPointF(*pts[i]), QPointF(mx, my))
+            path.lineTo(QPointF(*pts[-1]))
+        if closed:
+            path.closeSubpath()
+        return path
+
     def _paint_item(self, p, item, zoom):
         kind = item["type"]
         if kind == "image":
@@ -624,9 +641,11 @@ class ScribeCanvas(QWidget):
                     p.drawLine(b, QPointF(b.x() + head * math.cos(angle + turn),
                                           b.y() + head * math.sin(angle + turn)))
         elif kind == "curve":
-            pts = geo.quad_points(item["a"], item["b"], item["c"])
-            pts = [QPointF(x, y) for x, y in pts]
-            p.drawPolygon(pts) if fill else p.drawPolyline(pts)
+            path = QPainterPath(QPointF(*item["a"]))
+            path.quadTo(QPointF(*item["c"]), QPointF(*item["b"]))
+            if fill:
+                path.closeSubpath()
+            p.drawPath(path)
         elif kind in ("rect", "circle"):
             x0, y0, x1, y1 = geo.rect_of(item)
             rect = QRectF(x0, y0, x1 - x0, y1 - y0)
