@@ -303,4 +303,4 @@ const terminal={ id:"terminal", title:"Boot", by:"Amber phosphor", dur:13, still
     const bandY=((t*90*u)%(h+160*u))-80*u; const bg=c.createLinearGradient(0,bandY-60*u,0,bandY+60*u); bg.addColorStop(0,"rgba(255,176,0,0)"); bg.addColorStop(.5,"rgba(255,176,0,.05)"); bg.addColorStop(1,"rgba(255,176,0,0)"); c.fillStyle=bg; c.fillRect(0,bandY-60*u,w,120*u);
     vig(c,w,h,.85); } };
 
-[pull,enso,sundial,sand,typewriter,blueprint,swiss,neon,ripples,leader,constellation,eclipse,pendulum,stopmotion,sunrise,terminal].forEach(s=>SEQS.push(s));
+[pull].forEach(s=>SEQS.push(s));
