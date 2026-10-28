@@ -133,11 +133,21 @@ class Ring(QWidget):
 class ElidedLabel(QLabel):
     """One line that ends in an ellipsis instead of pushing the card wider."""
 
-    def __init__(self, text=""):
+    def __init__(self, text="", natural=False):
+        """natural=True asks for the text's own width (and only gives it up when the
+        row is too tight); the default takes whatever room is left over."""
         super().__init__(text)
         self._full = text
-        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._natural = natural
+        self.setSizePolicy(QSizePolicy.Preferred if natural else QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.setMinimumWidth(40)
+
+    def sizeHint(self):
+        if self._natural:
+            hint = super().sizeHint()
+            hint.setWidth(QFontMetrics(self.font()).horizontalAdvance(self._full) + 2)
+            return hint
+        return super().sizeHint()
 
     def setText(self, text):
         self._full = text or ""
@@ -206,8 +216,17 @@ LINK_STYLE = (
     f"QPushButton:disabled{{color:{FAINT};}}")
 
 
+class FitButton(QPushButton):
+    """A button that never shrinks below its own text, however tight the layout
+    gets (a plain QPushButton's minimum can be smaller than its label under a
+    stylesheet's padding, so rows of them used to collapse to blank slivers)."""
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+
 def button(text, style, height=40):
-    b = QPushButton(text)
+    b = FitButton(text)
     b.setCursor(Qt.PointingHandCursor)
     b.setFixedHeight(height)
     b.setStyleSheet(style)
@@ -215,7 +234,7 @@ def button(text, style, height=40):
 
 
 def link_button(text):
-    b = QPushButton(text)
+    b = FitButton(text)
     b.setFlat(True)
     b.setCursor(Qt.PointingHandCursor)
     b.setStyleSheet(LINK_STYLE)

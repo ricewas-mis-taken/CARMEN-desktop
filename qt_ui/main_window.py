@@ -17,6 +17,7 @@ if sys.platform != "darwin":
 from PySide6.QtCore import Qt
 from PySide6.QtCore import QEvent, QSize
 from PySide6.QtWidgets import (
+    QFrame,
     QButtonGroup,
     QHBoxLayout,
     QLabel,
@@ -76,6 +77,18 @@ class _RECT(ctypes.Structure):
 _win = None
 
 
+def _scrolling(page):
+    """Wraps a page that has a size it cannot go below, so a small window
+    scrolls it instead of crushing it."""
+    from PySide6.QtWidgets import QScrollArea
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.NoFrame)
+    area.setWidget(page)
+    area.refresh = getattr(page, "refresh", lambda: None)
+    return area
+
+
 def open_main_window():
     global _win
     if _win is not None:
@@ -87,6 +100,32 @@ def open_main_window():
     _win.show()
 
 
+_PAGE_FOR_TABLE = {
+    "tasks": "tasks", "board": "board",
+    "review_topics": "review", "review_subjects": "review",
+    "review_problems": "review", "review_sessions": "review",
+}
+
+
+def refresh_after_pull(tables):
+    """Called (on the GUI thread) when a sync pulled another computer's
+    changes: re-reads the pages whose data changed, so a review added on the
+    PC shows up on an already-open window instead of after the next restart."""
+    if _win is None:
+        return
+    pages = {_PAGE_FOR_TABLE[t] for t in tables if t in _PAGE_FOR_TABLE}
+    pages.add("home")
+    for key in pages:
+        page = _win._pages.get(key)
+        refresh = getattr(page, "refresh", None)
+        if refresh is None:
+            continue
+        try:
+            refresh()
+        except Exception:
+            pass
+
+
 def open_sign_in():
     """Tray "Sign in": the main window with the sign-in dialog on top."""
     open_main_window()
@@ -94,6 +133,18 @@ def open_sign_in():
 
 
 _NORMAL_SIZE = (800, 800)
+
+# The window cannot be dragged smaller than its current page needs: an explicit
+# setMinimumSize overrides what the layouts report, so without this the pages were
+# squeezed until buttons and titles lost their text. Content widths, beside the sidebar.
+_PAGE_MIN_WIDTH = {
+    "home": 480, "focus": 630, "tasks": 520, "board": 600,
+    "review": 640, "scribe": 640, "screentime": 480, "history": 830,
+}
+_MIN_HEIGHT = 560
+_SIDEBAR_FULL = 180
+_SIDEBAR_COMPACT = 64
+_COMPACT_BELOW = 900   # window width under which the sidebar shows icons only
 
 
 class _PagesStack(QStackedWidget):
@@ -158,7 +209,8 @@ class _MainWindow(QWidget):
         super().__init__()
         self.setWindowTitle("Carmen Focus")
         self.resize(*_NORMAL_SIZE)
-        self.setMinimumSize(540, 600)
+        self.setMinimumSize(_SIDEBAR_COMPACT + 480, _MIN_HEIGHT)
+        self._compact = False
         self._was_maximized = False
         self._drag_frame_size = None  # (width, height) in physical px, set only during a title-bar move
 
@@ -183,7 +235,7 @@ class _MainWindow(QWidget):
         self._add_page("tasks", TasksTab())
         self._add_page("board", BoardTab())
         self._add_page("review", ReviewTab())
-        self._add_page("scribe", ScribeTab())
+        self._add_page("scribe", _scrolling(ScribeTab()))
         self._add_page("screentime", ScreenTimeTab())
         self._add_page("history", HistoryTab())
 
@@ -196,7 +248,8 @@ class _MainWindow(QWidget):
     def _build_sidebar(self):
         sidebar = QWidget()
         sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(180)
+        sidebar.setFixedWidth(_SIDEBAR_FULL)
+        self._sidebar = sidebar
         layout = QVBoxLayout(sidebar)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
@@ -210,6 +263,9 @@ class _MainWindow(QWidget):
         title.setObjectName("SidebarTitle")
         brand_row.addWidget(title, 1)
         layout.addWidget(brand)
+        self._brand_title = title
+        self._brand_row = brand_row
+        self._group_captions = []
 
         self._nav_buttons = {}
         self._nav_group = QButtonGroup(self)
@@ -228,8 +284,10 @@ class _MainWindow(QWidget):
                 caption = QLabel(group_starts[key])
                 caption.setObjectName("SidebarGroup")
                 layout.addWidget(caption)
+                self._group_captions.append(caption)
             button = QPushButton(label)
             button.setProperty("class", "NavButton")
+            button.setProperty("fullLabel", label)
             button.setIcon(nav_icon(key))
             button.setIconSize(QSize(20, 20))
             button.setCursor(Qt.PointingHandCursor)
@@ -250,9 +308,38 @@ class _MainWindow(QWidget):
 
     def _show_tab(self, key):
         self._stack.setCurrentWidget(self._pages[key])
+        self._current_key = key
         button = self._nav_buttons.get(key)
         if button is not None:
             button.setChecked(True)
+        self._apply_min_size()
+
+    def _sidebar_width(self):
+        return _SIDEBAR_COMPACT if self._compact else _SIDEBAR_FULL
+
+    def _apply_min_size(self):
+        """Window minimum = sidebar + what the current page needs."""
+        key = getattr(self, "_current_key", "home")
+        self.setMinimumSize(_SIDEBAR_COMPACT + _PAGE_MIN_WIDTH.get(key, 480), _MIN_HEIGHT)
+
+    def _set_compact(self, compact):
+        """Icon-only sidebar on narrow windows, so the page keeps its room."""
+        if compact == self._compact:
+            return
+        self._compact = compact
+        self._sidebar.setFixedWidth(self._sidebar_width())
+        self._brand_title.setVisible(not compact)
+        self._brand_row.setContentsMargins(*((0, 24, 0, 18) if compact else (20, 24, 18, 18)))
+        for caption in self._group_captions:
+            caption.setVisible(not compact)
+        for button in self._nav_buttons.values():
+            full = button.property("fullLabel")
+            button.setText("" if compact else full)
+            button.setToolTip(full if compact else "")
+        self._account_area.set_compact(compact)
+        self._sidebar.setStyleSheet(
+            "QPushButton.NavButton { margin: 1px 8px; padding: 9px 0px; }" if compact else "")
+        self._apply_min_size()
 
     def changeEvent(self, event):
         # Qt restores a "restore down" (un-maximize) click to whatever
@@ -288,6 +375,7 @@ class _MainWindow(QWidget):
         # drag ends. Neither of those needs a reactive resize() call, so
         # there's nothing left for this backstop to correct.
         super().resizeEvent(event)
+        self._set_compact(event.size().width() < _COMPACT_BELOW)
 
     def nativeEvent(self, eventType, message):
         # No macOS equivalent needed here -- this guards a Windows-specific
