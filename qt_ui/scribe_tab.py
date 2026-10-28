@@ -358,10 +358,19 @@ class ScribeCanvas(QWidget):
 
     # ---- minimap ---------------------------------------------------------
     MINIMAP_BELOW = 0.5      # zoomed out past this, a map of the whole board appears
-    MINIMAP_SIZE = (210, 150)
+    MINIMAP_SIZE = (250, 180)
+    _minimap_on = True       # M hides and shows it
+
+    def _content_out_of_view(self, box):
+        z, w, h = self.zoom, self.width(), self.height()
+        return (box[0] < self.view["x"] - w / 2 / z or box[1] < self.view["y"] - h / 2 / z
+                or box[2] > self.view["x"] + w / 2 / z or box[3] > self.view["y"] + h / 2 / z)
 
     def _minimap_rect(self):
-        if self.zoom > self.MINIMAP_BELOW or self._all_bounds() is None:
+        box = self._all_bounds()
+        if not self._minimap_on or box is None:
+            return None
+        if self.zoom > self.MINIMAP_BELOW and not self._content_out_of_view(box):
             return None
         mw, mh = self.MINIMAP_SIZE
         return QRectF(self.width() - mw - 16, self.height() - mh - 16, mw, mh)
@@ -413,9 +422,22 @@ class ScribeCanvas(QWidget):
         w, h, z = self.width(), self.height(), self.zoom
         vx0, vy0 = self.view["x"] - w / 2 / z, self.view["y"] - h / 2 / z
         view = QRectF(vx0 * scale + ox, vy0 * scale + oy, w / z * scale, h / z * scale)
-        p.setPen(QPen(QColor("#3B82F6"), 2))
-        p.setBrush(QColor(59, 130, 246, 38))
+        # Where you are: a box (never smaller than a fingertip), lines across the whole map through
+        # its centre, and a dot, so a small view on a big board is still easy to find.
+        centre = view.center()
+        if view.width() < 18 or view.height() < 18:
+            view = QRectF(centre.x() - max(9, view.width() / 2), centre.y() - max(9, view.height() / 2),
+                          max(18, view.width()), max(18, view.height()))
+        p.setClipRect(rect.adjusted(1, 1, -1, -1))
+        p.setPen(QPen(QColor(59, 130, 246, 110), 1, Qt.DashLine))
+        p.drawLine(QPointF(rect.left() + 1, centre.y()), QPointF(rect.right() - 1, centre.y()))
+        p.drawLine(QPointF(centre.x(), rect.top() + 1), QPointF(centre.x(), rect.bottom() - 1))
+        p.setPen(QPen(QColor("#2563EB"), 2))
+        p.setBrush(QColor(59, 130, 246, 46))
         p.drawRect(view)
+        p.setPen(QPen(QColor("#FFFFFF"), 2))
+        p.setBrush(QColor("#2563EB"))
+        p.drawEllipse(centre, 5, 5)
         p.restore()
 
     def _minimap_jump(self, pos):
@@ -933,6 +955,9 @@ class ScribeCanvas(QWidget):
                 layer["items"] = [i for i in layer["items"] if not self._is_selected(i)]
             self._sel = []
             self.changed.emit()
+            self.update()
+        elif key == Qt.Key_M and not ctrl:
+            self._minimap_on = not self._minimap_on
             self.update()
         elif key == Qt.Key_Escape:
             self._sel = []

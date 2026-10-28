@@ -446,7 +446,6 @@ def test_minimap_appears_when_zoomed_out_and_jumps_the_view(qtbot):
         {"type": "rect", "a": [0, 0], "b": [100, 100], "width": 2, "stroke": "#111111", "fill": None},
         {"type": "rect", "a": [4000, 3000], "b": [4100, 3100], "width": 2, "stroke": "#cc0000", "fill": None},
     ]
-    assert canvas._minimap_rect() is None                  # zoom 100%: no map
     canvas.set_zoom(0.1)
     rect = canvas._minimap_rect()
     assert rect is not None and rect.right() <= canvas.width() and rect.bottom() <= canvas.height()
@@ -454,10 +453,29 @@ def test_minimap_appears_when_zoomed_out_and_jumps_the_view(qtbot):
     far = QPoint(int(rect.right() - 14), int(rect.bottom() - 14))     # the far corner of the map
     QTest.mouseClick(canvas, Qt.LeftButton, Qt.NoModifier, far)
     assert canvas.view["x"] > 2000 and canvas.view["y"] > 1500
-    canvas.set_zoom(1.0)
-    assert canvas._minimap_rect() is None
     empty = ScribeTab()
     qtbot.addWidget(empty)
     empty.canvas.doc["layers"][0]["items"] = []
     empty.canvas.set_zoom(0.1)
     assert empty.canvas._minimap_rect() is None            # nothing drawn: nothing to map
+
+
+def test_minimap_also_shows_when_zoomed_in_but_content_is_out_of_view_and_m_hides_it(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab.resize(900, 700)
+    tab.show()
+    canvas = tab.canvas
+    canvas.doc["layers"][0]["items"] = [
+        {"type": "rect", "a": [0, 0], "b": [60, 40], "width": 2, "stroke": "#111111", "fill": None},
+        {"type": "rect", "a": [5000, 5000], "b": [5060, 5040], "width": 2, "stroke": "#111111", "fill": None},
+    ]
+    canvas.set_zoom(3.0)                                   # zoomed in, the far shape is out of view
+    assert canvas._minimap_rect() is not None
+    QTest.keyClick(canvas, Qt.Key_M)
+    assert canvas._minimap_rect() is None
+    QTest.keyClick(canvas, Qt.Key_M)
+    assert canvas._minimap_rect() is not None
+    canvas.doc["layers"][0]["items"] = canvas.doc["layers"][0]["items"][:1]
+    canvas.view.update(x=30.0, y=20.0)
+    assert canvas._minimap_rect() is None                  # everything fits on screen: no map needed
