@@ -353,7 +353,80 @@ class ScribeCanvas(QWidget):
             self._paint_guides(p)
         if self.prefs["showRulers"]:
             self._paint_rulers(p)
+        self._paint_minimap(p)
         p.end()
+
+    # ---- minimap ---------------------------------------------------------
+    MINIMAP_BELOW = 0.5      # zoomed out past this, a map of the whole board appears
+    MINIMAP_SIZE = (210, 150)
+
+    def _minimap_rect(self):
+        if self.zoom > self.MINIMAP_BELOW or self._all_bounds() is None:
+            return None
+        mw, mh = self.MINIMAP_SIZE
+        return QRectF(self.width() - mw - 16, self.height() - mh - 16, mw, mh)
+
+    def _minimap_map(self, rect):
+        """(scale, world x0, world y0) that fit the content and the current view into `rect`."""
+        box = self._all_bounds()
+        z, w, h = self.zoom, self.width(), self.height()
+        vx0, vy0 = self.view["x"] - w / 2 / z, self.view["y"] - h / 2 / z
+        vx1, vy1 = self.view["x"] + w / 2 / z, self.view["y"] + h / 2 / z
+        x0, y0 = min(box[0], vx0), min(box[1], vy0)
+        x1, y1 = max(box[2], vx1), max(box[3], vy1)
+        pad = 8
+        scale = min((rect.width() - 2 * pad) / max(x1 - x0, 1.0), (rect.height() - 2 * pad) / max(y1 - y0, 1.0))
+        ox = rect.left() + pad + ((rect.width() - 2 * pad) - (x1 - x0) * scale) / 2 - x0 * scale
+        oy = rect.top() + pad + ((rect.height() - 2 * pad) - (y1 - y0) * scale) / 2 - y0 * scale
+        return scale, ox, oy
+
+    def _paint_minimap(self, p):
+        rect = self._minimap_rect()
+        if rect is None:
+            return
+        scale, ox, oy = self._minimap_map(rect)
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setPen(QPen(QColor(0, 0, 0, 60), 1))
+        p.setBrush(QColor(255, 255, 255, 232))
+        p.drawRoundedRect(rect, 10, 10)
+        p.setClipRect(rect.adjusted(1, 1, -1, -1))
+        for layer in self.doc["layers"]:
+            if not layer["visible"]:
+                continue
+            for item in layer["items"]:
+                colour = QColor(item.get("stroke", "#333333"))
+                colour.setAlpha(210)
+                if item.get("type") == "stroke" and len(item["pts"]) > 1:
+                    p.setPen(QPen(colour, 1.2))
+                    pts = item["pts"]
+                    step = max(1, len(pts) // 40)
+                    for a, b in zip(pts[::step], pts[step::step]):
+                        p.drawLine(QPointF(a[0] * scale + ox, a[1] * scale + oy), QPointF(b[0] * scale + ox, b[1] * scale + oy))
+                    continue
+                x0, y0, x1, y1 = geo.bounds(item)
+                r = QRectF(x0 * scale + ox, y0 * scale + oy, max(2.0, (x1 - x0) * scale), max(2.0, (y1 - y0) * scale))
+                p.setPen(Qt.NoPen)
+                colour.setAlpha(item.get("type") == "image" and 120 or 170)
+                p.setBrush(colour)
+                p.drawRect(r)
+        w, h, z = self.width(), self.height(), self.zoom
+        vx0, vy0 = self.view["x"] - w / 2 / z, self.view["y"] - h / 2 / z
+        view = QRectF(vx0 * scale + ox, vy0 * scale + oy, w / z * scale, h / z * scale)
+        p.setPen(QPen(QColor("#3B82F6"), 2))
+        p.setBrush(QColor(59, 130, 246, 38))
+        p.drawRect(view)
+        p.restore()
+
+    def _minimap_jump(self, pos):
+        rect = self._minimap_rect()
+        if rect is None:
+            return
+        scale, ox, oy = self._minimap_map(rect)
+        self.view["x"] = (pos.x() - ox) / scale
+        self.view["y"] = (pos.y() - oy) / scale
+        self.changed.emit()
+        self.update()
 
     def _grid_spacing(self):
         spacing = GRID
@@ -710,6 +783,11 @@ class ScribeCanvas(QWidget):
     def mousePressEvent(self, e):
         self.setFocus()
         pos = e.position()
+        mm = self._minimap_rect()
+        if mm is not None and e.button() == Qt.LeftButton and mm.contains(pos):
+            self._on_minimap = True
+            self._minimap_jump(pos)
+            return
         if e.button() == Qt.MiddleButton or (e.button() == Qt.LeftButton and (self._space or self.pan_mode)):
             self._pan = (pos, self.view["x"], self.view["y"])
             self.setCursor(Qt.ClosedHandCursor)
@@ -754,6 +832,14 @@ class ScribeCanvas(QWidget):
 
     def mouseMoveEvent(self, e):
         pos = e.position()
+        if getattr(self, "_on_minimap", False):
+            self._minimap_jump(pos)
+            return
+        mm = self._minimap_rect()
+        if mm is not None and mm.contains(pos) and not e.buttons():
+            self.setCursor(Qt.PointingHandCursor)
+        elif mm is not None and not e.buttons() and not self._pan:
+            self._update_cursor()
         w = self._to_world(pos)
         self._cursor_world = w
         if self._pan:
@@ -790,6 +876,9 @@ class ScribeCanvas(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, e):
+        if getattr(self, "_on_minimap", False):
+            self._on_minimap = False
+            return
         if self._pan:
             self._pan = None
             self._update_cursor()

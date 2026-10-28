@@ -434,3 +434,30 @@ def test_the_snap_menu_items_explain_themselves(qtbot):
     qtbot.addWidget(tab)
     for key in ("snapToGrid", "snapAroundGrid", "snapTo15", "showGuides", "showRulers"):
         assert tab._pref_checks[key].toolTip()
+
+
+def test_minimap_appears_when_zoomed_out_and_jumps_the_view(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab.resize(900, 700)
+    tab.show()
+    canvas = tab.canvas
+    canvas.doc["layers"][0]["items"] = [
+        {"type": "rect", "a": [0, 0], "b": [100, 100], "width": 2, "stroke": "#111111", "fill": None},
+        {"type": "rect", "a": [4000, 3000], "b": [4100, 3100], "width": 2, "stroke": "#cc0000", "fill": None},
+    ]
+    assert canvas._minimap_rect() is None                  # zoom 100%: no map
+    canvas.set_zoom(0.1)
+    rect = canvas._minimap_rect()
+    assert rect is not None and rect.right() <= canvas.width() and rect.bottom() <= canvas.height()
+    canvas.update()
+    far = QPoint(int(rect.right() - 14), int(rect.bottom() - 14))     # the far corner of the map
+    QTest.mouseClick(canvas, Qt.LeftButton, Qt.NoModifier, far)
+    assert canvas.view["x"] > 2000 and canvas.view["y"] > 1500
+    canvas.set_zoom(1.0)
+    assert canvas._minimap_rect() is None
+    empty = ScribeTab()
+    qtbot.addWidget(empty)
+    empty.canvas.doc["layers"][0]["items"] = []
+    empty.canvas.set_zoom(0.1)
+    assert empty.canvas._minimap_rect() is None            # nothing drawn: nothing to map
