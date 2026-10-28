@@ -88,7 +88,12 @@ class Ring(QWidget):
         self._big = ""
         self._small = ""
         self._dim = False
+        self._ink, self._muted, self._faint = INK, MUTED, FAINT
         self.setFixedSize(size, size)
+
+    def set_text_colors(self, ink, muted, faint):
+        self._ink, self._muted, self._faint = ink, muted, faint
+        self.update()
 
     def set_state(self, color, fraction, big, small, dim=False):
         fraction = round(max(0.0, fraction), 4)
@@ -121,14 +126,14 @@ class Ring(QWidget):
         big.setFamilies(NUM_FONTS)
         big.setPixelSize(26 if len(self._big) < 6 else 22)
         p.setFont(big)
-        p.setPen(QColor(FAINT if self._dim else INK))
+        p.setPen(QColor(self._faint if self._dim else self._ink))
         # With a caption under it the numerals sit a little high; alone they are centred in the ring.
         top = self.height() / 2 - 22 if self._small else self.height() / 2 - 15
         p.drawText(QRectF(0, top, self.width(), 30), Qt.AlignCenter, self._big)
         small = QFont(TEXT_FONT)
         small.setPixelSize(11)
         p.setFont(small)
-        p.setPen(QColor(FAINT if self._dim else MUTED))
+        p.setPen(QColor(self._faint if self._dim else self._muted))
         p.drawText(QRectF(0, self.height() / 2 + 6, self.width(), 18), Qt.AlignCenter, self._small)
 
 
