@@ -112,11 +112,3 @@ def test_count_up_lands_on_the_value(qtbot, moving):
     motion.count_up(label, "40%")
     qtbot.waitUntil(lambda: label.text() == "40%", timeout=2000)
 
-
-def test_dialogs_fade_in_and_end_fully_opaque(qtbot, window, moving):
-    from PySide6.QtWidgets import QDialog
-    motion.install()
-    dialog = QDialog()
-    qtbot.addWidget(dialog)
-    dialog.show()
-    qtbot.waitUntil(lambda: dialog.windowOpacity() == 1.0, timeout=2000)

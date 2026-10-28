@@ -230,20 +230,6 @@ def count_up(label, text, ms=MEDIUM_MS):
                               lambda: label.setText(str(text)))
 
 
-class _DialogFade(QObject):
-    """Dialogs and message boxes fade in (140 ms) instead of popping."""
-
-    def eventFilter(self, obj, event):
-        if event.type() == QEvent.Show and enabled():
-            from PySide6.QtWidgets import QDialog
-            if isinstance(obj, QDialog) and obj.isWindow() and not getattr(obj, "_faded", False):
-                obj._faded = True
-                obj.setWindowOpacity(0.0)
-                tween(obj, 0.0, 1.0, HOVER_MS, lambda v: obj.setWindowOpacity(v), lambda: obj.setWindowOpacity(1.0),
-                      QEasingCurve(QEasingCurve.OutCubic))
-        return False
-
-
 # --- buttons: lift on hover, press in --------------------------------------------------------------
 
 class ButtonMotion(QObject):
@@ -310,5 +296,3 @@ def install(app=None):
         return
     _button_motion = ButtonMotion(app)
     app.installEventFilter(_button_motion)
-    app._dialog_fade = _DialogFade(app)
-    app.installEventFilter(app._dialog_fade)
