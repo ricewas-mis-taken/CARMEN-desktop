@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 import session_history
 import session_manager
 import tasks_store
+from qt_ui import motion
 from qt_ui.ui_kit import (
     AMBER,
     FAINT,
@@ -513,8 +514,8 @@ class HistoryTab(QWidget):
 
         stats = summarize(sessions)
         self.stat_time.value.setText(_stat_time(stats["seconds"]))
-        self.stat_sessions.value.setText(str(stats["sessions"]))
-        self.stat_violations.value.setText(str(stats["violations"]))
+        motion.count_up(self.stat_sessions.value, str(stats["sessions"]))
+        motion.count_up(self.stat_violations.value, str(stats["violations"]))
         self.stat_clean.value.setText(
             f"{stats['clean']}" if not stats["sessions"] else f"{round(100 * stats['clean'] / stats['sessions'])}%")
         self.strip.set_days(minutes_by_day(everything))
