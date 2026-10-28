@@ -88,7 +88,16 @@ class Ring(QWidget):
         self._big = ""
         self._small = ""
         self._dim = False
+        self._ink, self._muted, self._faint = INK, MUTED, FAINT
         self.setFixedSize(size, size)
+
+    def set_text_colors(self, ink, muted, faint):
+        """Numeral / caption / dimmed colours, for themes whose cards are not white."""
+        colors = (ink, muted, faint)
+        if colors == (self._ink, self._muted, self._faint):
+            return
+        self._ink, self._muted, self._faint = colors
+        self.update()
 
     def set_state(self, color, fraction, big, small, dim=False):
         fraction = round(max(0.0, fraction), 4)
@@ -121,25 +130,35 @@ class Ring(QWidget):
         big.setFamilies(NUM_FONTS)
         big.setPixelSize(26 if len(self._big) < 6 else 22)
         p.setFont(big)
-        p.setPen(QColor(FAINT if self._dim else INK))
+        p.setPen(QColor(self._faint if self._dim else self._ink))
         # With a caption under it the numerals sit a little high; alone they are centred in the ring.
         top = self.height() / 2 - 22 if self._small else self.height() / 2 - 15
         p.drawText(QRectF(0, top, self.width(), 30), Qt.AlignCenter, self._big)
         small = QFont(TEXT_FONT)
         small.setPixelSize(11)
         p.setFont(small)
-        p.setPen(QColor(FAINT if self._dim else MUTED))
+        p.setPen(QColor(self._faint if self._dim else self._muted))
         p.drawText(QRectF(0, self.height() / 2 + 6, self.width(), 18), Qt.AlignCenter, self._small)
 
 
 class ElidedLabel(QLabel):
     """One line that ends in an ellipsis instead of pushing the card wider."""
 
-    def __init__(self, text=""):
+    def __init__(self, text="", natural=False):
+        """natural=True asks for the text's own width (and only gives it up when the
+        row is too tight); the default takes whatever room is left over."""
         super().__init__(text)
         self._full = text
-        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._natural = natural
+        self.setSizePolicy(QSizePolicy.Preferred if natural else QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.setMinimumWidth(40)
+
+    def sizeHint(self):
+        if self._natural:
+            hint = super().sizeHint()
+            hint.setWidth(QFontMetrics(self.font()).horizontalAdvance(self._full) + 2)
+            return hint
+        return super().sizeHint()
 
     def setText(self, text):
         self._full = text or ""
@@ -208,8 +227,17 @@ LINK_STYLE = (
     f"QPushButton:disabled{{color:{FAINT};}}")
 
 
+class FitButton(QPushButton):
+    """A button that never shrinks below its own text, however tight the layout
+    gets (a plain QPushButton's minimum can be smaller than its label under a
+    stylesheet's padding, so rows of them used to collapse to blank slivers)."""
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+
 def button(text, style, height=40):
-    b = QPushButton(text)
+    b = FitButton(text)
     b.setCursor(Qt.PointingHandCursor)
     b.setFixedHeight(height)
     b.setStyleSheet(style)
@@ -217,7 +245,7 @@ def button(text, style, height=40):
 
 
 def link_button(text):
-    b = QPushButton(text)
+    b = FitButton(text)
     b.setFlat(True)
     b.setCursor(Qt.PointingHandCursor)
     b.setStyleSheet(LINK_STYLE)

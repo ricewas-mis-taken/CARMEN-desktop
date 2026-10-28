@@ -19,6 +19,7 @@ from datetime import datetime
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QPixmap
 from PySide6.QtWidgets import (
+    QSizePolicy,
     QFileDialog,
     QGraphicsDropShadowEffect,
     QFrame,
@@ -348,8 +349,11 @@ class BoardTab(QWidget):
         titles.setSpacing(2)
         title = QLabel("The Board")
         title.setStyleSheet(f"font-size: 26px; font-weight: 700; color: {INK}; background: transparent;")
+        title.setMinimumWidth(title.sizeHint().width())
         titles.addWidget(title)
         self._subtitle = QLabel()
+        self._subtitle.setWordWrap(True)
+        self._subtitle.setMinimumWidth(0)
         self._subtitle.setStyleSheet(f"font-size: 13px; color: {MUTED}; background: transparent;")
         titles.addWidget(self._subtitle)
         header.addLayout(titles)

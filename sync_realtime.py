@@ -139,6 +139,19 @@ def _is_news_for_us(message, me):
     return record.get("device_id") != me
 
 
+def _is_slow_lane_news(message, me):
+    """True if a postgres_changes message is another computer's change to a
+    table the slower sync_client lane handles (review, tasks, board, ...)."""
+    data = (message.get("payload") or {}).get("data") or {}
+    record = data.get("record") if isinstance(data, dict) else None
+    if not isinstance(record, dict):
+        return False
+    table = record.get("table_name")
+    if table is None or table in sync_cloud.FAST_LANE_TABLES:
+        return False
+    return record.get("device_id") != me
+
+
 def _session():
     """One connection, from connecting until it ends. Returns why it ended:
     "idle" (no longer wanted), "dropped" (the line went away or went silent)."""
@@ -202,6 +215,11 @@ def _run_connection(user, token, me):
                 sync_live.poke()          # catch up on anything missed while not connected
             elif event == "postgres_changes" and _is_news_for_us(message, me):
                 sync_live.poke()
+            elif event == "postgres_changes" and _is_slow_lane_news(message, me):
+                # Review, tasks, board and events ride the slower lane; without
+                # this they only arrived on its 5-minute timer.
+                import sync_trigger
+                sync_trigger.note_change()
             elif event in ("phx_close", "phx_error") or (
                 event == "system" and (message.get("payload") or {}).get("status") == "error"
             ):

@@ -3,6 +3,7 @@
 enforcement UI. Verifies window flags (frameless, always-on-top, non-modal),
 the double-close guard, and the offending-process-name-gated Unblock
 button, without needing a real session or the real polling thread."""
+import sys
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
@@ -238,6 +239,7 @@ def test_blackout_survives_a_single_transient_miss(qtbot, isolate_state):
     win.close()
 
 
+@pytest.mark.skipif(sys.platform == "darwin", reason="Win32 reports physical pixels; macOS AX already reports points (see test_overlay_rect_mac.py)")
 def test_to_logical_rect_divides_by_device_pixel_ratio(monkeypatch):
     """Regression test: Win32/DWM report window rects in physical pixels;
     Qt widget geometry is logical pixels. On a scaled display (Windows'

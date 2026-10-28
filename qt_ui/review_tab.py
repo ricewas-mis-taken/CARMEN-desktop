@@ -464,7 +464,7 @@ class _ProblemRow(QFrame):
         text.setSpacing(5)
         top = QHBoxLayout()
         top.setSpacing(8)
-        self.name_label = QLabel(problem["name"])
+        self.name_label = ElidedLabel(problem["name"], natural=True)
         self.name_label.setStyleSheet(f"font-size:15px;font-weight:650;color:{INK};background:transparent;")
         top.addWidget(self.name_label)
         self.stars_label = QLabel(_star_text(problem["stars"]))
@@ -957,6 +957,7 @@ class _TopicView(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
         self._list_container = QWidget()
         self._list_container.setObjectName("ProblemList")
@@ -969,7 +970,9 @@ class _TopicView(QWidget):
         layout.addWidget(scroll, 1)
 
         self._side_card = self._build_sidebar()
+        self._side_narrow = False
         root.addWidget(self._side_card)
+        self._root_layout = root
 
         self.refresh()
 
@@ -1101,6 +1104,13 @@ class _TopicView(QWidget):
 
         header.addStretch(1)
 
+        # Narrow windows tuck the Find / Category / Sort card into this button's
+        # popup instead of giving it a fixed column beside the list.
+        self._filters_button = button("Filters", SECONDARY_STYLE, height=36)
+        self._filters_button.clicked.connect(self._show_filters_popup)
+        self._filters_button.hide()
+        header.addWidget(self._filters_button)
+
         missed_button = button("Log a mistake", SECONDARY_STYLE, height=36)
         missed_button.setToolTip("Add a problem you got wrong. It comes back for review soon.")
         missed_button.clicked.connect(
@@ -1118,6 +1128,39 @@ class _TopicView(QWidget):
         header.addWidget(add_button)
 
         return header
+
+    _NARROW_BELOW = 760
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._relayout_side(event.size().width() < self._NARROW_BELOW)
+
+    def _relayout_side(self, narrow):
+        if narrow == getattr(self, "_side_narrow", None) or not hasattr(self, "_side_card"):
+            return
+        self._side_narrow = narrow
+        card = self._side_card
+        if narrow:
+            self._root_layout.removeWidget(card)
+            card.hide()
+            card.setParent(self)
+            card.hide()
+        else:
+            card.setWindowFlags(Qt.Widget)
+            self._root_layout.addWidget(card)
+            card.show()
+        self._filters_button.setVisible(narrow)
+
+    def _show_filters_popup(self):
+        card = self._side_card
+        if card.isVisible():
+            card.hide()
+            return
+        card.setParent(self, Qt.Popup)
+        card.adjustSize()
+        anchor = self._filters_button.mapToGlobal(self._filters_button.rect().bottomRight())
+        card.move(anchor.x() - card.width(), anchor.y() + 6)
+        card.show()
 
     def _after_quick_add(self, message=None):
         """New problems are not due yet, so the "Due" view would hide what was just added.

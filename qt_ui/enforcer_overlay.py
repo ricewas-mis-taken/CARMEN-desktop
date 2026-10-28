@@ -16,6 +16,8 @@ lift()/focus_force() loop.
 """
 import time
 
+import sys
+
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
@@ -110,7 +112,14 @@ def _to_logical_rect(rect):
     the blackout land far off from the real window -- not a positioning bug,
     a unit mismatch. Assumes a single scale factor (primary screen's), which
     covers one monitor or several matched-DPI ones; a genuinely mixed-DPI
-    multi-monitor setup would need per-monitor DPI lookup instead."""
+    multi-monitor setup would need per-monitor DPI lookup instead.
+
+    macOS: the Accessibility API already reports points (top-left origin of
+    the primary display, spanning every display), the same space Qt uses for
+    widget geometry on every screen. Dividing by the Retina scale factor
+    would shrink and displace the blackout, so rects pass through as-is."""
+    if sys.platform == "darwin":
+        return rect
     screen = QApplication.primaryScreen()
     dpr = screen.devicePixelRatio() if screen else 1
     if dpr == 1:

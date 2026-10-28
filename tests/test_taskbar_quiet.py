@@ -1,6 +1,7 @@
 """Taskbar badges / flashing are switched off for the sessions that ask for it
 and put back exactly as the user had them -- never touching the real registry."""
 import json
+import types
 
 import pytest
 
@@ -36,6 +37,9 @@ def registry(tmp_path, monkeypatch):
     monkeypatch.setattr(taskbar_quiet, "_next_attempt", 0.0)
     monkeypatch.setattr(taskbar_quiet, "_busy", False)
     monkeypatch.setattr(taskbar_quiet, "ENABLED", True)
+    # The module is Windows-only (a no-op elsewhere); these tests drive it
+    # through a fake Settings app, so present it a Windows platform.
+    monkeypatch.setattr(taskbar_quiet, "sys", types.SimpleNamespace(platform="win32"))
     state["_runs"] = runs
     return state
 
@@ -155,3 +159,10 @@ def test_parked_feature_never_touches_settings(monkeypatch):
     monkeypatch.setattr(taskbar_quiet, "_run_script", lambda want, save_path=None: calls.append(want))
     taskbar_quiet.reconcile(_status(hideTaskbarBadges=True, stopTaskbarFlashing=True), wait=True)
     assert taskbar_quiet.ENABLED is False and calls == []
+
+
+def test_it_does_nothing_off_windows(registry, monkeypatch):
+    monkeypatch.setattr(taskbar_quiet, "sys", types.SimpleNamespace(platform="darwin"))
+    taskbar_quiet.reconcile(_status(hideTaskbarBadges=True, stopTaskbarFlashing=True))
+    assert registry["badges"] and registry["flashing"]
+    assert registry["_runs"] == []

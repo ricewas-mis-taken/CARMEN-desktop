@@ -1019,6 +1019,16 @@ def _apply_all(pulled_records):
 
 # --- the public entry point ---
 
+_pulled_listeners = []
+
+
+def add_pulled_listener(listener):
+    """listener(tables) is called after a pull applied records from another
+    computer; `tables` is the set of table names in that pull. Runs on the
+    sync thread, so a UI listener must marshal itself to the GUI thread."""
+    _pulled_listeners.append(listener)
+
+
 def sync_now():
     """Never raises. Returns a SyncResult describing what happened."""
     if not auth_manager.is_logged_in():
@@ -1105,6 +1115,13 @@ def sync_now():
     _save_last_sync(sync_start_wire)
     if new_cursor:
         _save_pull_cursor(new_cursor)
+    if pulled:
+        tables = {r.get("table_name") for r in pulled_records}
+        for listener in list(_pulled_listeners):
+            try:
+                listener(tables)
+            except Exception:
+                logger.warning("sync_client: pulled listener failed", exc_info=True)
     try:
         with httpx.Client(timeout=20.0) as client:
             sync_photos.download_missing(client, token, user["id"])

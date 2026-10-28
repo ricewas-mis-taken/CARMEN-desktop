@@ -931,3 +931,17 @@ stubbed pyobjc):
   State`/`info_cache` shape -- but not directly observed).
 - Verify `_window_rect`'s multi-monitor coordinate-space behavior on an
   external-display setup; not possible on this single-display machine.
+
+
+### Update 2026-10-26: Subsystem 3 implemented; blackout scale fixed
+
+- `mac-os/mac_os/browser_profiles_mac.py` now exists: window `AXTitle` suffix -> `Local State`
+  profile folder -> the Windows-format AUMI string. Wired into `enforcer_mac`
+  (`get_window_aumi`, `is_blocked_window`, sweep and hard lock minimize only the blocked profile's
+  windows) and `window_tracker_mac` (picker lists). The "Windows-only stub" notes above are
+  superseded. Still unverified on real Edge and with real Chrome windows end to end.
+- `qt_ui/enforcer_overlay._to_logical_rect` divided AX point rects by the Retina scale factor on
+  macOS, shrinking the soft-lock blackout; it now passes rects through on darwin. Multi-monitor:
+  AX and Qt share one global point space (primary display top-left), so no further mapping is
+  applied; still not exercised on a real external display.
+- Cross-OS process names: `process_aliases.py`, see DESIGN_DECISIONS.txt 2026-10-26.

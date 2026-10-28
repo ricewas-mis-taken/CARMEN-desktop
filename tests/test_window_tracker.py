@@ -5,6 +5,7 @@ minimizes it) used to retrigger enforcer.hard_lock_redirect() on every
 single poll tick, each call re-issuing SW_MINIMIZE/SetForegroundWindow
 (the app "flashing") and spawning another lock overlay (windows piling up).
 window_tracker.HARD_REDIRECT_COOLDOWN_SECONDS throttles that."""
+import sys
 import threading
 import time
 
@@ -424,6 +425,7 @@ class _FakeProcess:
         return self._name
 
 
+@pytest.mark.skipif(sys.platform == "darwin", reason="WinEvent foreground hook is Windows-only; see the macOS variant below")
 def test_poll_loop_and_instant_hook_do_not_double_count_one_violation(
     isolate_state, fast_polling, monkeypatch,
 ):
@@ -472,6 +474,36 @@ def test_poll_loop_and_instant_hook_do_not_double_count_one_violation(
             hwineventhook=0, event=enforcer._EVENT_SYSTEM_FOREGROUND, hwnd=111,
             id_object=enforcer._OBJID_WINDOW, id_child=0, id_event_thread=0, dwms_event_time=0,
         )
+    finally:
+        stop_event.set()
+        thread.join(timeout=2)
+
+    assert session_manager.get_status()["violationCount"] == 1
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS has no instant foreground hook; the poll loop is the only tracker")
+def test_mac_poll_loop_counts_one_violation_for_a_sustained_switch(
+    isolate_state, fast_polling, monkeypatch,
+):
+    """macOS counterpart of the double-count test: with no WinEvent hook there
+    is a single tracker, so staying on a blocked app across several polling
+    ticks must still log exactly one violation (the shared cooldown)."""
+    session_manager.start_session(25, "hard", ["discord"], [])
+
+    monkeypatch.setattr(
+        window_tracker, "get_active_window",
+        lambda: {"title": "Discord", "process_name": "Discord", "pid": 4242, "hwnd": 4242},
+    )
+    monkeypatch.setattr(enforcer, "hard_lock_redirect", lambda name=None: None)
+    monkeypatch.setattr(enforcer, "sweep_minimize_blocked_windows", lambda: [])
+    monkeypatch.setattr(enforcer, "show_blocked_notice", lambda name: None)
+
+    stop_event = threading.Event()
+    thread = threading.Thread(target=window_tracker.run_polling_loop, args=(stop_event,), daemon=True)
+    thread.start()
+    try:
+        wait_for(lambda: session_manager.get_status()["violationCount"] >= 1)
+        time.sleep(0.3)
     finally:
         stop_event.set()
         thread.join(timeout=2)

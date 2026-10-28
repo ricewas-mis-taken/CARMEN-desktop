@@ -74,6 +74,10 @@ class _AccountRow(QWidget):
         self._email_label.setStyleSheet("color: #E8EAED; font-size: 12px;")
         layout.addWidget(self._email_label, 1)
 
+    def set_compact(self, compact):
+        self._email_label.setVisible(not compact)
+        self.layout().setContentsMargins(*((19, 6, 19, 6) if compact else (14, 6, 14, 6)))
+
     def set_email(self, email):
         email = email or ""
         self._avatar.setText(email[0].upper() if email else "?")
@@ -184,6 +188,14 @@ class AccountArea(QWidget):
             self.refresh()      # the saved sign-in was refused: back to a normal Sign In
 
     # --- sign in / sign up ---
+
+    def set_compact(self, compact):
+        self._account_row.set_compact(compact)
+        self._signin_button.setText("" if compact else "Sign In")
+        self._signin_button.setToolTip("Sign In" if compact else "")
+        self._options_button.setText("" if compact else "Options")
+        self._options_button.setToolTip("Options" if compact else "")
+        self._status_label.setMaximumWidth(16777215 if not compact else 0)
 
     def _open_auth_dialog(self):
         _register_popup(_AuthDialog(on_success=self._on_login_success))

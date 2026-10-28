@@ -656,6 +656,26 @@ tick only while visible, restyle only when the look changes). Old TaskCard/burno
   ignores them and shows every ticked day at targetMinutes, which the editor sets to the first ticked
   day's time. Not done: a per-day time for the daily kind (every day is already "each day").
 
+2026-10-26  Block lists across Windows and Mac; Chrome/Edge profiles on Mac
+  Process names differ per OS ("chrome.exe" / "Google Chrome", "Discord.exe" / "Discord"), so a
+  block typed or picked on one computer never matched on the other.
+  Fork: (a) rewrite entries to one canonical form when saved, (b) store what the picker gave and
+  compare through a canonical key. Chose (b): process_aliases.canonical() lowercases, drops ".exe"
+  and spaces, then applies a short alias table (Chrome, Edge, VS Code, Teams, Office). Stored and
+  synced lists are unchanged, so an older Carmen on the other machine keeps working, and a wrong
+  alias is one line to fix. Cost: an app whose two names differ by more than that needs an alias
+  entry before a cross-machine block applies; until then it only matches on its own OS.
+  Mac profile blocking: macOS Chrome/Edge share one process like Windows, and the window's
+  Accessibility title ends with the profile name, which Local State maps to the profile folder
+  (spike, PORT_SPEC.md Subsystem 3). The folder becomes the same AUMI string Windows uses
+  ("Chrome.UserData.Profile4") so the picker and blockedBrowserProfiles mean the same on both.
+  blockedBrowserProfiles stays local-only (not synced), as before. When only a profile is blocked
+  the Mac sweep minimizes just that profile's windows and does not hide the browser app.
+  Blackout rect on Mac: the Accessibility API and Qt both use points, so qt_ui/enforcer_overlay no
+  longer divides by the Retina scale factor there (it had shrunk the soft-lock cover to a quarter).
+  Extension: no counterpart change; it reads domains, not process names, so nothing to
+  cross-reference in carmen-extension.
+
 2026-10-25  Reviews that ran without their own session
   Session History and a task's time both read finished sessions; the review database is a separate
   record. When a review could not start its own session (some other kind of session was running), its

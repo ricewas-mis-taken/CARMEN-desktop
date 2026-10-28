@@ -11,6 +11,8 @@ import time
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from calendar_log import logger
+
 import api_server
 import auto_updater
 from qt_ui import ui_kit
@@ -143,6 +145,13 @@ def main():
     sync_live.start(stop_event)
     sync_realtime.start(stop_event)
 
+    def _refresh_open_window(tables):
+        import qt_ui.main_window as main_window
+        qt_gui_thread.run_on_gui_thread(lambda: main_window.refresh_after_pull(tables))
+
+    import sync_client
+    sync_client.add_pulled_listener(_refresh_open_window)
+
     def on_quit():
         stop_event.set()
         # The periodic debounce inside screentime_store.add_app_seconds()
@@ -243,6 +252,17 @@ def main():
     # backends (e.g. macOS's Cocoa) would. This frees the main thread for
     # Qt's event loop below.
     icon.run_detached()
+
+    if sys.platform == "darwin":
+        # Live clock + hover card on the menu-bar dot (mac-os/mac_os/menubar_timer_mac.py).
+        try:
+            _mac_os_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mac-os")
+            if _mac_os_dir not in sys.path:
+                sys.path.insert(0, _mac_os_dir)
+            from mac_os import menubar_timer_mac
+            _menubar_timer = menubar_timer_mac.install(icon)
+        except Exception:
+            logger.exception("menubar timer unavailable")
 
     exit_code = app.exec()  # main thread blocks here instead of icon.run()
 

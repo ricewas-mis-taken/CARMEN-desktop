@@ -134,6 +134,18 @@ class FakeRunningApp:
     def processIdentifier(self):
         return self.pid
 
+    def activationPolicy(self):
+        return 0
+
+    def localizedName(self):
+        return None
+
+    def bundleURL(self):
+        return None
+
+    def isHidden(self):
+        return self.hidden
+
     def hide(self):
         self.hidden = True
         self.hide_calls += 1
@@ -257,6 +269,9 @@ def mac_world(monkeypatch):
         @staticmethod
         def sharedWorkspace():
             return FakeNSWorkspace()
+
+        def runningApplications(self):
+            return list(world.apps.values())
 
         def frontmostApplication(self):
             if world.frontmost_pid is None:
