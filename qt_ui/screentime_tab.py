@@ -91,11 +91,28 @@ class _StackedBar(QWidget):
     def __init__(self):
         super().__init__()
         self._entries = []  # [(label, seconds, color_hex), ...]
+        self._wipe = 1.0
+        self._anim = None
         self.setFixedHeight(18)
 
+    replay_on_enter = True
+
+    def replay(self):
+        """The bar draws itself left to right (when the tab is opened or the day changes)."""
+        from qt_ui import motion
+        motion.stop(self._anim)
+        self._anim = motion.tween(self, 0.0, 1.0, motion.MEDIUM_MS, self._set_wipe)
+
+    def _set_wipe(self, value):
+        self._wipe = value
+        self.update()
+
     def set_entries(self, entries):
+        changed = entries != self._entries
         self._entries = entries
         self.update()
+        if changed and self.isVisible():
+            self.replay()
 
     def segments(self, width):
         """[(label, x, w)] for the current entries in `width` pixels (gaps included)."""
@@ -120,6 +137,7 @@ class _StackedBar(QWidget):
             painter.drawRoundedRect(QRectF(0, 0, self.width(), self.height()), 9, 9)
             return
         colors = {label: color for label, _s, color in self._entries}
+        painter.setClipRect(QRectF(0, 0, self.width() * self._wipe + 1, self.height()))
         for label, x, w in self.segments(self.width()):
             painter.setBrush(QColor(colors[label]))
             painter.drawRoundedRect(QRectF(x, 0, w, self.height()), 6, 6)
