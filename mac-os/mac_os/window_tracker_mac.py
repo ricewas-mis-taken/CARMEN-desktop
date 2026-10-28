@@ -9,6 +9,8 @@ duplicated here. Only the window-lookup primitives below are swapped in via
 window_tracker.py's dispatch shim.
 """
 import psutil
+
+from mac_os import browser_profiles_mac
 from AppKit import NSWorkspace
 from Quartz import (
     CGWindowListCopyWindowInfo,
@@ -92,17 +94,56 @@ def list_running_apps():
 
 
 def list_browser_profile_windows():
-    """Per-Chrome/Edge-profile window identification (AUMI on Windows) has
-    no confirmed macOS equivalent yet -- the PORT_SPEC.md Subsystem 3
-    research spike needs a real Mac to run and hasn't happened. Per that
-    section's own documented fallback, per-profile blocking stays a
-    Windows-only feature for now; the base "block the whole browser" case
-    (session_manager.is_blocked(process_name)) already works identically on
-    both platforms with no changes needed. Always returns []."""
-    return []
+    """One entry per currently-open Chrome/Edge profile window, for the app
+    picker's "block just one browser profile" section -- same shape as
+    window_tracker.list_browser_profile_windows on Windows."""
+    seen = {}
+    try:
+        window_list = CGWindowListCopyWindowInfo(
+            kCGWindowListOptionOnScreenOnly, kCGNullWindowID
+        ) or []
+    except Exception:
+        return []
+    pids = {}
+    for w in window_list:
+        pid = w.get("kCGWindowOwnerPID")
+        if pid is None or pid in pids:
+            continue
+        try:
+            pids[pid] = psutil.Process(pid).name()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, Exception):
+            continue
+    for pid, process_name in pids.items():
+        if not browser_profiles_mac.is_profile_browser(process_name):
+            continue
+        profiles = browser_profiles_mac.read_profiles(process_name)
+        for _window, title in browser_profiles_mac.window_title_for(pid, focused_only=False):
+            aumi = browser_profiles_mac.aumi_for_title(process_name, title, profiles)
+            if not aumi or aumi in seen:
+                continue
+            seen[aumi] = {
+                "process_name": process_name,
+                "aumi": aumi,
+                "label": browser_profiles_mac.describe_aumi(process_name, aumi),
+                "window_title": title,
+            }
+    return list(seen.values())
 
 
 def list_known_browser_profiles():
-    """Same Subsystem 3 gap as list_browser_profile_windows() -- always []
-    until that spike is run on a real Mac and this is implemented for real."""
-    return []
+    """Every profile Chrome/Edge know about (Local State), merged with which
+    currently have a window open -- mirrors window_tracker's Windows version."""
+    running_by_aumi = {p["aumi"]: p for p in list_browser_profile_windows()}
+    merged = {}
+    for browser in browser_profiles_mac.BROWSERS.values():
+        process_name = browser["label"]
+        for aumi in browser_profiles_mac.list_known_aumis(process_name):
+            merged[aumi] = {
+                "process_name": process_name,
+                "aumi": aumi,
+                "label": browser_profiles_mac.describe_aumi(process_name, aumi),
+                "is_running": False,
+            }
+    for aumi, running in running_by_aumi.items():
+        merged[aumi] = {**merged.get(aumi, {}), **running, "is_running": True}
+    return sorted(merged.values(), key=lambda p: (not p["is_running"], p["label"]))

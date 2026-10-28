@@ -59,12 +59,64 @@ def test_is_blocked_window_matches_plain_process_blocklist(mac_world, monkeypatc
     assert enforcer_mac.is_blocked_window("textedit", 4242) is False
 
 
-def test_no_aumi_or_profile_concept_on_macos(mac_world, monkeypatch):
+def _fake_chrome(monkeypatch, tmp_path, titles_by_pid):
+    from mac_os import browser_profiles_mac as bp
+    (tmp_path / "Local State").write_text(
+        '{"profile": {"info_cache": {"Default": {"name": "Rice"}, "Profile 2": {"name": "Lucas"}}}}'
+    )
+    monkeypatch.setitem(bp.BROWSERS["google chrome"], "data_dir", str(tmp_path))
+    monkeypatch.setattr(
+        bp, "window_title_for",
+        lambda pid, focused_only=True: titles_by_pid[pid] if focused_only else [(f"w{i}", t) for i, t in enumerate(titles_by_pid[pid])],
+    )
+
+
+def test_non_browsers_have_no_aumi(mac_world, monkeypatch):
     enforcer_mac, _ = _import_fresh(monkeypatch)
+    _patch_processes(monkeypatch, {123: "TextEdit"})
 
     assert enforcer_mac.get_window_aumi(123) is None
-    assert enforcer_mac.list_known_profile_aumis("chrome.exe") == []
-    assert enforcer_mac.describe_browser_profile_aumi("chrome.exe", "anything") == "chrome.exe"
+    assert enforcer_mac.list_known_profile_aumis("TextEdit") == []
+    assert enforcer_mac.describe_browser_profile_aumi("TextEdit", "anything") == "TextEdit — anything"
+
+
+def test_chrome_window_aumi_comes_from_its_title(mac_world, monkeypatch, tmp_path):
+    enforcer_mac, _ = _import_fresh(monkeypatch)
+    _patch_processes(monkeypatch, {50: "Google Chrome"})
+    _fake_chrome(monkeypatch, tmp_path, {50: "Example - Google Chrome - Lucas"})
+
+    assert enforcer_mac.get_window_aumi(50) == "Chrome.UserData.Profile2"
+    assert enforcer_mac.list_known_profile_aumis("Google Chrome") == ["Chrome", "Chrome.UserData.Profile2"]
+    assert enforcer_mac.describe_browser_profile_aumi("Google Chrome", "Chrome.UserData.Profile2") == "Google Chrome — Lucas"
+
+
+def test_only_the_blocked_profile_is_blocked(mac_world, monkeypatch, isolate_state, tmp_path):
+    enforcer_mac, _ = _import_fresh(monkeypatch)
+    _patch_processes(monkeypatch, {50: "Google Chrome", 51: "Google Chrome"})
+    _fake_chrome(monkeypatch, tmp_path, {
+        50: "Example - Google Chrome - Lucas",
+        51: "Example - Google Chrome - Rice",
+    })
+    session_manager.start_session(25, "hard", [], [], blocked_browser_profiles=["Chrome.UserData.Profile2"])
+
+    assert enforcer_mac.is_blocked_window("Google Chrome", 50) is True
+    assert enforcer_mac.is_blocked_window("Google Chrome", 51) is False
+
+
+def test_sweep_minimizes_only_the_blocked_profiles_windows(mac_world, monkeypatch, isolate_state, tmp_path):
+    enforcer_mac, _ = _import_fresh(monkeypatch)
+    _patch_processes(monkeypatch, {50: "Google Chrome"})
+    _fake_chrome(monkeypatch, tmp_path, {50: ["T - Google Chrome - Lucas", "T - Google Chrome - Rice"]})
+    session_manager.start_session(25, "hard", [], [], blocked_browser_profiles=["Chrome.UserData.Profile2"])
+    mac_world.add_app(50)
+    minimized = []
+    monkeypatch.setattr(
+        enforcer_mac, "AXUIElementSetAttributeValue", lambda w, attr, v: minimized.append(w) or 0
+    )
+    monkeypatch.setattr(enforcer_mac, "AXUIElementCopyAttributeValue", lambda *a: (0, False))
+
+    assert enforcer_mac._minimize_blocked_profile_windows(50, "Google Chrome") == 1
+    assert minimized == ["w0"]
 
 
 def test_soft_lock_warning_covers_the_focused_windows_rect(mac_world, monkeypatch, isolate_state):
@@ -105,7 +157,7 @@ def test_soft_lock_warning_has_no_cover_when_rect_lookup_fails(mac_world, monkey
     assert overlay_calls[0][3] is None
 
 
-def test_hard_lock_redirect_minimizes_and_hides_blocked_frontmost_app(
+def test_hard_lock_redirect_hides_blocked_frontmost_app(
     mac_world, monkeypatch, isolate_state
 ):
     enforcer_mac, overlay_calls = _import_fresh(monkeypatch)
@@ -122,7 +174,7 @@ def test_hard_lock_redirect_minimizes_and_hides_blocked_frontmost_app(
 
     enforcer_mac.hard_lock_redirect("discord.exe")
 
-    assert mac_world.windows[111][0].minimized is True
+    assert mac_world.windows[111][0].minimized is False
     assert discord.hide_calls == 1
     assert 111 in enforcer_mac._hidden_pids
     assert code_app.activate_calls == 1
@@ -151,7 +203,7 @@ def test_hard_lock_redirect_does_nothing_when_frontmost_is_exempt(
     assert own_app.hide_calls == 0
 
 
-def test_sweep_minimizes_every_blocked_background_window(mac_world, monkeypatch, isolate_state):
+def test_sweep_hides_every_blocked_background_app(mac_world, monkeypatch, isolate_state):
     enforcer_mac, _ = _import_fresh(monkeypatch)
     session_manager.start_session(25, "hard", ["discord.exe"], [])
 
@@ -166,13 +218,13 @@ def test_sweep_minimizes_every_blocked_background_window(mac_world, monkeypatch,
     swept = enforcer_mac.sweep_minimize_blocked_windows()
 
     assert swept == [("discord.exe", 111)]
-    assert mac_world.windows[111][0].minimized is True
+    assert mac_world.windows[111][0].minimized is False
     assert discord.hide_calls == 1
     assert mac_world.windows[222][0].minimized is False
     assert allowed.hide_calls == 0
 
 
-def test_sweep_does_not_recount_an_already_minimized_blocked_window(
+def test_sweep_does_not_recount_an_already_hidden_blocked_app(
     mac_world, monkeypatch, isolate_state
 ):
     """Mirrors enforcer.py's Windows was_iconic check: a blocked window
@@ -182,10 +234,7 @@ def test_sweep_does_not_recount_an_already_minimized_blocked_window(
     enforcer_mac, _ = _import_fresh(monkeypatch)
     session_manager.start_session(25, "hard", ["discord.exe"], [])
 
-    mac_world.add_app(111, minimized_windows=[True])
-    mac_world.on_screen_windows = [
-        {"kCGWindowOwnerPID": 111, "kCGWindowName": "Discord", "kCGWindowLayer": 0},
-    ]
+    mac_world.add_app(111).hidden = True
     _patch_processes(monkeypatch, {111: "discord.exe"})
 
     swept = enforcer_mac.sweep_minimize_blocked_windows()
@@ -244,3 +293,26 @@ def test_accessibility_trust_check_reflects_world_state(mac_world, monkeypatch):
 
     mac_world.ax_trusted = True
     assert enforcer_mac.is_accessibility_trusted() is True
+
+
+def test_sweep_finds_blocked_app_that_is_not_in_the_on_screen_list(mac_world, monkeypatch, isolate_state):
+    """A blocked app on another Space or full-screen is absent from
+    CGWindowList's on-screen list; the sweep must still take it down."""
+    enforcer_mac, _ = _import_fresh(monkeypatch)
+    session_manager.start_session(25, "hard", ["discord.exe"], [])
+    app = mac_world.add_app(111, minimized_windows=[False])
+    mac_world.on_screen_windows = []
+    _patch_processes(monkeypatch, {111: "Discord"})
+
+    assert enforcer_mac.sweep_minimize_blocked_windows() == [("Discord", 111)]
+    assert app.hidden is True
+
+
+def test_block_matches_the_apps_dock_name_not_just_its_executable(mac_world, monkeypatch, isolate_state):
+    enforcer_mac, _ = _import_fresh(monkeypatch)
+    session_manager.start_session(25, "hard", ["Steam.exe"], [])
+    app = mac_world.add_app(111)
+    app.localizedName = lambda: "Steam"
+    _patch_processes(monkeypatch, {111: "steam_osx"})
+
+    assert enforcer_mac.is_blocked_window("steam_osx", 111) is True

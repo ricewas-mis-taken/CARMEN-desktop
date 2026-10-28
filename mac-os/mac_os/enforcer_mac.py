@@ -16,6 +16,7 @@ or returns a window handle actually takes/returns a pid -- see
 window_tracker_mac.get_active_window's docstring for why that's a safe
 stand-in for every current caller.
 """
+import os
 import threading
 
 import psutil
@@ -40,6 +41,7 @@ from Quartz import (
     kCGWindowListOptionOnScreenOnly,
 )
 
+from mac_os import browser_profiles_mac
 import qt_gui_thread
 import qt_ui.enforcer_overlay as enforcer_overlay
 import session_manager
@@ -208,35 +210,94 @@ def restore_all_taskbar_previews():
         _hide_app(pid, False)
 
 
+def _process_name_for(pid):
+    try:
+        return psutil.Process(pid).name()
+    except (psutil.NoSuchProcess, psutil.AccessDenied, Exception):
+        return None
+
+
 def get_window_aumi(window_id):
-    """No AppUserModelID concept on macOS -- always None. Kept only so
-    call sites written against enforcer.py's Windows API don't need a
-    separate code path to skip calling it."""
-    return None
+    """window_id is a pid. The AppUserModelID-equivalent of that app's focused
+    window: for Chrome/Edge, the same string Windows would report for the
+    profile (see browser_profiles_mac), else None."""
+    process_name = _process_name_for(window_id)
+    if not browser_profiles_mac.is_profile_browser(process_name):
+        return None
+    title = browser_profiles_mac.window_title_for(window_id)
+    return browser_profiles_mac.aumi_for_title(process_name, title)
 
 
 def list_known_profile_aumis(process_name):
-    """Per-Chrome/Edge-profile blocking is Windows-only for now -- see
-    window_tracker_mac.list_known_browser_profiles's docstring and
-    PORT_SPEC.md's Subsystem 3 findings. Always []."""
-    return []
+    return browser_profiles_mac.list_known_aumis(process_name)
 
 
 def describe_browser_profile_aumi(process_name, aumi):
-    """No per-profile labels to look up on macOS (see list_known_profile_aumis) --
-    falls back to the bare process name, same as enforcer.py's own fallback
-    branch for an unrecognized aumi."""
-    return process_name
+    return browser_profiles_mac.describe_aumi(process_name, aumi)
+
+
+def _name_candidates(pid, process_name):
+    """Every name this app goes by: executable name, display name, and the
+    .app folder name. A block list written on Windows ("Ollama App.exe",
+    "Steam.exe") rarely matches the macOS executable ("steam_osx") but often
+    matches what the app is called in the Dock."""
+    names = [process_name] if process_name else []
+    try:
+        app = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+        if app is not None:
+            if app.localizedName():
+                names.append(str(app.localizedName()))
+            url = app.bundleURL()
+            if url is not None:
+                base = os.path.basename(str(url.path()).rstrip("/"))
+                if base.endswith(".app"):
+                    names.append(base[: -len(".app")])
+    except Exception:
+        pass
+    seen, out = set(), []
+    for n in names:
+        if n and n.lower() not in seen:
+            seen.add(n.lower())
+            out.append(n)
+    return out
+
+
+def _process_is_blocked(pid, process_name):
+    return any(session_manager.is_blocked(n) for n in _name_candidates(pid, process_name))
 
 
 def is_blocked_window(process_name, window_id):
-    """window_id is a pid (see module docstring). With no AUMI/per-window
-    profile signal available on macOS yet, this collapses to the plain
-    process-name check -- session_manager.is_blocked() already works
-    identically on both platforms with no changes needed, which is exactly
-    PORT_SPEC.md's Subsystem 3 fallback: the base case works everywhere,
-    only per-profile blocking is deferred."""
-    return session_manager.is_blocked(process_name)
+    """window_id is a pid. session_manager.is_blocked()'s process-name check,
+    OR -- for Chrome/Edge, where every profile shares one process -- the
+    focused window belonging to a blocked profile. Same contract as
+    enforcer.is_blocked_window on Windows."""
+    if _process_is_blocked(window_id, process_name):
+        return True
+    if browser_profiles_mac.is_profile_browser(process_name):
+        aumi = get_window_aumi(window_id)
+        if aumi and session_manager.is_blocked_browser_profile(aumi):
+            return True
+    return False
+
+
+def _minimize_blocked_profile_windows(pid, process_name):
+    """Minimizes only the windows of pid whose profile is blocked, leaving the
+    browser's other profiles alone. Returns how many were newly minimized."""
+    count = 0
+    profiles = browser_profiles_mac.read_profiles(process_name)
+    for window, title in browser_profiles_mac.window_title_for(pid, focused_only=False):
+        aumi = browser_profiles_mac.aumi_for_title(process_name, title, profiles)
+        if not aumi or not session_manager.is_blocked_browser_profile(aumi):
+            continue
+        try:
+            err, minimized = AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute, None)
+            if not err and minimized:
+                continue
+            AXUIElementSetAttributeValue(window, kAXMinimizedAttribute, True)
+            count += 1
+        except Exception:
+            continue
+    return count
 
 
 def _find_pid_by_process_name(process_name):
@@ -324,8 +385,12 @@ def hard_lock_redirect(offending_process_name=None):
         and frontmost_process
         and is_blocked_window(frontmost_process, frontmost_pid)
     ):
-        _minimize_all_windows(frontmost_pid)
-        _hide_app(frontmost_pid, True)
+        if _process_is_blocked(frontmost_pid, frontmost_process):
+            _hide_app(frontmost_pid, True)
+        else:
+            # Blocked only because of its Chrome/Edge profile: take down just
+            # that profile's windows, not the browser (and every other profile).
+            _minimize_blocked_profile_windows(frontmost_pid, frontmost_process)
 
     last_acceptable = session_manager.get_last_acceptable_process()
     target_pid = _find_pid_by_process_name(last_acceptable) if last_acceptable else None
@@ -359,35 +424,42 @@ def sweep_minimize_blocked_windows():
     only ever uses this value as an opaque dedupe-dict key / equality check,
     never a real window handle, so it's a safe drop-in."""
     minimized = []
-    seen_pids = set()
     try:
-        window_list = CGWindowListCopyWindowInfo(
-            kCGWindowListOptionOnScreenOnly, kCGNullWindowID
-        ) or []
+        apps = [
+            (a.processIdentifier(), a)
+            for a in NSWorkspace.sharedWorkspace().runningApplications()
+            if a.activationPolicy() == 0
+        ]
     except Exception:
         return minimized
 
-    for window in window_list:
-        pid = window.get("kCGWindowOwnerPID")
-        if pid is None or pid in seen_pids:
+    # Walks every regular running app rather than the on-screen window list:
+    # that list leaves out windows on other Spaces and full-screen windows,
+    # which is exactly where a blocked app can sit untouched.
+    for pid, app in apps:
+        process_name = _process_name_for(pid)
+        if not process_name or session_manager.is_exempt(process_name, pid):
             continue
-        seen_pids.add(pid)
-        try:
-            process_name = psutil.Process(pid).name()
-        except (psutil.NoSuchProcess, psutil.AccessDenied, Exception):
-            continue
-        if session_manager.is_exempt(process_name, pid):
+        if (
+            not _process_is_blocked(pid, process_name)
+            and browser_profiles_mac.is_profile_browser(process_name)
+        ):
+            if _minimize_blocked_profile_windows(pid, process_name):
+                minimized.append((process_name, pid))
             continue
         if not is_blocked_window(process_name, pid):
             continue
 
-        was_all_minimized = _all_windows_minimized(pid)
-        # Idempotent, like enforcer.py's own _hide_taskbar_preview -- safe to
-        # reapply every tick even if this pid is already hidden.
+        # Cmd+H (NSRunningApplication.hide), not the yellow minimize button.
+        # Idempotent -- safe to reapply every tick; only a transition from
+        # visible to hidden counts as newly swept.
+        try:
+            was_hidden = bool(app.isHidden())
+        except Exception:
+            was_hidden = False
         _hide_app(pid, True)
-        if not was_all_minimized:
-            if _minimize_all_windows(pid):
-                minimized.append((process_name, pid))
+        if not was_hidden:
+            minimized.append((process_name, pid))
 
     return minimized
 

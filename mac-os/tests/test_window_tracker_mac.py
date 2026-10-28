@@ -88,11 +88,14 @@ def test_list_running_apps_skips_windows_with_no_title(mac_world, monkeypatch):
     assert apps == []
 
 
-def test_browser_profile_functions_are_windows_only_stub(mac_world, monkeypatch):
-    """Subsystem 3 (per-Chrome/Edge-profile blocking) needs a real Mac to
-    spike -- both functions must return [] rather than raising or guessing,
-    per PORT_SPEC.md's documented fallback."""
+def test_known_browser_profiles_come_from_local_state(mac_world, monkeypatch, tmp_path):
+    from mac_os import browser_profiles_mac as bp
+    (tmp_path / "Local State").write_text('{"profile": {"info_cache": {"Default": {"name": "Rice"}}}}')
+    monkeypatch.setitem(bp.BROWSERS["google chrome"], "data_dir", str(tmp_path))
+    monkeypatch.setitem(bp.BROWSERS["microsoft edge"], "data_dir", str(tmp_path / "no-edge"))
     window_tracker_mac = _import_fresh(monkeypatch)
+    monkeypatch.setattr(window_tracker_mac, "list_browser_profile_windows", lambda: [])
 
-    assert window_tracker_mac.list_browser_profile_windows() == []
-    assert window_tracker_mac.list_known_browser_profiles() == []
+    assert window_tracker_mac.list_known_browser_profiles() == [
+        {"process_name": "Google Chrome", "aumi": "Chrome", "label": "Google Chrome — Rice", "is_running": False}
+    ]
