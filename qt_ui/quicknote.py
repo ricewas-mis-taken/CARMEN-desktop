@@ -37,28 +37,51 @@ TICK_GREEN = QColor("#22C55E")
 class _Tick(QCheckBox):
     """A square exactly one line of text tall: empty outline, or green with a white tick."""
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._draw = 1.0 if self.isChecked() else 0.0     # 0..1: how much of the tick is drawn
+        self._anim = None
+        self.toggled.connect(self._animate)
+
+    def _animate(self, on):
+        from qt_ui import motion
+        motion.stop(self._anim)
+
+        def step(value):
+            self._draw = value
+            self.update()
+        self._anim = motion.tween(self, self._draw, 1.0 if on else 0.0, motion.SMALL_MS if on else motion.HOVER_MS, step)
+
     def paintEvent(self, _event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         side = min(self.width(), self.height()) - 3
         box = QRectF((self.width() - side) / 2, (self.height() - side) / 2, side, side)
         radius = side * 0.25
-        if self.isChecked():
+        if self._draw < 1.0 or not self.isChecked():
+            painter.setPen(QPen(QColor("#5B8DEF") if self.underMouse() else GREY, 1.5))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(box, radius, radius)
+        if self._draw > 0.0:
+            fill = QColor(TICK_GREEN)
+            fill.setAlphaF(min(1.0, self._draw * 2.2))
             painter.setPen(Qt.NoPen)
-            painter.setBrush(TICK_GREEN)
+            painter.setBrush(fill)
             painter.drawRoundedRect(box, radius, radius)
             pen = QPen(QColor("#FFFFFF"), max(1.6, side * 0.13), Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
             painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
+            a = (box.left() + side * 0.24, box.top() + side * 0.54)
+            b = (box.left() + side * 0.43, box.top() + side * 0.72)
+            c = (box.left() + side * 0.78, box.top() + side * 0.30)
+            first = min(1.0, self._draw / 0.4)
+            second = max(0.0, (self._draw - 0.4) / 0.6)
             tick = QPainterPath()
-            tick.moveTo(box.left() + side * 0.24, box.top() + side * 0.54)
-            tick.lineTo(box.left() + side * 0.43, box.top() + side * 0.72)
-            tick.lineTo(box.left() + side * 0.78, box.top() + side * 0.30)
+            tick.moveTo(*a)
+            tick.lineTo(a[0] + (b[0] - a[0]) * first, a[1] + (b[1] - a[1]) * first)
+            if second > 0:
+                tick.lineTo(b[0] + (c[0] - b[0]) * second, b[1] + (c[1] - b[1]) * second)
             painter.drawPath(tick)
-        else:
-            painter.setPen(QPen(QColor("#5B8DEF") if self.underMouse() else GREY, 1.5))
-            painter.setBrush(Qt.NoBrush)
-            painter.drawRoundedRect(box, radius, radius)
 
 
 class _BulletEdit(WrapEdit):

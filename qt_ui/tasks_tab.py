@@ -496,8 +496,7 @@ class TasksTab(QWidget):
     def __init__(self):
         super().__init__()
         self.setObjectName("TasksPage")
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setStyleSheet("QWidget#TasksPage{background:#F6F7F9;}")
+        # No background of its own: it sits on the shared themed page colour like every other tab.
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 24, 28, 20)
         layout.setSpacing(4)
