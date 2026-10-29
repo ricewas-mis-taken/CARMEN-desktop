@@ -737,3 +737,12 @@ the Home year grid) set replay_on_enter and are replayed on tab entry. Motion is
 pytest and when Windows "animation effects" are off. Also: Tasks and Scribe now sit on the
 shared themed page colour like the other tabs (Tasks had its own hard-coded grey, Scribe's
 scroll viewport was the system colour), and the Openings gallery is given the theme's sky.
+
+2026-10-28 -- Motion made louder: cards rise, buttons ripple, cards lift
+The first pass (a 240 ms fade of each card) was too faint to notice. Page entrances now paint a
+picture of each card sliding up 30 px from 96% with a fade, 70 ms apart, 620 ms each, on the
+strong ease-out cubic-bezier(0.23, 1, 0.32, 1) from Emil Kowalski's animate skill, with page
+headings gliding in from the left. Buttons ripple from the click, cards lift on hover (shadow
+deepens), a running session's ring breathes and its tip glows, and the Screen Time / History
+bars grow in. Skipped on purpose, per the same skill: nothing animates for keyboard actions,
+and dialogs still open instantly (a fade crashed the test run).
