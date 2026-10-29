@@ -417,14 +417,12 @@ def dialog_title(title, subtitle=None):
     box.setContentsMargins(0, 0, 0, 4)
     box.setSpacing(3)
     box.addWidget(role_label(title, "title"))
-    if subtitle:
-        box.addWidget(role_label(subtitle, "subtitle", wrap=True))
     return holder
 
 
 def field_label(text, hint=None):
     """The small grey label above a field (and, if given, a quieter hint after it)."""
-    return role_label(text if not hint else f"{text}  ·  {hint}", "field")
+    return role_label(text, "field")
 
 
 def accent(button_):

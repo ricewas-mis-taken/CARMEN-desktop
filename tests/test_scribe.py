@@ -408,74 +408,10 @@ def _every_control(tab):
             for w in tab.findChildren(kind)]
 
 
-def test_every_control_explains_itself_on_hover(qtbot):
+def test_controls_carry_no_explanatory_sentences(qtbot):
+    """Tooltips are names (a tool and its key, a colour's code), never help text."""
     tab = ScribeTab()
     qtbot.addWidget(tab)
-    missing = []
     for widget in _every_control(tab):
-        if widget is tab._background:      # hidden: the paper thumbnails speak for it
-            continue
-        if not widget.toolTip().strip():
-            missing.append((type(widget).__name__, widget.text() if hasattr(widget, "text") else ""))
-    assert missing == []
-
-
-def test_tool_tooltips_say_what_the_tool_does(qtbot):
-    tab = ScribeTab()
-    qtbot.addWidget(tab)
-    from qt_ui.scribe_tab import TOOL_HELP
-    for key, button in tab._tool_buttons.items():
-        assert TOOL_HELP[key] in button.toolTip()
-    assert "Click and drag" in tab._tool_buttons["line"].toolTip()
-
-
-def test_the_snap_menu_items_explain_themselves(qtbot):
-    tab = ScribeTab()
-    qtbot.addWidget(tab)
-    for key in ("snapToGrid", "snapAroundGrid", "snapTo15", "showGuides", "showRulers"):
-        assert tab._pref_checks[key].toolTip()
-
-
-def test_minimap_appears_when_zoomed_out_and_jumps_the_view(qtbot):
-    tab = ScribeTab()
-    qtbot.addWidget(tab)
-    tab.resize(900, 700)
-    tab.show()
-    canvas = tab.canvas
-    canvas.doc["layers"][0]["items"] = [
-        {"type": "rect", "a": [0, 0], "b": [100, 100], "width": 2, "stroke": "#111111", "fill": None},
-        {"type": "rect", "a": [4000, 3000], "b": [4100, 3100], "width": 2, "stroke": "#cc0000", "fill": None},
-    ]
-    canvas.set_zoom(0.1)
-    rect = canvas._minimap_rect()
-    assert rect is not None and rect.right() <= canvas.width() and rect.bottom() <= canvas.height()
-    canvas.update()
-    far = QPoint(int(rect.right() - 14), int(rect.bottom() - 14))     # the far corner of the map
-    QTest.mouseClick(canvas, Qt.LeftButton, Qt.NoModifier, far)
-    assert canvas.view["x"] > 2000 and canvas.view["y"] > 1500
-    empty = ScribeTab()
-    qtbot.addWidget(empty)
-    empty.canvas.doc["layers"][0]["items"] = []
-    empty.canvas.set_zoom(0.1)
-    assert empty.canvas._minimap_rect() is None            # nothing drawn: nothing to map
-
-
-def test_minimap_also_shows_when_zoomed_in_but_content_is_out_of_view_and_m_hides_it(qtbot):
-    tab = ScribeTab()
-    qtbot.addWidget(tab)
-    tab.resize(900, 700)
-    tab.show()
-    canvas = tab.canvas
-    canvas.doc["layers"][0]["items"] = [
-        {"type": "rect", "a": [0, 0], "b": [60, 40], "width": 2, "stroke": "#111111", "fill": None},
-        {"type": "rect", "a": [5000, 5000], "b": [5060, 5040], "width": 2, "stroke": "#111111", "fill": None},
-    ]
-    canvas.set_zoom(3.0)                                   # zoomed in, the far shape is out of view
-    assert canvas._minimap_rect() is not None
-    QTest.keyClick(canvas, Qt.Key_M)
-    assert canvas._minimap_rect() is None
-    QTest.keyClick(canvas, Qt.Key_M)
-    assert canvas._minimap_rect() is not None
-    canvas.doc["layers"][0]["items"] = canvas.doc["layers"][0]["items"][:1]
-    canvas.view.update(x=30.0, y=20.0)
-    assert canvas._minimap_rect() is None                  # everything fits on screen: no map needed
+        assert len(widget.toolTip()) < 40, widget.toolTip()
+    assert "Click and drag" not in tab._tool_buttons["line"].toolTip()

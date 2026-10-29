@@ -6,6 +6,7 @@ background, zoom and position on the board. Every change is written to
 private/scribe.json a moment later (see scribe_store.py), and again when the tab
 is hidden or the app quits. Shape maths lives in scribe_geometry.py.
 """
+import collections
 import math
 import time
 
@@ -17,6 +18,7 @@ from PySide6.QtGui import (
     QIcon,
     QImage,
     QKeySequence,
+    QLinearGradient,
     QPainter,
     QPainterPath,
     QPen,
@@ -486,34 +488,106 @@ class ScribeCanvas(QWidget):
             spacing *= 5
         return spacing
 
+    # The board is a row of tall sheets of paper on a desk, side by side without end.
+    PAGE_W, PAGE_H, PAGE_GAP, PAGE_TOP = 900.0, 2700.0, 70.0, -500.0
+
+    @staticmethod
+    def _grain_tile():
+        """A small tile of paper fibre: faint light and dark flecks, made once."""
+        tile = ScribeCanvas.__dict__.get("_grain")
+        if tile is None:
+            import random
+            image = QImage(160, 160, QImage.Format_ARGB32)
+            image.fill(Qt.transparent)
+            rnd = random.Random(7)
+            painter = QPainter(image)
+            for _ in range(900):
+                x, y = rnd.random() * 160, rnd.random() * 160
+                length = 1.5 + rnd.random() * 4
+                angle = rnd.random() * 6.283
+                shade = 255 if rnd.random() < 0.5 else 0
+                painter.setPen(QPen(QColor(shade, shade, shade, 4 + int(rnd.random() * 8)), 0.8))
+                painter.drawLine(QPointF(x, y), QPointF(x + math.cos(angle) * length, y + math.sin(angle) * length))
+            painter.end()
+            tile = ScribeCanvas._grain = QPixmap.fromImage(image)
+        return tile
+
     def _paint_background(self, p):
         paper, minor, major, dark = _BACKGROUNDS[self.prefs["background"]]
-        p.fillRect(self.rect(), QColor(paper))
         kind = self.prefs["background"]
-        if minor is None:
-            return
         z, w, h = self.zoom, self.width(), self.height()
+        p.fillRect(self.rect(), QColor("#12151B" if dark else "#CFCBDD"))          # the desk
+        stride = self.PAGE_W + self.PAGE_GAP
+        left, right = self.view["x"] - w / 2 / z, self.view["x"] + w / 2 / z
+        first = math.floor((left + self.PAGE_W / 2) / stride)
+        last = math.floor((right + self.PAGE_W / 2) / stride)
+        if last - first > 160:                    # zoomed far out: sheets are specks, so just tint
+            p.fillRect(self.rect(), QColor(paper).darker(108) if not dark else QColor(paper).lighter(130))
+            return
         spacing = self._grid_spacing()
+        grain = self._grain_tile()
+        for index in range(first, last + 1):
+            x0 = index * stride - self.PAGE_W / 2
+            sx0, sy0 = self._to_screen(x0, self.PAGE_TOP)
+            sx1, sy1 = self._to_screen(x0 + self.PAGE_W, self.PAGE_TOP + self.PAGE_H)
+            page = QRectF(sx0, sy0, sx1 - sx0, sy1 - sy0)
+            if page.right() < 0 or page.left() > w or page.bottom() < 0 or page.top() > h:
+                continue
+            for grow, alpha in ((14, 10), (9, 14), (5, 18), (2, 22)):        # a soft shadow under the sheet
+                p.setPen(Qt.NoPen)
+                p.setBrush(QColor(20, 16, 40, alpha))
+                p.drawRoundedRect(page.adjusted(-grow * 0.4, grow * 0.3, grow * 0.4, grow * 0.9),
+                                  3 + grow * 0.3, 3 + grow * 0.3)
+            p.setBrush(QColor(paper))
+            p.drawRoundedRect(page, 3, 3)
+            p.save()
+            clip = QPainterPath()
+            clip.addRoundedRect(page, 3, 3)
+            p.setClipPath(clip)
+            if not dark:
+                shade = QLinearGradient(page.topLeft(), page.bottomLeft())      # a touch of light from above
+                shade.setColorAt(0, QColor(255, 255, 255, 40))
+                shade.setColorAt(1, QColor(120, 100, 60, 18))
+                p.fillRect(page, shade)
+            p.drawTiledPixmap(page, grain, QPointF(-(page.left() % 160), -(page.top() % 160)))
+            if minor is not None:
+                self._paint_rules(p, kind, minor, major, spacing, page)
+            p.restore()
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(QColor(255, 255, 255, 30) if dark else QColor(0, 0, 0, 38), 1))
+            p.drawRoundedRect(page, 3, 3)
+
+    def _paint_rules(self, p, kind, minor, major, spacing, page):
+        """Grid, dots or lines, drawn only inside one sheet."""
+        z = self.zoom
         step = spacing * z
-        left, top = self.view["x"] - w / 2 / z, self.view["y"] - h / 2 / z
-        first_i, first_j = math.floor(left / spacing), math.floor(top / spacing)
-        count_x, count_y = int(w / step) + 2, int(h / step) + 2
+        if step < 3:
+            return
+        left, top = self.view["x"] - self.width() / 2 / z, self.view["y"] - self.height() / 2 / z
+        x_from, x_to = max(0.0, page.left()), min(float(self.width()), page.right())
+        y_from, y_to = max(0.0, page.top()), min(float(self.height()), page.bottom())
+        first_i = math.floor((left + x_from / z) / spacing)
+        first_j = math.floor((top + y_from / z) / spacing)
+        count_x, count_y = int((x_to - x_from) / step) + 2, int((y_to - y_from) / step) + 2
         if kind == "dots":
             p.setPen(QPen(QColor(minor), 2.5, Qt.SolidLine, Qt.RoundCap))
             for i in range(first_i, first_i + count_x):
                 for j in range(first_j, first_j + count_y):
                     sx, sy = self._to_screen(i * spacing, j * spacing)
-                    p.drawPoint(QPointF(sx, sy))
+                    if x_from <= sx <= x_to and y_from <= sy <= y_to:
+                        p.drawPoint(QPointF(sx, sy))
             return
         if kind != "lined":
             for i in range(first_i, first_i + count_x):
                 sx = round(self._to_screen(i * spacing, 0)[0]) + 0.5
-                p.setPen(QPen(QColor(major if i % 5 == 0 else minor), 1))
-                p.drawLine(QPointF(sx, 0), QPointF(sx, h))
+                if x_from <= sx <= x_to:
+                    p.setPen(QPen(QColor(major if i % 5 == 0 else minor), 1))
+                    p.drawLine(QPointF(sx, y_from), QPointF(sx, y_to))
         for j in range(first_j, first_j + count_y):
             sy = round(self._to_screen(0, j * spacing)[1]) + 0.5
-            p.setPen(QPen(QColor(major if (major and j % 5 == 0) else minor), 1))
-            p.drawLine(QPointF(0, sy), QPointF(w, sy))
+            if y_from <= sy <= y_to:
+                p.setPen(QPen(QColor(major if (major and j % 5 == 0) else minor), 1))
+                p.drawLine(QPointF(x_from, sy), QPointF(x_to, sy))
 
     def _paint_scene(self, p, width, height, zoom, cx, cy, ui):
         p.save()
@@ -576,17 +650,30 @@ class ScribeCanvas(QWidget):
 
     @staticmethod
     def _smooth_path(pts, closed=False):
-        """Freehand points as a smooth curve: quadratic segments through the midpoints, so the
-        stroke stays round at any zoom instead of showing its straight pieces."""
+        """Freehand points as one smooth curve (a Catmull-Rom spline through every point), so even a
+        fast stroke with few, far-apart points comes out round instead of as straight pieces."""
         path = QPainterPath(QPointF(*pts[0]))
-        if len(pts) < 3:
+        count = len(pts)
+        if count < 3:
             for x, y in pts[1:]:
                 path.lineTo(QPointF(x, y))
         else:
-            for i in range(1, len(pts) - 1):
-                mx, my = (pts[i][0] + pts[i + 1][0]) / 2, (pts[i][1] + pts[i + 1][1]) / 2
-                path.quadTo(QPointF(*pts[i]), QPointF(mx, my))
-            path.lineTo(QPointF(*pts[-1]))
+            def tangent(a, b, seg):
+                dx, dy = (b[0] - a[0]) / 6.0, (b[1] - a[1]) / 6.0
+                reach = math.hypot(dx, dy)
+                limit = seg * 0.5                      # never swing wider than half the segment
+                if reach > limit > 0:
+                    dx, dy = dx * limit / reach, dy * limit / reach
+                return dx, dy
+            for i in range(count - 1):
+                p0 = pts[i - 1] if i > 0 else pts[i]
+                p1, p2 = pts[i], pts[i + 1]
+                p3 = pts[i + 2] if i + 2 < count else pts[i + 1]
+                seg = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
+                t1 = tangent(p0, p2, seg)
+                t2 = tangent(p1, p3, seg)
+                path.cubicTo(QPointF(p1[0] + t1[0], p1[1] + t1[1]), QPointF(p2[0] - t2[0], p2[1] - t2[1]),
+                             QPointF(p2[0], p2[1]))
         if closed:
             path.closeSubpath()
         return path
@@ -629,8 +716,7 @@ class ScribeCanvas(QWidget):
                 p.setBrush(color)
                 p.drawEllipse(QPointF(*pts[0]), pen_width / 2, pen_width / 2)
             else:
-                p.drawPolyline([QPointF(x, y) for x, y in pts]) if not fill else \
-                    p.drawPolygon([QPointF(x, y) for x, y in pts])
+                p.drawPath(self._smooth_path(pts, closed=bool(fill)))
         elif kind in geo.LINE_TYPES:
             a, b = QPointF(*item["a"]), QPointF(*item["b"])
             p.drawLine(a, b)
@@ -1035,43 +1121,8 @@ _TOOLS = [
 ]
 
 # What each control does: shown when the pointer rests on it.
-TOOL_HELP = {
-    "select": "Click a shape to pick it, drag to move it, drag a box to pick several. Delete removes them.",
-    "freehand": "Draw by hand. Hold the button down and move.",
-    "line": "Click and drag to draw a straight line.",
-    "curve": "Drag a straight line, then click where the bend should go.",
-    "arrow": "Click and drag to draw a line with an arrowhead.",
-    "rect": "Click and drag to draw a rectangle (or a square with the corners rounded, if you chose that).",
-    "circle": "Click and drag to draw a circle or an oval.",
-    "text": "Click where the words should go, then type.",
-    "fill": "Click inside a closed shape to colour it with the fill colour.",
-    "insert": "Put a picture on the board from a file.",
-}
-HELP = {
-    "colour_well": "Line colour (the ring) and fill colour (the disc). Click either one to change it.",
-    "swap": "Swap the line colour and the fill colour.",
-    "no_fill": "Draw shapes as outlines, with nothing inside.",
-    "quick": "Left-click: use as the line colour. Right-click: use as the fill colour.",
-    "preview": "What the next line you draw will look like.",
-    "width": "How thick lines are, in board units. Changes the selected shapes too.",
-    "shouldScale": "Line width grows and shrinks as you zoom, like a real part of the drawing.",
-    "roundCorners": "Round the ends and corners of lines and rectangles.",
-    "dashed": "Draw lines as dashes instead of solid.",
-    "paper": "The paper behind the drawing. It does not change what you drew.",
-    "opacity": "How see-through the selected layer is.",
-    "layers": "Layers stack like sheets of tracing paper. Tick one to show it, double-click to rename it.",
-    "export": "Save the whole drawing as a picture (PNG).",
-    "new": "Clear every shape on every layer. Undo brings it back until you quit.",
-    "snapToGrid": "Corners and ends jump to the nearest grid point.",
-    "snapAroundGrid": "Shapes jump to the lines between grid points too.",
-    "snapTo15": "Lines turn in steps of 15 degrees, so they come out straight or at clean angles.",
-    "showGuides": "Show alignment guides while you drag.",
-    "showRulers": "Show a ruler along the top and left edges.",
-    "undo": "Take back the last change (Ctrl+Z).",
-    "redo": "Put back what you just undid (Ctrl+Y).",
-    "zoom_label": "How far in you are. Scroll the mouse wheel over the board to zoom.",
-    "snap_menu": "Snapping, guides and rulers.",
-}
+TOOL_HELP = collections.defaultdict(str)
+HELP = collections.defaultdict(str)
 
 SCRIBE_INK = "#1F2328"
 _QUICK_COLORS = ["#000000", "#E03131", "#F08C00", "#FAB005", "#2F9E44", "#1971C2", "#7048E8", "#FFFFFF"]
@@ -1329,7 +1380,7 @@ class _PaperChip(QPushButton):
         super().__init__()
         self._key = key
         self.setCheckable(True)
-        self.setFixedSize(40, 40)
+        self.setFixedSize(30, 44)
         self.setAccessibleName(f"{label} paper")
         self.setCursor(Qt.PointingHandCursor)
 
@@ -1346,16 +1397,18 @@ class _PaperChip(QPushButton):
             p.setPen(QPen(QColor(minor), 1))
             if self._key == "dots":
                 p.setPen(QPen(QColor(minor), 2, Qt.SolidLine, Qt.RoundCap))
-                for x in range(8, 36, 8):
-                    for y in range(8, 36, 8):
+                for x in range(9, 28, 8):
+                    for y in range(8, 42, 8):
                         p.drawPoint(QPointF(x, y))
             elif self._key == "lined":
-                for y in range(11, 36, 8):
+                for y in range(11, 42, 8):
                     p.drawLine(QPointF(inner.left(), y), QPointF(inner.right(), y))
             else:
-                for v in range(11, 36, 8):
-                    p.setPen(QPen(QColor(major if v == 19 else minor), 1))
+                for v in range(11, 28, 8):
+                    p.setPen(QPen(QColor(minor), 1))
                     p.drawLine(QPointF(v, inner.top()), QPointF(v, inner.bottom()))
+                for v in range(11, 42, 8):
+                    p.setPen(QPen(QColor(major if v == 19 else minor), 1))
                     p.drawLine(QPointF(inner.left(), v), QPointF(inner.right(), v))
         p.setClipping(False)
         p.setBrush(Qt.NoBrush)
@@ -1542,13 +1595,13 @@ class ScribeTab(QWidget):
             "font-size: 13px; font-weight: 700; color: #1F2328; background: transparent;")
         self._pan_button = QPushButton("Pan")
         self._pan_button.setCheckable(True)
-        self._pan_button.setToolTip("Drag the board (or hold Space, or middle-drag)")
+        self._pan_button.setToolTip("Pan")
         self._pan_button.toggled.connect(self.canvas.set_pan_mode)
         fit = QPushButton("Fit")
-        fit.setToolTip("Zoom to everything you drew")
+        fit.setToolTip("Fit all")
         fit.clicked.connect(self.canvas.fit_all)
         reset = QPushButton("Reset")
-        reset.setToolTip("Back to 100% at the centre")
+        reset.setToolTip("100%")
         reset.clicked.connect(self.canvas.reset_view)
         for widget in (minus, self._zoom_label, plus, self._pan_button, fit, reset):
             bar.addWidget(widget)
@@ -1604,7 +1657,6 @@ class ScribeTab(QWidget):
         self._pref_checks = getattr(self, "_pref_checks", {})
 
         # --- ink: one well that shows stroke and fill together, and the quick colours
-        box.addWidget(self._heading("Ink"))
         well_row = QHBoxLayout()
         well_row.setSpacing(12)
         self._color_well = _ColorWell(prefs["stroke"], prefs["fill"])
@@ -1613,9 +1665,6 @@ class ScribeTab(QWidget):
         well_row.addWidget(self._color_well)
         well_text = QVBoxLayout()
         well_text.setSpacing(2)
-        hint = QLabel("Click the ring for the line,\nthe disc for the fill.")
-        hint.setProperty("scribe", "muted")
-        well_text.addWidget(hint)
         row = QHBoxLayout()
         row.setSpacing(4)
         swap = QPushButton("⇄")
@@ -1641,7 +1690,7 @@ class ScribeTab(QWidget):
         grid.setVerticalSpacing(6)
         for index, color in enumerate(_QUICK_COLORS):
             dot = _ColorDot(color)
-            dot.setToolTip(f"{color.upper()}\n{HELP['quick']}")
+            dot.setToolTip(color.upper())
             dot.picked.connect(self._quick_stroke)
             dot.pickedFill.connect(self._set_fill)
             self._quick_dots[color] = dot
@@ -1651,7 +1700,6 @@ class ScribeTab(QWidget):
 
         # --- line: width with a live preview of the line itself
         box.addSpacing(4)
-        box.addWidget(self._heading("Line"))
         self._stroke_preview = _StrokePreview()
         self._stroke_preview.setToolTip(HELP["preview"])
         box.addWidget(self._stroke_preview)
@@ -1682,7 +1730,6 @@ class ScribeTab(QWidget):
 
         # --- paper: thumbnails of each background (the combo underneath still holds the value)
         box.addSpacing(4)
-        box.addWidget(self._heading("Paper"))
         self._background = QComboBox()
         for key, label in BACKGROUND_LABELS.items():
             self._background.addItem(label, key)
@@ -1697,16 +1744,15 @@ class ScribeTab(QWidget):
         paper_grid.setVerticalSpacing(6)
         for index, key in enumerate(BACKGROUND_LABELS):
             chip = _PaperChip(key, BACKGROUND_LABELS[key])
-            chip.setToolTip(f"{BACKGROUND_LABELS[key]} paper\n{HELP['paper']}")
+            chip.setToolTip(BACKGROUND_LABELS[key])
             chip.clicked.connect(lambda _c=False, k=key: self._background.setCurrentIndex(self._background.findData(k)))
             self._paper_chips[key] = chip
-            paper_grid.addWidget(chip, index // 4, index % 4)
+            paper_grid.addWidget(chip, index // 5, index % 5)
         box.addLayout(paper_grid)
         self._sync_paper_chips()
 
         # --- layers
         box.addSpacing(4)
-        box.addWidget(self._heading("Layers"))
         self._opacity = QComboBox()
         for pct in scribe_store.OPACITIES:
             self._opacity.addItem(f"{pct}%", pct)

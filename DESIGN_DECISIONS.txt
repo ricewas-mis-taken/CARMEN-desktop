@@ -753,3 +753,14 @@ computer or session) was pulled within a minute and the app restarted at once, m
 update is still pulled immediately, but the restart now waits until there has been no keyboard
 or mouse input for two minutes (Windows GetLastInputInfo; elsewhere it restarts at once as
 before). Cost: a running copy can be up to a few minutes behind main while you work.
+
+2026-10-29 -- Scribe: sheets of paper, real curves, no help text
+Freehand strokes were still drawn as straight pieces: the previous fix's edit to the stroke
+painter silently did not apply (the file has CRLF line endings and the patch matched LF), so only
+the helper was added. Strokes are now drawn through a Catmull-Rom spline, so a fast stroke with
+few points is round. The board is a row of tall sheets (900 x 2700, endless sideways) on a
+desk, with paper grain and a soft shadow; grid, dots and lines draw inside each sheet, and the
+paper chips are small sheets too. Explanatory text was removed across the desktop app:
+Scribe's help tooltips, the "Paper"/"Layers"/"Ink"/"Line" headings and the colour-well hint,
+popup subtitles and field hints (ui_kit.dialog_title / field_label ignore them now), and a
+few long tooltips in Review and Board. Tooltips are names only.

@@ -1114,13 +1114,11 @@ class _TopicView(QWidget):
         header.addWidget(self._filters_button)
 
         missed_button = button("Log a mistake", SECONDARY_STYLE, height=36)
-        missed_button.setToolTip("Add a problem you got wrong. It comes back for review soon.")
         missed_button.clicked.connect(
             lambda: _register_popup(_MissDialog(self._topic_id, on_done=self._after_quick_add)))
         header.addWidget(missed_button)
 
         paste_button = button("Paste a list", SECONDARY_STYLE, height=36)
-        paste_button.setToolTip("Add many problems at once from a list, a spreadsheet column or a range.")
         paste_button.clicked.connect(
             lambda: _register_popup(_BatchDialog(self._topic_id, on_done=self._after_quick_add)))
         header.addWidget(paste_button)
@@ -1204,7 +1202,6 @@ class _TopicView(QWidget):
         self._search_edit = QLineEdit()
         self._search_edit.setPlaceholderText("Search name, subject or notes")
         self._search_edit.setClearButtonEnabled(True)
-        self._search_edit.setToolTip("Type to filter the list. Matches a problem's name, subject and notes.")
         self._search_edit.setStyleSheet(
             "QLineEdit { background: #F7F8FA; border: 1px solid #E6E9EF; border-radius: 10px; padding: 7px 10px; "
             f"font-size: 13px; color: {INK}; }} QLineEdit:focus {{ border: 1.5px solid {INK}; background: #FFFFFF; }}")
@@ -1215,7 +1212,6 @@ class _TopicView(QWidget):
         category_head = QHBoxLayout()
         category_head.addWidget(heading("Category"), 1)
         new_category = link_button("+ New")
-        new_category.setToolTip("Make a category to sort problems into. Right-click one to delete it.")
         new_category.clicked.connect(lambda: self._new_category())
         category_head.addWidget(new_category)
         box.addLayout(category_head)
@@ -1228,7 +1224,6 @@ class _TopicView(QWidget):
         self._sort_combo = QComboBox()
         for key, label in SORT_CHOICES:
             self._sort_combo.addItem(label, key)
-        self._sort_combo.setToolTip("How the list is ordered")
         self._sort_combo.currentIndexChanged.connect(self._set_sort)
         box.addWidget(self._sort_combo)
         box.addStretch(1)
@@ -2907,7 +2902,6 @@ class _AddProblemDialog(QWidget):
             # there's actually something to fill in about.
             first_attempt_button = accent(QPushButton("Start first attempt now"))
             first_attempt_button.setMinimumHeight(40)
-            first_attempt_button.setToolTip("Start the timer straight away and fill the form in afterwards.")
             first_attempt_button.clicked.connect(self._start_first_attempt)
             layout.addWidget(first_attempt_button)
 
