@@ -241,7 +241,7 @@ class BoardTab(QWidget):
         column.setSpacing(10)
 
         rule = QFrame()
-        rule.setFixedHeight(5)
+        rule.setFixedHeight(3)
         rule.setStyleSheet(f"background:{INK};border:none;")
         column.addWidget(rule)
 
@@ -294,7 +294,7 @@ class BoardTab(QWidget):
             line = QHBoxLayout()
             line.setSpacing(12)
             tick = _Tick()
-            tick.setFixedSize(22, 22)
+            tick.setFixedSize(20, 20)
             label = QLabel(text)
             label.setWordWrap(True)
             self._style_note(label, False)
@@ -309,7 +309,7 @@ class BoardTab(QWidget):
     @staticmethod
     def _style_note(label, ticked):
         label.setStyleSheet(
-            f"color: {'#98A2B3' if ticked else INK}; font-size: 16px; background: transparent;"
+            f"color: {'#98A2B3' if ticked else INK}; font-size: 15px; background: transparent;"
             + ("text-decoration: line-through;" if ticked else ""))
         font = label.font()
         font.setStrikeOut(ticked)
