@@ -15,6 +15,7 @@ qt_ui/review_tab.py's popups), so it needs the same _register_popup()
 strong-reference trick or it would be garbage-collected the instant
 _open_auth_dialog() returns.
 """
+from qt_ui.ui_kit import ElidedLabel
 import threading
 
 from PySide6.QtCore import Qt, QTimer
@@ -70,7 +71,7 @@ class _AccountRow(QWidget):
         )
         layout.addWidget(self._avatar)
 
-        self._email_label = QLabel("")
+        self._email_label = ElidedLabel("")
         self._email_label.setStyleSheet("color: #E8EAED; font-size: 12px;")
         layout.addWidget(self._email_label, 1)
 

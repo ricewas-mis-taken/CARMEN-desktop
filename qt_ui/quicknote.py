@@ -19,7 +19,7 @@ from qt_ui.wrap_edit import WrapEdit
 SAVE_DELAY_MS = 400
 TEXT_PX = 15
 REMOTE_CHECK_MS = 1000
-DEFAULT_SIZE = (320, 380)
+DEFAULT_SIZE = (340, 420)
 
 _STYLE = """
 QWidget#QuickNote { background: #111317; }
@@ -142,7 +142,7 @@ class NoteList(QWidget):
         self.setObjectName("QuickNoteRows")
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
-        self._layout.setSpacing(2)
+        self._layout.setSpacing(7)
         self._layout.addStretch(1)
         self._edits = []
         self.set_items([""])
@@ -169,7 +169,7 @@ class NoteList(QWidget):
         row = QWidget()
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(6)
+        row_layout.setSpacing(10)
         edit = _BulletEdit(text)
         font = edit.font()
         font.setPixelSize(TEXT_PX)
@@ -177,7 +177,8 @@ class NoteList(QWidget):
         edit.document().setDocumentMargin(0)               # the first line starts at the very top
         edit._fit_height()
         # The checkbox is exactly one line of text tall and wide, level with the first line.
-        side = QFontMetrics(font).lineSpacing()
+        line = QFontMetrics(font).lineSpacing()
+        side = round(line * 0.9)               # a touch smaller than the line, so it reads as a tick box, not a block
         box = _Tick()
         box.setFixedSize(side, side)
         edit.checkbox = box
@@ -186,7 +187,10 @@ class NoteList(QWidget):
         edit.backspace_on_empty.connect(self._on_backspace_on_empty)
         edit.move.connect(self._on_move)
         edit.textChanged.connect(self.changed.emit)
-        row_layout.addWidget(box, 0, Qt.AlignTop)
+        holder = QVBoxLayout()
+        holder.setContentsMargins(0, (line - side) // 2, 0, 0)       # centred on the first line of text
+        holder.addWidget(box, 0, Qt.AlignTop)
+        row_layout.addLayout(holder)
         row_layout.addWidget(edit, 1)
         self._layout.insertWidget(index, row)
         self._edits.insert(index, edit)
@@ -254,7 +258,7 @@ class QuickNoteWindow(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setWidget(self._list)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setContentsMargins(18, 16, 18, 16)
         layout.addWidget(scroll)
 
         self._dirty = False

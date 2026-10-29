@@ -645,3 +645,14 @@ QMenu::indicator {
 QScrollArea#HomeScroll, QWidget#HomePage {
     background: #F7F7F8;
 }
+
+
+/* Slim scrollbars everywhere (the native ones are wide grey boxes once a stylesheet is set). */
+QScrollBar:vertical { background: transparent; width: 12px; margin: 2px; }
+QScrollBar::handle:vertical { background: rgba(120, 126, 140, 0.45); border-radius: 4px; min-height: 32px; }
+QScrollBar::handle:vertical:hover { background: rgba(90, 96, 110, 0.7); }
+QScrollBar:horizontal { background: transparent; height: 12px; margin: 2px; }
+QScrollBar::handle:horizontal { background: rgba(120, 126, 140, 0.45); border-radius: 4px; min-width: 32px; }
+QScrollBar::handle:horizontal:hover { background: rgba(90, 96, 110, 0.7); }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }

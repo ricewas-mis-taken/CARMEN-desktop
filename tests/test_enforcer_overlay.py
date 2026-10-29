@@ -86,27 +86,54 @@ def test_overlay_auto_closes_after_duration(qtbot, isolate_state):
     qtbot.waitUntil(lambda: win._closed, timeout=2000)
 
 
-def test_second_overlay_cascades_away_from_first(qtbot, isolate_state):
-    """Regression test: two overlays open at once (e.g. two different
-    offending apps in quick succession) used to both land dead-center on top
-    of each other, indistinguishable and each stealing focus back from the
-    other every 50ms -- the same "flashing" symptom as the redirect-storm
-    bug in window_tracker.py. The first stays centered; a second one open at
-    the same time must land somewhere else."""
+def _settled(qtbot):
+    qtbot.wait(400)      # lets the slide-in / reflow animations finish
+
+
+def test_new_overlay_stacks_above_the_older_one(qtbot, isolate_state):
+    """Two popups must never land at random spots: the newer one sits directly above the
+    older one, a fixed gap apart, the pair centred on the screen."""
     first = enforcer_overlay.build_overlay("first", duration_ms=5000)
     qtbot.addWidget(first)
     second = enforcer_overlay.build_overlay("second", duration_ms=5000)
     qtbot.addWidget(second)
+    _settled(qtbot)
 
-    assert first.pos() != second.pos()
+    assert second.pos().x() == first.pos().x()
+    assert second.pos().y() + second.height() + enforcer_overlay._STACK_GAP == first.pos().y()
 
     first.close()
     second.close()
 
 
-def test_overlay_alone_is_still_centered(qtbot, isolate_state):
-    win = enforcer_overlay.build_overlay("only one", duration_ms=200)
+def test_closing_one_slides_the_other_back_to_centre(qtbot, isolate_state):
+    first = enforcer_overlay.build_overlay("first", duration_ms=5000)
+    qtbot.addWidget(first)
+    second = enforcer_overlay.build_overlay("second", duration_ms=5000)
+    qtbot.addWidget(second)
+    _settled(qtbot)
+    second.close()
+    _settled(qtbot)
+
+    from PySide6.QtWidgets import QApplication
+    screen = QApplication.primaryScreen().availableGeometry()
+    assert first.pos().y() == screen.y() + (screen.height() - first.height()) // 2
+    first.close()
+
+
+def test_new_overlay_animates_in(qtbot, isolate_state):
+    win = enforcer_overlay.build_overlay("hello", duration_ms=5000)
     qtbot.addWidget(win)
+    assert win.windowOpacity() < 1.0          # starts transparent and fades up
+    _settled(qtbot)
+    assert win.windowOpacity() == 1.0
+    win.close()
+
+
+def test_overlay_alone_is_still_centered(qtbot, isolate_state):
+    win = enforcer_overlay.build_overlay("only one", duration_ms=5000)
+    qtbot.addWidget(win)
+    _settled(qtbot)
 
     from PySide6.QtWidgets import QApplication
     screen = QApplication.primaryScreen().availableGeometry()
@@ -115,6 +142,26 @@ def test_overlay_alone_is_still_centered(qtbot, isolate_state):
     assert win.pos().x() == expected_x
     assert win.pos().y() == expected_y
 
+    win.close()
+
+
+def test_closed_overlays_leave_the_stack(qtbot, isolate_state):
+    win = enforcer_overlay.build_overlay("x", duration_ms=5000)
+    qtbot.addWidget(win)
+    assert win in enforcer_overlay._stack
+    win.close()
+    assert win not in enforcer_overlay._stack
+
+
+def test_overlay_never_activates_carmen_on_mac(qtbot, isolate_state, monkeypatch):
+    """Taking focus on macOS made the system hand it back to the blocked app on close,
+    un-hiding it; the popup must be non-activating there."""
+    monkeypatch.setattr(enforcer_overlay.sys, "platform", "darwin")
+    win = enforcer_overlay._LockOverlay("m", 5000)
+    qtbot.addWidget(win)
+    assert win.windowFlags() & Qt.WindowDoesNotAcceptFocus
+    assert win.testAttribute(Qt.WA_ShowWithoutActivating)
+    assert win.testAttribute(Qt.WA_TranslucentBackground)   # real rounded corners
     win.close()
 
 

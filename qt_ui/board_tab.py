@@ -241,7 +241,7 @@ class BoardTab(QWidget):
         column.setSpacing(10)
 
         rule = QFrame()
-        rule.setFixedHeight(5)
+        rule.setFixedHeight(3)
         rule.setStyleSheet(f"background:{INK};border:none;")
         column.addWidget(rule)
 
@@ -294,7 +294,7 @@ class BoardTab(QWidget):
             line = QHBoxLayout()
             line.setSpacing(12)
             tick = _Tick()
-            tick.setFixedSize(22, 22)
+            tick.setFixedSize(20, 20)
             label = QLabel(text)
             label.setWordWrap(True)
             self._style_note(label, False)
@@ -309,7 +309,7 @@ class BoardTab(QWidget):
     @staticmethod
     def _style_note(label, ticked):
         label.setStyleSheet(
-            f"color: {'#98A2B3' if ticked else INK}; font-size: 16px; background: transparent;"
+            f"color: {'#98A2B3' if ticked else INK}; font-size: 15px; background: transparent;"
             + ("text-decoration: line-through;" if ticked else ""))
         font = label.font()
         font.setStrikeOut(ticked)
@@ -357,8 +357,7 @@ class BoardTab(QWidget):
         self._subtitle.setMinimumWidth(0)
         self._subtitle.setStyleSheet(f"font-size: 13px; color: {MUTED}; background: transparent;")
         titles.addWidget(self._subtitle)
-        header.addLayout(titles)
-        header.addStretch(1)
+        header.addLayout(titles, 1)   # the subtitle gets all the free width, the links stay right
 
         self._hide_tags_button = link_button("Hide Tags")
         self._hide_tags_button.clicked.connect(self._open_hide_tags_menu)

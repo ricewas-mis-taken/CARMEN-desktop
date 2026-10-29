@@ -18,8 +18,8 @@ import time
 
 import sys
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Qt, QTimer
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QRegion
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -94,6 +94,45 @@ import tasks_store
 # removed on close().
 _open_windows = set()
 
+# Lock popups stack: the newest sits on top, older ones below it, the whole column
+# centred on the screen. When one closes the rest slide to their new place.
+_stack = []
+_STACK_GAP = 12
+_SLIDE_IN_PX = 28
+_SLIDE_MS = 240
+_REFLOW_MS = 200
+
+
+def _stack_targets():
+    screen = QApplication.primaryScreen().availableGeometry()
+    total = sum(w.height() for w in _stack) + _STACK_GAP * max(0, len(_stack) - 1)
+    y = screen.y() + max(0, (screen.height() - total) // 2)
+    targets = {}
+    for w in reversed(_stack):                    # newest first = top of the column
+        targets[w] = QPoint(screen.x() + (screen.width() - w.width()) // 2, y)
+        y += w.height() + _STACK_GAP
+    return targets
+
+
+def _restack(skip=None):
+    """Slides every popup (except `skip`, which is animating in) to its slot."""
+    for w, target in _stack_targets().items():
+        if w is not skip:
+            w.slide_to(target, _REFLOW_MS)
+
+
+def _stack_in(win):
+    """Adds a freshly built popup to the column: the others make room while it
+    slides up and fades in at its own slot."""
+    _stack.append(win)
+    targets = _stack_targets()
+    win.move(targets[win] + QPoint(0, _SLIDE_IN_PX))
+    win.setWindowOpacity(0.0)
+    win.show()
+    win.slide_to(targets[win], _SLIDE_MS)
+    win.fade_to(1.0, _SLIDE_MS)
+    _restack(skip=win)
+
 # If a second violation fires before the first overlay finishes (e.g. two
 # different offending apps in quick succession, or a soft-lock warning's 5s
 # window outlasting the poll interval), stacking every overlay dead-center
@@ -140,7 +179,7 @@ def build_overlay(
     )
     _open_windows.add(win)
     win.destroyed.connect(lambda: _open_windows.discard(win))
-    win.show()
+    _stack_in(win)
     return win
 
 
@@ -235,10 +274,19 @@ class _LockOverlay(QWidget):
         blackout_rect=None,
         blackout_rect_provider=None,
     ):
-        super().__init__(
-            None,
-            Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool,
-        )
+        flags = Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
+        if sys.platform == "darwin":
+            # Never take focus: activating Carmen here made macOS hand focus back to the
+            # blocked app when the popup closed, which un-hid it and started the hide /
+            # reappear loop.
+            flags |= Qt.WindowDoesNotAcceptFocus
+        super().__init__(None, flags)
+        self._anims = {}
+        if sys.platform == "darwin":
+            self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+            # A truly transparent window, so the card's rounded corners are real
+            # (an opaque one painted its square corners black).
+            self.setAttribute(Qt.WA_TranslucentBackground, True)
         # Lets the QSS border-radius below actually round the window's real
         # corners (a plain top-level widget has an opaque rectangular
         # backing surface regardless of QSS) rather than clipping them square.
@@ -252,7 +300,13 @@ class _LockOverlay(QWidget):
         # combo, worse than the plain square corners this falls back to.
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setObjectName("LockOverlayCard")
-        self.setStyleSheet(_OVERLAY_STYLESHEET)
+        stylesheet = _OVERLAY_STYLESHEET
+        if sys.platform == "darwin":
+            # A stylesheet background does not paint on a transparent window, so the card
+            # is drawn in paintEvent below and the stylesheet's own is switched off.
+            stylesheet = stylesheet.replace(
+                "background: #23262E;\n        border-radius: 14px;", "background: transparent;", 1)
+        self.setStyleSheet(stylesheet)
 
         self._closed = False
         self._duration_ms = duration_ms
@@ -268,13 +322,12 @@ class _LockOverlay(QWidget):
         if offending_process_name:
             height += 40
         self.resize(width, height)
-        self._position_window(width, height)
-
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(32)
-        shadow.setOffset(0, 6)
-        shadow.setColor(QColor(0, 0, 0, 140))
-        self.setGraphicsEffect(shadow)
+        if sys.platform != "darwin":
+            shadow = QGraphicsDropShadowEffect(self)
+            shadow.setBlurRadius(32)
+            shadow.setOffset(0, 6)
+            shadow.setColor(QColor(0, 0, 0, 140))
+            self.setGraphicsEffect(shadow)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(22, 20, 22, 18)
@@ -314,30 +367,48 @@ class _LockOverlay(QWidget):
         self._tick_timer.start(50)
         self._tick()
 
-    def _position_window(self, width, height):
-        screen = QApplication.primaryScreen().availableGeometry()
-        center_x = screen.x() + (screen.width() - width) // 2
-        center_y = screen.y() + (screen.height() - height) // 2
+    def slide_to(self, target, ms):
+        old = self._anims.get("pos")
+        if old is not None:
+            old.stop()
+        anim = QPropertyAnimation(self, b"pos", self)
+        anim.setDuration(ms)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        anim.setStartValue(self.pos())
+        anim.setEndValue(target)
+        self._anims["pos"] = anim
+        anim.start()
 
-        # Counts overlays already open at construction time -- build_overlay()
-        # only adds `self` to _open_windows *after* this runs, so index 0
-        # here always means "no other overlay is currently up", i.e. this one
-        # is centered exactly like before.
-        index = sum(1 for w in _open_windows if isinstance(w, _LockOverlay))
-        if index == 0:
-            self.move(center_x, center_y)
+    def fade_to(self, opacity, ms):
+        old = self._anims.get("opacity")
+        if old is not None:
+            old.stop()
+        anim = QPropertyAnimation(self, b"windowOpacity", self)
+        anim.setDuration(ms)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        anim.setStartValue(self.windowOpacity())
+        anim.setEndValue(opacity)
+        self._anims["opacity"] = anim
+        anim.start()
+
+    def paintEvent(self, event):
+        if sys.platform == "darwin":
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor("#23262E"))
+            painter.drawRoundedRect(self.rect(), 14, 14)
             return
+        super().paintEvent(event)
 
-        step = index % _CASCADE_MAX_STEPS
-        offset = _CASCADE_OFFSET_PX * (step + 1)
-        x = center_x + offset
-        y = center_y + offset
-
-        max_x = screen.x() + screen.width() - width
-        max_y = screen.y() + screen.height() - height
-        x = max(screen.x(), min(x, max_x))
-        y = max(screen.y(), min(y, max_y))
-        self.move(x, y)
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if sys.platform == "win32":
+            # Windows paints this window opaque (a transparent one rendered blank), so the
+            # rounded corners are cut out of the window itself instead.
+            path = QPainterPath()
+            path.addRoundedRect(self.rect(), 14, 14)
+            self.setMask(QRegion(path.toFillPolygon().toPolygon()))
 
     def _on_unblock_click(self, process_name):
         # Close this overlay first, not just hide it — otherwise its own
@@ -374,7 +445,8 @@ class _LockOverlay(QWidget):
 
         try:
             self.raise_()
-            self.activateWindow()
+            if sys.platform != "darwin":
+                self.activateWindow()
         except Exception:
             pass
 
@@ -395,6 +467,9 @@ class _LockOverlay(QWidget):
         # next soft-lock warning (and every one after) lands off-center
         # instead of back at dead-center once nothing is actually open.
         _open_windows.discard(self)
+        if self in _stack:
+            _stack.remove(self)
+            _restack()
         return super().close()
 
 

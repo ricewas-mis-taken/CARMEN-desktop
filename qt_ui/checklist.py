@@ -12,7 +12,8 @@ deliberately preserved to minimize call-site churn: build the rows once,
 read checked state on demand (after the caller's own Save action) rather
 than treating the returned dict as a point-in-time snapshot.
 """
-from PySide6.QtWidgets import QCheckBox, QLabel, QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QCheckBox, QLabel, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 
 def build_checklist(items, checked_keys, key_fn=None, label_fn=None, height=180):
@@ -37,6 +38,7 @@ def build_checklist(items, checked_keys, key_fn=None, label_fn=None, height=180)
     scroll.setWidgetResizable(True)
     scroll.setFixedHeight(height)
     scroll.setFrameShape(QScrollArea.NoFrame)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)   # a long name is clipped, not given a sideways scrollbar
     scroll.setStyleSheet("background: transparent;")
     content = QWidget()
     content.setObjectName("PopupBg")
@@ -62,6 +64,8 @@ def build_checklist(items, checked_keys, key_fn=None, label_fn=None, height=180)
                 existing_checkbox.setChecked(True)
             return
         checkbox = QCheckBox(label)
+        checkbox.setToolTip(label)
+        checkbox.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)   # never wider than the list
         checkbox.setChecked(checked)
         _apply_checked_style(checkbox, checked)
         checkbox.toggled.connect(lambda is_checked, cb=checkbox: _apply_checked_style(cb, is_checked))
