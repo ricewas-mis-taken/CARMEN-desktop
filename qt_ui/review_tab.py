@@ -1022,7 +1022,7 @@ class _TopicView(QWidget):
                     # A fresh, still-hidden dialog takes its place.
                     dialog = _register_popup(_AddProblemDialog(
                         self._topic_id, on_added=self._after_add_problem,
-                        on_start_first_attempt=self._start_first_attempt,
+                        on_start_first_attempt=self._start_first_attempt, start_hidden=True,
                     ))
                     done, cancelled = self._first_attempt_callbacks(dialog)
                     self._review_banner.start(
@@ -2876,7 +2876,7 @@ class _AddProblemDialog(QWidget):
     instead of create_problem. Review history/schedule fields aren't shown
     here at all, so editing can't touch them."""
 
-    def __init__(self, topic_id, on_added, problem=None, on_start_first_attempt=None):
+    def __init__(self, topic_id, on_added, problem=None, on_start_first_attempt=None, start_hidden=False):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self._editing = problem is not None
@@ -3004,7 +3004,8 @@ class _AddProblemDialog(QWidget):
         button_row.addWidget(submit_button)
         layout.addLayout(button_row)
 
-        self.show()
+        if not start_hidden:
+            self.show()
 
     def _reload_subjects(self, select_id=None):
         self._subject_combo.clear()

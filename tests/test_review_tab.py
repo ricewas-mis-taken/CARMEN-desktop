@@ -1165,3 +1165,15 @@ def test_adding_a_problem_shows_it_even_though_it_is_not_due(qtbot, isolate_revi
     assert view._due_only is False
     assert [r.name_label.text() for r in view._rows] == ["Fresh"]
     assert "Added" in view._summary_label.text() and problem["nextReviewDate"] in view._summary_label.text()
+
+
+def test_add_problem_dialog_can_be_built_without_showing(qtbot, isolate_review_db):
+    """Resuming a first attempt after a restart rebuilds this dialog behind the scenes; it must
+    not pop up on its own every time Carmen opens."""
+    topic, _subject = _make_topic_and_subject()
+    hidden = review_tab._AddProblemDialog(topic["id"], on_added=lambda _p: None, start_hidden=True)
+    qtbot.addWidget(hidden)
+    assert not hidden.isVisible()
+    shown = review_tab._AddProblemDialog(topic["id"], on_added=lambda _p: None)
+    qtbot.addWidget(shown)
+    assert shown.isVisible()
