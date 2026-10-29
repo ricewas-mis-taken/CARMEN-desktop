@@ -764,3 +764,13 @@ paper chips are small sheets too. Explanatory text was removed across the deskto
 Scribe's help tooltips, the "Paper"/"Layers"/"Ink"/"Line" headings and the colour-well hint,
 popup subtitles and field hints (ui_kit.dialog_title / field_label ignore them now), and a
 few long tooltips in Review and Board. Tooltips are names only.
+
+2026-10-29 -- Task history window; calmer motion
+A clock button beside the pencil on each task card opens that task's own history (qt_ui/task_history.py):
+totals (time, sessions, longest and average sitting, days worked, ran to the end vs cut short,
+violations), a two-week bar strip and every session, newest first, openable like in the History
+tab. It reads the same session log, filtered on the task id, so nothing new is stored. Motion:
+Home had no business running the page entrance (it rebuilds itself every ~10 s and has its own
+sky), the entrance no longer scales cards (that read as wobbling), it ends if the window is
+resized, and a ring that is just built shows its value instead of sweeping from empty (Home
+rebuilt its rings each refresh, so they re-swept constantly).
