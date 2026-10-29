@@ -6,7 +6,8 @@ not run from a terminal someone is watching -- so "pull the latest code"
 has to happen on its own. Once a minute, this checks whether origin/<branch>
 has moved past the local HEAD; if the working tree is clean and the update
 is a plain fast-forward, it pulls and triggers a full process restart (via
-os.execv in main.py) so the freshly-pulled code actually takes effect.
+os.execv in main.py) so the freshly-pulled code actually takes effect. The restart waits until
+the user has been idle for two minutes, so it never closes the app mid-use.
 
 Skips quietly (retrying next minute) on a dirty working tree, a diverged
 history that isn't a fast-forward, or any git/network failure -- this must
@@ -107,10 +108,45 @@ def _check_and_pull():
     return True
 
 
+IDLE_BEFORE_RESTART_SECONDS = 120
+
+
+def user_idle_seconds():
+    """Seconds since the last key press or mouse move anywhere on this computer, or None when it
+    cannot be told (not Windows). The restart waits on this so an update never closes the app
+    while you are using it."""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+
+        class LASTINPUTINFO(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+
+        info = LASTINPUTINFO()
+        info.cbSize = ctypes.sizeof(info)
+        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
+            return None
+        return (ctypes.windll.kernel32.GetTickCount() - info.dwTime) / 1000.0
+    except Exception:
+        return None
+
+
+def safe_to_restart():
+    idle = user_idle_seconds()
+    return idle is None or idle >= IDLE_BEFORE_RESTART_SECONDS
+
+
 def _loop(stop_event, on_update_ready):
+    pulled = False
     while not stop_event.wait(CHECK_INTERVAL_SECONDS):
         try:
-            if _check_and_pull():
+            if not pulled:
+                pulled = _check_and_pull()
+                if pulled:
+                    logger.info("auto_updater: update pulled; restarting once you have been idle %ss",
+                                IDLE_BEFORE_RESTART_SECONDS)
+            if pulled and safe_to_restart():
                 _restart_requested.set()
                 on_update_ready()
                 return

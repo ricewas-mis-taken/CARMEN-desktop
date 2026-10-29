@@ -97,6 +97,7 @@ def test_loop_sets_restart_flag_and_calls_callback_once_then_stops(repo_pair, tm
     _push_new_commit(origin, tmp_path, "hello\nworld\n")
     monkeypatch.setattr(auto_updater, "REPO_ROOT", str(clone))
     monkeypatch.setattr(auto_updater, "CHECK_INTERVAL_SECONDS", 0.05)
+    monkeypatch.setattr(auto_updater, "safe_to_restart", lambda: True)
     auto_updater._restart_requested.clear()
 
     calls = []
@@ -107,6 +108,31 @@ def test_loop_sets_restart_flag_and_calls_callback_once_then_stops(repo_pair, tm
     assert not thread.is_alive()
     assert calls == [1]
     assert auto_updater.restart_was_requested() is True
+
+
+def test_the_restart_waits_until_the_user_is_idle(repo_pair, tmp_path, monkeypatch):
+    """An update is pulled at once, but the app is only closed to apply it once nobody is using it."""
+    import threading
+    import time
+
+    origin, clone = repo_pair
+    _push_new_commit(origin, tmp_path, "hello\nworld\n")
+    monkeypatch.setattr(auto_updater, "REPO_ROOT", str(clone))
+    monkeypatch.setattr(auto_updater, "CHECK_INTERVAL_SECONDS", 0.05)
+    idle = {"now": 5.0}
+    monkeypatch.setattr(auto_updater, "user_idle_seconds", lambda: idle["now"])
+    auto_updater._restart_requested.clear()
+
+    calls = []
+    stop_event = threading.Event()
+    thread = auto_updater.start(stop_event, lambda: calls.append(1))
+    time.sleep(0.5)
+    assert (clone / "f.txt").read_text() == "hello\nworld\n"      # pulled already
+    assert calls == [] and not auto_updater.restart_was_requested()   # but still open: you are typing
+    idle["now"] = auto_updater.IDLE_BEFORE_RESTART_SECONDS + 1
+    thread.join(timeout=2)
+    assert calls == [1] and auto_updater.restart_was_requested()
+    stop_event.set()
 
 
 def test_repeated_fetch_failure_is_logged_once(repo_pair, caplog, monkeypatch):
