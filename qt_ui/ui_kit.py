@@ -95,6 +95,7 @@ class Ring(QWidget):
 
     replay_on_enter = True
     _live = False
+    _has_state = False
     _pulse = 0.0
     _pulse_timer = None
 
@@ -155,8 +156,12 @@ class Ring(QWidget):
                 self._color.name(), self._fraction, self._big, self._small, self._dim):
             return
         before = self._fraction
+        first = not self._has_state
+        self._has_state = True
         self._color, self._fraction, self._big, self._small, self._dim = QColor(color), fraction, big, small, dim
-        if fraction != before:
+        if first:
+            self._shown = fraction                 # a ring that is just built shows its value, no sweep
+        elif fraction != before:
             self._ease_to(fraction)
         self.update()
 

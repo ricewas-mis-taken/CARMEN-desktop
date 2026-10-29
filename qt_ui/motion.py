@@ -148,7 +148,7 @@ class _Stage(QWidget):
     """Lies over a page for its entrance and paints each card (a picture of it) rising into place:
     it slides up ~30 px, grows from 96% and fades in, one after another. Under each card a patch in
     the colour behind it hides the real card until its turn, so nothing flashes first."""
-    RISE = 30
+    RISE = 22
 
     def __init__(self, page):
         super().__init__(page)
@@ -182,12 +182,11 @@ class _Stage(QWidget):
             p.drawRoundedRect(rect.adjusted(-8, -8, 8, 8), radius + 4, radius + 4)
             if t <= 0.0:
                 continue
-            scale = 0.96 + 0.04 * e
-            w, h = rect.width() * scale, rect.height() * scale
-            x = rect.center().x() - w / 2 + dx * (1 - e)
-            y = rect.center().y() - h / 2 + dy * (1 - e)
+            # Only a slide and a fade: the card keeps its exact size the whole way, so nothing wobbles.
+            x = rect.x() + dx * (1 - e)
+            y = rect.y() + dy * (1 - e)
             p.setOpacity(min(1.0, e * 1.4))
-            p.drawPixmap(QRectF(x, y, w, h), pixmap, QRectF(pixmap.rect()))
+            p.drawPixmap(QRectF(x, y, rect.width(), rect.height()), pixmap, QRectF(pixmap.rect()))
 
 
 def _big_labels(page, cards):
@@ -213,6 +212,17 @@ def _big_labels(page, cards):
         if not inside:
             found.append(label)
     return found[:3]
+
+
+class _EndOnResize(QObject):
+    def __init__(self, page, finish):
+        super().__init__(page)
+        self._finish = finish
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Resize and getattr(obj, "_motion_stage", None) is not None:
+            self._finish()
+        return False
 
 
 def reveal(page):
@@ -266,6 +276,10 @@ def reveal(page):
         page._motion_veils = []
 
     page._motion_anim = tween(stage, 0.0, float(total), total, stage.set_time, done, QEasingCurve(QEasingCurve.Linear))
+    # If the window is resized mid-entrance the pictures no longer match the layout: end it at once.
+    guard = _EndOnResize(page, lambda: (stop(page._motion_anim), done()))
+    page._motion_guard = guard
+    page.installEventFilter(guard)
 
 
 def appear(widget):

@@ -133,3 +133,19 @@ def test_ripples_clean_up_after_themselves(qtbot, moving):
     motion.ripple(button, QPoint(30, 20))
     assert button.findChildren(motion._Ripple)
     qtbot.waitUntil(lambda: not button.findChildren(motion._Ripple), timeout=3000)
+
+
+def test_a_freshly_built_ring_shows_its_value_without_sweeping(qtbot, moving):
+    """Home rebuilds its rings every few seconds; each must appear at its value, not sweep from empty."""
+    ring = Ring()
+    qtbot.addWidget(ring)
+    ring.set_state("#5B8DEF", 0.6, "10", "min")
+    assert ring._shown == 0.6
+    ring.set_state("#5B8DEF", 0.7, "9", "min")
+    assert ring._shown < 0.7 or ring._shown == 0.7
+
+
+def test_home_has_no_page_entrance(window, moving):
+    window._show_tab("tasks")
+    window._show_tab("home")
+    assert getattr(window._pages["home"], "_motion_stage", None) is None
