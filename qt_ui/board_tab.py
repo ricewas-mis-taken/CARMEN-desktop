@@ -667,7 +667,6 @@ class _ImportanceBadge(QLabel):
         self.setFixedSize(46, 46)
         self.setAlignment(Qt.AlignCenter)
         self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip("Importance. Double-click to change it")
         self.setFont(_numeral_font(24))
         self._restyle(value)
 
