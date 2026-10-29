@@ -679,6 +679,7 @@ class _TaskCard(QFrame):
         self._running_panel.hide()
 
         self._edit_button = self._build_edit_button()
+        self._history_button = self._build_history_button()
         self._apply_card_style("idle")
 
     # --- static pieces ---
@@ -701,9 +702,32 @@ class _TaskCard(QFrame):
         button.hide()
         return button
 
+    def _build_history_button(self):
+        """Next to the pencil: opens everything done on this task so far."""
+        button = QPushButton("◷", self)
+        button.setObjectName("historyTaskButton")
+        button.setFlat(True)
+        button.setFixedSize(34, 34)
+        button.setCursor(Qt.PointingHandCursor)
+        button.setToolTip("History")
+        button.setAccessibleName("Task history")
+        button.setStyleSheet(
+            f"QPushButton{{border:1px solid #E1E5EC;background:#FFFFFF;color:{INK};font-size:18px;"
+            f"border-radius:17px;padding:0 0 2px 0;}}"
+            f"QPushButton:hover{{background:#F2F4F7;color:{INK};}}")
+        button.clicked.connect(self._open_history)
+        button.hide()
+        return button
+
+    def _open_history(self):
+        from qt_ui.task_history import open_task_history
+        open_task_history(self._task)
+
     def _place_edit_button(self):
         self._edit_button.move(self.width() - self._edit_button.width() - 10, 9)
         self._edit_button.raise_()
+        self._history_button.move(self._edit_button.x() - self._history_button.width() - 8, 9)
+        self._history_button.raise_()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -712,10 +736,12 @@ class _TaskCard(QFrame):
     def enterEvent(self, event):
         self._place_edit_button()
         self._edit_button.show()
+        self._history_button.show()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
         self._edit_button.hide()
+        self._history_button.hide()
         super().leaveEvent(event)
 
     def eventFilter(self, obj, event):
@@ -728,7 +754,7 @@ class _TaskCard(QFrame):
     def _build_header(self):
         row = QHBoxLayout()
         row.setSpacing(10)
-        row.setContentsMargins(0, 0, 30, 0)  # room for the hover pencil in the corner
+        row.setContentsMargins(0, 0, 72, 0)  # room for the hover history and pencil buttons in the corner
         self._dot = QLabel()
         self._dot.setFixedSize(12, 12)
         self._dot.setStyleSheet(f"background:{self._color};border-radius:6px;")

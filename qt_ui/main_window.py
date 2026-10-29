@@ -154,7 +154,7 @@ _SIDEBAR_COMPACT = 64
 _COMPACT_BELOW = 900   # window width under which the sidebar shows icons only
 
 
-_NO_ENTRANCE = {"scribe", "openings"}      # a canvas and a web view: nothing card-like to stagger
+_NO_ENTRANCE = {"home", "scribe", "openings"}   # Home has its own sky and rebuilds itself every few seconds; the others are a canvas and a web view
 
 
 class _NavMarker(QWidget):
