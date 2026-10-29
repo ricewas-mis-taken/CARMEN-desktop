@@ -518,7 +518,7 @@ class TasksTab(QWidget):
         self._grid_container.setStyleSheet("QWidget#TasksGridBg{background:transparent;}")
         self._grid = QGridLayout(self._grid_container)
         self._grid.setSpacing(GRID_GAP)
-        self._grid.setContentsMargins(0, 10, 0, 10)
+        self._grid.setContentsMargins(0, 10, 16, 10)   # room for the scrollbar, so the last column is never cut
         self._grid.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         scroll.setWidget(self._grid_container)
         layout.addWidget(scroll, 1)
@@ -573,7 +573,7 @@ class TasksTab(QWidget):
     # --- layout: as many cards per row as fit ---
 
     def _columns(self):
-        width = self._scroll.viewport().width()
+        width = self._scroll.viewport().width() - 16
         return max(1, (width + GRID_GAP) // (CARD_MIN + GRID_GAP))
 
     def _place_cards(self):

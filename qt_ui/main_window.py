@@ -146,7 +146,7 @@ _NORMAL_SIZE = (800, 800)
 # squeezed until buttons and titles lost their text. Content widths, beside the sidebar.
 _PAGE_MIN_WIDTH = {
     "home": 480, "focus": 630, "tasks": 520, "board": 600,
-    "review": 640, "scribe": 640, "screentime": 480, "history": 830, "openings": 640,
+    "review": 640, "scribe": 640, "screentime": 480, "history": 900, "openings": 640,
 }
 _MIN_HEIGHT = 560
 _SIDEBAR_FULL = 180

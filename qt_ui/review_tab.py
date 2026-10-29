@@ -470,7 +470,7 @@ class _ProblemRow(QFrame):
         self.stars_label = QLabel(_star_text(problem["stars"]))
         self.stars_label.setStyleSheet("font-size:12px;color:#F5A623;background:transparent;")
         top.addWidget(self.stars_label)
-        top.addWidget(chip(problem["subjectName"], color))
+        top.addWidget(chip(problem["subjectName"], color, elide=True))
         top.addStretch(1)
         text.addLayout(top)
         self.meta_label = ElidedLabel(_problem_meta(problem))
@@ -548,6 +548,8 @@ class ReviewTab(QWidget):
 
         self._tabs = QTabWidget()
         self._tabs.setDocumentMode(True)
+        # Document mode paints a grey base strip under the tabs with the native macOS style.
+        self._tabs.tabBar().setDrawBase(False)
         # Only tab-bar selectors, so nothing leaks into the topic views inside.
         self._tabs.setStyleSheet(
             "QTabWidget::pane { border: none; background: transparent; }"
@@ -1129,7 +1131,7 @@ class _TopicView(QWidget):
 
         return header
 
-    _NARROW_BELOW = 760
+    _NARROW_BELOW = 960
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1574,7 +1576,7 @@ class _ReviewBanner(QWidget):
         btn_row.addStretch(1)
 
         self._pause_btn = button("Pause", SECONDARY_STYLE, height=40)
-        self._pause_btn.setFixedWidth(96)
+        self._pause_btn.setMinimumWidth(96)   # grows for "Switch to this" / "Resume (on break)"
         self._pause_btn.clicked.connect(self._pause_resume)
         btn_row.addWidget(self._pause_btn)
 

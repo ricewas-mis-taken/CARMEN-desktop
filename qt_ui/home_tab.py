@@ -770,6 +770,7 @@ class HomeTab(QWidget):
         self._compact = width < COMPACT_BELOW
         for block in self._blocks:
             self._grid.removeWidget(block)
+            block.hide()          # gone from view at once; deleteLater only runs on the next loop turn
             block.deleteLater()
         now = datetime.now()
         status = session_manager.get_status()

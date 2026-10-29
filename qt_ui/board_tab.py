@@ -357,8 +357,7 @@ class BoardTab(QWidget):
         self._subtitle.setMinimumWidth(0)
         self._subtitle.setStyleSheet(f"font-size: 13px; color: {MUTED}; background: transparent;")
         titles.addWidget(self._subtitle)
-        header.addLayout(titles)
-        header.addStretch(1)
+        header.addLayout(titles, 1)   # the subtitle gets all the free width, the links stay right
 
         self._hide_tags_button = link_button("Hide Tags")
         self._hide_tags_button.clicked.connect(self._open_hide_tags_menu)

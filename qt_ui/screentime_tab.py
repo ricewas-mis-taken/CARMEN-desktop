@@ -321,8 +321,8 @@ class ScreenTimeTab(QWidget):
         # (all of them assume a light background, matching every other
         # popup/tab in the app) is invisible against that dark fill.
         scroll.setStyleSheet(
-            "QScrollArea { background: #F7F7F8; border: none; }"
-            "QScrollArea > QWidget > QWidget { background: #F7F7F8; }"
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }"
         )
         self._sections_container = QWidget()
         self._sections_layout = QVBoxLayout(self._sections_container)

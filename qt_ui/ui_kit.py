@@ -244,8 +244,37 @@ class ElidedLabel(QLabel):
         p.drawText(self.rect(), Qt.AlignLeft | Qt.AlignVCenter, shown)
 
 
-def chip(text, color=None, solid=False, tone=None):
-    label = QLabel(text)
+class ElidedChip(QLabel):
+    """A chip that gives up the end of its text ("Complete Search w...") rather than
+    pushing its row wider than the window; asks for its full width when there is room."""
+
+    _PAD = 22   # the stylesheet's 10px of padding either side, plus the border
+
+    def __init__(self, text):
+        super().__init__(text)
+        self._full = text
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+
+    def sizeHint(self):
+        hint = super().sizeHint()
+        hint.setWidth(self.fontMetrics().horizontalAdvance(self._full) + self._PAD)
+        return hint
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        hint.setWidth(60)
+        return hint
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        shown = self.fontMetrics().elidedText(self._full, Qt.ElideRight, max(10, self.width() - self._PAD))
+        if shown != self.text():
+            super().setText(shown)
+        self.setToolTip(self._full if shown != self._full else "")
+
+
+def chip(text, color=None, solid=False, tone=None, elide=False):
+    label = ElidedChip(text) if elide else QLabel(text)
     if solid:
         css = f"background:{INK};color:#FFFFFF;"
     elif tone:
