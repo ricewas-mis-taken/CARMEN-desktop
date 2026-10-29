@@ -246,6 +246,7 @@ def mac_world(monkeypatch):
     application_services.AXValueGetValue = ax_value_get_value
     application_services.kAXWindowsAttribute = "kAXWindowsAttribute"
     application_services.kAXMinimizedAttribute = "kAXMinimizedAttribute"
+    application_services.kAXTitleAttribute = "kAXTitleAttribute"
     application_services.kAXFocusedWindowAttribute = "kAXFocusedWindowAttribute"
     application_services.kAXPositionAttribute = "kAXPositionAttribute"
     application_services.kAXSizeAttribute = "kAXSizeAttribute"

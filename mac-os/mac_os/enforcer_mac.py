@@ -18,6 +18,7 @@ stand-in for every current caller.
 """
 import os
 import threading
+import time
 
 import psutil
 from AppKit import NSRunningApplication, NSWorkspace, NSApplicationActivateIgnoringOtherApps
@@ -70,6 +71,12 @@ def is_accessibility_trusted(prompt=False):
 # enforcer.py's _hidden_hwnds on Windows.
 _hidden_pids = set()
 _hidden_pids_lock = threading.Lock()
+
+# An app that un-hides itself (Electron apps do, on launch and on activation) is hidden
+# again at once, but only the first time in this many seconds counts as a new catch --
+# otherwise every re-hide re-raised a violation and a popup, which looked like a loop.
+QUIET_REHIDE_SECONDS = 8
+_last_caught = {}
 
 
 def _minimize_all_windows(pid):
@@ -459,7 +466,10 @@ def sweep_minimize_blocked_windows():
             was_hidden = False
         _hide_app(pid, True)
         if not was_hidden:
-            minimized.append((process_name, pid))
+            now = time.time()
+            if now - _last_caught.get(pid, 0.0) >= QUIET_REHIDE_SECONDS:
+                minimized.append((process_name, pid))
+            _last_caught[pid] = now
 
     return minimized
 

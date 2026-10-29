@@ -316,3 +316,18 @@ def test_block_matches_the_apps_dock_name_not_just_its_executable(mac_world, mon
     _patch_processes(monkeypatch, {111: "steam_osx"})
 
     assert enforcer_mac.is_blocked_window("steam_osx", 111) is True
+
+
+def test_an_app_that_unhides_itself_is_rehidden_without_a_new_catch(mac_world, monkeypatch, isolate_state):
+    """Instant re-hide stays, but only the first catch in a few seconds counts, so a
+    self-reappearing app does not trigger a violation and popup every time."""
+    enforcer_mac, _ = _import_fresh(monkeypatch)
+    enforcer_mac._last_caught.clear()
+    session_manager.start_session(25, "hard", ["discord.exe"], [])
+    app = mac_world.add_app(111)
+    _patch_processes(monkeypatch, {111: "Discord"})
+
+    assert enforcer_mac.sweep_minimize_blocked_windows() == [("Discord", 111)]
+    app.hidden = False                       # the app un-hides itself
+    assert enforcer_mac.sweep_minimize_blocked_windows() == []
+    assert app.hidden is True                # ...but is hidden again immediately
