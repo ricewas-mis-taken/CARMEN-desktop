@@ -746,3 +746,10 @@ headings gliding in from the left. Buttons ripple from the click, cards lift on 
 deepens), a running session's ring breathes and its tip glows, and the Screen Time / History
 bars grow in. Skipped on purpose, per the same skill: nothing animates for keyboard actions,
 and dialogs still open instantly (a fade crashed the test run).
+
+2026-10-28 -- Updates restart Carmen only when you are idle
+"Carmen closes randomly" was the auto-updater: any merge to main (from this or another
+computer or session) was pulled within a minute and the app restarted at once, mid-use. The
+update is still pulled immediately, but the restart now waits until there has been no keyboard
+or mouse input for two minutes (Windows GetLastInputInfo; elsewhere it restarts at once as
+before). Cost: a running copy can be up to a few minutes behind main while you work.
