@@ -49,6 +49,7 @@ def test_tween_jumps_to_the_end_when_motion_is_off():
 def test_the_ring_eases_to_its_new_value(qtbot, moving):
     ring = Ring()
     qtbot.addWidget(ring)
+    ring.set_state("#5B8DEF", 0.2, "10", "min")      # the first state is shown at once
     ring.set_state("#5B8DEF", 0.6, "10", "min")
     assert ring._shown < 0.6                     # on its way, not there yet
     qtbot.waitUntil(lambda: ring._shown == pytest.approx(0.6, abs=0.001), timeout=2000)
