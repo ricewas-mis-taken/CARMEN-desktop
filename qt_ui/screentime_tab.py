@@ -152,6 +152,20 @@ class _MiniBar(QWidget):
         self._color = QColor(color)
         self.setFixedHeight(6)
         self.setMinimumWidth(60)
+        self._grow = 1.0
+        self._anim = None
+
+    replay_on_enter = True
+
+    def replay(self):
+        """The bar grows out from the left to its share (when the tab is opened)."""
+        from qt_ui import motion
+        motion.stop(self._anim)
+        self._anim = motion.tween(self, 0.0, 1.0, 700, self._set_grow)
+
+    def _set_grow(self, value):
+        self._grow = value
+        self.update()
 
     def paintEvent(self, _event):
         painter = QPainter(self)
@@ -162,7 +176,7 @@ class _MiniBar(QWidget):
         painter.setBrush(track)
         painter.drawRoundedRect(QRectF(0, 0, self.width(), self.height()), 3, 3)
         painter.setBrush(self._color)
-        painter.drawRoundedRect(QRectF(0, 0, max(4.0, self.width() * self._fraction), self.height()), 3, 3)
+        painter.drawRoundedRect(QRectF(0, 0, max(4.0, self.width() * self._fraction * self._grow), self.height()), 3, 3)
 
 
 class _Dot(QFrame):

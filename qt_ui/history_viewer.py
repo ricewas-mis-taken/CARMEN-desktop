@@ -12,7 +12,7 @@ other code can reuse the old plain-text style description of one session.
 import html
 from datetime import date, datetime, timedelta
 
-from PySide6.QtCore import QRectF, Qt
+from PySide6.QtCore import QEasingCurve, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -189,6 +189,19 @@ class _ActivityStrip(QWidget):
         self.setFixedHeight(76)
         self.setMinimumWidth(240)
 
+    replay_on_enter = True
+    _rise = 1.0
+    _rise_anim = None
+
+    def replay(self):
+        """The bars rise from the baseline, left to right (when the tab is opened)."""
+        motion.stop(self._rise_anim)
+        self._rise_anim = motion.tween(self, 0.0, 1.0, 900, self._set_rise, curve=QEasingCurve(QEasingCurve.Linear))
+
+    def _set_rise(self, value):
+        self._rise = value
+        self.update()
+
     def set_days(self, days):
         self._days = days
         peak = max((m for _d, m in days), default=0)
@@ -215,6 +228,8 @@ class _ActivityStrip(QWidget):
         for i, (day, minutes) in enumerate(self._days):
             x = i * (bar_w + gap)
             h = max(4.0, chart_h * minutes / peak) if minutes else 4.0
+            local = max(0.0, min(1.0, (self._rise * 1.6 - i / max(1, count)) / 0.6))
+            h = 4.0 + (h - 4.0) * (1 - (1 - local) ** 3)
             color = QColor(INK) if day == today else QColor("#9AA6BF" if minutes else "#E4E7EC")
             p.setBrush(color)
             p.drawRoundedRect(QRectF(x, chart_h - h, bar_w, h), 4, 4)
