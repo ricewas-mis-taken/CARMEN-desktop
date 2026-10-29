@@ -65,15 +65,15 @@ def test_a_page_entrance_leaves_no_veils_behind(qtbot, window, moving):
     window._show_tab("tasks")
     window._show_tab("history")
     page = window._pages["history"]
-    veils = lambda: [w for w in page.findChildren(motion._Veil)]
-    qtbot.waitUntil(lambda: not page._motion_veils and not veils(), timeout=3000)
+    stages = lambda: page.findChildren(motion._Stage)
+    qtbot.waitUntil(lambda: not page._motion_veils and not stages(), timeout=4000)
 
 
 def test_switching_tabs_quickly_does_not_stack_veils(qtbot, window, moving):
     for key in ("tasks", "board", "tasks", "board", "tasks"):
         window._show_tab(key)
     for page in window._pages.values():
-        qtbot.waitUntil(lambda page=page: not page.findChildren(motion._Veil), timeout=3000)
+        qtbot.waitUntil(lambda page=page: not page.findChildren(motion._Stage), timeout=4000)
 
 
 def test_the_nav_marker_ends_on_the_current_tab(qtbot, window, moving):
@@ -112,3 +112,24 @@ def test_count_up_lands_on_the_value(qtbot, moving):
     motion.count_up(label, "40%")
     qtbot.waitUntil(lambda: label.text() == "40%", timeout=2000)
 
+
+
+def test_the_live_ring_pulses_only_while_motion_is_on(qtbot, moving):
+    ring = Ring()
+    qtbot.addWidget(ring)
+    ring.set_live(True)
+    assert ring._live is True
+    ring.set_live(False)
+    assert ring._live is False and ring._pulse_timer is None
+
+
+def test_ripples_clean_up_after_themselves(qtbot, moving):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QPushButton
+    button = QPushButton("Go")
+    button.resize(120, 40)
+    qtbot.addWidget(button)
+    button.show()
+    motion.ripple(button, QPoint(30, 20))
+    assert button.findChildren(motion._Ripple)
+    qtbot.waitUntil(lambda: not button.findChildren(motion._Ripple), timeout=3000)

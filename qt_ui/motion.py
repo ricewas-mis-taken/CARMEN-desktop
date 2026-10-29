@@ -7,18 +7,21 @@ entrance 300-500 ms; things that arrive ease out (a fast start, a soft landing);
 are staggered; nothing loops except real status. It all turns off when Windows "animation effects"
 are off, and under pytest, so the rest of the code can call it unconditionally.
 """
+import math
 import os
 import re
 import sys
 
 from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QPointF, QRect, Qt, QVariantAnimation
 from PySide6.QtGui import QColor, QPainter
-from PySide6.QtWidgets import QApplication, QFrame, QGraphicsDropShadowEffect, QPushButton, QWidget
+from PySide6.QtCore import QRectF
+from PySide6.QtWidgets import QApplication, QFrame, QGraphicsDropShadowEffect, QLabel, QPushButton, QWidget
 
 HOVER_MS = 140        # hover / press feedback
 SMALL_MS = 240        # one card arriving, a check being drawn
 MEDIUM_MS = 420       # a ring sweeping, a bar growing, the nav marker moving
-STAGGER_MS = 55       # between neighbouring cards on a page entrance
+STAGGER_MS = 70       # between neighbouring cards on a page entrance
+REVEAL_MS = 620       # one card rising into place
 MAX_STAGGERED = 8     # cards after this arrive together with the last one
 
 _os_allows = None
@@ -49,7 +52,7 @@ def enabled():
 def ease_out():
     """cubic-bezier(0.16, 1, 0.3, 1): arrives fast, settles slowly."""
     curve = QEasingCurve(QEasingCurve.BezierSpline)
-    curve.addCubicBezierSegment(QPointF(0.16, 1.0), QPointF(0.3, 1.0), QPointF(1.0, 1.0))
+    curve.addCubicBezierSegment(QPointF(0.23, 1.0), QPointF(0.32, 1.0), QPointF(1.0, 1.0))
     return curve
 
 
@@ -141,57 +144,128 @@ def _cards(page):
     return chosen
 
 
+class _Stage(QWidget):
+    """Lies over a page for its entrance and paints each card (a picture of it) rising into place:
+    it slides up ~30 px, grows from 96% and fades in, one after another. Under each card a patch in
+    the colour behind it hides the real card until its turn, so nothing flashes first."""
+    RISE = 30
+
+    def __init__(self, page):
+        super().__init__(page)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setGeometry(page.rect())
+        self._items = []         # (pixmap, QRect, patch colour, radius, delay ms, dx, dy)
+        self._ms = 0.0
+        self._curve = ease_out()
+        self.show()
+        self.raise_()
+
+    def add(self, pixmap, rect, colour, radius, delay, dx=0, dy=None):
+        self._items.append((pixmap, rect, colour, radius, delay, dx, self.RISE if dy is None else dy))
+
+    def set_time(self, ms):
+        self._ms = ms
+        self.update()
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        for pixmap, rect, colour, radius, delay, dx, dy in self._items:
+            t = max(0.0, min(1.0, (self._ms - delay) / REVEAL_MS))
+            if t >= 1.0:
+                continue                                  # arrived: the real card shows through
+            e = self._curve.valueForProgress(t)
+            p.setOpacity(1.0)
+            p.setPen(Qt.NoPen)
+            p.setBrush(colour)
+            p.drawRoundedRect(rect.adjusted(-8, -8, 8, 8), radius + 4, radius + 4)
+            if t <= 0.0:
+                continue
+            scale = 0.96 + 0.04 * e
+            w, h = rect.width() * scale, rect.height() * scale
+            x = rect.center().x() - w / 2 + dx * (1 - e)
+            y = rect.center().y() - h / 2 + dy * (1 - e)
+            p.setOpacity(min(1.0, e * 1.4))
+            p.drawPixmap(QRectF(x, y, w, h), pixmap, QRectF(pixmap.rect()))
+
+
+def _big_labels(page, cards):
+    """Page headings: big text outside any card (the title of the page, a section heading)."""
+    found = []
+    for label in page.findChildren(QLabel):
+        if not label.isVisible() or not label.text().strip() or label.width() < 40 or label.height() < 20:
+            continue
+        font = label.font()
+        size = font.pixelSize() if font.pixelSize() > 0 else int(font.pointSizeF() * 1.33)
+        match = re.search(r"font-size:\s*(\d+)px", label.styleSheet())
+        if match:
+            size = int(match.group(1))
+        if size < 24:
+            continue
+        inside = False
+        parent = label.parentWidget()
+        while parent is not None and parent is not page:
+            if parent in cards:
+                inside = True
+                break
+            parent = parent.parentWidget()
+        if not inside:
+            found.append(label)
+    return found[:3]
+
+
 def reveal(page):
-    """Page entrance: the cards fade in top to bottom, and rings, bars and grids that asked to
-    (an attribute `replay_on_enter`) draw themselves again."""
+    """Page entrance: headings glide in from the left, the cards rise one after another, and rings,
+    bars and grids that asked to (an attribute `replay_on_enter`) draw themselves again."""
     if not enabled() or not page.isVisible():
         return
-    for old in getattr(page, "_motion_veils", []):
+    old = getattr(page, "_motion_stage", None)
+    if old is not None:
         try:
             old.deleteLater()
         except RuntimeError:
             pass
     stop(getattr(page, "_motion_anim", None))
     page._motion_veils = []
+    page._motion_stage = None
     for widget in page.findChildren(QWidget):
         if getattr(widget, "replay_on_enter", False) and widget.isVisible():
             widget.replay()
     cards = _cards(page)
-    if not cards:
+    heads = _big_labels(page, cards)
+    if not cards and not heads:
         return
-    # Sample the colour behind each card from the whole window (the page alone has no background of
-    # its own), just left of the card's edge.
     window = page.window()
-    image = window.grab().toImage()
+    image = window.grab().toImage()                       # the colour behind each card comes from here
     ratio = image.devicePixelRatio()
-    veils = []
-    for index, card in enumerate(cards):
-        origin = card.mapTo(window, QPoint(0, 0))
-        sx = max(0, min(image.width() - 1, int((origin.x() - 5) * ratio)))
-        sy = max(0, min(image.height() - 1, int((origin.y() + card.height() // 2) * ratio)))
-        veils.append((_Veil(card.parentWidget(), card.geometry(), image.pixelColor(sx, sy), _radius_of(card)),
-                      min(index, MAX_STAGGERED) * STAGGER_MS))
-    page._motion_veils = [v for v, _d in veils]
-    total = SMALL_MS + MAX_STAGGERED * STAGGER_MS
-    curve = ease_out()
+    stage = _Stage(page)
 
-    def step(ms):
-        ms = ms * total
-        for veil, delay in veils:
-            try:
-                veil.set_alpha(1.0 - curve.valueForProgress(max(0.0, min(1.0, (ms - delay) / SMALL_MS))))
-            except RuntimeError:
-                pass
+    def colour_behind(widget):
+        origin = widget.mapTo(window, QPoint(0, 0))
+        sx = max(0, min(image.width() - 1, int((origin.x() - 10) * ratio)))
+        sy = max(0, min(image.height() - 1, int((origin.y() + widget.height() // 2) * ratio)))
+        return image.pixelColor(sx, sy)
+
+    for label in heads:
+        rect = QRect(label.mapTo(page, QPoint(0, 0)), label.size())
+        stage.add(label.grab(), rect, colour_behind(label), 4, 0, dx=-34, dy=0)
+    for index, card in enumerate(cards):
+        rect = QRect(card.mapTo(page, QPoint(0, 0)), card.size())
+        stage.add(card.grab(), rect, colour_behind(card), _radius_of(card), 90 + min(index, MAX_STAGGERED) * STAGGER_MS)
+    page._motion_stage = stage
+    page._motion_veils = [stage]
+    total = 90 + MAX_STAGGERED * STAGGER_MS + REVEAL_MS
 
     def done():
-        for veil, _d in veils:
-            try:
-                veil.deleteLater()
-            except RuntimeError:
-                pass
+        try:
+            stage.deleteLater()
+        except RuntimeError:
+            pass
+        page._motion_stage = None
         page._motion_veils = []
 
-    page._motion_anim = tween(page, 0.0, 1.0, total, step, done, QEasingCurve(QEasingCurve.Linear))
+    page._motion_anim = tween(stage, 0.0, float(total), total, stage.set_time, done, QEasingCurve(QEasingCurve.Linear))
 
 
 def appear(widget):
@@ -231,6 +305,78 @@ def count_up(label, text, ms=MEDIUM_MS):
 
 
 # --- buttons: lift on hover, press in --------------------------------------------------------------
+
+class _Ripple(QWidget):
+    """A circle that spreads from the click and fades, clipped to the button's shape."""
+
+    def __init__(self, button, point, light):
+        super().__init__(button)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setGeometry(button.rect())
+        self._point = QPointF(point)
+        self._light = light
+        self._t = 0.0
+        far = max(math.hypot(point.x() - x, point.y() - y) for x in (0, button.width()) for y in (0, button.height()))
+        self._reach = far
+        self._radius = min(button.height() / 2.0, 14.0)
+        self.show()
+        self.raise_()
+
+    def set_t(self, t):
+        self._t = t
+        self.update()
+
+    def paintEvent(self, _event):
+        from PySide6.QtGui import QPainterPath
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(self.rect()), self._radius, self._radius)
+        p.setClipPath(clip)
+        alpha = 0.42 * (1.0 - self._t) ** 1.5
+        colour = QColor(255, 255, 255, int(255 * alpha)) if self._light else QColor(70, 60, 140, int(255 * alpha * 0.55))
+        p.setPen(Qt.NoPen)
+        p.setBrush(colour)
+        p.drawEllipse(self._point, self._reach * self._t, self._reach * self._t)
+
+
+def ripple(button, point):
+    if not enabled() or button.width() < 36 or button.height() < 22:
+        return
+    light = button.property("class") in ("AccentButton", "DangerButton", "NavButton") or button.isChecked()
+    wave = _Ripple(button, point, light)
+    tween(wave, 0.0, 1.0, 520, wave.set_t, wave.deleteLater)
+
+
+class CardHover(QObject):
+    """Cards lift when the pointer is on them: the shadow deepens and drops a little (180 ms)."""
+
+    def eventFilter(self, obj, event):
+        kind = event.type()
+        if kind in (QEvent.Enter, QEvent.Leave) and isinstance(obj, QFrame) and enabled():
+            effect = obj.graphicsEffect()
+            if isinstance(effect, QGraphicsDropShadowEffect) and obj.width() >= 120 and obj.height() >= 40                     and "border-radius" in obj.styleSheet():
+                self._lift(obj, effect, kind == QEvent.Enter)
+        return False
+
+    def _lift(self, card, effect, up):
+        if not hasattr(card, "_shadow_base"):
+            card._shadow_base = (effect.blurRadius(), effect.yOffset(), effect.color().alpha())
+        blur, offset, alpha = card._shadow_base
+        stop(getattr(card, "_hover_anim", None))
+        colour = QColor(effect.color())
+
+        def step(v):
+            try:
+                effect.setBlurRadius(blur + 16 * v)
+                effect.setYOffset(offset + 6 * v)
+                colour.setAlpha(min(255, int(alpha + 26 * v)))
+                effect.setColor(colour)
+            except RuntimeError:
+                pass
+        card._hover_anim = tween(card, getattr(card, "_hover_v", 0.0), 1.0 if up else 0.0, 200 if up else 260,
+                                 lambda v: (setattr(card, "_hover_v", v), step(v)))
+
 
 class ButtonMotion(QObject):
     """A soft shadow that grows under a button on hover, tightens on press and fades on leave."""
@@ -296,3 +442,5 @@ def install(app=None):
         return
     _button_motion = ButtonMotion(app)
     app.installEventFilter(_button_motion)
+    app._card_hover = CardHover(app)
+    app.installEventFilter(app._card_hover)
