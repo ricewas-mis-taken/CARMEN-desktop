@@ -10,7 +10,7 @@ import os
 import tempfile
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPainterPath, QPen, QPixmap, QRadialGradient
 from PySide6.QtWidgets import QLabel, QPushButton, QSizePolicy, QWidget
 
 from qt_ui.day_layout import contrasting_text_color
@@ -94,6 +94,35 @@ class Ring(QWidget):
         self.setFixedSize(size, size)
 
     replay_on_enter = True
+    _live = False
+    _pulse = 0.0
+    _pulse_timer = None
+
+    def set_live(self, on):
+        """A running session: a soft halo breathes out from the arc, and its tip glows. Status only,
+        so it is the one thing here that loops."""
+        from qt_ui import motion
+        from PySide6.QtCore import QElapsedTimer, QTimer
+        on = bool(on) and motion.enabled()
+        if on == self._live:
+            return
+        self._live = on
+        if on:
+            self._clock = QElapsedTimer()
+            self._clock.start()
+            self._pulse_timer = QTimer(self)
+            self._pulse_timer.timeout.connect(self._advance_pulse)
+            self._pulse_timer.start(33)
+        elif self._pulse_timer is not None:
+            self._pulse_timer.stop()
+            self._pulse_timer.deleteLater()
+            self._pulse_timer = None
+            self.update()
+
+    def _advance_pulse(self):
+        if self.isVisible():
+            self._pulse = (self._clock.elapsed() % 2400) / 2400.0
+            self.update()
 
     def replay(self):
         """Draws the arc again from empty (when the tab is opened)."""
@@ -140,6 +169,13 @@ class Ring(QWidget):
         track.setAlphaF(0.15)
         p.setPen(QPen(track, width, Qt.SolidLine, Qt.RoundCap))
         p.drawEllipse(rect)
+        if self._live and not self._dim and self._shown > 0:
+            halo = QColor(self._color)
+            grow = 1.0 - (1.0 - self._pulse) ** 2
+            halo.setAlphaF(0.30 * (1.0 - self._pulse))
+            p.setPen(QPen(halo, width * (1 + 0.2 * grow)))
+            p.setBrush(Qt.NoBrush)
+            p.drawEllipse(rect.adjusted(-3 * grow, -3 * grow, 3 * grow, 3 * grow))
         if self._shown > 0:
             arc = QColor(self._color)
             if self._dim:
@@ -150,6 +186,16 @@ class Ring(QWidget):
                 p.drawEllipse(rect)
             else:
                 p.drawArc(rect, 90 * 16, int(-span * 16))
+                if self._live and not self._dim:
+                    import math
+                    angle = math.radians(90 - span)
+                    tip = rect.center() + QPointF(math.cos(angle) * rect.width() / 2, -math.sin(angle) * rect.height() / 2)
+                    glow = QRadialGradient(tip, 11)
+                    glow.setColorAt(0, QColor(255, 255, 255, int(150 + 90 * math.sin(self._pulse * 6.2832) ** 2)))
+                    glow.setColorAt(1, QColor(255, 255, 255, 0))
+                    p.setPen(Qt.NoPen)
+                    p.setBrush(glow)
+                    p.drawEllipse(tip, 11, 11)
         big = QFont()
         big.setFamilies(NUM_FONTS)
         big.setPixelSize(26 if len(self._big) < 6 else 22)

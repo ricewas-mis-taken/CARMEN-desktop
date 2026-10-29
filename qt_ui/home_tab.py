@@ -842,6 +842,7 @@ class HomeTab(QWidget):
             ring = Ring(size)
             ring.set_text_colors(INK, MUTED, FAINT)
             ring.set_state(colour, fraction or 0.0, clock, "paused" if paused else "", dim=paused)
+            ring.set_live(not paused)
             self._live = (ring, colour)
             row.addWidget(ring, 0, Qt.AlignLeft if self._compact else Qt.AlignVCenter)
             text.addStretch(1)
