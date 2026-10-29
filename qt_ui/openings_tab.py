@@ -5,6 +5,7 @@ built the first time the tab is shown, so starting Carmen does not pay for a bro
 nobody opened.
 """
 import os
+import sys
 from urllib.parse import quote
 
 import theme
@@ -41,6 +42,10 @@ class OpeningsTab(QWidget):
 
     def _build(self):
         try:
+            if "pytest" in sys.modules or os.environ.get("CARMEN_NO_WEBENGINE"):
+                # Chromium aborts the whole process when a headless test or audit run
+                # creates and drops one, which shows up as "Python quit unexpectedly".
+                raise RuntimeError("web engine switched off for this run")
             from PySide6.QtWebEngineWidgets import QWebEngineView
             view = QWebEngineView()
             view.setUrl(page_url())

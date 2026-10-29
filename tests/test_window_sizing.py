@@ -11,10 +11,6 @@ import qt_ui.main_window as mw
 def window(monkeypatch, isolate_state):
     monkeypatch.setattr(auth_manager, "is_logged_in", lambda: False)
     monkeypatch.setattr(auth_manager, "may_be_logged_in", lambda: False)
-    # The Openings page embeds Qt WebEngine, which crashes later tests if it is created
-    # and dropped here; sizing needs a page of that name, not a real browser.
-    from PySide6.QtWidgets import QWidget
-    monkeypatch.setattr(mw, "OpeningsTab", lambda *a, **k: QWidget())
     app = QApplication.instance() or QApplication([])
     win = mw._MainWindow()
     win.show()
