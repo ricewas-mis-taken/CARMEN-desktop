@@ -11,6 +11,7 @@ timer, not just push-on-change, so enable()/disable() (mirroring
 sync_trigger.py's) gate _tick() itself instead of relying on that.
 """
 import threading
+import time
 
 import sync_client
 from calendar_log import logger
@@ -40,9 +41,15 @@ def start(stop_event):
 
 
 def _run(stop_event):
+    last_reconcile = None
     while not stop_event.is_set():
         try:
             _tick()
+            now = time.time()
+            if _enabled and (last_reconcile is None or now - last_reconcile >= sync_client.RECONCILE_EVERY_SECONDS):
+                last_reconcile = now
+                if sync_client.reconcile_reviews():
+                    _tick()          # push what was just marked, and take what was brought in
         except Exception:
             logger.exception("sync scheduler tick failed")
         stop_event.wait(sync_client.SYNC_INTERVAL_SECONDS)

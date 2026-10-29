@@ -1019,6 +1019,95 @@ def _apply_all(pulled_records):
 
 # --- the public entry point ---
 
+RECONCILE_EVERY_SECONDS = 3600
+_RECONCILE_TABLES = ("review_problems", "review_sessions")
+
+
+def _review_progress(review_count, last_reviewed_at):
+    """How far along a problem's review history is: more reviews, then a later one."""
+    return (int(review_count or 0), str(last_reviewed_at or "")[:26])
+
+
+def reconcile_reviews():
+    """Self-heal for review data that stopped matching the cloud.
+
+    The normal push only sends rows changed since the last sync's watermark, so a review
+    whose push was dropped once (a failed request, the server keeping a row it thought
+    newer) is never sent again, and the two computers stay different for good. This reads
+    the cloud's problems and sessions in full and compares:
+      * a problem this computer is further along on (more reviews, or a later one) is
+        marked changed now, so the next push sends it
+      * a problem the cloud is further along on is brought here
+      * a problem or session the cloud has never seen is marked changed too
+    Returns how many rows it queued for push or pulled in (0 = already matching). Never
+    raises.
+    """
+    if not auth_manager.is_logged_in():
+        return 0
+    token = auth_manager.get_access_token()
+    if not token:
+        return 0
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            sync_cloud.ensure_ready(client, token)
+            records, _ = sync_cloud.pull(client, token, None, tables=_RECONCILE_TABLES)
+    except Exception:
+        logger.warning("sync_client.reconcile_reviews: could not read the cloud", exc_info=True)
+        return 0
+    return _reconcile_with(records)
+
+
+def _reconcile_with(records):
+    cloud_problems = {r["sync_id"]: r for r in records if r["table_name"] == "review_problems" and not r["is_deleted"]}
+    cloud_sessions = {r["sync_id"] for r in records if r["table_name"] == "review_sessions"}
+    me = device_id.get_device_id()
+    now = datetime.now().isoformat()
+    changed = 0
+    try:
+        with calendar_store._lock:
+            review_store._get_conn()
+            conn = calendar_store._get_conn()
+            for row in conn.execute(
+                "SELECT * FROM review_problems WHERE is_deleted = 0 AND sync_id IS NOT NULL"
+            ).fetchall():
+                cloud = cloud_problems.get(row["sync_id"])
+                if cloud is None:
+                    conn.execute("UPDATE review_problems SET updated_at = ?, device_id = ? WHERE id = ?", (now, me, row["id"]))
+                    changed += 1
+                    continue
+                data = cloud["data"]
+                here = _review_progress(row["review_count"], row["last_reviewed_at"])
+                there = _review_progress(data.get("reviewCount"), data.get("lastReviewedAt"))
+                if here > there:
+                    conn.execute("UPDATE review_problems SET updated_at = ?, device_id = ? WHERE id = ?", (now, me, row["id"]))
+                    changed += 1
+                elif there > here:
+                    conn.execute(
+                        "UPDATE review_problems SET review_count = ?, last_reviewed_at = ?, fastest_time_seconds = ?, "
+                        "fastest_time_is_solved = ?, schedule_stage = ?, next_review_date = ?, updated_at = ?, device_id = ? "
+                        "WHERE id = ?",
+                        (
+                            data.get("reviewCount"), data.get("lastReviewedAt"), data.get("fastestTimeSeconds"),
+                            data.get("fastestTimeIsSolved"), data.get("scheduleStage"), data.get("nextReviewDate"),
+                            _from_wire_ts(cloud["updated_at"]), cloud["device_id"], row["id"],
+                        ),
+                    )
+                    changed += 1
+            for row in conn.execute(
+                "SELECT id, sync_id FROM review_sessions WHERE is_deleted = 0 AND sync_id IS NOT NULL"
+            ).fetchall():
+                if row["sync_id"] not in cloud_sessions:
+                    conn.execute("UPDATE review_sessions SET updated_at = ?, device_id = ? WHERE id = ?", (now, me, row["id"]))
+                    changed += 1
+            conn.commit()
+    except Exception:
+        logger.warning("sync_client.reconcile_reviews: could not compare", exc_info=True)
+        return 0
+    if changed:
+        logger.warning("sync_client.reconcile_reviews: %s review rows were out of step with the cloud", changed)
+    return changed
+
+
 _pulled_listeners = []
 
 
