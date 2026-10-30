@@ -564,3 +564,17 @@ def test_ctrl_c_ctrl_x_ctrl_v_and_ctrl_d_work_on_the_board(qtbot):
     assert len(canvas.doc["layers"][0]["items"]) == 1
     QTest.keyClick(canvas, Qt.Key_V, Qt.ControlModifier)
     assert len(canvas.doc["layers"][0]["items"]) == 2
+
+
+def test_the_board_extent_is_worked_out_once_while_panning(qtbot):
+    from PySide6.QtCore import QPointF
+    canvas = _board(qtbot)
+    canvas.doc["layers"][0]["items"].append({"type": "rect", "a": [0, 0], "b": [50, 50], "stroke": "#000000", "width": 2})
+    calls = []
+    real = canvas._work_out_bounds
+    canvas._work_out_bounds = lambda: calls.append(1) or real()
+    canvas._pan = (QPointF(0, 0), 0.0, 0.0)
+    for _ in range(5):
+        canvas._all_bounds()
+    canvas._pan = None
+    assert len(calls) == 1

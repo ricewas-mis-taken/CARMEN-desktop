@@ -298,11 +298,20 @@ class ScribeCanvas(QWidget):
         known = getattr(self, "_drawing_bounds", None)
         if drawing is not None and known is not None and known[0] is drawing:
             return known[1]
-        boxes = [self._bounds_of(i) for layer in self.doc["layers"] if layer["visible"] for i in layer["items"]]
-        result = None if not boxes else (min(b[0] for b in boxes), min(b[1] for b in boxes),
-                                         max(b[2] for b in boxes), max(b[3] for b in boxes))
+        # Panning or one repaint: nothing on the board moves, so the extent is worked out once.
+        hold = self._pan or getattr(self, "_paint_token", None)
+        held = getattr(self, "_bounds_hold", None)
+        if hold is not None and held is not None and held[0] is hold:
+            return held[1]
+        result = self._work_out_bounds()
         self._drawing_bounds = (drawing, result) if drawing is not None else None
+        self._bounds_hold = (hold, result) if hold is not None else None
         return result
+
+    def _work_out_bounds(self):
+        boxes = [self._bounds_of(i) for layer in self.doc["layers"] if layer["visible"] for i in layer["items"]]
+        return None if not boxes else (min(b[0] for b in boxes), min(b[1] for b in boxes),
+                                       max(b[2] for b in boxes), max(b[3] for b in boxes))
 
     def fit_all(self):
         box = self._all_bounds()
@@ -368,6 +377,13 @@ class ScribeCanvas(QWidget):
         return self._images[name]
 
     def paintEvent(self, event):
+        self._paint_token = object()
+        try:
+            self._paint_all()
+        finally:
+            self._paint_token = None
+
+    def _paint_all(self):
         p = QPainter(self)
         # Round the board's corners to match the card it sits in.
         corners = QPainterPath()
@@ -1669,6 +1685,9 @@ class ScribeTab(QWidget):
         canvas.update()
 
     def _show_saved(self, saved):
+        if getattr(self, "_shown_saved", None) is saved:
+            return                      # restyling on every pan move was costing frames
+        self._shown_saved = saved
         self._saved_label.setText("Saved" if saved else "Saving…")
         self._saved_dot.setStyleSheet(
             f"background: {'#2F9E44' if saved else '#F08C00'}; border-radius: 4px;")
