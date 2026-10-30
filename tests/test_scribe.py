@@ -488,3 +488,79 @@ def test_a_long_line_being_drawn_keeps_its_finished_curve_pieces(qtbot):
         draft["pts"].append(pts[n - 1])
         built = canvas._stroke_path(draft, False)
         assert built == canvas._smooth_path(draft["pts"], False)
+
+
+def _board(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab.resize(900, 600)
+    return tab.canvas
+
+
+def test_copy_and_paste_puts_an_identical_copy_in_the_middle_of_the_screen(qtbot):
+    canvas = _board(qtbot)
+    item = {"type": "rect", "a": [-500, -400], "b": [-300, -300], "stroke": "#E2603B", "fill": "#112233",
+            "width": 7}
+    canvas.doc["layers"][0]["items"].append(item)
+    canvas.view.update({"x": 1000.0, "y": 2000.0})
+    canvas._sel = [item]
+    assert canvas.copy_selection()
+    assert canvas.paste_selection()
+    pasted = canvas.doc["layers"][0]["items"][-1]
+    assert pasted is not item
+    assert (pasted["stroke"], pasted["fill"], pasted["width"]) == ("#E2603B", "#112233", 7)
+    x0, y0, x1, y1 = geo.bounds(pasted)
+    assert ((x0 + x1) / 2, (y0 + y1) / 2) == (1000.0, 2000.0)         # the middle of the screen
+    assert (x1 - x0, y1 - y0) == (geo.bounds(item)[2] - geo.bounds(item)[0],
+                                  geo.bounds(item)[3] - geo.bounds(item)[1])
+    assert canvas._sel == [pasted] and canvas.tool == "select"
+
+
+def test_pasting_twice_in_one_spot_does_not_hide_the_first_copy(qtbot):
+    canvas = _board(qtbot)
+    item = {"type": "line", "a": [0, 0], "b": [100, 0], "stroke": "#000000", "width": 3}
+    canvas.doc["layers"][0]["items"].append(item)
+    canvas._sel = [item]
+    canvas.copy_selection()
+    canvas.paste_selection()
+    canvas.paste_selection()
+    first, second = canvas.doc["layers"][0]["items"][-2:]
+    assert first["a"] != second["a"]
+
+
+def test_cut_removes_the_items_and_paste_brings_them_back_and_undo_works(qtbot):
+    canvas = _board(qtbot)
+    item = {"type": "stroke", "pts": [[0, 0], [20, 30], [40, 0]], "stroke": "#000000", "width": 3}
+    canvas.doc["layers"][0]["items"].append(item)
+    canvas._sel = [item]
+    assert canvas.cut_selection()
+    assert canvas.doc["layers"][0]["items"] == [] and canvas._sel == []
+    assert canvas.paste_selection()
+    assert len(canvas.doc["layers"][0]["items"]) == 1
+    canvas.undo()
+    assert canvas.doc["layers"][0]["items"] == []
+
+
+def test_a_pasted_selection_can_be_recoloured(qtbot):
+    canvas = _board(qtbot)
+    item = {"type": "line", "a": [0, 0], "b": [100, 0], "stroke": "#000000", "width": 3}
+    canvas.doc["layers"][0]["items"].append(item)
+    canvas._sel = [item]
+    canvas.copy_selection()
+    canvas.paste_selection()
+    canvas.set_stroke("#3366FF")
+    assert canvas.doc["layers"][0]["items"][-1]["stroke"] == "#3366FF"
+    assert item["stroke"] == "#000000"
+
+
+def test_ctrl_c_ctrl_x_ctrl_v_and_ctrl_d_work_on_the_board(qtbot):
+    canvas = _board(qtbot)
+    item = {"type": "line", "a": [0, 0], "b": [100, 0], "stroke": "#000000", "width": 3}
+    canvas.doc["layers"][0]["items"].append(item)
+    canvas._sel = [item]
+    QTest.keyClick(canvas, Qt.Key_D, Qt.ControlModifier)
+    assert len(canvas.doc["layers"][0]["items"]) == 2
+    QTest.keyClick(canvas, Qt.Key_X, Qt.ControlModifier)
+    assert len(canvas.doc["layers"][0]["items"]) == 1
+    QTest.keyClick(canvas, Qt.Key_V, Qt.ControlModifier)
+    assert len(canvas.doc["layers"][0]["items"]) == 2
