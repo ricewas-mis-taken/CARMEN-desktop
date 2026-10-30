@@ -818,3 +818,11 @@ pen move fell back to a full repaint (rulers do not move while drawing, so the f
 the cards' QGraphicsDropShadowEffect (blur 24) reached over the board's edges, so any repaint touching the board
 edge re-rendered every widget in both side panels (60+ paints, ~10 ms). Shadows are now blur 8 / offset 1, which
 stays inside the 10-12 px gaps. Guides still repaint the whole board, now cheap. Rejected: painting shadows by hand.
+
+2026-10-29 -- Scribe lag, the real cause: the timed save ran on the UI thread (desktop only)
+The user's real board is 2,968 items / 37k points (1.9 MB). scribe_store.save reads, parses, cleans and rewrites
+it in ~220 ms, and it ran on the GUI thread 600 ms after any change, i.e. in the middle of the next stroke:
+the pen froze and quick strokes arrived late or looked dropped. The timed save now copies the board cheaply
+(point lists are only replaced, never edited, so only the item dicts are copied) and writes it on one
+background thread; leaving the tab and quitting still save synchronously and wait for it. Rejected: making
+save() itself faster only (still a stall), and a full deepcopy for the thread (20 ms, 4 MB per save).
