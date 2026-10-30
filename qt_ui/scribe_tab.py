@@ -915,6 +915,61 @@ class ScribeCanvas(QWidget):
         names = [n for n in (scribe_store.store_image_file(p) for p in paths) if n]
         self._place_images(names)
 
+    _shelf = None          # what was last copied or cut: (token, [items]); shared by every board
+
+    def _selection_bounds(self, items):
+        boxes = [self._bounds_of(i) for i in items]
+        return (min(b[0] for b in boxes), min(b[1] for b in boxes),
+                max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+    def copy_selection(self):
+        """Remember the selected items exactly as they are (colour, width, fill, everything)."""
+        if not self._sel:
+            return False
+        import copy
+        import uuid
+        token = "carmen-scribe:" + uuid.uuid4().hex
+        ScribeCanvas._shelf = (token, [copy.deepcopy(i) for i in self._sel])
+        QApplication.clipboard().setText(token)         # so a picture copied later wins over this
+        return True
+
+    def cut_selection(self):
+        if not self.copy_selection():
+            return False
+        self._push_undo()
+        for layer in self.doc["layers"]:
+            layer["items"] = [i for i in layer["items"] if not self._is_selected(i)]
+        self._sel = []
+        self.changed.emit()
+        self.update()
+        return True
+
+    def paste_selection(self):
+        """Put the copied items, unchanged, in the middle of the screen, and select them. The middle of
+        the screen is the view's centre (view x/y is the world point under it). Pasting again in the same
+        spot steps down and right so the copies do not hide each other."""
+        shelf = ScribeCanvas._shelf
+        if not shelf or QApplication.clipboard().text() != shelf[0]:
+            return False
+        import copy
+        items = [copy.deepcopy(i) for i in shelf[1]]
+        x0, y0, x1, y1 = self._selection_bounds(items)
+        cx, cy = self.view["x"], self.view["y"]
+        step = getattr(self, "_paste_step", None)
+        count = step[1] + 1 if step and step[0] == (shelf[0], round(cx), round(cy)) else 0
+        self._paste_step = ((shelf[0], round(cx), round(cy)), count)
+        shift = count * 24 / self.zoom
+        for item in items:
+            geo.translate(item, cx - (x0 + x1) / 2 + shift, cy - (y0 + y1) / 2 + shift)
+        self._push_undo()
+        self._active_items().extend(items)
+        if self.tool != "select":
+            self.set_tool("select")                    # so they can be dragged straight away
+        self._sel = items
+        self.changed.emit()
+        self.update()
+        return True
+
     def paste_image(self):
         image = QApplication.clipboard().image()
         if image.isNull():
@@ -1147,8 +1202,16 @@ class ScribeCanvas(QWidget):
         elif ctrl and key == Qt.Key_A:
             self._sel = [i for i in self._visible_items_top_first()]
             self.update()
+        elif ctrl and key == Qt.Key_C:
+            self.copy_selection()
+        elif ctrl and key == Qt.Key_X:
+            self.cut_selection()
+        elif ctrl and key == Qt.Key_D:
+            if self.copy_selection():
+                self.paste_selection()
         elif ctrl and key == Qt.Key_V:
-            self.paste_image()
+            if not self.paste_selection():
+                self.paste_image()
         elif key in (Qt.Key_Delete, Qt.Key_Backspace) and self._sel:
             self._push_undo()
             for layer in self.doc["layers"]:
