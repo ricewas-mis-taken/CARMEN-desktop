@@ -811,3 +811,10 @@ The minimap asks for the extent of every item several times per repaint, a walk 
 moves nothing on it, so the extent is held for the length of a pan (and for one repaint); other edits still
 recompute it. Rejected: a version counter bumped at each edit site, which would go stale the first time a
 new edit path forgot to bump it. The "Saved" chip is also only restyled when its state flips.
+
+2026-10-29 -- Scribe lag root cause: rulers on, and card shadows redrawing the whole window (desktop only)
+Two things had kept drawing and panning slow however much the canvas itself was trimmed. With rulers on, every
+pen move fell back to a full repaint (rulers do not move while drawing, so the fast path now allows them). And
+the cards' QGraphicsDropShadowEffect (blur 24) reached over the board's edges, so any repaint touching the board
+edge re-rendered every widget in both side panels (60+ paints, ~10 ms). Shadows are now blur 8 / offset 1, which
+stays inside the 10-12 px gaps. Guides still repaint the whole board, now cheap. Rejected: painting shadows by hand.
