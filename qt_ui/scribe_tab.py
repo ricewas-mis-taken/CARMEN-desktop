@@ -1156,7 +1156,7 @@ class ScribeCanvas(QWidget):
 
     def _update_around_stroke(self, d):
         """Repaint only the patch the newest piece of a freehand line can touch (and the minimap),
-        not the whole board."""
+        not the whole board. The rulers never move while drawing, so they no longer force a full repaint."""
         pts = d["pts"][-4:]
         xs = [(x - self.view["x"]) * self.zoom + self.width() / 2 for x, _ in pts]
         ys = [(y - self.view["y"]) * self.zoom + self.height() / 2 for _, y in pts]
@@ -1705,8 +1705,8 @@ class ScribeTab(QWidget):
         if width:
             frame.setFixedWidth(width)
         shadow = QGraphicsDropShadowEffect(frame)
-        shadow.setBlurRadius(24)
-        shadow.setOffset(0, 5)
+        shadow.setBlurRadius(8)
+        shadow.setOffset(0, 1)
         shadow.setColor(QColor(16, 24, 40, 20))
         frame.setGraphicsEffect(shadow)
         return frame
