@@ -578,3 +578,28 @@ def test_the_board_extent_is_worked_out_once_while_panning(qtbot):
         canvas._all_bounds()
     canvas._pan = None
     assert len(calls) == 1
+
+
+def test_repainting_the_whole_board_does_not_redraw_the_side_panels(qtbot):
+    from PySide6.QtCore import QEvent, QObject
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab.resize(1400, 800)
+    tab.show()
+    qtbot.waitExposed(tab)
+    painted = []
+
+    class Watch(QObject):
+        def eventFilter(self, obj, event):
+            if event.type() == QEvent.Paint:
+                painted.append(obj)
+            return False
+    watch = Watch()
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance().installEventFilter(watch)
+    QApplication.processEvents()
+    painted.clear()
+    tab.canvas.update()
+    QApplication.processEvents()
+    QApplication.instance().removeEventFilter(watch)
+    assert len(painted) < 10     # card shadows reaching the board made every panel repaint (60+ widgets)
