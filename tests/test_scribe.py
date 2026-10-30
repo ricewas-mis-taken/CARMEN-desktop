@@ -461,6 +461,7 @@ def test_drawing_by_hand_repaints_only_the_new_line(qtbot):
     assert canvas._picture[1] is first                    # same picture: the board was not repainted
     canvas.doc["layers"][0]["items"].append(
         {"type": "stroke", "pts": [[5, 5], [9, 9]], "stroke": "#000000", "width": 3})
+    canvas._draft = dict(canvas._draft)                   # the next line begins
     canvas.grab()
     assert canvas._picture[1] is not first                # the drawing changed, so it was remade
 
@@ -474,3 +475,16 @@ def test_a_strokes_curve_is_built_once_and_rebuilt_when_it_changes(qtbot):
     assert canvas._stroke_path(item, False) is first
     item["pts"].append([50, 50])
     assert canvas._stroke_path(item, False) is not first
+
+
+def test_a_long_line_being_drawn_keeps_its_finished_curve_pieces(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    canvas = tab.canvas
+    pts = [[i * 3.0, (i % 7) * 4.0] for i in range(40)]
+    draft = {"type": "stroke", "pts": pts[:3], "stroke": "#000000", "width": 3}
+    canvas._draft = draft
+    for n in range(4, 41):
+        draft["pts"].append(pts[n - 1])
+        built = canvas._stroke_path(draft, False)
+        assert built == canvas._smooth_path(draft["pts"], False)

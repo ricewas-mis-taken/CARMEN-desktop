@@ -789,3 +789,9 @@ bounds and the minimap heat. Curves, stroke bounds and heat are now cached until
 changes, and while drawing by hand the board plus paper is one cached picture with only the line in
 progress painted over it. Chosen over throttling mouse events, which would have made the line itself
 look choppy.
+
+2026-10-29 -- Scribe lag, second pass: dirty patch and incremental curve
+The first fix still repainted the whole board per move, rebuilt the whole draft curve and re-walked every
+stroke for the minimap extent. Now only a small patch around the newest piece (plus the minimap) is
+repainted, finished curve pieces of the live line are kept, and board extent/version are computed once
+per line. Falls back to full repaints when guides or rulers are on, since they follow the cursor.
