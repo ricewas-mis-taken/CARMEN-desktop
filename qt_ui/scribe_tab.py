@@ -23,6 +23,7 @@ from PySide6.QtGui import (
     QPainterPath,
     QPen,
     QPixmap,
+    QRegion,
     QShortcut,
 )
 from PySide6.QtWidgets import (
@@ -291,11 +292,17 @@ class ScribeCanvas(QWidget):
         return box
 
     def _all_bounds(self):
+        # While a line is being drawn nothing else on the board changes, so the extent is worked out
+        # once for the whole stroke instead of on every mouse move.
+        drawing = self._draft if self._draft is not None and self._draft.get("type") == "stroke" else None
+        known = getattr(self, "_drawing_bounds", None)
+        if drawing is not None and known is not None and known[0] is drawing:
+            return known[1]
         boxes = [self._bounds_of(i) for layer in self.doc["layers"] if layer["visible"] for i in layer["items"]]
-        if not boxes:
-            return None
-        return (min(b[0] for b in boxes), min(b[1] for b in boxes),
-                max(b[2] for b in boxes), max(b[3] for b in boxes))
+        result = None if not boxes else (min(b[0] for b in boxes), min(b[1] for b in boxes),
+                                         max(b[2] for b in boxes), max(b[3] for b in boxes))
+        self._drawing_bounds = (drawing, result) if drawing is not None else None
+        return result
 
     def fit_all(self):
         box = self._all_bounds()
@@ -389,11 +396,21 @@ class ScribeCanvas(QWidget):
         self._paint_minimap(p)
         p.end()
 
+    def _content_version(self):
+        """A cheap number that changes whenever strokes are added or grow (kept for the length of a line being drawn)."""
+        drawing = self._draft if self._draft is not None and self._draft.get("type") == "stroke" else None
+        known = getattr(self, "_drawing_version", None)
+        if drawing is not None and known is not None and known[0] is drawing:
+            return known[1]
+        version = sum(len(layer["items"]) * 7 + sum(len(i["pts"]) for i in layer["items"] if i.get("type") == "stroke")
+                      for layer in self.doc["layers"] if layer["visible"])
+        self._drawing_version = (drawing, version) if drawing is not None else None
+        return version
+
     def _board_picture(self):
         """The paper and everything drawn so far, as one picture, kept until the view or the content changes."""
         ratio = self.devicePixelRatioF()
-        version = sum(len(layer["items"]) * 7 + sum(len(i["pts"]) for i in layer["items"] if i.get("type") == "stroke")
-                      for layer in self.doc["layers"] if layer["visible"])
+        version = self._content_version()
         key = (self.width(), self.height(), ratio, self.zoom, self.view["x"], self.view["y"],
                self.prefs["background"], version, len(self.doc["layers"]),
                tuple((layer["visible"], layer["opacity"]) for layer in self.doc["layers"]))
@@ -448,8 +465,7 @@ class ScribeCanvas(QWidget):
     def _heat(self, rect, scale, ox, oy):
         """The heat cells, remembered while nothing under them has changed (it walks every point of every
         stroke, so doing it on each mouse move made drawing lag)."""
-        version = sum(len(layer["items"]) * 7 + sum(len(i["pts"]) for i in layer["items"] if i.get("type") == "stroke")
-                      for layer in self.doc["layers"] if layer["visible"])
+        version = self._content_version()
         key = (round(rect.width()), round(rect.height()), round(scale, 5), round(ox), round(oy), version)
         known = getattr(self, "_heat_cache", None)
         if known is not None and known[0] == key:
@@ -648,11 +664,50 @@ class ScribeCanvas(QWidget):
         known = cache.get(id(item))
         if known is not None and known[0] is item and known[1] == stamp:
             return known[2]
+        if item is self._draft and not closed and len(item["pts"]) >= 3:
+            return self._draft_path(item["pts"])
         path = self._smooth_path(item["pts"], closed)
-        if item is not self._draft:                 # the stroke being drawn changes on every move
+        if item is not self._draft:               # the stroke being drawn changes on every move
             if len(cache) > 4000:
                 cache.clear()
             cache[id(item)] = (item, stamp, path)
+        return path
+
+    @staticmethod
+    def _spline_piece(path, pts, i):
+        """Add the curve from pts[i] to pts[i+1] (Catmull-Rom, tangents clamped to half the piece)."""
+        count = len(pts)
+
+        def tangent(a, b, seg):
+            dx, dy = (b[0] - a[0]) / 6.0, (b[1] - a[1]) / 6.0
+            reach = math.hypot(dx, dy)
+            limit = seg * 0.5                      # never swing wider than half the segment
+            if reach > limit > 0:
+                dx, dy = dx * limit / reach, dy * limit / reach
+            return dx, dy
+        p0 = pts[i - 1] if i > 0 else pts[i]
+        p1, p2 = pts[i], pts[i + 1]
+        p3 = pts[i + 2] if i + 2 < count else pts[i + 1]
+        seg = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
+        t1 = tangent(p0, p2, seg)
+        t2 = tangent(p1, p3, seg)
+        path.cubicTo(QPointF(p1[0] + t1[0], p1[1] + t1[1]), QPointF(p2[0] - t2[0], p2[1] - t2[1]),
+                     QPointF(p2[0], p2[1]))
+
+    def _draft_path(self, pts):
+        """The curve of the line being drawn. Pieces whose neighbours are all known never change, so they
+        are kept and only the last two are redone on each move, however long the line gets."""
+        done = getattr(self, "_draft_done", None)
+        if done is None or done[0] is not pts or done[1] > len(pts) - 2 or done[2] != pts[0]:
+            done = [pts, 0, list(pts[0]), QPainterPath(QPointF(*pts[0]))]
+            self._draft_done = done
+        final = max(0, len(pts) - 2)
+        for i in range(done[1], final):
+            self._spline_piece(done[3], pts, i)
+        done[1] = final
+        path = QPainterPath(done[3])
+        for i in range(final, len(pts) - 1):
+            self._spline_piece(path, pts, i)
         return path
 
     @staticmethod
@@ -665,22 +720,8 @@ class ScribeCanvas(QWidget):
             for x, y in pts[1:]:
                 path.lineTo(QPointF(x, y))
         else:
-            def tangent(a, b, seg):
-                dx, dy = (b[0] - a[0]) / 6.0, (b[1] - a[1]) / 6.0
-                reach = math.hypot(dx, dy)
-                limit = seg * 0.5                      # never swing wider than half the segment
-                if reach > limit > 0:
-                    dx, dy = dx * limit / reach, dy * limit / reach
-                return dx, dy
             for i in range(count - 1):
-                p0 = pts[i - 1] if i > 0 else pts[i]
-                p1, p2 = pts[i], pts[i + 1]
-                p3 = pts[i + 2] if i + 2 < count else pts[i + 1]
-                seg = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
-                t1 = tangent(p0, p2, seg)
-                t2 = tangent(p1, p3, seg)
-                path.cubicTo(QPointF(p1[0] + t1[0], p1[1] + t1[1]), QPointF(p2[0] - t2[0], p2[1] - t2[1]),
-                             QPointF(p2[0], p2[1]))
+                ScribeCanvas._spline_piece(path, pts, i)
         if closed:
             path.closeSubpath()
         return path
@@ -1018,6 +1059,9 @@ class ScribeCanvas(QWidget):
                 last = d["pts"][-1]
                 if math.hypot(w[0] - last[0], w[1] - last[1]) >= 1.2 / self.zoom and len(d["pts"]) < 4000:
                     d["pts"].append(list(w))
+                    if not (self.prefs["showGuides"] or self.prefs["showRulers"]):
+                        self._update_around_stroke(d)
+                        return
             elif kind == "curve" and self._phase == 1:
                 d["c"] = list(self._snap(w))
             else:
@@ -1038,6 +1082,20 @@ class ScribeCanvas(QWidget):
         elif not self.prefs["showGuides"]:
             return
         self.update()
+
+    def _update_around_stroke(self, d):
+        """Repaint only the patch the newest piece of a freehand line can touch (and the minimap),
+        not the whole board."""
+        pts = d["pts"][-4:]
+        xs = [(x - self.view["x"]) * self.zoom + self.width() / 2 for x, _ in pts]
+        ys = [(y - self.view["y"]) * self.zoom + self.height() / 2 for _, y in pts]
+        pad = d["width"] * self.zoom + 10
+        patch = QRectF(min(xs) - pad, min(ys) - pad, max(xs) - min(xs) + 2 * pad, max(ys) - min(ys) + 2 * pad)
+        region = QRegion(patch.toAlignedRect())
+        mm = self._minimap_rect()
+        if mm is not None:
+            region = region.united(QRegion(mm.adjusted(-4, -4, 4, 4).toAlignedRect()))
+        self.update(region)
 
     def mouseReleaseEvent(self, e):
         if getattr(self, "_on_minimap", False):
