@@ -603,3 +603,27 @@ def test_repainting_the_whole_board_does_not_redraw_the_side_panels(qtbot):
     QApplication.processEvents()
     QApplication.instance().removeEventFilter(watch)
     assert len(painted) < 10     # card shadows reaching the board made every panel repaint (60+ widgets)
+
+
+def test_the_timed_save_runs_off_the_ui_thread(qtbot, monkeypatch):
+    import threading
+    import time
+    import scribe_store
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    gate = threading.Event()
+    seen = []
+
+    def slow_save(doc):
+        seen.append(threading.current_thread())
+        gate.wait(2)
+    monkeypatch.setattr(scribe_store, "save", slow_save)
+    tab.canvas.doc["layers"][0]["items"].append({"type": "rect", "a": [0, 0], "b": [5, 5], "stroke": "#000000", "width": 2})
+    tab._dirty = True
+    started = time.perf_counter()
+    tab._flush_in_background()
+    assert time.perf_counter() - started < 0.5          # did not wait for the write
+    assert not tab._dirty
+    gate.set()
+    tab.flush()                                          # waits for the write already running
+    assert seen and seen[0] is not threading.main_thread()
