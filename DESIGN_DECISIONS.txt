@@ -800,3 +800,8 @@ per line. Falls back to full repaints when guides or rulers are on, since they f
 Until burnout and reviews have no length to fill, so a ring (which showed the day goal, or nothing)
 was misleading. Ring.set_state(plain=True) draws a tinted rounded plate with a breathing dot, used on
 the Tasks card and Home; the mini timer already showed a bare stopwatch.
+
+2026-10-29 -- Scribe copy/paste lives on the board, not the system clipboard
+Copies are deep copies kept in memory (a marker token goes on the system clipboard so a picture copied
+later still pastes as an image). Pasting centres the items on the view centre, which is the world
+point under the middle of the screen, and steps 24px on repeat pastes so copies do not hide each other.
