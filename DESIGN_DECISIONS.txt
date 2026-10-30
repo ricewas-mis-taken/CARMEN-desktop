@@ -826,3 +826,10 @@ the pen froze and quick strokes arrived late or looked dropped. The timed save n
 (point lists are only replaced, never edited, so only the item dicts are copied) and writes it on one
 background thread; leaving the tab and quitting still save synchronously and wait for it. Rejected: making
 save() itself faster only (still a stall), and a full deepcopy for the thread (20 ms, 4 MB per save).
+
+2026-10-29 -- Scribe save still stalled the pen through the GIL (desktop only)
+Moving the save to a thread was not enough: its json.dumps of the whole board is one C call that holds the GIL
+(~40 ms), and each save re-read and re-parsed the 1.9 MB file to see whether the layers changed. The store now
+remembers the last-written layers as per-item text (so no re-read, and in-place edits are still seen -- a
+cached dict compare was tried and missed them) and builds it item by item so the pen can run in between.
+Worst UI stall during a save on the real board: 52 ms -> ~15 ms.
