@@ -441,3 +441,36 @@ def test_controls_carry_no_explanatory_sentences(qtbot):
     for widget in _every_control(tab):
         assert len(widget.toolTip()) < 40, widget.toolTip()
     assert "Click and drag" not in tab._tool_buttons["line"].toolTip()
+
+
+def test_drawing_by_hand_repaints_only_the_new_line(qtbot):
+    """While a freehand line is being drawn the board underneath is one remembered picture, rebuilt only
+    when the view or the drawing changes (repainting everything on each mouse move made it lag)."""
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab.resize(900, 600)
+    tab.show()
+    canvas = tab.canvas
+    canvas.doc["layers"][0]["items"].append(
+        {"type": "stroke", "pts": [[0, 0], [50, 40], [100, 0]], "stroke": "#000000", "width": 3})
+    canvas._draft = {"type": "stroke", "pts": [[10, 10], [20, 20]], "stroke": "#E2603B", "width": 3}
+    canvas.grab()
+    first = canvas._picture[1]
+    canvas._draft["pts"].append([30, 10])
+    canvas.grab()
+    assert canvas._picture[1] is first                    # same picture: the board was not repainted
+    canvas.doc["layers"][0]["items"].append(
+        {"type": "stroke", "pts": [[5, 5], [9, 9]], "stroke": "#000000", "width": 3})
+    canvas.grab()
+    assert canvas._picture[1] is not first                # the drawing changed, so it was remade
+
+
+def test_a_strokes_curve_is_built_once_and_rebuilt_when_it_changes(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    canvas = tab.canvas
+    item = {"type": "stroke", "pts": [[0, 0], [10, 20], [30, 10]], "stroke": "#000000", "width": 3}
+    first = canvas._stroke_path(item, False)
+    assert canvas._stroke_path(item, False) is first
+    item["pts"].append([50, 50])
+    assert canvas._stroke_path(item, False) is not first

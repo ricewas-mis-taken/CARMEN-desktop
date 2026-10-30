@@ -782,3 +782,10 @@ lifted, showing more, and ringed) that fills the panel width. The board goes bac
 chosen paper edge to edge: the tall sheets on a desk only covered one band of the board, so
 anywhere else (above, below, far away) every paper but black showed the same desk colour and
 "none of the papers worked".
+
+2026-10-29 -- Scribe freehand lag: remember work, repaint only the new line
+Every mouse move repainted the whole board, rebuilding each stroke curve and re-walking every point for
+bounds and the minimap heat. Curves, stroke bounds and heat are now cached until the stroke or view
+changes, and while drawing by hand the board plus paper is one cached picture with only the line in
+progress painted over it. Chosen over throttling mouse events, which would have made the line itself
+look choppy.
