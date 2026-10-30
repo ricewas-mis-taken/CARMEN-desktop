@@ -778,7 +778,7 @@ class _TaskCard(QFrame):
         row.addWidget(self._name_label, 1)
         self._state_chip = QLabel()
         self._state_chip.hide()
-        row.addWidget(self._state_chip)
+        row.addWidget(self._state_chip, 0, Qt.AlignVCenter)
         return row
 
     def _build_chips(self):
