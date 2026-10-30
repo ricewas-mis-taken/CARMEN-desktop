@@ -68,3 +68,15 @@ def test_images_on_the_board_are_synced_as_photos(isolate_state):
 
 def test_zoom_out_has_no_practical_floor():
     assert scribe_store.MIN_ZOOM <= 1e-5
+
+
+def test_a_second_save_does_not_reread_the_file_and_still_sees_in_place_edits(isolate_state):
+    doc = scribe_store.load()
+    doc["layers"][0]["items"].append({"type": "rect", "a": [0, 0], "b": [9, 9], "stroke": "#000000", "width": 2})
+    scribe_store.save(doc)
+    stamp = scribe_store.export()["updatedAt"]
+    scribe_store.save(doc)                                   # nothing changed: no new stamp
+    assert scribe_store.export()["updatedAt"] == stamp
+    doc["layers"][0]["items"][0]["stroke"] = "#ff0000"       # edited in place, as the canvas does
+    scribe_store.save(doc)
+    assert scribe_store.export()["updatedAt"] != stamp
