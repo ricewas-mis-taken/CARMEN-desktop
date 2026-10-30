@@ -488,106 +488,34 @@ class ScribeCanvas(QWidget):
             spacing *= 5
         return spacing
 
-    # The board is a row of tall sheets of paper on a desk, side by side without end.
-    PAGE_W, PAGE_H, PAGE_GAP, PAGE_TOP = 900.0, 2700.0, 70.0, -500.0
-
-    @staticmethod
-    def _grain_tile():
-        """A small tile of paper fibre: faint light and dark flecks, made once."""
-        tile = ScribeCanvas.__dict__.get("_grain")
-        if tile is None:
-            import random
-            image = QImage(160, 160, QImage.Format_ARGB32)
-            image.fill(Qt.transparent)
-            rnd = random.Random(7)
-            painter = QPainter(image)
-            for _ in range(900):
-                x, y = rnd.random() * 160, rnd.random() * 160
-                length = 1.5 + rnd.random() * 4
-                angle = rnd.random() * 6.283
-                shade = 255 if rnd.random() < 0.5 else 0
-                painter.setPen(QPen(QColor(shade, shade, shade, 4 + int(rnd.random() * 8)), 0.8))
-                painter.drawLine(QPointF(x, y), QPointF(x + math.cos(angle) * length, y + math.sin(angle) * length))
-            painter.end()
-            tile = ScribeCanvas._grain = QPixmap.fromImage(image)
-        return tile
-
     def _paint_background(self, p):
         paper, minor, major, dark = _BACKGROUNDS[self.prefs["background"]]
+        p.fillRect(self.rect(), QColor(paper))
         kind = self.prefs["background"]
+        if minor is None:
+            return
         z, w, h = self.zoom, self.width(), self.height()
-        p.fillRect(self.rect(), QColor("#12151B" if dark else "#CFCBDD"))          # the desk
-        stride = self.PAGE_W + self.PAGE_GAP
-        left, right = self.view["x"] - w / 2 / z, self.view["x"] + w / 2 / z
-        first = math.floor((left + self.PAGE_W / 2) / stride)
-        last = math.floor((right + self.PAGE_W / 2) / stride)
-        if last - first > 160:                    # zoomed far out: sheets are specks, so just tint
-            p.fillRect(self.rect(), QColor(paper).darker(108) if not dark else QColor(paper).lighter(130))
-            return
         spacing = self._grid_spacing()
-        grain = self._grain_tile()
-        for index in range(first, last + 1):
-            x0 = index * stride - self.PAGE_W / 2
-            sx0, sy0 = self._to_screen(x0, self.PAGE_TOP)
-            sx1, sy1 = self._to_screen(x0 + self.PAGE_W, self.PAGE_TOP + self.PAGE_H)
-            page = QRectF(sx0, sy0, sx1 - sx0, sy1 - sy0)
-            if page.right() < 0 or page.left() > w or page.bottom() < 0 or page.top() > h:
-                continue
-            for grow, alpha in ((14, 10), (9, 14), (5, 18), (2, 22)):        # a soft shadow under the sheet
-                p.setPen(Qt.NoPen)
-                p.setBrush(QColor(20, 16, 40, alpha))
-                p.drawRoundedRect(page.adjusted(-grow * 0.4, grow * 0.3, grow * 0.4, grow * 0.9),
-                                  3 + grow * 0.3, 3 + grow * 0.3)
-            p.setBrush(QColor(paper))
-            p.drawRoundedRect(page, 3, 3)
-            p.save()
-            clip = QPainterPath()
-            clip.addRoundedRect(page, 3, 3)
-            p.setClipPath(clip)
-            if not dark:
-                shade = QLinearGradient(page.topLeft(), page.bottomLeft())      # a touch of light from above
-                shade.setColorAt(0, QColor(255, 255, 255, 40))
-                shade.setColorAt(1, QColor(120, 100, 60, 18))
-                p.fillRect(page, shade)
-            p.drawTiledPixmap(page, grain, QPointF(-(page.left() % 160), -(page.top() % 160)))
-            if minor is not None:
-                self._paint_rules(p, kind, minor, major, spacing, page)
-            p.restore()
-            p.setBrush(Qt.NoBrush)
-            p.setPen(QPen(QColor(255, 255, 255, 30) if dark else QColor(0, 0, 0, 38), 1))
-            p.drawRoundedRect(page, 3, 3)
-
-    def _paint_rules(self, p, kind, minor, major, spacing, page):
-        """Grid, dots or lines, drawn only inside one sheet."""
-        z = self.zoom
         step = spacing * z
-        if step < 3:
-            return
-        left, top = self.view["x"] - self.width() / 2 / z, self.view["y"] - self.height() / 2 / z
-        x_from, x_to = max(0.0, page.left()), min(float(self.width()), page.right())
-        y_from, y_to = max(0.0, page.top()), min(float(self.height()), page.bottom())
-        first_i = math.floor((left + x_from / z) / spacing)
-        first_j = math.floor((top + y_from / z) / spacing)
-        count_x, count_y = int((x_to - x_from) / step) + 2, int((y_to - y_from) / step) + 2
+        left, top = self.view["x"] - w / 2 / z, self.view["y"] - h / 2 / z
+        first_i, first_j = math.floor(left / spacing), math.floor(top / spacing)
+        count_x, count_y = int(w / step) + 2, int(h / step) + 2
         if kind == "dots":
             p.setPen(QPen(QColor(minor), 2.5, Qt.SolidLine, Qt.RoundCap))
             for i in range(first_i, first_i + count_x):
                 for j in range(first_j, first_j + count_y):
                     sx, sy = self._to_screen(i * spacing, j * spacing)
-                    if x_from <= sx <= x_to and y_from <= sy <= y_to:
-                        p.drawPoint(QPointF(sx, sy))
+                    p.drawPoint(QPointF(sx, sy))
             return
         if kind != "lined":
             for i in range(first_i, first_i + count_x):
                 sx = round(self._to_screen(i * spacing, 0)[0]) + 0.5
-                if x_from <= sx <= x_to:
-                    p.setPen(QPen(QColor(major if i % 5 == 0 else minor), 1))
-                    p.drawLine(QPointF(sx, y_from), QPointF(sx, y_to))
+                p.setPen(QPen(QColor(major if i % 5 == 0 else minor), 1))
+                p.drawLine(QPointF(sx, 0), QPointF(sx, h))
         for j in range(first_j, first_j + count_y):
             sy = round(self._to_screen(0, j * spacing)[1]) + 0.5
-            if y_from <= sy <= y_to:
-                p.setPen(QPen(QColor(major if (major and j % 5 == 0) else minor), 1))
-                p.drawLine(QPointF(x_from, sy), QPointF(x_to, sy))
+            p.setPen(QPen(QColor(major if (major and j % 5 == 0) else minor), 1))
+            p.drawLine(QPointF(0, sy), QPointF(w, sy))
 
     def _paint_scene(self, p, width, height, zoom, cx, cy, ui):
         p.save()
@@ -1373,47 +1301,92 @@ class _StrokePreview(QWidget):
         p.drawPath(path)
 
 
-class _PaperChip(QPushButton):
-    """A small picture of one paper (white, grid, dots...); the chosen one wears a ring."""
+class _PaperStack(QWidget):
+    """The papers as a stack of wide rounded cards, each showing a strip of its top before the next
+    card begins. The chosen one is lifted: more of it shows, and a ring marks it."""
+    picked = Signal(str)
+    PEEK, EXTRA, CARD, RADIUS = 26, 54, 78, 12
 
-    def __init__(self, key, label):
+    def __init__(self, keys, current):
         super().__init__()
-        self._key = key
-        self.setCheckable(True)
-        self.setFixedSize(30, 44)
-        self.setAccessibleName(f"{label} paper")
+        self._keys = list(keys)
+        self._current = current
+        self._pos = float(self._keys.index(current)) if current in self._keys else 0.0
+        self._anim = None
         self.setCursor(Qt.PointingHandCursor)
+        self.setFixedHeight(self._top(len(self._keys) - 1) + self.CARD + 6)
+        self.setMinimumWidth(120)
+
+    def current(self):
+        return self._current
+
+    def _top(self, index):
+        lift = max(0.0, min(1.0, index - self._pos))
+        return 3 + index * self.PEEK + self.EXTRA * lift
+
+    def set_current(self, key, animate=True):
+        if key not in self._keys:
+            return
+        self._current = key
+        target = float(self._keys.index(key))
+        from qt_ui import motion
+        motion.stop(self._anim)
+        if not animate:
+            self._pos = target
+            self.update()
+            return
+
+        def step(value):
+            self._pos = value
+            self.update()
+        self._anim = motion.tween(self, self._pos, target, motion.MEDIUM_MS, step)
+
+    def mousePressEvent(self, event):
+        y = event.position().y()
+        for index in range(len(self._keys) - 1, -1, -1):
+            if y >= self._top(index):
+                self.picked.emit(self._keys[index])
+                return
 
     def paintEvent(self, _event):
-        paper, minor, major, _dark = _BACKGROUNDS[self._key]
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        inner = QRectF(3, 3, self.width() - 6, self.height() - 6)
-        path = QPainterPath()
-        path.addRoundedRect(inner, 8, 8)
-        p.setClipPath(path)
-        p.fillRect(inner, QColor(paper))
-        if minor is not None:
-            p.setPen(QPen(QColor(minor), 1))
-            if self._key == "dots":
-                p.setPen(QPen(QColor(minor), 2, Qt.SolidLine, Qt.RoundCap))
-                for x in range(9, 28, 8):
-                    for y in range(8, 42, 8):
-                        p.drawPoint(QPointF(x, y))
-            elif self._key == "lined":
-                for y in range(11, 42, 8):
-                    p.drawLine(QPointF(inner.left(), y), QPointF(inner.right(), y))
-            else:
-                for v in range(11, 28, 8):
-                    p.setPen(QPen(QColor(minor), 1))
-                    p.drawLine(QPointF(v, inner.top()), QPointF(v, inner.bottom()))
-                for v in range(11, 42, 8):
-                    p.setPen(QPen(QColor(major if v == 19 else minor), 1))
-                    p.drawLine(QPointF(inner.left(), v), QPointF(inner.right(), v))
-        p.setClipping(False)
-        p.setBrush(Qt.NoBrush)
-        p.setPen(QPen(QColor(SCRIBE_INK) if self.isChecked() else QColor("#D5D9E0"), 2 if self.isChecked() else 1))
-        p.drawRoundedRect(inner, 8, 8)
+        width = self.width()
+        for index, key in enumerate(self._keys):
+            paper, minor, major, dark = _BACKGROUNDS[key]
+            card = QRectF(3, self._top(index), width - 6, self.CARD)
+            path = QPainterPath()
+            path.addRoundedRect(card, self.RADIUS, self.RADIUS)
+            for grow, alpha in ((6, 16), (3, 22)):             # a soft shadow on the card behind
+                p.setPen(Qt.NoPen)
+                p.setBrush(QColor(20, 16, 40, alpha))
+                p.drawRoundedRect(card.adjusted(-grow * 0.3, -grow, grow * 0.3, 0), self.RADIUS, self.RADIUS)
+            p.save()
+            p.setClipPath(path)
+            p.fillRect(card, QColor(paper))
+            if minor is not None:
+                p.setPen(QPen(QColor(minor), 1))
+                if key == "dots":
+                    p.setPen(QPen(QColor(minor), 2, Qt.SolidLine, Qt.RoundCap))
+                    for x in range(int(card.left()) + 10, int(card.right()), 12):
+                        for y in range(int(card.top()) + 8, int(card.bottom()), 12):
+                            p.drawPoint(QPointF(x, y))
+                elif key == "lined":
+                    for y in range(int(card.top()) + 12, int(card.bottom()), 12):
+                        p.drawLine(QPointF(card.left(), y), QPointF(card.right(), y))
+                else:
+                    for k, x in enumerate(range(int(card.left()) + 6, int(card.right()), 12)):
+                        p.setPen(QPen(QColor(major if k % 5 == 0 and major else minor), 1))
+                        p.drawLine(QPointF(x, card.top()), QPointF(x, card.bottom()))
+                    for k, y in enumerate(range(int(card.top()) + 6, int(card.bottom()), 12)):
+                        p.setPen(QPen(QColor(major if k % 5 == 0 and major else minor), 1))
+                        p.drawLine(QPointF(card.left(), y), QPointF(card.right(), y))
+            p.restore()
+            chosen = key == self._current
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(QColor(SCRIBE_INK) if chosen else QColor(255, 255, 255, 40) if dark else QColor(0, 0, 0, 40),
+                          2 if chosen else 1))
+            p.drawRoundedRect(card, self.RADIUS, self.RADIUS)
 
 
 class ScribeTab(QWidget):
@@ -1738,18 +1711,10 @@ class ScribeTab(QWidget):
         self._background.setToolTip(HELP["paper"])
         self._background.hide()
         box.addWidget(self._background)
-        self._paper_chips = {}
-        paper_grid = QGridLayout()
-        paper_grid.setHorizontalSpacing(6)
-        paper_grid.setVerticalSpacing(6)
-        for index, key in enumerate(BACKGROUND_LABELS):
-            chip = _PaperChip(key, BACKGROUND_LABELS[key])
-            chip.setToolTip(BACKGROUND_LABELS[key])
-            chip.clicked.connect(lambda _c=False, k=key: self._background.setCurrentIndex(self._background.findData(k)))
-            self._paper_chips[key] = chip
-            paper_grid.addWidget(chip, index // 5, index % 5)
-        box.addLayout(paper_grid)
-        self._sync_paper_chips()
+        self._paper_stack = _PaperStack(BACKGROUND_LABELS.keys(), prefs["background"])
+        self._paper_stack.picked.connect(
+            lambda k: self._background.setCurrentIndex(self._background.findData(k)))
+        box.addWidget(self._paper_stack)
 
         # --- layers
         box.addSpacing(4)
@@ -1817,8 +1782,7 @@ class ScribeTab(QWidget):
         self._sync_paper_chips()
 
     def _sync_paper_chips(self):
-        for key, chip in self._paper_chips.items():
-            chip.setChecked(key == self._background.currentData())
+        self._paper_stack.set_current(self._background.currentData())
 
     def _sync_quick_dots(self):
         stroke = (self.canvas.prefs["stroke"] or "").lower()

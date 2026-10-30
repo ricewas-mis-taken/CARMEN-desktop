@@ -774,3 +774,11 @@ Home had no business running the page entrance (it rebuilds itself every ~10 s a
 sky), the entrance no longer scales cards (that read as wobbling), it ends if the window is
 resized, and a ring that is just built shows its value instead of sweeping from empty (Home
 rebuilt its rings each refresh, so they re-swept constantly).
+
+2026-10-29 -- Scribe papers: a stack of cards, painted edge to edge
+The "papers" meant the paper choices in the side panel, not the board. They are now one stacked
+column of wide rounded cards (each shows a strip of its pattern above the next card; the chosen one is
+lifted, showing more, and ringed) that fills the panel width. The board goes back to painting the
+chosen paper edge to edge: the tall sheets on a desk only covered one band of the board, so
+anywhere else (above, below, far away) every paper but black showed the same desk colour and
+"none of the papers worked".

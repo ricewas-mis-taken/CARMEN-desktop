@@ -389,15 +389,41 @@ def test_the_preview_shows_the_line_you_will_draw(qtbot):
     assert tab._stroke_preview._style == ("#7048E8", 9, True, tab.canvas.prefs["roundCorners"])
 
 
-def test_paper_thumbnails_set_the_background_and_show_the_current_one(qtbot):
+def test_the_paper_stack_sets_the_background_and_shows_the_current_one(qtbot):
     tab = ScribeTab()
     qtbot.addWidget(tab)
-    tab._paper_chips["dots"].click()
+    stack = tab._paper_stack
+    stack.picked.emit("dots")
     assert tab.canvas.prefs["background"] == "dots" and tab._background.currentData() == "dots"
-    assert tab._paper_chips["dots"].isChecked() and not tab._paper_chips["grid"].isChecked()
-    assert set(tab._paper_chips) == set(scribe_store.BACKGROUNDS)
-    for chip in tab._paper_chips.values():
-        chip.grab()   # every paper paints
+    assert stack.current() == "dots"
+    assert set(stack._keys) == set(scribe_store.BACKGROUNDS)
+    stack.grab()      # every paper paints
+
+
+def test_clicking_a_paper_strip_picks_that_paper(qtbot):
+    from PySide6.QtCore import QPoint
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab.show()
+    stack = tab._paper_stack
+    for index, key in enumerate(stack._keys):
+        y = int(stack._top(index)) + 6                  # inside this card's own strip
+        qtbot.mouseClick(stack, Qt.LeftButton, pos=QPoint(40, y))
+        assert tab.canvas.prefs["background"] == key, key
+
+
+def test_every_paper_paints_edge_to_edge_on_the_board(qtbot):
+    """Wherever the view is, the board is the chosen paper (white, black and plain paper are flat)."""
+    from qt_ui.scribe_tab import _BACKGROUNDS
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab.resize(1200, 800)
+    tab.show()
+    for key in ("white", "black", "paper"):
+        tab.canvas.set_background(key)
+        tab.canvas.view.update(x=0, y=9000)
+        image = tab.canvas.grab().toImage()
+        assert image.pixelColor(60, 60).name() == _BACKGROUNDS[key][0].lower(), key
 
 
 # ------------------------------------------------------------------ hover help ----
