@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -503,8 +504,19 @@ class TasksTab(QWidget):
 
         layout.addLayout(self._build_header())
         self._summary_label = QLabel()
-        self._summary_label.setStyleSheet(f"color:{MUTED};font-size:13px;")
+        self._summary_label.setStyleSheet(f"color:{INK};font-size:26px;font-weight:800;")
+        self._summary_label.setMinimumWidth(0)
+        self._summary_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)  # never widens the window
         layout.addWidget(self._summary_label)
+        self._summary_bar = QProgressBar()
+        self._summary_bar.setTextVisible(False)
+        self._summary_bar.setFixedHeight(12)
+        self._summary_bar.setRange(0, 1000)
+        self._summary_bar.setStyleSheet(
+            "QProgressBar{background:#E6E9EF;border:none;border-radius:6px;}"
+            "QProgressBar::chunk{background:#2F9E44;border-radius:6px;}")
+        layout.addWidget(self._summary_bar)
+        layout.addSpacing(10)
 
         scroll = QScrollArea()
         self._scroll = scroll
@@ -624,6 +636,8 @@ class TasksTab(QWidget):
                 scheduled += 1
             elif card.goal_state == "open":
                 scheduled += 1
+        self._summary_bar.setVisible(bool(scheduled))
+        self._summary_bar.setValue(int(1000 * reached / scheduled) if scheduled else 0)
         if not self._cards:
             self._summary_label.setText("")
         elif not scheduled:
