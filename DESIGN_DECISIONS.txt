@@ -805,3 +805,9 @@ the Tasks card and Home; the mini timer already showed a bare stopwatch.
 Copies are deep copies kept in memory (a marker token goes on the system clipboard so a picture copied
 later still pastes as an image). Pasting centres the items on the view centre, which is the world
 point under the middle of the screen, and steps 24px on repeat pastes so copies do not hide each other.
+
+2026-10-29 -- Scribe pan lag: freeze the board extent while panning (desktop only)
+The minimap asks for the extent of every item several times per repaint, a walk over the whole board. Panning
+moves nothing on it, so the extent is held for the length of a pan (and for one repaint); other edits still
+recompute it. Rejected: a version counter bumped at each edit site, which would go stale the first time a
+new edit path forgot to bump it. The "Saved" chip is also only restyled when its state flips.
