@@ -795,3 +795,8 @@ The first fix still repainted the whole board per move, rebuilt the whole draft 
 stroke for the minimap extent. Now only a small patch around the newest piece (plus the minimap) is
 repainted, finished curve pieces of the live line are kept, and board extent/version are computed once
 per line. Falls back to full repaints when guides or rulers are on, since they follow the cursor.
+
+2026-10-29 -- Count-up sessions get no ring
+Until burnout and reviews have no length to fill, so a ring (which showed the day goal, or nothing)
+was misleading. Ring.set_state(plain=True) draws a tinted rounded plate with a breathing dot, used on
+the Tasks card and Home; the mini timer already showed a bare stopwatch.
