@@ -272,8 +272,26 @@ class ScribeCanvas(QWidget):
         self.view.update({"x": 0.0, "y": 0.0})
         self.set_zoom(1.0)
 
+    def _stroke_stamp(self, item):
+        pts = item["pts"]
+        return (len(pts), pts[0][0], pts[0][1], pts[-1][0], pts[-1][1]) if pts else (0,)
+
+    def _bounds_of(self, item):
+        """geo.bounds, but a stroke's box is remembered between calls: working it out walks every
+        point, and it is asked for several times for every repaint."""
+        if item.get("type") != "stroke" or not item.get("pts"):
+            return geo.bounds(item)
+        cache = self.__dict__.setdefault("_stroke_boxes", {})
+        stamp = self._stroke_stamp(item)
+        known = cache.get(id(item))
+        if known is not None and known[0] is item and known[1] == stamp:
+            return known[2]
+        box = geo.bounds(item)
+        cache[id(item)] = (item, stamp, box)
+        return box
+
     def _all_bounds(self):
-        boxes = [geo.bounds(i) for layer in self.doc["layers"] if layer["visible"] for i in layer["items"]]
+        boxes = [self._bounds_of(i) for layer in self.doc["layers"] if layer["visible"] for i in layer["items"]]
         if not boxes:
             return None
         return (min(b[0] for b in boxes), min(b[1] for b in boxes),
@@ -348,15 +366,49 @@ class ScribeCanvas(QWidget):
         corners = QPainterPath()
         corners.addRoundedRect(QRectF(self.rect()), 15, 15)
         p.setClipPath(corners)
-        self._paint_background(p)
-        p.setRenderHint(QPainter.Antialiasing, True)
-        self._paint_scene(p, self.width(), self.height(), self.zoom, self.view["x"], self.view["y"], ui=True)
+        if self._draft is not None and self._draft.get("type") == "stroke":
+            # Drawing by hand: everything already on the board is a picture made once, and only the
+            # line being drawn is painted on top of it on each move (repainting a whole board on
+            # every mouse event is what made freehand lag).
+            p.drawPixmap(0, 0, self._board_picture())
+            p.setRenderHint(QPainter.Antialiasing, True)
+            p.save()
+            p.translate(self.width() / 2, self.height() / 2)
+            p.scale(self.zoom, self.zoom)
+            p.translate(-self.view["x"], -self.view["y"])
+            self._paint_item(p, self._draft, self.zoom)
+            p.restore()
+        else:
+            self._paint_background(p)
+            p.setRenderHint(QPainter.Antialiasing, True)
+            self._paint_scene(p, self.width(), self.height(), self.zoom, self.view["x"], self.view["y"], ui=True)
         if self.prefs["showGuides"]:
             self._paint_guides(p)
         if self.prefs["showRulers"]:
             self._paint_rulers(p)
         self._paint_minimap(p)
         p.end()
+
+    def _board_picture(self):
+        """The paper and everything drawn so far, as one picture, kept until the view or the content changes."""
+        ratio = self.devicePixelRatioF()
+        version = sum(len(layer["items"]) * 7 + sum(len(i["pts"]) for i in layer["items"] if i.get("type") == "stroke")
+                      for layer in self.doc["layers"] if layer["visible"])
+        key = (self.width(), self.height(), ratio, self.zoom, self.view["x"], self.view["y"],
+               self.prefs["background"], version, len(self.doc["layers"]),
+               tuple((layer["visible"], layer["opacity"]) for layer in self.doc["layers"]))
+        known = getattr(self, "_picture", None)
+        if known is not None and known[0] == key:
+            return known[1]
+        image = QPixmap(int(self.width() * ratio), int(self.height() * ratio))
+        image.setDevicePixelRatio(ratio)
+        picture = QPainter(image)
+        self._paint_background(picture)
+        picture.setRenderHint(QPainter.Antialiasing, True)
+        self._paint_scene(picture, self.width(), self.height(), self.zoom, self.view["x"], self.view["y"], ui=False)
+        picture.end()
+        self._picture = (key, image)
+        return image
 
     # ---- minimap ---------------------------------------------------------
     MINIMAP_BELOW = 0.5      # zoomed out past this, a map of the whole board appears
@@ -394,6 +446,19 @@ class ScribeCanvas(QWidget):
     HEAT_CELL = 6    # minimap pixels per heat cell
 
     def _heat(self, rect, scale, ox, oy):
+        """The heat cells, remembered while nothing under them has changed (it walks every point of every
+        stroke, so doing it on each mouse move made drawing lag)."""
+        version = sum(len(layer["items"]) * 7 + sum(len(i["pts"]) for i in layer["items"] if i.get("type") == "stroke")
+                      for layer in self.doc["layers"] if layer["visible"])
+        key = (round(rect.width()), round(rect.height()), round(scale, 5), round(ox), round(oy), version)
+        known = getattr(self, "_heat_cache", None)
+        if known is not None and known[0] == key:
+            return known[1]
+        heat = self._heat_compute(rect, scale, ox, oy)
+        self._heat_cache = (key, heat)
+        return heat
+
+    def _heat_compute(self, rect, scale, ox, oy):
         """{(col, row): weight}: how much is drawn in each cell of the map, so busy areas glow."""
         cell = self.HEAT_CELL
         cols, rows = int(rect.width() // cell) + 1, int(rect.height() // cell) + 1
@@ -576,6 +641,20 @@ class ScribeCanvas(QWidget):
         pad = 16 + 6 * width
         return not (x1 + pad < view[0] or x0 - pad > view[2] or y1 + pad < view[1] or y0 - pad > view[3])
 
+    def _stroke_path(self, item, closed):
+        """The curve for a stroke, built once and reused until the stroke changes."""
+        cache = self.__dict__.setdefault("_path_cache", {})
+        stamp = (self._stroke_stamp(item), closed)
+        known = cache.get(id(item))
+        if known is not None and known[0] is item and known[1] == stamp:
+            return known[2]
+        path = self._smooth_path(item["pts"], closed)
+        if item is not self._draft:                 # the stroke being drawn changes on every move
+            if len(cache) > 4000:
+                cache.clear()
+            cache[id(item)] = (item, stamp, path)
+        return path
+
     @staticmethod
     def _smooth_path(pts, closed=False):
         """Freehand points as one smooth curve (a Catmull-Rom spline through every point), so even a
@@ -644,7 +723,7 @@ class ScribeCanvas(QWidget):
                 p.setBrush(color)
                 p.drawEllipse(QPointF(*pts[0]), pen_width / 2, pen_width / 2)
             else:
-                p.drawPath(self._smooth_path(pts, closed=bool(fill)))
+                p.drawPath(self._stroke_path(item, bool(fill)))
         elif kind in geo.LINE_TYPES:
             a, b = QPointF(*item["a"]), QPointF(*item["b"])
             p.drawLine(a, b)
