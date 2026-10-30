@@ -1130,8 +1130,8 @@ class ScribeCanvas(QWidget):
                 last = d["pts"][-1]
                 if math.hypot(w[0] - last[0], w[1] - last[1]) >= 1.2 / self.zoom and len(d["pts"]) < 4000:
                     d["pts"].append(list(w))
-                    if not (self.prefs["showGuides"] or self.prefs["showRulers"]):
-                        self._update_around_stroke(d)
+                    if not self.prefs["showGuides"]:     # guide lines reach the board's edge, where the cards'
+                        self._update_around_stroke(d)   # shadows make a repaint redraw the whole window
                         return
             elif kind == "curve" and self._phase == 1:
                 d["c"] = list(self._snap(w))
