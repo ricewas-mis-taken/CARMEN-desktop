@@ -1305,7 +1305,6 @@ class _TaskCard(QFrame):
         pomo = view.get("pomodoro")
         elapsed = tasks_store.worked_seconds(
             view.get("startTime"), None, view.get("violationLog")) if view.get("startTime") else 0
-        elapsed_m, elapsed_s = divmod(elapsed, 60)
 
         ring_color = _BREAK_COLOR if on_break else self._color
         plain = bool(review_problem or view.get("isBurnout"))
@@ -1314,19 +1313,18 @@ class _TaskCard(QFrame):
             big, small = _format_clock(elapsed), "elapsed"
             ring_fraction = fraction
             if review_problem:
-                headline = f"{review_problem} · {elapsed_m}m {elapsed_s}s elapsed"
+                headline = str(review_problem)
             else:
-                headline = f"Until burnout · {elapsed_m}m {elapsed_s}s elapsed"
+                headline = "Until burnout"
         else:
             remaining = view.get("secondsRemaining", 0)
-            rem_m, rem_s = divmod(remaining, 60)
             if pomo:
                 phase_minutes = pomo["breakMinutes"] if on_break else pomo["focusMinutes"]
                 label = "Break" if on_break else "Focus"
-                headline = f"{label} {pomo['currentCycle']}/{pomo['totalCycles']} · {rem_m}m {rem_s}s remaining"
+                headline = f"{label} {pomo['currentCycle']}/{pomo['totalCycles']}"
                 total = phase_minutes * 60
             else:
-                headline = f"{rem_m}m {rem_s}s remaining"
+                headline = "Break" if on_break else "Focus session"
                 total = elapsed + remaining
             big, small = _format_clock(remaining), "break" if on_break else "remaining"
             ring_fraction = 0.0 if total <= 0 else 1 - remaining / total

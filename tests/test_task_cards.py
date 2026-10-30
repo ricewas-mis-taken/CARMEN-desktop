@@ -135,7 +135,7 @@ def test_running_card_shows_the_session_ring_and_a_running_chip(qtbot, world):
     assert card._state_chip.text() == "Running"
     assert card._ring._small == "remaining"
     assert card._ring._big in ("30:00", "29:59")
-    assert card._pause_button.text() == "Pause" and "remaining" in card._countdown_label.text()
+    assert card._pause_button.text() == "Pause" and card._countdown_label.text() == "Focus session"
 
 
 def test_paused_card_offers_resume(qtbot, world):

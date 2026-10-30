@@ -41,7 +41,8 @@ def test_review_session_for_linked_task_shows_as_running(qtbot, isolate_tasks, i
     text = card._countdown_label.text()
     assert "Quadratics 1" in text
     assert "Algebra" not in text
-    assert "elapsed" in text.lower()
+    assert "elapsed" not in text.lower()      # the ring carries the time; the line does not repeat it
+    assert card._ring._small == "elapsed"
 
 
 def test_burnout_session_shows_as_stopwatch_even_on_a_fresh_card(qtbot, isolate_tasks, isolate_state):
@@ -61,9 +62,8 @@ def test_burnout_session_shows_as_stopwatch_even_on_a_fresh_card(qtbot, isolate_
     fresh_card.update_dynamic(session_manager.get_status(), session_history.load_all())
 
     text = fresh_card._countdown_label.text().lower()
-    assert "until burnout" in text
-    assert "elapsed" in text
-    assert "remaining" not in text
+    assert text == "until burnout"
+    assert fresh_card._ring._small == "elapsed"
 
 
 def test_review_session_pause_button_works_for_linked_task(qtbot, isolate_tasks, isolate_state):
