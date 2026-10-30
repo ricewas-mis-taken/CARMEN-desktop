@@ -150,11 +150,16 @@ class Ring(QWidget):
         self._ink, self._muted, self._faint = colors
         self.update()
 
-    def set_state(self, color, fraction, big, small, dim=False):
+    _plain = False
+
+    def set_state(self, color, fraction, big, small, dim=False, plain=False):
+        """plain=True is a count-up with nothing to fill (until burnout, a review): no ring, a tinted
+        plate with a breathing dot instead."""
         fraction = round(max(0.0, fraction), 4)
-        if (QColor(color).name(), fraction, big, small, dim) == (
-                self._color.name(), self._fraction, self._big, self._small, self._dim):
+        if (QColor(color).name(), fraction, big, small, dim, plain) == (
+                self._color.name(), self._fraction, self._big, self._small, self._dim, self._plain):
             return
+        self._plain = plain
         before = self._fraction
         first = not self._has_state
         self._has_state = True
@@ -165,6 +170,32 @@ class Ring(QWidget):
             self._ease_to(fraction)
         self.update()
 
+    def _paint_plate(self, p, rect):
+        """The count-up look: a soft rounded plate, a dot that breathes, the clock and its caption."""
+        import math
+        plate = QColor(self._color)
+        plate.setAlphaF(0.10 if not self._dim else 0.05)
+        p.setPen(Qt.NoPen)
+        p.setBrush(plate)
+        p.drawRoundedRect(rect, 26, 26)
+        dot = QColor(self._color)
+        breathe = 0.5 + 0.5 * math.sin(self._pulse * 6.2832) if self._live and not self._dim else 0.6
+        dot.setAlphaF((0.35 + 0.65 * breathe) * (0.4 if self._dim else 1.0))
+        p.setBrush(dot)
+        radius = 4 + 1.5 * breathe
+        p.drawEllipse(QPointF(self.width() / 2, rect.top() + 20), radius, radius)
+        big = QFont()
+        big.setFamilies(NUM_FONTS)
+        big.setPixelSize(26 if len(self._big) < 6 else 22)
+        p.setFont(big)
+        p.setPen(QColor(self._faint if self._dim else self._ink))
+        p.drawText(QRectF(0, self.height() / 2 - 14, self.width(), 30), Qt.AlignCenter, self._big)
+        small = QFont(TEXT_FONT)
+        small.setPixelSize(11)
+        p.setFont(small)
+        p.setPen(QColor(self._faint if self._dim else self._muted))
+        p.drawText(QRectF(0, self.height() / 2 + 16, self.width(), 18), Qt.AlignCenter, self._small)
+
     def paintEvent(self, _event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
@@ -172,6 +203,9 @@ class Ring(QWidget):
         rect = QRectF(width / 2 + 2, width / 2 + 2, self.width() - width - 4, self.height() - width - 4)
         track = QColor(self._color)
         track.setAlphaF(0.15)
+        if self._plain:
+            self._paint_plate(p, rect)
+            return
         p.setPen(QPen(track, width, Qt.SolidLine, Qt.RoundCap))
         p.drawEllipse(rect)
         if self._live and not self._dim and self._shown > 0:

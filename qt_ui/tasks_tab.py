@@ -1294,6 +1294,7 @@ class _TaskCard(QFrame):
         elapsed_m, elapsed_s = divmod(elapsed, 60)
 
         ring_color = _BREAK_COLOR if on_break else self._color
+        plain = bool(review_problem or view.get("isBurnout"))
         if review_problem or view.get("isBurnout"):
             # A stopwatch, not a timer: no fixed duration to count down to.
             big, small = _format_clock(elapsed), "elapsed"
@@ -1321,7 +1322,7 @@ class _TaskCard(QFrame):
             headline = "Waiting while another task runs"
         self._countdown_label.setText(headline)
         self._countdown_label.setStyleSheet(f"font-size:15px;font-weight:600;color:{INK};background:transparent;")
-        self._ring.set_state(ring_color, ring_fraction, big, small, dim=paused or is_waiting)
+        self._ring.set_state(ring_color, ring_fraction, big, small, dim=paused or is_waiting, plain=plain)
 
         phrase = self._snap["phrase"] if self._snap else "today"
         detail = (f"{_format_minutes(logged)} of {_format_amount(required)} {phrase}" if required > 0

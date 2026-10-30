@@ -758,7 +758,8 @@ class HomeTab(QWidget):
             ring, colour = self._live
             _label, clock, fraction, _can_pause = describe_session(status)
             paused = bool(status.get("isPaused"))
-            ring.set_state(colour, fraction or 0.0, clock, "paused" if paused else "", dim=paused)
+            ring.set_state(colour, fraction or 0.0, clock, "paused" if paused else "", dim=paused,
+                           plain=fraction is None)
 
     def _typing(self):
         widget = self.focusWidget()
@@ -842,7 +843,8 @@ class HomeTab(QWidget):
             colour = BREAK_COLOR if status.get("isBreak") else _GRID_BLUE
             ring = Ring(size)
             ring.set_text_colors(INK, MUTED, FAINT)
-            ring.set_state(colour, fraction or 0.0, clock, "paused" if paused else "", dim=paused)
+            ring.set_state(colour, fraction or 0.0, clock, "paused" if paused else "", dim=paused,
+                           plain=fraction is None)
             ring.set_live(not paused)
             self._live = (ring, colour)
             row.addWidget(ring, 0, Qt.AlignLeft if self._compact else Qt.AlignVCenter)
