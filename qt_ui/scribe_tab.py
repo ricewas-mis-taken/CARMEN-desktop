@@ -7,7 +7,9 @@ private/scribe.json a moment later (see scribe_store.py), and again when the tab
 is hidden or the app quits. Shape maths lives in scribe_geometry.py.
 """
 import collections
+import copy
 import math
+import threading
 import time
 
 from PySide6.QtCore import QBuffer, QByteArray, QPointF, QRectF, QSize, Qt, QTimer, Signal
@@ -1606,18 +1608,22 @@ class _PaperStack(QWidget):
 
 
 class ScribeTab(QWidget):
+    _saved_now = Signal()           # a background save finished
     _remote_arrived = Signal()      # emitted from the sync thread; handled on the GUI thread
 
     def __init__(self):
         super().__init__()
         self._dirty = False
+        self._saver = None           # the thread writing the board right now, if any
+        self._save_failed = False
         self._remote_arrived.connect(self._reload_shared)
+        self._saved_now.connect(self._after_background_save)
         scribe_store.add_remote_listener(self._remote_arrived.emit)
         self.canvas = ScribeCanvas(scribe_store.load())
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(SAVE_DELAY_MS)
-        self._save_timer.timeout.connect(self.flush)
+        self._save_timer.timeout.connect(self._flush_in_background)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -1656,7 +1662,47 @@ class ScribeTab(QWidget):
         self._show_saved(False)
         self._save_timer.start()
 
+    def _copy_for_saving(self):
+        """The board as it is now, cheap to copy (point lists are only ever replaced, never edited), so a
+        thread can write it while drawing carries on."""
+        doc = self.canvas.doc
+        copied = {key: (value if key == "layers" else copy.deepcopy(value)) for key, value in doc.items()}
+        copied["layers"] = [dict(layer, items=[dict(item) for item in layer["items"]]) for layer in doc["layers"]]
+        return copied
+
+    def _write(self, doc):
+        try:
+            scribe_store.save(doc)
+        except OSError:
+            self._save_failed = True   # stays dirty; the next change (or quit) tries again
+
+    def _flush_in_background(self):
+        """Saving a big board takes a few hundred ms; on the UI thread that froze the pen mid-stroke."""
+        if not self._dirty:
+            return
+        if self._saver is not None and self._saver.is_alive():
+            self._save_timer.start()               # one write at a time; try again shortly
+            return
+        doc = self._copy_for_saving()
+        self._dirty = False
+        self._save_failed = False
+        self._saver = threading.Thread(target=self._write_and_mark, args=(doc,), daemon=True)
+        self._saver.start()
+
+    def _write_and_mark(self, doc):
+        self._write(doc)
+        if self._save_failed:
+            self._dirty = True
+        else:
+            self._saved_now.emit()
+
     def flush(self):
+        """Save now and wait for it (leaving the tab, quitting)."""
+        if self._saver is not None:
+            self._saver.join()
+        if self._save_failed:
+            self._dirty = True
+            self._save_failed = False
         if not self._dirty:
             return
         try:
@@ -1665,6 +1711,10 @@ class ScribeTab(QWidget):
             self._show_saved(True)
         except OSError:
             pass  # stays dirty; the next change (or quit) tries again
+
+    def _after_background_save(self):
+        if not self._dirty:
+            self._show_saved(True)
 
     def _reload_shared(self):
         """The other computer's drawing (or its images) arrived. Anything not yet saved here
