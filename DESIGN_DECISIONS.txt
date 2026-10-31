@@ -833,3 +833,12 @@ Moving the save to a thread was not enough: its json.dumps of the whole board is
 remembers the last-written layers as per-item text (so no re-read, and in-place edits are still seen -- a
 cached dict compare was tried and missed them) and builds it item by item so the pen can run in between.
 Worst UI stall during a save on the real board: 52 ms -> ~15 ms.
+
+2026-10-30 -- Popups flashing when reviews are switched: hide before detaching (desktop only)
+The parked-review strip was rebuilt every second (its clock text was part of the "did anything change" key),
+and each rebuild cleared old rows with widget.setParent(None) while they were still visible. A visible widget
+with no parent is a top-level window, so every row flashed on screen as a popup until deleteLater ran. The same
+pattern sat in six other places (tasks, history viewer, quick notes, review categories and problem list).
+One helper, ui_kit.discard_widget (hide, detach, delete), replaces all of them, and the strip now only
+changes label text when just a clock moved. Rejected: only fixing the strip, since the other sites flash on
+any refresh.
