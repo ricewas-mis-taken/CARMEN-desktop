@@ -587,3 +587,11 @@ def force_light_scheme():
     hints = QGuiApplication.styleHints()
     if hasattr(hints, "setColorScheme"):
         hints.setColorScheme(Qt.ColorScheme.Light)
+
+
+def discard_widget(widget):
+    """Takes a widget out of a layout for good. Hidden first: a visible widget whose parent is cleared
+    becomes a top-level window and flashes on screen as a popup until it is deleted."""
+    widget.hide()
+    widget.setParent(None)
+    widget.deleteLater()

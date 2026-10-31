@@ -53,6 +53,7 @@ from qt_ui.ui_kit import (  # noqa: F401 -- aliases keep the older private names
     AMBER as _AMBER,
     BREAK_COLOR as _BREAK_COLOR,
     DANGER_STYLE as _DANGER_STYLE,
+    discard_widget,
     FAINT,
     GREEN as _GREEN,
     GREY as _GREY,
@@ -237,7 +238,7 @@ class _ReviewBox(QFrame):
             item = self._layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
-                widget.setParent(None)
+                discard_widget(widget)
                 widget.deleteLater()
             elif item.layout() is not None:
                 self._drop_layout(item.layout())
@@ -293,7 +294,7 @@ class _ReviewBox(QFrame):
             item = layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
-                widget.setParent(None)
+                discard_widget(widget)
                 widget.deleteLater()
             elif item.layout() is not None:
                 _ReviewBox._drop_layout(item.layout())

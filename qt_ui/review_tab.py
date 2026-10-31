@@ -38,6 +38,7 @@ from qt_ui import confirm_dialog
 import tasks_store
 from qt_ui.safe_link import make_link_label
 from qt_ui.ui_kit import (
+    discard_widget,
     accent,
     danger,
     dialog_title,
@@ -1231,7 +1232,7 @@ class _TopicView(QWidget):
         while self._category_box.count():
             widget = self._category_box.takeAt(0).widget()
             if widget is not None:
-                widget.setParent(None)
+                discard_widget(widget)
                 widget.deleteLater()
         self._category_buttons = {}
         counts = {}
@@ -1291,7 +1292,7 @@ class _TopicView(QWidget):
         while self._list_layout.count():
             widget = self._list_layout.takeAt(0).widget()
             if widget is not None:
-                widget.setParent(None)
+                discard_widget(widget)
                 widget.deleteLater()
         self._rows = []
         current_id = self._review_banner.current_problem_id()
@@ -2077,20 +2078,31 @@ class _ParkedStrip(QWidget):
         self._on_resume = on_resume
         self._on_end = on_end
         self._signature = None
+        self._row_labels = []
         self._rows_layout = QVBoxLayout(self)
         self._rows_layout.setContentsMargins(0, 0, 0, 0)
         self._rows_layout.setSpacing(4)
         self.hide()
 
+    @staticmethod
+    def _row_text(row):
+        return f"⏸  {row['name']}  ·  {_format_mmss(row['seconds'])}  ·  paused"
+
     def set_rows(self, rows):
-        signature = [(r["kind"], r["key"], r["name"], r["seconds"]) for r in rows]
+        signature = [(r["kind"], r["key"], r["name"]) for r in rows]
         if signature == self._signature:
+            # The same rows, only a clock moved: change the text, don't rebuild (and re-show) every row each second.
+            for label, row in zip(self._row_labels, rows):
+                text = self._row_text(row)
+                if label.text() != text:
+                    label.setText(text)
             return
         self._signature = signature
+        self._row_labels = []
         while self._rows_layout.count():
             widget = self._rows_layout.takeAt(0).widget()
             if widget is not None:
-                widget.setParent(None)
+                discard_widget(widget)
                 widget.deleteLater()
         for row in rows:
             frame = QFrame()
@@ -2102,7 +2114,9 @@ class _ParkedStrip(QWidget):
             line = QHBoxLayout(frame)
             line.setContentsMargins(14, 6, 8, 6)
             line.setSpacing(8)
-            line.addWidget(QLabel(f"⏸  {row['name']}  ·  {_format_mmss(row['seconds'])}  ·  paused"), 1)
+            text_label = QLabel(self._row_text(row))
+            self._row_labels.append(text_label)
+            line.addWidget(text_label, 1)
             resume = button("Resume", SECONDARY_STYLE, height=30)
             resume.clicked.connect(lambda checked=False, r=row: self._on_resume(r))
             end = button("End", DANGER_STYLE, height=30)

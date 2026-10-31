@@ -31,6 +31,7 @@ import session_manager
 import tasks_store
 from qt_ui import motion
 from qt_ui.ui_kit import (
+    discard_widget,
     AMBER,
     FAINT,
     GREEN,
@@ -538,7 +539,7 @@ class HistoryTab(QWidget):
         while self._timeline.count():
             widget = self._timeline.takeAt(0).widget()
             if widget is not None:
-                widget.setParent(None)
+                discard_widget(widget)
                 widget.deleteLater()
         self._cards = []
         self._day_label_widgets = []
