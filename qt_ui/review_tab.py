@@ -239,78 +239,63 @@ def _session_summary_fields(number, session):
     return (f"#{number}", duration, f"{shakiness_text}{a_marker}", date_text)
 
 
-def _timeline_sessions(sessions):
-    """Picks which of a problem's full session history (newest first, from
-    review_store.list_sessions) to show in the review timeline, each paired
-    with its session number (1 = first ever): everything if there are 5 or
-    fewer, otherwise the newest 3 plus the first-ever and second-ever
-    session (in that chronological order), with a gap marker in between so
-    it's clear there's more history not shown."""
-    total = len(sessions)
-    numbered = [(total - i, session) for i, session in enumerate(sessions)]
-    if total <= 5:
-        return numbered, False
-    newest_three = numbered[:3]
-    first_two_ever = [numbered[-1], numbered[-2]]
-    return newest_three + first_two_ever, True
+def _timeline_row(number, session):
+    """One review as a soft card: its number, how long it took, how shaky it was, and when."""
+    number_text, duration, shakiness_text, date_text = _session_summary_fields(number, session)
+    solved = bool(session.get("selfSolved"))
+    row = QFrame()
+    row.setObjectName("TimelineRow")
+    row.setStyleSheet("QFrame#TimelineRow{background:#F5F6F9;border:none;border-radius:12px;}"
+                      "QFrame#TimelineRow QLabel{background:transparent;}")
+    box = QHBoxLayout(row)
+    box.setContentsMargins(12, 8, 14, 8)
+    box.setSpacing(12)
+    badge = QLabel(number_text)
+    badge.setFixedSize(34, 26)
+    badge.setAlignment(Qt.AlignCenter)
+    badge.setStyleSheet("background:#FFFFFF;color:#4A5160;border-radius:8px;font-size:12px;font-weight:700;")
+    box.addWidget(badge)
+    time_label = QLabel(duration)
+    time_label.setStyleSheet("font-size:15px;font-weight:700;color:#1E2430;")
+    box.addWidget(time_label)
+    verdict = QLabel(shakiness_text.replace(" (A)", "") if solved else "Checked the answer")
+    verdict.setStyleSheet(f"font-size:12px;font-weight:600;color:{'#2F7D4F' if solved else '#B26A00'};")
+    box.addWidget(verdict)
+    box.addStretch(1)
+    date_label = QLabel(date_text)
+    date_label.setStyleSheet("font-size:12px;color:#8A8F98;")
+    box.addWidget(date_label)
+    return row
 
 
-_TIMELINE_HEADER_CELLS = ("#", "Time", "Shakiness", "Date")
-
-
-def _timeline_gap_marker():
-    """3 stacked dot labels, each its own widget centered in a tight
-    QVBoxLayout -- rendering the vertical-ellipsis glyph ("⋮") as a
-    single QLabel comes out visibly off-axis in some fonts, so 3
-    independently-centered dots are used instead to guarantee a straight
-    vertical line."""
-    dots_widget = QWidget()
-    dots_layout = QVBoxLayout(dots_widget)
-    dots_layout.setContentsMargins(0, 4, 0, 4)
-    dots_layout.setSpacing(3)
-    dots_layout.setAlignment(Qt.AlignHCenter)
-    for _ in range(3):
-        dot_label = QLabel("•")
-        dot_label.setStyleSheet("font-size: 13px; font-weight: 700; color: #5A6070;")
-        dot_label.setAlignment(Qt.AlignHCenter)
-        dots_layout.addWidget(dot_label)
-    return dots_widget
+# Room for about four rows; any more scroll, so the popup keeps its size however long the history is.
+_TIMELINE_HEIGHT = 190
 
 
 def _build_review_timeline(layout, problem):
     sessions = review_store.list_sessions(problem["id"])
     if not sessions:
         return
-    shown, has_gap = _timeline_sessions(sessions)
+    total = len(sessions)
 
     layout.addWidget(_bold_label("Review Timeline"))
 
-    # A real grid, not a dash-joined string -- each column (#, Time,
-    # Shakiness, Date) is its own cell so rows and the header actually line
-    # up under each other in a proportional font, instead of drifting based
-    # on how wide each value happens to be.
-    grid_container = QWidget()
-    grid = QGridLayout(grid_container)
-    grid.setContentsMargins(0, 0, 0, 0)
-    grid.setHorizontalSpacing(18)
-    grid.setVerticalSpacing(4)
-    for column, header_text in enumerate(_TIMELINE_HEADER_CELLS):
-        header_label = QLabel(header_text)
-        header_label.setStyleSheet("font-size: 11px; font-weight: 700; color: #8A8F98;")
-        grid.addWidget(header_label, 0, column)
-
-    row = 1
-    for index, (number, session) in enumerate(shown):
-        for column, field_text in enumerate(_session_summary_fields(number, session)):
-            field_label = QLabel(field_text)
-            field_label.setStyleSheet("font-size: 12px; color: #5A6070;")
-            grid.addWidget(field_label, row, column)
-        row += 1
-        if has_gap and index == 2:
-            grid.addWidget(_timeline_gap_marker(), row, 0, 1, len(_TIMELINE_HEADER_CELLS))
-            row += 1
-
-    layout.addWidget(grid_container, alignment=Qt.AlignLeft)
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.NoFrame)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    scroll.setFixedHeight(min(_TIMELINE_HEIGHT, total * 44 + 4))
+    scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}"
+                         "QScrollArea > QWidget > QWidget{background:transparent;}")
+    inner = QWidget()
+    column = QVBoxLayout(inner)
+    column.setContentsMargins(0, 0, 6, 0)
+    column.setSpacing(6)
+    for index, session in enumerate(sessions):          # newest first, every one of them
+        column.addWidget(_timeline_row(total - index, session))
+    column.addStretch(1)
+    scroll.setWidget(inner)
+    layout.addWidget(scroll)
 
 
 def _build_description_content(layout, problem):
