@@ -210,21 +210,6 @@ def _fake_session(n, self_solved=True, shakiness=3):
     }
 
 
-def test_timeline_sessions_shows_everything_when_five_or_fewer():
-    sessions = [_fake_session(n) for n in (5, 4, 3, 2, 1)]
-    shown, has_gap = review_tab._timeline_sessions(sessions)
-    assert [(number, s["id"]) for number, s in shown] == [(5, 5), (4, 4), (3, 3), (2, 2), (1, 1)]
-    assert has_gap is False
-
-
-def test_timeline_sessions_shows_latest_three_and_first_two_ever_when_more_than_five():
-    # Newest first, id 7 is the latest session, id 1 the first ever.
-    sessions = [_fake_session(n) for n in range(7, 0, -1)]
-    shown, has_gap = review_tab._timeline_sessions(sessions)
-    assert has_gap is True
-    assert [(number, s["id"]) for number, s in shown] == [(7, 7), (6, 6), (5, 5), (1, 1), (2, 2)]
-
-
 def test_session_summary_fields_shows_number_duration_shakiness_and_a_marker():
     solved = _fake_session(1, self_solved=True, shakiness=2)
     checked = _fake_session(2, self_solved=False)
@@ -254,21 +239,16 @@ def test_description_popup_shows_review_timeline(qtbot, isolate_review_db):
 
     labels = [w.text() for w in popup.findChildren(review_tab.QLabel)]
     assert any("Review Timeline" in text for text in labels)
-    assert any("(A)" in text for text in labels)
-    for header_cell in review_tab._TIMELINE_HEADER_CELLS:
-        assert header_cell in labels
+    assert any("Checked the answer" in text for text in labels)
 
 
-def test_timeline_gap_marker_has_three_straight_dots_spanning_all_columns(qtbot, isolate_review_db):
-    """Regression test: the "more history" gap marker is 3 independently
-    centered dot labels (straight line, no off-axis glyph) spanning every
-    column of the timeline grid -- see _timeline_gap_marker."""
+def test_timeline_lists_every_review_in_a_scroll_area_with_no_gap_dots(qtbot, isolate_review_db):
     topic, subject = _make_topic_and_subject()
     problem = review_store.create_problem(
-        topic["id"], subject["id"], "Gap Marker Problem", stars=3,
+        topic["id"], subject["id"], "Long History", stars=3,
         description_type="text", description_text="x",
     )
-    for _ in range(7):
+    for _ in range(9):
         token = review_store.start_review(problem["id"])
         review_store.finish_review(token, self_solved=True, shakiness=2)
     problem = review_store.get_problem(problem["id"])
@@ -277,16 +257,11 @@ def test_timeline_gap_marker_has_three_straight_dots_spanning_all_columns(qtbot,
     qtbot.addWidget(popup)
     popup.show()
 
-    dot_labels = [w for w in popup.findChildren(review_tab.QLabel) if w.text() == "•"]
-    assert len(dot_labels) == 3
-    dots_widget = dot_labels[0].parentWidget()
-    assert all(dot.parentWidget() is dots_widget for dot in dot_labels)
-
-    grid = popup.findChild(review_tab.QGridLayout)
-    assert grid.columnCount() == len(review_tab._TIMELINE_HEADER_CELLS)
-    index = grid.indexOf(dots_widget)
-    _, _, _, col_span = grid.getItemPosition(index)
-    assert col_span == len(review_tab._TIMELINE_HEADER_CELLS)
+    labels = [w.text() for w in popup.findChildren(review_tab.QLabel)]
+    assert all(f"#{n}" in labels for n in range(1, 10))      # all nine, not newest 3 + first 2
+    assert "•" not in labels
+    scroll = popup.findChild(review_tab.QScrollArea)
+    assert scroll.height() == review_tab._TIMELINE_HEIGHT     # capped: the rest scrolls
 
 
 def test_review_start_dialog_shows_subject_and_task_name(
@@ -339,7 +314,7 @@ def test_review_start_dialog_shows_review_timeline(qtbot, isolate_review_db):
 
     labels = [w.text() for w in dialog.findChildren(review_tab.QLabel)]
     assert any("Review Timeline" in text for text in labels)
-    assert any("(A)" in text for text in labels)
+    assert any("Checked the answer" in text for text in labels)
 
 
 def test_begin_review_starts_and_ends_linked_task_session(
