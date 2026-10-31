@@ -1152,3 +1152,37 @@ def test_add_problem_dialog_can_be_built_without_showing(qtbot, isolate_review_d
     shown = review_tab._AddProblemDialog(topic["id"], on_added=lambda _p: None)
     qtbot.addWidget(shown)
     assert shown.isVisible()
+
+
+def test_clearing_and_refreshing_the_parked_strip_never_flashes_a_window(qtbot):
+    """A visible widget whose parent is cleared becomes a top-level window and flashes; that is what
+    made popups appear and vanish every second while a review was set aside."""
+    from PySide6.QtCore import QEvent, QObject
+    from PySide6.QtWidgets import QApplication, QWidget
+    host = QWidget()
+    qtbot.addWidget(host)
+    strip = review_tab._ParkedStrip(on_resume=lambda r: None, on_end=lambda r: None)
+    from PySide6.QtWidgets import QVBoxLayout
+    box = QVBoxLayout(host)
+    box.addWidget(strip)
+    host.show()
+    qtbot.waitExposed(host)
+    shown = []
+
+    class Watch(QObject):
+        def eventFilter(self, obj, event):
+            if event.type() == QEvent.Show and isinstance(obj, QWidget) and obj.isWindow() and obj is not host:
+                shown.append(obj)
+            return False
+    watch = Watch()
+    QApplication.instance().installEventFilter(watch)
+    row = {"kind": "session", "key": "a", "name": "Quadratics", "seconds": 5}
+    strip.set_rows([row])
+    strip.set_rows([{**row, "seconds": 6}])               # only the clock moved: same widgets, new text
+    first = strip._row_labels[0]
+    strip.set_rows([{**row, "seconds": 7}])
+    assert strip._row_labels[0] is first and "00:07" in first.text()
+    strip.set_rows([])                                   # clearing hides before it detaches
+    QApplication.processEvents()
+    QApplication.instance().removeEventFilter(watch)
+    assert shown == []
