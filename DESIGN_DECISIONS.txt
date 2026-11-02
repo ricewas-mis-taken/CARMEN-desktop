@@ -849,3 +849,19 @@ Chose to pause the review's session, which start_session() then parks, and run t
 review comes back through the Review tab's parked strip or the Tasks card. Two sessions cannot both enforce rules,
 and the 2026-10-25 decision already makes hand-started sessions park what is running. The running card shows a
 "Pomodoro" button only while a review is the live session. Extension: none (it only reads sessions).
+
+2026-11-01 -- A review rides beside ANY session: pause, resume, breaks, and what happens at the end (desktop only)
+Rules, as the user set them (kept together so they are not lost again):
+ 1. Any session can start while a review of the task is running OR paused: pomodoro, custom length, or
+    until-burnout. A review that owns the live session is set aside (paused; start_session parks it).
+ 2. When the session pauses, a review riding beside it (review_store) pauses; when the session resumes, the
+    review resumes -- but only a pause the session caused. A review the user paused stays paused.
+ 3. A pomodoro's rest pauses the review; the rest ending into another focus phase resumes it.
+ 4. If nothing follows the rest (last cycle, or the pomodoro is ended by hand during it) the review STAYS paused.
+    Before this, the end of the pomodoro resumed it. Another session taking over mid-rest still resumes it,
+    because the review then follows the new session.
+Done in session_manager.pause_session/resume_session (review_store.auto_pause_for_break / auto_resume_from_break,
+not while on a break) and _finalize_to_history_locked. Tasks card: Pomodoro / Custom / Burnout buttons while a
+review is the live session, running or paused.
+Open: a review that OWNS its session is parked, not kept running beside the new session (only one session
+can enforce rules at a time); keeping it counting would need it demoted to a review_store review first.
