@@ -1,6 +1,7 @@
 import os
 import re
 import uuid
+import weakref
 from datetime import date, datetime, timedelta
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, QUrl
@@ -1507,11 +1508,15 @@ class _TopicView(QWidget):
 GONE_TICKS_BEFORE_ABANDON = 4     # seconds a banner's session must stay missing before it counts as ended
 
 
+_live_banners = weakref.WeakSet()
+
+
 class _ReviewBanner(QWidget):
     def __init__(self, on_finished, on_changed=None):
         super().__init__()
         self._on_finished = on_finished
         self._on_changed = on_changed
+        _live_banners.add(self)
         self._session_token = None
         self._end_session_on_finish = False
         self._problem = None
@@ -1732,6 +1737,26 @@ class _ReviewBanner(QWidget):
                 self._first_attempt_callback is not None or problem.get("name") == session_manager.FIRST_ATTEMPT_NAME):
             return "your first attempt"
         return problem.get("name") or "this review"
+
+    def make_independent(self):
+        """A review that owns the live session hands it over: it becomes a review_store review that
+        rides BESIDE whatever session starts next (pausing, resting and resuming with it), keeping
+        its elapsed time. False if this banner is not such a review."""
+        problem_id = (self._problem or {}).get("id")
+        if not self._end_session_on_finish or self._finishing or problem_id is None:
+            return False
+        status, is_parked = self._linked_view()
+        if is_parked or not status.get("isActive"):
+            return False
+        token = review_store.start_review_with_elapsed(
+            problem_id, self._elapsed_seconds_now(), paused=bool(status.get("isPaused")))
+        if token is None:
+            return False
+        self._session_token = token          # first: from here the banner follows review_store
+        self._end_session_on_finish = False
+        session_manager.end_session(end_type="manual")
+        self._changed()
+        return True
 
     def park_current(self):
         """Pauses whatever this banner is timing and stops showing it. Returns
@@ -2046,6 +2071,17 @@ def _can_drive_over(status):
     """True when a review may start its own blocking session: nothing is running, or
     what is running is paused (it is set aside and comes back when the review ends)."""
     return not status.get("isActive") or bool(status.get("isPaused"))
+
+
+def make_live_review_independent():
+    """True if the review that owns the live session was handed over to ride beside the next session."""
+    for banner in list(_live_banners):
+        try:
+            if banner.is_running() and banner.make_independent():
+                return True
+        except RuntimeError:          # a banner whose window is already gone
+            _live_banners.discard(banner)
+    return False
 
 
 def _make_room_for(task):
