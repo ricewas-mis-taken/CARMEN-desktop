@@ -1043,8 +1043,12 @@ class _TaskCard(QFrame):
         """A review that is the live session waits (paused, frozen) while another session starts over it;
         a paused one is already waiting and start_session() parks it."""
         status = session_manager.get_status()
-        if status.get("isActive") and not status.get("isPaused") and status.get("source") == "review":
-            session_manager.pause_session()
+        if status.get("isActive") and status.get("source") == "review":
+            from qt_ui import review_tab
+            if review_tab.make_live_review_independent():
+                return                           # it now rides beside the session that starts next
+            if not status.get("isPaused"):
+                session_manager.pause_session()
 
     def _start_pomodoro(self):
         settings = _PomodoroDialog.get_settings(self)

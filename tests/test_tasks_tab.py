@@ -225,3 +225,33 @@ def test_burnout_can_start_over_a_paused_review_session(qtbot, isolate_tasks, is
     status = session_manager.get_status()
     assert status["source"] == "task" and not status["isPaused"]
     assert [p.get("reviewProblemName") for p in status["parkedSessions"]] == ["Quadratics 1"]
+
+
+def test_a_session_over_a_review_leaves_it_counting_beside_it(qtbot, isolate_tasks, isolate_state, isolate_review_db):
+    import review_store
+    from qt_ui import review_tab
+    task = _make_task()
+    topic = review_store.create_topic("Math")
+    subject = review_store.create_subject(topic["id"], "Algebra", "#111111")
+    problem = review_store.create_problem(topic["id"], subject["id"], "Quadratics 1", 3, "text", description_text="x")
+    session_manager.start_session(
+        30, "soft", [], [], source="review", event_id=task["id"], event_title="Study - Algebra review",
+        review_problem_name="Quadratics 1", review_subject_name="Algebra", review_problem_id=problem["id"],
+    )
+    banner = review_tab._ReviewBanner(on_finished=lambda: None)
+    qtbot.addWidget(banner)
+    banner.start({**problem, "id": problem["id"]}, None, end_session_on_finish=True)
+    card = tasks_tab._TaskCard(task, on_changed=lambda: None)
+    qtbot.addWidget(card)
+
+    card._start_burnout()
+
+    status = session_manager.get_status()
+    assert status["source"] == "task" and not status["isPaused"] and not status.get("parkedSessions")
+    active = review_store.get_active_review()
+    assert active["problemId"] == problem["id"] and active["isPaused"] is False
+    assert banner._end_session_on_finish is False
+    session_manager.pause_session()
+    assert review_store.get_active_review()["isPaused"] is True
+    session_manager.resume_session()
+    assert review_store.get_active_review()["isPaused"] is False
