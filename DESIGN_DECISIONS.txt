@@ -865,3 +865,10 @@ not while on a break) and _finalize_to_history_locked. Tasks card: Pomodoro / Cu
 review is the live session, running or paused.
 Open: a review that OWNS its session is parked, not kept running beside the new session (only one session
 can enforce rules at a time); keeping it counting would need it demoted to a review_store review first.
+
+2026-11-01 -- Resolved: a review that owns the session is handed over, not parked
+Starting any session over a review that owns the live session now converts that review to a review_store
+review (review_store.start_review_with_elapsed keeps its time and its paused state; the banner switches to
+following review_store; the review's own session is ended by hand, its time still counted for the task). It then
+rides beside the new session by the rules above. If there is no banner to convert (a first attempt, which has no
+problem id) the old behaviour stays: the review is paused and parked.
