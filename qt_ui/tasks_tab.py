@@ -903,6 +903,14 @@ class _TaskCard(QFrame):
         self._review_pomodoro_button.clicked.connect(self._start_pomodoro)
         self._review_pomodoro_button.hide()
         layout.addWidget(self._review_pomodoro_button)
+        self._review_custom_button = _button("Custom", _SECONDARY_STYLE)
+        self._review_custom_button.clicked.connect(self._start_custom_over_review)
+        self._review_custom_button.hide()
+        layout.addWidget(self._review_custom_button)
+        self._review_burnout_button = _button("Burnout", _SECONDARY_STYLE)
+        self._review_burnout_button.clicked.connect(self._start_burnout)
+        self._review_burnout_button.hide()
+        layout.addWidget(self._review_burnout_button)
         self._end_button = _button("End", _DANGER_STYLE)
         self._end_button.clicked.connect(self._end_task)
         layout.addWidget(self._end_button)
@@ -1020,16 +1028,30 @@ class _TaskCard(QFrame):
         self._begin_session(duration_minutes, is_burnout=False)
 
     def _start_burnout(self):
+        self._set_review_aside()
         self._begin_session(tasks_store.BURNOUT_MINUTES, is_burnout=True)
+
+    def _start_custom_over_review(self):
+        from PySide6.QtWidgets import QInputDialog
+        minutes, ok = QInputDialog.getInt(self, "Custom session", "Minutes", 25, 1, 600)
+        if ok:
+            self._set_review_aside()
+            self._begin_session(float(minutes), is_burnout=False)
+
+    @staticmethod
+    def _set_review_aside():
+        """A review that is the live session waits (paused, frozen) while another session starts over it;
+        a paused one is already waiting and start_session() parks it."""
+        status = session_manager.get_status()
+        if status.get("isActive") and not status.get("isPaused") and status.get("source") == "review":
+            session_manager.pause_session()
 
     def _start_pomodoro(self):
         settings = _PomodoroDialog.get_settings(self)
         if settings is None:
             return
         focus_minutes, break_minutes, cycles = settings
-        status = session_manager.get_status()
-        if status.get("isActive") and not status.get("isPaused") and status.get("source") == "review":
-            session_manager.pause_session()      # the review waits, frozen, and comes back after the pomodoro
+        self._set_review_aside()
         session_manager.start_pomodoro_session(
             focus_minutes,
             break_minutes,
@@ -1354,8 +1376,9 @@ class _TaskCard(QFrame):
             detail = "Nothing is blocked during the break."
         self._detail_label.setText(detail)
         self._detail_label.show()
-        self._review_pomodoro_button.setVisible(
-            view.get("source") == "review" and not is_waiting and not paused and not on_break)
+        over_review = view.get("source") == "review" and not is_waiting   # running, on a break or paused
+        for extra in (self._review_pomodoro_button, self._review_custom_button, self._review_burnout_button):
+            extra.setVisible(over_review)
 
         if violations:
             self._violation_chip.setText(f"{violations} violation{'s' if violations != 1 else ''}")

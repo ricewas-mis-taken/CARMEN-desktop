@@ -204,3 +204,24 @@ def test_a_pomodoro_can_start_while_a_review_of_the_task_is_running(qtbot, isola
     assert [p.get("reviewProblemName") for p in waiting] == ["Quadratics 1"]    # the review waits, not ended
     card.update_dynamic(status, session_history.load_all())
     assert not card._review_pomodoro_button.isVisible()
+
+
+def test_burnout_can_start_over_a_paused_review_session(qtbot, isolate_tasks, isolate_state):
+    task = _make_task()
+    card = tasks_tab._TaskCard(task, on_changed=lambda: None)
+    qtbot.addWidget(card)
+    card.show()
+    session_manager.start_session(
+        30, "soft", [], [],
+        source="review", event_id=task["id"], event_title="Study - Algebra review",
+        review_problem_name="Quadratics 1", review_subject_name="Algebra",
+    )
+    session_manager.pause_session()
+    card.update_dynamic(session_manager.get_status(), session_history.load_all())
+    assert card._review_burnout_button.isVisible() and card._review_custom_button.isVisible()
+
+    card._review_burnout_button.click()
+
+    status = session_manager.get_status()
+    assert status["source"] == "task" and not status["isPaused"]
+    assert [p.get("reviewProblemName") for p in status["parkedSessions"]] == ["Quadratics 1"]
