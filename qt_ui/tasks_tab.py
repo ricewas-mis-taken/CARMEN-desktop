@@ -898,6 +898,11 @@ class _TaskCard(QFrame):
         self._pause_button = _button("Pause", _SECONDARY_STYLE)
         self._pause_button.clicked.connect(self._pause_resume)
         layout.addWidget(self._pause_button, 1)
+        # While a review of this task is the running session: a pomodoro can still be started; the review waits.
+        self._review_pomodoro_button = _button("Pomodoro", _SECONDARY_STYLE)
+        self._review_pomodoro_button.clicked.connect(self._start_pomodoro)
+        self._review_pomodoro_button.hide()
+        layout.addWidget(self._review_pomodoro_button)
         self._end_button = _button("End", _DANGER_STYLE)
         self._end_button.clicked.connect(self._end_task)
         layout.addWidget(self._end_button)
@@ -1022,6 +1027,9 @@ class _TaskCard(QFrame):
         if settings is None:
             return
         focus_minutes, break_minutes, cycles = settings
+        status = session_manager.get_status()
+        if status.get("isActive") and not status.get("isPaused") and status.get("source") == "review":
+            session_manager.pause_session()      # the review waits, frozen, and comes back after the pomodoro
         session_manager.start_pomodoro_session(
             focus_minutes,
             break_minutes,
@@ -1346,6 +1354,8 @@ class _TaskCard(QFrame):
             detail = "Nothing is blocked during the break."
         self._detail_label.setText(detail)
         self._detail_label.show()
+        self._review_pomodoro_button.setVisible(
+            view.get("source") == "review" and not is_waiting and not paused and not on_break)
 
         if violations:
             self._violation_chip.setText(f"{violations} violation{'s' if violations != 1 else ''}")
