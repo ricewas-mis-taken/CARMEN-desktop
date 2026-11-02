@@ -842,3 +842,10 @@ pattern sat in six other places (tasks, history viewer, quick notes, review cate
 One helper, ui_kit.discard_widget (hide, detach, delete), replaces all of them, and the strip now only
 changes label text when just a clock moved. Rejected: only fixing the strip, since the other sites flash on
 any refresh.
+
+2026-11-01 -- Pomodoro while a review of the same task is running (desktop only)
+Fork: let the pomodoro ride beside the review (as a review rides beside a running pomodoro) or put the review aside.
+Chose to pause the review's session, which start_session() then parks, and run the pomodoro as the session; the
+review comes back through the Review tab's parked strip or the Tasks card. Two sessions cannot both enforce rules,
+and the 2026-10-25 decision already makes hand-started sessions park what is running. The running card shows a
+"Pomodoro" button only while a review is the live session. Extension: none (it only reads sessions).
