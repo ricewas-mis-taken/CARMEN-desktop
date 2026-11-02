@@ -180,3 +180,27 @@ def test_pomodoro_and_burnout_buttons_are_distinctly_styled(qtbot, isolate_tasks
     assert card._burnout_button.objectName() == "burnoutButton"
     assert card._pomodoro_button.objectName() == "pomodoroButton"
     assert card._burnout_button.objectName() != card._pomodoro_button.objectName()
+
+
+def test_a_pomodoro_can_start_while_a_review_of_the_task_is_running(qtbot, isolate_tasks, isolate_state, monkeypatch):
+    task = _make_task()
+    card = tasks_tab._TaskCard(task, on_changed=lambda: None)
+    qtbot.addWidget(card)
+    card.show()
+    session_manager.start_session(
+        30, "soft", [], [],
+        source="review", event_id=task["id"], event_title="Study - Algebra review",
+        review_problem_name="Quadratics 1", review_subject_name="Algebra",
+    )
+    card.update_dynamic(session_manager.get_status(), session_history.load_all())
+    assert card._review_pomodoro_button.isVisible()
+
+    monkeypatch.setattr(tasks_tab._PomodoroDialog, "get_settings", staticmethod(lambda parent=None: (25, 5, 4)))
+    card._review_pomodoro_button.click()
+
+    status = session_manager.get_status()
+    assert status["pomodoro"]["focusMinutes"] == 25 and status["source"] == "task" and not status["isPaused"]
+    waiting = status.get("parkedSessions") or []
+    assert [p.get("reviewProblemName") for p in waiting] == ["Quadratics 1"]    # the review waits, not ended
+    card.update_dynamic(status, session_history.load_all())
+    assert not card._review_pomodoro_button.isVisible()
