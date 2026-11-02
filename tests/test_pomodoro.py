@@ -136,10 +136,9 @@ def test_break_expiry_auto_resumes_an_independent_review(isolate_state, isolate_
     assert active["autoPaused"] is False
 
 
-def test_last_break_expiry_also_auto_resumes_an_independent_review(isolate_state, isolate_review_db):
-    """The pomodoro ending entirely (last cycle's break finishing) must not
-    leave a review riding along stuck paused forever just because there's
-    no next focus phase to resume into."""
+def test_last_break_expiry_leaves_an_independent_review_paused(isolate_state, isolate_review_db):
+    """The pomodoro ending entirely (last cycle's break finishing): no focus is left, so the review
+    that was paused for the break stays paused until the user resumes it."""
     _start_independent_review(isolate_review_db)
     session_manager.start_pomodoro_session(25, 5, 1, "soft", [], [])
     _expire_now()
@@ -150,7 +149,7 @@ def test_last_break_expiry_also_auto_resumes_an_independent_review(isolate_state
     session_manager.get_status()  # break -> whole session ends
 
     active = review_store.get_active_review()
-    assert active["isPaused"] is False
+    assert active["isPaused"] is True
 
 
 def test_break_auto_pause_does_not_override_a_review_the_user_already_paused(isolate_state, isolate_review_db):
@@ -230,3 +229,32 @@ def test_plain_start_session_clears_any_leftover_pomodoro_state(isolate_state, i
     status = session_manager.get_status()
     assert status["pomodoro"] is None
     assert not status["isBreak"]
+
+
+def test_pausing_and_resuming_a_session_pauses_and_resumes_a_review_beside_it(isolate_state, isolate_review_db):
+    _start_independent_review(isolate_review_db)
+    session_manager.start_session(30, "soft", [], [])
+    session_manager.pause_session()
+    assert review_store.get_active_review()["isPaused"] is True
+    session_manager.resume_session()
+    assert review_store.get_active_review()["isPaused"] is False
+
+
+def test_a_review_the_user_paused_stays_paused_when_the_session_resumes(isolate_state, isolate_review_db):
+    _start_independent_review(isolate_review_db)
+    review_store.pause_active_review()
+    session_manager.start_session(30, "soft", [], [])
+    session_manager.pause_session()
+    session_manager.resume_session()
+    assert review_store.get_active_review()["isPaused"] is True
+
+
+def test_a_break_pauses_the_review_and_the_next_focus_resumes_it(isolate_state, isolate_review_db):
+    _start_independent_review(isolate_review_db)
+    session_manager.start_pomodoro_session(25, 5, 2, "soft", [], [])
+    _expire_now()
+    session_manager.get_status()                       # focus -> break
+    assert review_store.get_active_review()["isPaused"] is True
+    _expire_now()
+    session_manager.get_status()                       # break -> next focus
+    assert review_store.get_active_review()["isPaused"] is False

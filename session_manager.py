@@ -559,10 +559,8 @@ def _advance_pomodoro_locked(now):
 
     if pomo["currentCycle"] >= pomo["totalCycles"]:
         _pending_natural_end["value"] = _finalize_to_history_locked(now, end_type="natural")
-        # The whole pomodoro just ended (last cycle's break finishing) --
-        # an independent review riding along shouldn't be left stuck paused
-        # forever just because there's no more focus phase to resume into.
-        review_store.auto_resume_from_break()
+        # The whole pomodoro just ended (last cycle's break finishing). A review riding along was
+        # paused for that break and STAYS paused: with no focus left it must not start counting again.
         return
 
     pomo["currentCycle"] += 1
@@ -756,11 +754,9 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None, restore_pa
     _save()
     state_events.bump()
 
-    if pomodoro is not None:
-        # An independent review auto-paused for this pomodoro's break would
-        # otherwise stay paused forever when the pomodoro ends mid-break by
-        # any route other than the natural end (which resumes it itself).
-        # A no-op unless that review is still marked auto_paused.
+    if pomodoro is not None and end_type not in ("manual", "natural"):
+        # Replaced by another session while on a break: the review follows the new session. A manual end
+        # or the natural end leaves it paused -- no focus is left to count.
         import review_store
         review_store.auto_resume_from_break()
 
@@ -1159,6 +1155,8 @@ def pause_session():
             _state["violationLog"].append({"kind": "pause", "timestamp": now.isoformat()})
         _save()
         state_events.bump()
+        import review_store
+        review_store.auto_pause_for_break()      # a review riding beside this session pauses with it
         return _get_status_locked()
 
 
@@ -1180,6 +1178,8 @@ def resume_session():
         _state["frozenSecondsRemaining"] = None
         if not _state["isBreak"]:
             _state["violationLog"].append({"kind": "resume", "timestamp": now.isoformat()})
+            import review_store
+            review_store.auto_resume_from_break()   # ...and resumes with it (not mid-break: the break still pauses it)
         _save()
         state_events.bump()
         return _get_status_locked()
