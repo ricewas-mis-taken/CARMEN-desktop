@@ -35,7 +35,7 @@ import tasks_store
 from qt_ui.history_viewer import minutes_by_day
 from qt_ui.mini_timer import describe as describe_session
 from qt_ui.ui_kit import (
-    BREAK_COLOR, ElidedLabel, Ring, button, format_minutes, safe_color, tint,
+    BREAK_COLOR, ElidedLabel, FlowLayout, Ring, button, format_minutes, safe_color, tint,
 )
 from qt_ui import inkwrite
 from qt_ui.wrap_edit import WrapEdit
@@ -280,12 +280,25 @@ def _text(text, size=13, colour=None, weight=400):
 
 
 def _chip_done(task):
-    label = ElidedLabel("✓  " + task.get("name", "Task"))
-    label.setMaximumWidth(150)
-    label.setStyleSheet(
-        f"color:{INK};background:{tint(safe_color(task.get('color')), 0.16)};"
-        "border-radius:10px;padding:3px 10px;font-size:12px;font-weight:600;")
-    return label
+    """A finished task: a filled tick badge in its colour, then its name in full."""
+    colour = safe_color(task.get("color"))
+    chip = QWidget()
+    chip.setStyleSheet(f"background:{tint(colour, 0.16)};border-radius:11px;")
+    row = QHBoxLayout(chip)
+    row.setContentsMargins(4, 3, 12, 3)
+    row.setSpacing(7)
+    tick = QLabel("✓")
+    tick.setFixedSize(18, 18)
+    tick.setAlignment(Qt.AlignCenter)
+    tick.setStyleSheet(f"background:{colour};color:#FFFFFF;border-radius:9px;font-size:11px;font-weight:800;")
+    row.addWidget(tick)
+    name = QLabel(task.get("name", "Task"))
+    name.setStyleSheet(f"color:{INK};background:transparent;font-size:12px;font-weight:600;")
+    name.setMaximumWidth(180)
+    name.setText(QFontMetricsF(name.font()).elidedText(name.text(), Qt.ElideRight, 180))
+    row.addWidget(name)
+    chip.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+    return chip
 
 
 class _Bar(QWidget):
@@ -923,12 +936,12 @@ class HomeTab(QWidget):
                 15, INK, 600))
             layout.addWidget(_Bar(data["total_logged"] / data["total_required"], _GRID_BLUE, height=10))
         if data["done_tasks"]:
-            chips = QHBoxLayout()
-            chips.setSpacing(6)
+            chips = FlowLayout(spacing=6)
             for task in data["done_tasks"][:4]:
                 chips.addWidget(_chip_done(task))
-            chips.addStretch(1)
-            layout.addLayout(chips)
+            holder = QWidget()
+            holder.setLayout(chips)
+            layout.addWidget(holder)
         # The hero already features the top task when nothing is running.
         skip = 0 if self._live is not None else 1
         rest = data["open"][skip:skip + 5]
