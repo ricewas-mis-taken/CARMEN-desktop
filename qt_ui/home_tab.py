@@ -195,7 +195,7 @@ def importance_colour(n):
 
 def summary(tasks, sessions, due_reviews, today, live_minutes=0.0, status=None):
     """Everything Home shows, as plain data (so it can be tested without a window)."""
-    open_tasks, done_tasks = [], []
+    open_tasks, done_tasks, suggested = [], [], []
     total_required = total_logged = 0.0
     for task in tasks:
         snap = tasks_store.goal_snapshot(task, today, sessions, live_status=status)
@@ -210,8 +210,11 @@ def summary(tasks, sessions, due_reviews, today, live_minutes=0.0, status=None):
             before_today = logged - logged_today
             required = max(0.0, snap["required"] - before_today) / max(1, snap["daysLeft"])
             logged = logged_today
-            if period_left <= 0.5:
-                required = logged = 0.0
+            if period_left > 0.5 and required > 0.5:
+                # A week / month goal is only ever suggested here: never part of today's total.
+                suggested.append({"task": task, "minutes": required, "logged": min(logged, required),
+                                  "period_phrase": snap["phrase"], "days_left": snap["daysLeft"]})
+            continue
         total_required += required
         total_logged += min(logged, required)
         left = required - logged
@@ -232,6 +235,9 @@ def summary(tasks, sessions, due_reviews, today, live_minutes=0.0, status=None):
         "done_tasks": done_tasks,
         "total_required": total_required,
         "total_logged": total_logged,
+        "suggested": suggested,
+        "suggested_minutes": sum(x["minutes"] for x in suggested),
+        "suggested_logged": sum(x["logged"] for x in suggested),
         "due_reviews": due_reviews,
         "week": week,
         "streak": streak_days(_with_live(minutes_by_day(sessions, 60, today=today), live_minutes)),
@@ -272,33 +278,18 @@ def _heading(text):
     return box
 
 
+def _plain(text, size=13, colour=None, weight=400):
+    """A label that keeps its full width (never elided), for short figures beside each other."""
+    label = QLabel(text)
+    label.setStyleSheet(f"color:{colour or MUTED};font-size:{size}px;font-weight:{weight};background:transparent;")
+    return label
+
+
 def _text(text, size=13, colour=None, weight=400):
     label = ElidedLabel(text)
     colour = colour or MUTED
     label.setStyleSheet(f"color:{colour};font-size:{size}px;font-weight:{weight};background:transparent;")
     return label
-
-
-def _chip_done(task):
-    """A finished task: a filled tick badge in its colour, then its name in full."""
-    colour = safe_color(task.get("color"))
-    chip = QWidget()
-    chip.setStyleSheet(f"background:{tint(colour, 0.16)};border-radius:11px;")
-    row = QHBoxLayout(chip)
-    row.setContentsMargins(4, 3, 12, 3)
-    row.setSpacing(7)
-    tick = QLabel("✓")
-    tick.setFixedSize(18, 18)
-    tick.setAlignment(Qt.AlignCenter)
-    tick.setStyleSheet(f"background:{colour};color:#FFFFFF;border-radius:9px;font-size:11px;font-weight:800;")
-    row.addWidget(tick)
-    name = QLabel(task.get("name", "Task"))
-    name.setStyleSheet(f"color:{INK};background:transparent;font-size:12px;font-weight:600;")
-    name.setMaximumWidth(180)
-    name.setText(QFontMetricsF(name.font()).elidedText(name.text(), Qt.ElideRight, 180))
-    row.addWidget(name)
-    chip.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
-    return chip
 
 
 class _Bar(QWidget):
@@ -324,6 +315,56 @@ class _Bar(QWidget):
             p.setBrush(self._colour)
             width = max(float(self._height), self.width() * self._fraction)
             p.drawRoundedRect(QRectF(0, 0, width, self._height), radius, radius)
+
+
+class _GoalBar(QWidget):
+    """Today's goal as one bar. What is suggested (week and month pace) hangs off the end as a dashed,
+    unfilled-looking extension: it is there if you want it, and never counts against the day."""
+
+    def __init__(self, logged, required, suggested, suggested_logged, colour, height=10):
+        super().__init__()
+        self._logged, self._required = max(0.0, logged), max(0.0, required)
+        self._suggested, self._suggested_logged = max(0.0, suggested), max(0.0, suggested_logged)
+        self._colour = QColor(safe_color(colour))
+        self._height = height
+        self.setFixedHeight(height + 2)
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        total = (self._required + self._suggested) or 1.0
+        gap = 8.0 if self._required and self._suggested else 0.0
+        usable = self.width() - gap
+        h, top = float(self._height), 1.0
+        r = h / 2
+        main_w = usable * self._required / total
+        track = QColor(self._colour)
+        track.setAlphaF(0.16)
+        p.setPen(Qt.NoPen)
+        if self._required:
+            p.setBrush(track)
+            p.drawRoundedRect(QRectF(0, top, main_w, h), r, r)
+            if self._logged > 0:
+                p.setBrush(self._colour)
+                w = max(h, main_w * min(1.0, self._logged / self._required))
+                p.drawRoundedRect(QRectF(0, top, w, h), r, r)
+        if self._suggested:
+            x = main_w + gap
+            sug_w = usable * self._suggested / total
+            soft = QColor(self._colour)
+            soft.setAlphaF(0.55)
+            pen = QPen(soft, 1.4, Qt.DashLine)
+            pen.setDashPattern([3.0, 3.0])
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(QRectF(x + 0.7, top + 0.7, sug_w - 1.4, h - 1.4), r, r)
+            if self._suggested_logged > 0:
+                p.setPen(Qt.NoPen)
+                fill = QColor(self._colour)
+                fill.setAlphaF(0.4)
+                p.setBrush(fill)
+                w = max(h, sug_w * min(1.0, self._suggested_logged / self._suggested))
+                p.drawRoundedRect(QRectF(x, top, w, h), r, r)
 
 
 class _Grid(QWidget):
@@ -930,46 +971,60 @@ class HomeTab(QWidget):
         layout.setSpacing(12)
         done = data["done"]
         layout.addWidget(_heading("Today" + (f": {done} done" if done else "")))
-        if data["total_required"] > 0:
-            layout.addWidget(_text(
-                f"{format_minutes(data['total_logged'])} of {format_minutes(data['total_required'])} goal",
-                15, INK, 600))
-            layout.addWidget(_Bar(data["total_logged"] / data["total_required"], _GRID_BLUE, height=10))
-        if data["done_tasks"]:
-            chips = FlowLayout(spacing=6)
-            for task in data["done_tasks"][:4]:
-                chips.addWidget(_chip_done(task))
-            holder = QWidget()
-            holder.setLayout(chips)
-            layout.addWidget(holder)
+        if data["total_required"] > 0 or data["suggested_minutes"] > 0:
+            head = QHBoxLayout()
+            head.setSpacing(10)
+            if data["total_required"] > 0:
+                head.addWidget(_plain(
+                    f"{format_minutes(data['total_logged'])} of {format_minutes(data['total_required'])} goal",
+                    15, INK, 600))
+            if data["suggested_minutes"] > 0:
+                head.addWidget(_plain(f"+ {format_minutes(data['suggested_minutes'])} suggested", 13, FAINT))
+            head.addStretch(1)
+            layout.addLayout(head)
+            layout.addWidget(_GoalBar(data["total_logged"], data["total_required"], data["suggested_minutes"],
+                                      data["suggested_logged"], _GRID_BLUE))
         # The hero already features the top task when nothing is running.
         skip = 0 if self._live is not None else 1
         rest = data["open"][skip:skip + 5]
-        if not data["open"]:
-            layout.addWidget(_text("All goals met." if data["done"] else "No goals set for today."))
+        if not data["open"] and not data["done_tasks"] and not data["suggested"]:
+            layout.addWidget(_text("No goals set for today."))
         for item in rest:
             colour = safe_color(item["task"].get("color"))
-            line = QHBoxLayout()
-            line.setSpacing(12)
-            dot = QLabel()
-            dot.setFixedSize(12, 12)
-            dot.setStyleSheet(f"background:{colour};border-radius:6px;")
-            line.addWidget(dot)
-            name = ElidedLabel(item["task"].get("name", "Task"))
-            name.setStyleSheet(f"color:{INK};font-size:17px;font-weight:600;background:transparent;")
-            line.addWidget(name, 1)
-            left = QLabel(f"{format_minutes(item['left'])} left")
-            left.setStyleSheet(f"color:{MUTED};font-size:14px;background:transparent;")
-            line.addWidget(left)
-            layout.addLayout(line)
-            layout.addWidget(_Bar(item["logged"] / item["required"], colour))
+            self._task_row(layout, colour, item["task"].get("name", "Task"),
+                           f"{format_minutes(item['left'])} left", item["logged"] / item["required"])
         more = len(data["open"]) - skip - 5
         if more > 0:
             layout.addWidget(_text(f"and {more} more", 12.5, FAINT))
+        for task in data["done_tasks"][:5]:
+            self._task_row(layout, safe_color(task.get("color")), task.get("name", "Task"), "done", 1.0)
+        for item in data["suggested"][:4]:
+            self._task_row(layout, safe_color(item["task"].get("color")), item["task"].get("name", "Task"),
+                           f"suggested {format_minutes(item['minutes'])}",
+                           item["logged"] / item["minutes"], dashed=True)
         link = button("All tasks", SECONDARY_STYLE, height=34)
         link.clicked.connect(lambda: self._go("tasks"))
         layout.addWidget(link, 0, Qt.AlignLeft)
         return card
+
+    def _task_row(self, layout, colour, name_text, note, fraction, dashed=False):
+        line = QHBoxLayout()
+        line.setSpacing(12)
+        dot = QLabel()
+        dot.setFixedSize(12, 12)
+        dot.setStyleSheet(
+            f"background:transparent;border:2px dashed {colour};border-radius:6px;" if dashed
+            else f"background:{colour};border-radius:6px;")
+        line.addWidget(dot)
+        name = ElidedLabel(name_text)
+        name.setStyleSheet(f"color:{MUTED if dashed else INK};font-size:17px;font-weight:600;background:transparent;")
+        line.addWidget(name, 1)
+        left = QLabel(note)
+        left.setStyleSheet(f"color:{MUTED};font-size:14px;background:transparent;")
+        line.addWidget(left)
+        layout.addLayout(line)
+        layout.addWidget(_GoalBar(fraction, 1.0, 0, 0, colour, height=6) if not dashed
+                         else _GoalBar(0, 0, 1.0, fraction, colour, height=6))
 
     def _needs_you(self, data, status, now):
         card = _card()
