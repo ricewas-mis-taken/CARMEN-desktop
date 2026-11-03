@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFrame,
+    QScrollArea,
     QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
@@ -1646,7 +1647,16 @@ class ScribeTab(QWidget):
         center.addWidget(self._build_topbar())
         center.addWidget(self._build_canvas_card(), 1)
         layout.addLayout(center, 1)
-        layout.addWidget(self._build_right())
+        self._root_layout = layout
+        self._side = QScrollArea()                   # the options card: scrolls when the window is short
+        self._side.setWidgetResizable(True)
+        self._side.setFrameShape(QFrame.NoFrame)
+        self._side.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._side.setFixedWidth(240)
+        self._side.setStyleSheet("QScrollArea{background:transparent;border:none;}"
+                                 "QScrollArea > QWidget > QWidget{background:transparent;}")
+        self._side.setWidget(self._build_right())
+        layout.addWidget(self._side)
 
         self.canvas.changed.connect(self._schedule_save)
         self.canvas.changed.connect(self._refresh_preview)
@@ -1753,6 +1763,52 @@ class ScribeTab(QWidget):
         self._saved_label.setText("Saved" if saved else "Saving…")
         self._saved_dot.setStyleSheet(
             f"background: {'#2F9E44' if saved else '#F08C00'}; border-radius: 4px;")
+
+    # ---- small windows -----------------------------------------------------
+    _SIDE_BELOW = 1060       # content width under which the options card becomes a popup
+    _COMPACT_BELOW = 820     # ...and under which the top bar drops its least useful bits
+
+    def minimumSizeHint(self):
+        # What the pieces need only holds at full width; narrower, they fold away (below), so the tab
+        # can shrink to this instead of forcing a sideways scroll.
+        return QSize(600, 420)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        width = event.size().width()
+        self._relayout_side(width < self._SIDE_BELOW)
+        compact = width < self._COMPACT_BELOW
+        for widget in (self._topbar_title, self._saved_label, self._pan_button, self._reset_button):
+            widget.setVisible(not compact)
+
+    def _relayout_side(self, narrow):
+        if narrow == getattr(self, "_side_narrow", None):
+            return
+        self._side_narrow = narrow
+        side = self._side
+        if narrow:
+            self._root_layout.removeWidget(side)
+            side.hide()
+            side.setParent(self)
+            side.hide()
+        else:
+            side.setWindowFlags(Qt.Widget)
+            self._root_layout.addWidget(side)
+            side.setMaximumHeight(16777215)
+            side.show()
+        self._options_button.setVisible(narrow)
+
+    def _show_options_popup(self):
+        side = self._side
+        if side.isVisible():
+            side.hide()
+            return
+        side.setParent(self, Qt.Popup)
+        height = min(side.widget().sizeHint().height() + 4, max(200, self.height() - 90))
+        side.setFixedHeight(height)
+        anchor = self._options_button.mapToGlobal(self._options_button.rect().bottomRight())
+        side.move(anchor.x() - side.width(), anchor.y() + 6)
+        side.show()
 
     def hideEvent(self, event):
         self.flush()
@@ -1870,6 +1926,11 @@ class ScribeTab(QWidget):
             button.clicked.connect(fn)
             bar.addWidget(button)
         bar.addWidget(self._build_snap_menu())
+        self._options_button = QPushButton("Options")      # only when the options card has no room beside the board
+        self._options_button.clicked.connect(self._show_options_popup)
+        self._options_button.hide()
+        bar.addWidget(self._options_button)
+        self._topbar_title, self._reset_button = title, reset
         return card
 
     def _build_snap_menu(self):
