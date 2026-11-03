@@ -117,10 +117,12 @@ def test_a_weekly_goal_shows_today_share_not_the_whole_week(isolate_state, tmp_p
     task = tasks_store.create_task({"name": "Weekly", "targetMinutes": 600, "recurrence": "biweekly_total"})
     today = date.today()
     data = home.summary([task], [], 0, today)
-    item = data["open"][0]
+    item = data["suggested"][0]
     days = tasks_store.days_left_in_period(task, today)
-    assert round(item["required"], 3) == round(600 / days, 3)
-    assert item["period_left"] == 600 and item["days_left"] == days
+    assert round(item["minutes"], 3) == round(600 / days, 3)
+    assert item["days_left"] == days
+    # Suggested only: it never becomes a daily goal or part of the day's total.
+    assert data["open"] == [] and data["total_required"] == 0 and data["done"] == 0
 
 
 def test_year_grid_reports_the_hovered_day(qtbot):
