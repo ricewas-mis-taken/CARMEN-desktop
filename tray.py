@@ -148,6 +148,18 @@ def build_tray_icon(on_quit):
     def on_sign_in(icon, item):
         qt_gui_thread.run_on_gui_thread(main_window.open_sign_in)
 
+    def _discord_on(item):
+        return bool(config.load_config().get("discordPresence", True))
+
+    def on_toggle_discord(icon, item):
+        config.update_config(lambda cfg: cfg.update(discordPresence=not cfg.get("discordPresence", True)))
+
+    def _names_on(item):
+        return bool(config.load_config().get("discordShowNames"))
+
+    def on_toggle_discord_names(icon, item):
+        config.update_config(lambda cfg: cfg.update(discordShowNames=not cfg.get("discordShowNames")))
+
     menu = pystray.Menu(
         # default=True makes a left-click on the icon itself fire this item
         # directly (pystray's win32 backend), instead of opening the
@@ -158,6 +170,10 @@ def build_tray_icon(on_quit):
         pystray.MenuItem("Mini Timer", on_mini_timer),
         pystray.MenuItem("QuickNote", on_quicknote),
         pystray.MenuItem("Status", on_status),
+        pystray.MenuItem("Discord status", pystray.Menu(
+            pystray.MenuItem("Show in Discord", on_toggle_discord, checked=_discord_on),
+            pystray.MenuItem("Show task and problem names", on_toggle_discord_names, checked=_names_on),
+        )),
         # The extension's token is only handed out once signed in, so every user
         # signs in first (and from then on syncs) before the extension is paired.
         pystray.MenuItem("Sign in", on_sign_in, visible=_signed_out),
