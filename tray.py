@@ -1,4 +1,5 @@
 """System tray icon setup and menu."""
+import os
 import pystray
 from PIL import Image, ImageDraw
 from PySide6.QtWidgets import QApplication
@@ -17,15 +18,13 @@ import tasks_store
 
 
 def _generate_icon_image():
-    size = 64
-    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
-    padding = 6
-    draw.ellipse(
-        (padding, padding, size - padding, size - padding),
-        fill=(45, 140, 255, 255),
-    )
-    return image
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "carmen_icon.png")
+    try:
+        return Image.open(path).convert("RGBA").resize((64, 64), Image.LANCZOS)
+    except OSError:
+        image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        ImageDraw.Draw(image).ellipse((6, 6, 58, 58), fill=(45, 140, 255, 255))
+        return image
 
 
 def _format_status_text():
