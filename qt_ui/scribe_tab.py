@@ -1570,15 +1570,25 @@ class _PaperStack(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         width = self.width()
-        for index, key in enumerate(self._keys):
+        # Farthest from the chosen paper first, the chosen one last: it sits on top of the stack.
+        for index in sorted(range(len(self._keys)), key=lambda i: -abs(i - self._pos)):
+            key = self._keys[index]
             paper, minor, major, dark = _BACKGROUNDS[key]
-            card = QRectF(3, self._top(index), width - 6, self.CARD)
+            near = max(0.0, 1.0 - abs(index - self._pos))            # 1 for the chosen paper, easing to 0
+            inset = 3 + 8 * (1 - near)                                 # the others sit narrower, the chosen sticks out
+            card = QRectF(inset, self._top(index), width - 2 * inset, self.CARD)
             path = QPainterPath()
             path.addRoundedRect(card, self.RADIUS, self.RADIUS)
-            for grow, alpha in ((6, 16), (3, 22)):             # a soft shadow on the card behind
+            p.setPen(Qt.NoPen)
+            for grow, alpha in ((12, 14), (8, 22), (5, 32), (2, 46)):  # a shadow cast up onto the paper behind
+                p.setBrush(QColor(20, 16, 40, int(alpha * (1 + near))))
+                p.drawRoundedRect(card.adjusted(-grow * 0.4, -grow, grow * 0.4, grow * 0.4 * near), self.RADIUS, self.RADIUS)
+            if near > 0.01:                                            # the halo round the lifted paper
+                for ring, alpha in ((7, 26), (5, 44), (3, 70)):
+                    p.setBrush(Qt.NoBrush)
+                    p.setPen(QPen(QColor(59, 130, 246, int(alpha * near)), 2))
+                    p.drawRoundedRect(card.adjusted(-ring, -ring, ring, ring), self.RADIUS + ring, self.RADIUS + ring)
                 p.setPen(Qt.NoPen)
-                p.setBrush(QColor(20, 16, 40, alpha))
-                p.drawRoundedRect(card.adjusted(-grow * 0.3, -grow, grow * 0.3, 0), self.RADIUS, self.RADIUS)
             p.save()
             p.setClipPath(path)
             p.fillRect(card, QColor(paper))
@@ -1602,9 +1612,11 @@ class _PaperStack(QWidget):
             p.restore()
             chosen = key == self._current
             p.setBrush(Qt.NoBrush)
-            p.setPen(QPen(QColor(SCRIBE_INK) if chosen else QColor(255, 255, 255, 40) if dark else QColor(0, 0, 0, 40),
-                          2 if chosen else 1))
+            p.setPen(QPen(QColor(SCRIBE_INK) if chosen else QColor(255, 255, 255, 110) if dark else QColor(0, 0, 0, 105),
+                          2 if chosen else 1.4))                       # a clear edge, so each paper's start and end show
             p.drawRoundedRect(card, self.RADIUS, self.RADIUS)
+            p.setPen(QPen(QColor(255, 255, 255, 150 if not dark else 40), 1))   # a bright lip on the top edge
+            p.drawLine(QPointF(card.left() + self.RADIUS, card.top() + 1.5), QPointF(card.right() - self.RADIUS, card.top() + 1.5))
 
 
 class ScribeTab(QWidget):
