@@ -897,3 +897,11 @@ size. Fixed: Session History now wraps its filter pills (ui_kit.FlowLayout) and 
 narrow, so its page minimum fell from 900 to 540 px instead of widening the window; review rows hide the due
 pill below 600 px (it moves into the tooltip) so the name and subject are not cut to "Pro...". Long names
 elide by design. Left alone: the Board's plain-text header links, dialogs (fixed size, centred).
+
+2026-11-02 -- Popups: one filter sizes them all (desktop only)
+Fork: set a size in each of ~30 dialogs, or one application-wide rule. Chose qt_ui/popup_fit.py: an event filter
+that, on the first show of any top-level window named PopupBg, clamps it to 380-560 px wide (up to 780 for the
+two that lay out a table or timeline), at most 90% of the screen, centres it over the window that opened it,
+and, if its content needs more height than the screen, moves its layout into a scroll area so it scrolls
+instead of being cut off. Per-dialog resize() calls stay as the preferred size. Rejected: editing every dialog
+(they drift again) and a fixed size for all (a yes/no box is not an Add Problem form).
