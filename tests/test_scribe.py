@@ -627,3 +627,22 @@ def test_the_timed_save_runs_off_the_ui_thread(qtbot, monkeypatch):
     gate.set()
     tab.flush()                                          # waits for the write already running
     assert seen and seen[0] is not threading.main_thread()
+
+
+def test_scribe_folds_its_options_into_a_popup_and_trims_the_top_bar_when_narrow(qtbot):
+    from qt_ui.main_window import _scrolling
+    tab = ScribeTab()
+    holder = _scrolling(tab)                      # as in the app: the page sits in a scroll area
+    qtbot.addWidget(holder)
+    holder.resize(1300, 700)
+    holder.show()
+    qtbot.waitExposed(holder)
+    assert tab._side.isVisible() and not tab._options_button.isVisible()
+    holder.resize(700, 560)
+    qtbot.wait(50)
+    assert not tab._side.isVisible() and tab._options_button.isVisible()
+    assert not tab._pan_button.isVisible() and not tab._reset_button.isVisible()    # compact top bar
+    assert tab.minimumSizeHint().width() <= 600                                     # no forced sideways scroll
+    holder.resize(1300, 700)
+    qtbot.wait(50)
+    assert tab._side.isVisible() and tab._pan_button.isVisible()
