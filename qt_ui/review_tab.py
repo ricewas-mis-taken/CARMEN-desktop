@@ -2131,7 +2131,7 @@ class _ParkedStrip(QWidget):
 
     @staticmethod
     def _row_text(row):
-        return f"⏸  {row['name']}  ·  {_format_mmss(row['seconds'])}  ·  paused"
+        return f"⏸  {row['name']}, {_format_mmss(row['seconds'])}, paused"
 
     def set_rows(self, rows):
         signature = [(r["kind"], r["key"], r["name"]) for r in rows]

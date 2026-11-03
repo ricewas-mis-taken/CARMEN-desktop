@@ -94,7 +94,7 @@ class TaskHistoryDialog(QWidget):
             tiles.addWidget(tile, index // 4, index % 4)
         outer.addLayout(tiles)
 
-        span = QLabel(f"First session {_date_text(stats['first'])}  ·  Last {_date_text(stats['last'])}"
+        span = QLabel(f"First session {_date_text(stats['first'])}, last {_date_text(stats['last'])}"
                       if stats["sessions"] else "")
         span.setStyleSheet(f"font-size:12.5px;color:{MUTED};background:transparent;")
         span.setVisible(bool(stats["sessions"]))

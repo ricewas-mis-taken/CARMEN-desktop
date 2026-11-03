@@ -929,7 +929,7 @@ class HomeTab(QWidget):
         layout.setContentsMargins(22, 18, 22, 18)
         layout.setSpacing(12)
         done = data["done"]
-        layout.addWidget(_heading("Today" + (f"  ·  {done} done" if done else "")))
+        layout.addWidget(_heading("Today" + (f": {done} done" if done else "")))
         if data["total_required"] > 0:
             layout.addWidget(_text(
                 f"{format_minutes(data['total_logged'])} of {format_minutes(data['total_required'])} goal",
@@ -1106,7 +1106,7 @@ class HomeTab(QWidget):
         head = QHBoxLayout()
         for text, size, colour, weight, align in (
                 (f"{streak}-day streak" if streak else "No streak yet: one session today starts it", 17, INK, 700, Qt.AlignLeft),
-                (f"{active} active days  ·  {format_minutes(total)} this year", 13, MUTED, 400, Qt.AlignRight)):
+                (f"{active} active days, {format_minutes(total)} this year", 13, MUTED, 400, Qt.AlignRight)):
             label = QLabel(text)
             label.setAlignment(align | Qt.AlignVCenter)
             label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)     # shrinks with the window
