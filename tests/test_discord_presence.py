@@ -38,9 +38,9 @@ def test_reviews_and_burnout_count_up():
     burnout = dp.describe(_status(isBurnout=True), None)
     assert burnout["details"] == "Working until burnout" and burnout["start"] and "end" not in burnout
     side = dp.describe({"isActive": False}, {"problemName": "P", "isPaused": True})
-    assert side["details"] == "Reviewing" and side["state"] == "Paused"
+    assert side is None
 
 
 def test_paused_shows_no_clock():
     card = dp.describe(_status(isPaused=True), None)
-    assert card["state"] == "Paused" and "start" not in card and "end" not in card
+    assert card is None

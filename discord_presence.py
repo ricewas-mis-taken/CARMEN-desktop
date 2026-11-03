@@ -24,7 +24,8 @@ def describe(status, review, show_names=False):
     if status.get("isActive"):
         pomo = status.get("pomodoro")
         on_break = bool(status.get("isBreak"))
-        paused = bool(status.get("isPaused")) and not on_break
+        if status.get("isPaused") and not on_break:
+            return None   # a pause is not "doing something": no card, so a parked session never reads as live
         reviewing = status.get("source") == "review"
         if reviewing:
             details, state = "Reviewing", "Problem review"
@@ -38,21 +39,22 @@ def describe(status, review, show_names=False):
             details, state = "Focus session", "Locked in"
         if show_names and not reviewing and status.get("eventTitle"):
             details = f"{details}: {status['eventTitle']}"
-        fields = {"details": details, "state": "Paused" if paused else state}
+        fields = {"details": details, "state": state}
         if pomo and not on_break:
             fields["party_size"] = [int(pomo["currentCycle"]), int(pomo["totalCycles"])]   # "Cycle (2 of 4)"
         countdown = bool(pomo) or not (reviewing or status.get("isBurnout"))
-        if not paused:
-            if countdown and _epoch(status.get("endTime")):
-                fields["end"] = _epoch(status["endTime"])
-            elif _epoch(status.get("startTime")):
-                fields["start"] = _epoch(status["startTime"])
+        if countdown and _epoch(status.get("endTime")):
+            fields["end"] = _epoch(status["endTime"])
+        elif _epoch(status.get("startTime")):
+            fields["start"] = _epoch(status["startTime"])
         return fields
     if review:
         details = "Reviewing"
         if show_names and review.get("problemName"):
             details = f"Reviewing: {review['problemName']}"
-        return {"details": details, "state": "Paused" if review.get("isPaused") else "Problem review"}
+        if review.get("isPaused"):
+            return None
+        return {"details": details, "state": "Problem review"}
     return None
 
 
