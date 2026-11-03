@@ -232,6 +232,9 @@ def main():
     )
     polling_thread.start()
 
+    import discord_presence
+    discord_presence.start(stop_event)
+
     # Instant re-minimize on click (hard lock only) -- a WinEvent hook, not
     # part of window_tracker's poll loop, so it needs a real Windows message
     # pump on its own thread; see enforcer.run_instant_reminimize_watcher.
