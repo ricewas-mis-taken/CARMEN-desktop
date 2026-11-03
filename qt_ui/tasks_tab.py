@@ -893,28 +893,34 @@ class _TaskCard(QFrame):
 
     def _build_running_panel(self):
         panel = QWidget()
-        layout = QHBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        outer = QVBoxLayout(panel)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(8)
+        top = QHBoxLayout()
+        top.setSpacing(8)
         self._pause_button = _button("Pause", _SECONDARY_STYLE)
         self._pause_button.clicked.connect(self._pause_resume)
-        layout.addWidget(self._pause_button, 1)
-        # While a review of this task is the running session: a pomodoro can still be started; the review waits.
-        self._review_pomodoro_button = _button("Pomodoro", _SECONDARY_STYLE)
-        self._review_pomodoro_button.clicked.connect(self._start_pomodoro)
-        self._review_pomodoro_button.hide()
-        layout.addWidget(self._review_pomodoro_button)
-        self._review_custom_button = _button("Custom", _SECONDARY_STYLE)
-        self._review_custom_button.clicked.connect(self._start_custom_over_review)
-        self._review_custom_button.hide()
-        layout.addWidget(self._review_custom_button)
-        self._review_burnout_button = _button("Burnout", _SECONDARY_STYLE)
-        self._review_burnout_button.clicked.connect(self._start_burnout)
-        self._review_burnout_button.hide()
-        layout.addWidget(self._review_burnout_button)
+        top.addWidget(self._pause_button, 1)
         self._end_button = _button("End", _DANGER_STYLE)
         self._end_button.clicked.connect(self._end_task)
-        layout.addWidget(self._end_button)
+        top.addWidget(self._end_button)
+        outer.addLayout(top)
+        # While a review of this task is the running session: a session can still be started; the review waits.
+        # Own row so no label is squeezed.
+        self._review_row = QWidget()
+        row = QHBoxLayout(self._review_row)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        self._review_pomodoro_button = _button("Pomodoro", _SECONDARY_STYLE)
+        self._review_pomodoro_button.clicked.connect(self._start_pomodoro)
+        self._review_custom_button = _button("Custom", _SECONDARY_STYLE)
+        self._review_custom_button.clicked.connect(self._start_custom_over_review)
+        self._review_burnout_button = _button("Burnout", _SECONDARY_STYLE)
+        self._review_burnout_button.clicked.connect(self._start_burnout)
+        for b in (self._review_pomodoro_button, self._review_custom_button, self._review_burnout_button):
+            row.addWidget(b, 1)
+        self._review_row.hide()
+        outer.addWidget(self._review_row)
         return panel
 
     # --- card look ---
@@ -1382,8 +1388,7 @@ class _TaskCard(QFrame):
         self._detail_label.setText(detail)
         self._detail_label.show()
         over_review = view.get("source") == "review" and not is_waiting   # running, on a break or paused
-        for extra in (self._review_pomodoro_button, self._review_custom_button, self._review_burnout_button):
-            extra.setVisible(over_review)
+        self._review_row.setVisible(over_review)
 
         if violations:
             self._violation_chip.setText(f"{violations} violation{'s' if violations != 1 else ''}")
