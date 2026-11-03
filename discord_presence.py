@@ -17,36 +17,42 @@ POLL_SECONDS = 5
 
 
 def describe(status, review, show_names=False):
-    """(details, state, started_epoch_or_None) for what is happening now, or None when idle."""
+    """The card to show now, as Rich Presence fields, or None when idle.
+
+    A countdown (pomodoro focus or rest, a custom length) shows Discord's own "12:30 left" through `end`;
+    a stopwatch (until burnout, a review) shows elapsed time through `start`; a pause shows neither."""
     if status.get("isActive"):
         pomo = status.get("pomodoro")
-        paused = bool(status.get("isPaused")) and not status.get("isBreak")
+        on_break = bool(status.get("isBreak"))
+        paused = bool(status.get("isPaused")) and not on_break
         reviewing = status.get("source") == "review"
         if reviewing:
-            details = "Reviewing"
+            details, state = "Reviewing", "Problem review"
             if show_names and status.get("reviewProblemName"):
                 details = f"Reviewing: {status['reviewProblemName']}"
         elif pomo:
-            details = "On a break" if status.get("isBreak") else "Pomodoro focus"
+            details, state = ("Taking a break", "Rest") if on_break else ("Pomodoro focus", "Cycle")
         elif status.get("isBurnout"):
-            details = "Working until burnout"
+            details, state = "Working until burnout", "No time limit"
         else:
-            details = "Focus session"
+            details, state = "Focus session", "Locked in"
         if show_names and not reviewing and status.get("eventTitle"):
             details = f"{details}: {status['eventTitle']}"
-        parts = []
-        if pomo:
-            parts.append(f"Cycle {pomo['currentCycle']} of {pomo['totalCycles']}")
-        if paused:
-            parts.append("paused")
-        state = " · ".join(parts) or "In a session"
-        started = None if paused or status.get("isBreak") else _epoch(status.get("startTime"))
-        return details, state, started
+        fields = {"details": details, "state": "Paused" if paused else state}
+        if pomo and not on_break:
+            fields["party_size"] = [int(pomo["currentCycle"]), int(pomo["totalCycles"])]   # "Cycle (2 of 4)"
+        countdown = bool(pomo) or not (reviewing or status.get("isBurnout"))
+        if not paused:
+            if countdown and _epoch(status.get("endTime")):
+                fields["end"] = _epoch(status["endTime"])
+            elif _epoch(status.get("startTime")):
+                fields["start"] = _epoch(status["startTime"])
+        return fields
     if review:
         details = "Reviewing"
         if show_names and review.get("problemName"):
             details = f"Reviewing: {review['problemName']}"
-        return details, "paused" if review.get("isPaused") else "In a review", None
+        return {"details": details, "state": "Paused" if review.get("isPaused") else "Problem review"}
     return None
 
 
@@ -108,10 +114,7 @@ class Presence(threading.Thread):
         if shown is None:
             self._client.clear()
             return
-        details, state, started = shown
-        fields = {"details": details, "state": state, "large_image": "carmen", "large_text": "Carmen Focus"}
-        if started:
-            fields["start"] = started
+        fields = {**shown, "large_image": "carmen", "large_text": "Carmen Focus"}
         self._client.update(**fields)
 
 
