@@ -872,3 +872,11 @@ review (review_store.start_review_with_elapsed keeps its time and its paused sta
 following review_store; the review's own session is ended by hand, its time still counted for the task). It then
 rides beside the new session by the rules above. If there is no banner to convert (a first attempt, which has no
 problem id) the old behaviour stays: the review is paused and parked.
+
+2026-11-02 -- Discord Rich Presence, desktop only
+Fork: put the status in the extension (it has no way to talk to Discord's desktop app) or in the desktop app,
+which already knows the session and review state. Chose the desktop: discord_presence.py polls
+session_manager and review_store every 5 s on a daemon thread and talks to the Discord app over its local pipe
+(pypresence); nothing is sent anywhere but Discord. Quiet when Discord is not running (retries). Task and problem
+names are off by default because friends can see the status; both switches live in the tray menu under
+"Discord status". Application ID 1566985492547895337 ("Carmen Focus"). Extension: none.
