@@ -107,6 +107,8 @@ def main():
     # thread below is the one that matters most — it can trigger
     # enforcer.py's lock overlays at any time once it starts).
     app = QApplication(sys.argv)
+    import qt_ui.popup_fit as popup_fit
+    popup_fit.install(app)                      # every popup opens a sensible size, on screen
     from PySide6.QtGui import QIcon
     app.setWindowIcon(QIcon(os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "carmen_icon.ico")))  # windows and the taskbar
     # Tray-resident app: closing the last visible window (the calendar
