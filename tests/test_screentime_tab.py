@@ -90,9 +90,9 @@ def test_the_total_and_caption_lead_the_page(qtbot, isolate_screentime):
     tab = screentime_tab.ScreenTimeTab()
     qtbot.addWidget(tab)
     assert tab._total_label.text() == "2h 35m"
-    assert tab._caption.text() == "today · this computer"
+    assert tab._caption.text() == "today, this computer"
     tab._week_btn.click()
-    assert tab._caption.text() == "this week · this computer"
+    assert tab._caption.text() == "this week, this computer"
 
 
 def test_the_total_of_an_empty_day_is_zero(qtbot, isolate_screentime):

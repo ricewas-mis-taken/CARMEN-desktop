@@ -482,7 +482,7 @@ class BoardTab(QWidget):
         if len(tasks) != active_count:
             parts[0] = f"{len(tasks)} of {active_count} tasks"
         parts.append("most important first")
-        self._subtitle.setText(" · ".join(parts))
+        self._subtitle.setText(", ".join(parts))
 
     def _open_add_dialog(self):
         _AddTaskDialog(on_added=lambda _t: self.refresh())

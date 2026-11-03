@@ -245,7 +245,7 @@ class _ReviewBox(QFrame):
         self._time_labels = []
         self.pause_buttons = []
         if len(rows) > 1:
-            head = QLabel(f"Reviews · {len(rows)}")
+            head = QLabel(f"Reviews: {len(rows)}")
             head.setStyleSheet(f"font-size:12px;font-weight:700;color:{MUTED};")
             self._layout.addWidget(head)
         for row in rows:
@@ -646,7 +646,7 @@ class TasksTab(QWidget):
             self._summary_label.setText("Nothing scheduled today")
         else:
             self._summary_label.setText(
-                f"Today · {reached} of {scheduled} goal{'s' if scheduled != 1 else ''} reached")
+                f"Today: {reached} of {scheduled} goal{'s' if scheduled != 1 else ''} reached")
 
 
 class _TaskCard(QFrame):
@@ -1256,7 +1256,7 @@ class _TaskCard(QFrame):
             return ["No restrictions set", "No rules"], False
         a = f"{apps} app{'s' if apps != 1 else ''}"
         t = f"{sites} site{'s' if sites != 1 else ''}"
-        return [f"{a} blocked · {t} ok", f"{a} · {t}", f"{apps} · {sites}"], True
+        return [f"{a} blocked, {t} ok", f"{a}, {t}", f"{apps}, {sites}"], True
 
     def _set_restrictions(self, variants, clickable):
         self._restrictions_variants = variants
@@ -1318,7 +1318,7 @@ class _TaskCard(QFrame):
             if period:
                 days = max(1, snap["daysLeft"])
                 pace = _format_minutes(math.ceil(left / days))
-                detail = "Due today" if days == 1 else f"{_days_text(days, 'left')} · about {pace} a day"
+                detail = "Due today" if days == 1 else f"{_days_text(days, 'left')}, about {pace} a day"
         self._countdown_label.setText(headline)
         self._countdown_label.setStyleSheet(
             f"font-size:15px;font-weight:600;color:{'#8A93A3' if locked_by_other else INK};background:transparent;")

@@ -190,10 +190,10 @@ class _WaitingRow(QFrame):
         self._dot.setStyleSheet(f"background:{color};border-radius:5px;")
         self.name_label.setText(_session_name(session))
         big, caption = _clock_for(session)
-        detail = f"{big} {caption} · {_session_kind(session)}"
+        detail = f"{big} {caption}, {_session_kind(session)}"
         if session.get("pomodoro"):
             pomo = session["pomodoro"]
-            detail += f" · pomodoro {pomo['currentCycle']}/{pomo['totalCycles']}"
+            detail += f", pomodoro {pomo['currentCycle']}/{pomo['totalCycles']}"
         self.detail_label.setText(detail)
 
 
@@ -218,7 +218,7 @@ class _NoteRow(QFrame):
         self.name_label.setStyleSheet(f"font-size:14.5px;font-weight:700;color:{INK};background:transparent;")
         text.addWidget(self.name_label)
         self.detail_label = ElidedLabel(
-            f"{format_clock(review.get('elapsedSeconds', 0))} elapsed · paused · resume it in the Review tab")
+            f"{format_clock(review.get('elapsedSeconds', 0))} elapsed, paused, resume it in the Review tab")
         self.detail_label.setStyleSheet(f"font-size:12.5px;color:{MUTED};background:transparent;")
         text.addWidget(self.detail_label)
         row.addLayout(text, 1)
@@ -377,7 +377,7 @@ class FocusTab(QWidget):
                  f"{sites} website{'s' if sites != 1 else ''} allowed"]
         if profiles:
             parts.append(f"{profiles} browser profile{'s' if profiles != 1 else ''} blocked")
-        self._rules_summary.setText(" · ".join(parts))
+        self._rules_summary.setText(", ".join(parts))
 
     def _start_clicked(self):
         minutes = self._chosen_minutes()
@@ -521,7 +521,7 @@ class FocusTab(QWidget):
             waiting += 1  # a paused review
         if waiting:
             parts.append(f"{waiting} waiting")
-        self._summary_label.setText(" · ".join(parts) if parts else "Nothing running")
+        self._summary_label.setText(", ".join(parts) if parts else "Nothing running")
 
     def _show_chip(self, text, tone):
         self._now_chip.setText(text)
@@ -616,7 +616,7 @@ class FocusTab(QWidget):
     def _update_waiting(self, parked, set_aside):
         total = len(parked) + len(set_aside)
         self._waiting_title.setVisible(bool(total))
-        self._waiting_title.setText(f"Waiting · {total}")
+        self._waiting_title.setText(f"Waiting: {total}")
         keep = {p.get("parkId") for p in parked}
         for park_id in list(self._waiting_rows):
             if park_id not in keep:
@@ -648,7 +648,7 @@ class FocusTab(QWidget):
                 self._waiting_box.addWidget(row)
             else:
                 self._review_rows[token].detail_label.setText(
-                    f"{format_clock(review.get('elapsedSeconds', 0))} elapsed · paused · resume it in the Review tab")
+                    f"{format_clock(review.get('elapsedSeconds', 0))} elapsed, paused, resume it in the Review tab")
         self._parked_note = ""
 
     def _update_start_note(self, status, active):

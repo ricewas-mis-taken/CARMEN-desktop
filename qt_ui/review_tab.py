@@ -399,10 +399,10 @@ def _next_review_pill(problem):
         return "Not scheduled", GREY
     display = _next_review_display(when)
     if _is_overdue(when):
-        return f"Overdue · {display}", RED
+        return f"Overdue: {display}", RED
     if display == "Today":
         return "Due today", AMBER
-    return f"Next · {display}", GREY
+    return f"Next: {display}", GREY
 
 
 def _problem_meta(problem):
@@ -415,7 +415,7 @@ def _problem_meta(problem):
     fastest = _fastest_display(problem)
     if fastest != "--:--":
         parts.append(f"fastest {fastest}")
-    return " · ".join(parts)
+    return ", ".join(parts)
 
 
 class _ProblemRow(QFrame):
@@ -1291,9 +1291,9 @@ class _TopicView(QWidget):
         everything = len(review_store.list_problems(self._topic_id, due_only=False))
         due = len(review_store.list_problems(self._topic_id, due_only=True))
         lead = f"{due} due" if due else "Nothing due"
-        text = f"{lead} · {everything} problem{'s' if everything != 1 else ''}"
+        text = f"{lead}, {everything} problem{'s' if everything != 1 else ''}"
         if in_view is not None and len(self._problems) != in_view:
-            text += f" · showing {len(self._problems)}"
+            text += f", showing {len(self._problems)}"
         self._summary_label.setText(text)
 
     def _render_table(self):

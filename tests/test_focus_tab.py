@@ -156,7 +156,7 @@ def test_a_running_review_is_the_big_time_and_the_session_sits_behind_it(qtbot, 
     assert tab._clock_label.text() in ("04:38", "04:39", "04:40") and tab._clock_caption.text() == "elapsed"
     assert "Chinese" in tab._status_label.text() and "hard" in tab._status_label.text()
     assert tab._behind_row is not None and tab._behind_row.name_label.text() == "Chinese"
-    assert tab._summary_label.text() == "1 reviewing · 1 waiting"
+    assert tab._summary_label.text() == "1 reviewing, 1 waiting"
 
 
 def test_pause_pauses_the_review_not_the_session(qtbot, isolate_state, isolate_review_db):

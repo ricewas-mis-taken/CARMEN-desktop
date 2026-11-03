@@ -583,7 +583,7 @@ class HistoryTab(QWidget):
             name = QLabel(day_label(day))
             name.setStyleSheet(f"font-size:13px;font-weight:700;color:{INK};background:transparent;")
             hrow.addWidget(name)
-            total = QLabel(f"{_duration_text(sum(worked_seconds(s) for s in items))} · "
+            total = QLabel(f"{_duration_text(sum(worked_seconds(s) for s in items))}, "
                            f"{len(items)} session{'s' if len(items) != 1 else ''}")
             total.setStyleSheet(f"font-size:12.5px;color:{MUTED};background:transparent;")
             hrow.addWidget(total)

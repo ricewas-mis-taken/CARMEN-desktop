@@ -844,10 +844,10 @@ def _problem_dict(**over):
 def test_the_due_pill_reads_overdue_today_or_later():
     from datetime import date, timedelta
     iso = lambda days: (date.today() + timedelta(days=days)).isoformat()
-    assert review_tab._next_review_pill(_problem_dict(nextReviewDate=iso(-3)))[0] == "Overdue · 3 days ago"
+    assert review_tab._next_review_pill(_problem_dict(nextReviewDate=iso(-3)))[0] == "Overdue: 3 days ago"
     assert review_tab._next_review_pill(_problem_dict(nextReviewDate=iso(0)))[0] == "Due today"
-    assert review_tab._next_review_pill(_problem_dict(nextReviewDate=iso(1)))[0] == "Next · Tomorrow"
-    assert review_tab._next_review_pill(_problem_dict(nextReviewDate=iso(5)))[0] == "Next · in 5 days"
+    assert review_tab._next_review_pill(_problem_dict(nextReviewDate=iso(1)))[0] == "Next: Tomorrow"
+    assert review_tab._next_review_pill(_problem_dict(nextReviewDate=iso(5)))[0] == "Next: in 5 days"
     assert review_tab._next_review_pill(_problem_dict())[0] == "Not scheduled"
     assert review_tab._next_review_pill(_problem_dict(nextReviewDate=iso(-3)))[1] == review_tab.RED
 
@@ -880,10 +880,10 @@ def test_the_summary_counts_due_and_all(qtbot, isolate_review_db):
     topic, subject = _make_topic_and_subject()
     view = review_tab._TopicView(topic["id"])
     qtbot.addWidget(view)
-    assert view._summary_label.text() == "Nothing due · 0 problems"
+    assert view._summary_label.text() == "Nothing due, 0 problems"
     review_store.create_problem(topic["id"], subject["id"], "A", stars=3, description_type="text", description_text="x")
     view.refresh()
-    assert view._summary_label.text().endswith("· 1 problem")
+    assert view._summary_label.text().endswith(", 1 problem")
 
 
 def test_the_empty_list_explains_itself(qtbot, isolate_review_db):
