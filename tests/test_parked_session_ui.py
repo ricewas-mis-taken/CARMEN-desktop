@@ -56,7 +56,7 @@ def test_focus_tab_lists_every_waiting_session_with_its_own_buttons(qtbot, isola
     qtbot.addWidget(tab)
     tab.show()
     tab._refresh_status()
-    assert tab._summary_label.text() == "1 running · 2 waiting"
+    assert tab._summary_label.text() == "1 running, 2 waiting"
     assert tab._now_name.text() == "Gamma"
     names = sorted(row.name_label.text() for row in tab._waiting_rows.values())
     assert names == ["Alpha", "Beta"]

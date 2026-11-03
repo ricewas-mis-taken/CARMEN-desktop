@@ -455,7 +455,7 @@ class ScreenTimeTab(QWidget):
         grand_total = sum(seconds for _category, seconds, _color in chart_entries)
         self._total_label.setText(_format_total(grand_total))
         when = "today" if self._range == "day" else "this week"
-        self._caption.setText(f"{when} · {self._device_caption()}")
+        self._caption.setText(f"{when}, {self._device_caption()}")
 
         while self._sections_layout.count() > 1:
             item = self._sections_layout.takeAt(0)

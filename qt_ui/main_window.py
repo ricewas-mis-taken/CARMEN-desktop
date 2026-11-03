@@ -256,6 +256,7 @@ class _MainWindow(QWidget):
         self.resize(*_NORMAL_SIZE)
         self.setMinimumSize(_SIDEBAR_COMPACT + 480, _MIN_HEIGHT)
         self._compact = False
+        self._short = False
         self._was_maximized = False
         self._drag_frame_size = None  # (width, height) in physical px, set only during a title-bar move
 
@@ -397,16 +398,36 @@ class _MainWindow(QWidget):
         self._brand_title.setVisible(not compact)
         self._brand_row.setAlignment(self._logo, (Qt.AlignHCenter if compact else Qt.AlignLeft) | Qt.AlignVCenter)
         self._brand_row.setContentsMargins(*((0, 24, 0, 18) if compact else (20, 24, 18, 18)))
-        for caption in self._group_captions:
-            caption.setVisible(not compact)
+        self._show_captions()
         for button in self._nav_buttons.values():
             full = button.property("fullLabel")
             button.setText("" if compact else full)
             button.setToolTip(full if compact else "")
         self._account_area.set_compact(compact)
-        self._sidebar.setStyleSheet(
-            "QPushButton.NavButton { margin: 1px 8px; padding: 9px 0px; text-align: center; }" if compact else "")
+        self._restyle_sidebar()
         self._apply_min_size()
+        QTimer.singleShot(0, lambda: self._move_marker(animated=False))
+
+    def _show_captions(self):
+        for caption in self._group_captions:
+            caption.setVisible(not (self._compact or self._short))
+
+    def _restyle_sidebar(self):
+        rules = []
+        if self._compact:
+            rules.append("margin: 1px 8px; padding: 9px 0px; text-align: center;")
+        if self._short:
+            rules.append("padding-top: 5px; padding-bottom: 5px;")
+        self._sidebar.setStyleSheet("QPushButton.NavButton { %s }" % " ".join(rules) if rules else "")
+
+    def _set_short(self, short):
+        """On a short window the group headings go and the buttons tighten, so the account
+        buttons at the bottom are never squeezed into each other."""
+        if short == self._short:
+            return
+        self._short = short
+        self._show_captions()
+        self._restyle_sidebar()
         QTimer.singleShot(0, lambda: self._move_marker(animated=False))
 
     def changeEvent(self, event):
@@ -444,6 +465,7 @@ class _MainWindow(QWidget):
         # there's nothing left for this backstop to correct.
         super().resizeEvent(event)
         self._set_compact(event.size().width() < _COMPACT_BELOW)
+        self._set_short(event.size().height() < 800)
 
     def nativeEvent(self, eventType, message):
         # No macOS equivalent needed here -- this guards a Windows-specific

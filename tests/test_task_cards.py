@@ -45,7 +45,7 @@ def test_idle_card_shows_the_goal_the_rules_and_a_start_button(qtbot, world):
     card = _card(qtbot, _task(processBlocklist=["a.exe", "b.exe"], domainWhitelist=["x.com"]))
     assert card._countdown_label.text() == "30 min to go"
     assert card._ring._big == "0m" and card._ring._small == "of 30m today"
-    assert card._restrictions_variants[0] == "2 apps blocked · 1 site ok"
+    assert card._restrictions_variants[0] == "2 apps blocked, 1 site ok"
     assert card._blocklist_button.text() in card._restrictions_variants
     assert card._start_button.isEnabled() and card._start_button.text().endswith("Start")
     assert not card._running_panel.isVisible() and not card._armed_panel.isVisible()
@@ -367,11 +367,11 @@ def test_timer_does_nothing_while_the_tab_is_hidden(qtbot, world, monkeypatch):
 def test_summary_counts_goals_reached(qtbot, world, monkeypatch):
     tab = _tab(qtbot, 2)
     tab.show()
-    assert tab._summary_label.text() == "Today · 0 of 2 goals reached"
+    assert tab._summary_label.text() == "Today: 0 of 2 goals reached"
     first = next(iter(tab._cards.values()))
     monkeypatch.setattr(tasks_store, "logged_seconds_for_date", lambda *a, **k: 31 * 60)
     tab._tick()
-    assert tab._summary_label.text() == "Today · 2 of 2 goals reached"
+    assert tab._summary_label.text() == "Today: 2 of 2 goals reached"
     assert first.goal_state == "reached"
 
 
@@ -414,7 +414,7 @@ def test_restrictions_line_is_never_cut_off(qtbot, world, width):
     fm = button.fontMetrics()
     assert fm.horizontalAdvance(button.text()) <= button.width()
     assert button.text() in card._restrictions_variants or button.text().endswith("…")
-    assert "12 apps blocked · 14 sites ok" in button.toolTip() or button.text() == "12 apps blocked · 14 sites ok"
+    assert "12 apps blocked, 14 sites ok" in button.toolTip() or button.text() == "12 apps blocked, 14 sites ok"
 
 
 # ------------------------------------------------------------ period goals ----
