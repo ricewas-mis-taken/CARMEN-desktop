@@ -505,9 +505,10 @@ class TasksTab(QWidget):
 
         layout.addLayout(self._build_header())
         self._summary_label = QLabel()
-        self._summary_label.setStyleSheet(f"color:{INK};font-size:26px;font-weight:800;")
+        self._summary_label.setStyleSheet(f"color:{INK};font-size:22px;font-weight:800;")
         self._summary_label.setMinimumWidth(0)
         self._summary_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)  # never widens the window
+        layout.addSpacing(6)
         layout.addWidget(self._summary_label)
         self._summary_bar = QProgressBar()
         self._summary_bar.setTextVisible(False)
