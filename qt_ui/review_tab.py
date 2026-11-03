@@ -478,6 +478,15 @@ class _ProblemRow(QFrame):
             self.start_button.setToolTip("You are reviewing this one right now")
         outer.addWidget(self.start_button, 0, Qt.AlignVCenter)
 
+    _NARROW_BELOW = 600
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        narrow = event.size().width() < self._NARROW_BELOW
+        # The due pill gives its room to the name and the subject when the row is tight (its text stays in the tooltip).
+        self.next_pill.setVisible(not narrow)
+        self.setToolTip(self.next_pill.text() if narrow else "")
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton and self.childAt(event.position().toPoint()) is not self.start_button:
             self._on_open(self.problem)
