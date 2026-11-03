@@ -890,3 +890,10 @@ px of page the options card (itself a scroll area) becomes an "Options" popup bu
 bar drops its title, saved text, Pan and Reset. The tab reports a small minimumSizeHint so the page can shrink.
 Rejected: raising the page minimum (the window would stop shrinking for everyone) and shrinking the board.
 Not changed: Session History still needs 900 px (it grows the window instead of wrapping); other pages fit.
+
+2026-11-02 -- Small windows, second pass (data-filled pages), desktop only
+Rendered every page with seeded data (long task and problem names, 14 problems, 40 sessions) at the smallest
+size. Fixed: Session History now wraps its filter pills (ui_kit.FlowLayout) and lays its four numbers 2x2 when
+narrow, so its page minimum fell from 900 to 540 px instead of widening the window; review rows hide the due
+pill below 600 px (it moves into the tooltip) so the name and subject are not cut to "Pro...". Long names
+elide by design. Left alone: the Board's plain-text header links, dialogs (fixed size, centred).
