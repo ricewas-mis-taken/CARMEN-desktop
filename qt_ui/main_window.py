@@ -310,7 +310,8 @@ class _MainWindow(QWidget):
         brand_row = QHBoxLayout(brand)
         brand_row.setContentsMargins(20, 24, 18, 18)
         brand_row.setSpacing(10)
-        brand_row.addWidget(LogoMark(22), 0, Qt.AlignVCenter)
+        self._logo = LogoMark(22)
+        brand_row.addWidget(self._logo, 0, Qt.AlignVCenter)
         title = QLabel("Carmen Focus")
         title.setObjectName("SidebarTitle")
         brand_row.addWidget(title, 1)
@@ -394,6 +395,7 @@ class _MainWindow(QWidget):
         self._compact = compact
         self._sidebar.setFixedWidth(self._sidebar_width())
         self._brand_title.setVisible(not compact)
+        self._brand_row.setAlignment(self._logo, (Qt.AlignHCenter if compact else Qt.AlignLeft) | Qt.AlignVCenter)
         self._brand_row.setContentsMargins(*((0, 24, 0, 18) if compact else (20, 24, 18, 18)))
         for caption in self._group_captions:
             caption.setVisible(not compact)
@@ -403,7 +405,7 @@ class _MainWindow(QWidget):
             button.setToolTip(full if compact else "")
         self._account_area.set_compact(compact)
         self._sidebar.setStyleSheet(
-            "QPushButton.NavButton { margin: 1px 8px; padding: 9px 0px; }" if compact else "")
+            "QPushButton.NavButton { margin: 1px 8px; padding: 9px 0px; text-align: center; }" if compact else "")
         self._apply_min_size()
         QTimer.singleShot(0, lambda: self._move_marker(animated=False))
 
