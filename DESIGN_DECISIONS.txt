@@ -880,3 +880,13 @@ session_manager and review_store every 5 s on a daemon thread and talks to the D
 (pypresence); nothing is sent anywhere but Discord. Quiet when Discord is not running (retries). Task and problem
 names are off by default because friends can see the status; both switches live in the tray menu under
 "Discord status". Application ID 1566985492547895337 ("Carmen Focus"). Extension: none.
+
+2026-11-02 -- Small windows: Scribe folds instead of scrolling sideways (desktop only)
+Found by rendering every page of the real window at its smallest size with the real fonts and stylesheet
+(a throwaway harness, run with CARMEN_PRIVATE_DIR pointing at an empty folder). Scribe was the one page with
+a real fault: its tool column, board, top bar and 226 px options card need ~1060 px, the page is only allowed
+down to 640, so the scroll wrapper added a sideways bar and cut the top bar and options off. Now, below 1060
+px of page the options card (itself a scroll area) becomes an "Options" popup button, and below 820 the top
+bar drops its title, saved text, Pan and Reset. The tab reports a small minimumSizeHint so the page can shrink.
+Rejected: raising the page minimum (the window would stop shrinking for everyone) and shrinking the board.
+Not changed: Session History still needs 900 px (it grows the window instead of wrapping); other pages fit.
