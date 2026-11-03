@@ -1087,6 +1087,24 @@ def start_review(problem_id):
     return token
 
 
+def start_review_with_elapsed(problem_id, elapsed_seconds, paused=False):
+    """start_review() for a review that has already been running (it handed its own session over): the
+    elapsed time carries on from where it was, and it can start paused."""
+    token = start_review(problem_id)
+    if token is None:
+        return None
+    with _lock:
+        entry = _active_sessions[token]
+        entry["accumulated_seconds"] = int(elapsed_seconds)
+        if paused:
+            entry["resumed_at"] = None
+        else:
+            entry["resumed_at"] = datetime.now()
+        entry["auto_paused"] = False
+        _save_active_sessions()
+    return token
+
+
 def park_active_review():
     """Sets the review being timed aside, paused and out of the running slot,
     so a different review can start. Returns its token (pass it to

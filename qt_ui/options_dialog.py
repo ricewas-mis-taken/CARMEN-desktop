@@ -4,9 +4,10 @@ import os
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QApplication, QColorDialog, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QColorDialog, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 
+import config
 import theme
 from qt_ui import ui_kit
 from qt_ui.ui_kit import SECONDARY_STYLE, accent, dialog_title, field_label, role_label
@@ -29,17 +30,22 @@ class OptionsDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle("Options")
-        self.resize(500, 420)
+        self.resize(500, 500)
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(24, 22, 24, 20)
         self._layout.setSpacing(10)
-        self._layout.addWidget(dialog_title("Options", "Colours apply to this app and the browser extension."))
+        self._layout.addWidget(dialog_title("Options", "Colours apply to this app and the browser extension. Discord is opt-in per line."))
         self._layout.addWidget(field_label("Colours"))
         self._grid = QGridLayout()
         self._grid.setSpacing(10)
         self._layout.addLayout(self._grid)
         self._note = role_label("", "hint", wrap=True)
         self._layout.addWidget(self._note)
+        self._layout.addWidget(field_label("Discord"))
+        self._discord_on = self._config_box("Show what I'm doing on my Discord profile", "discordPresence", True)
+        self._discord_names = self._config_box("Include task and problem names", "discordShowNames", False)
+        self._discord_names.setEnabled(self._discord_on.isChecked())
+        self._discord_on.toggled.connect(self._discord_names.setEnabled)
         self._layout.addWidget(role_label(
             "Buttons and numbers pick up a new colour the next time Carmen starts.", "hint", wrap=True))
         self._layout.addStretch(1)
@@ -51,6 +57,13 @@ class OptionsDialog(QWidget):
         self._layout.addLayout(row)
         self._fill()
         self.show()
+
+    def _config_box(self, text, key, default):
+        box = QCheckBox(text)
+        box.setChecked(bool(config.load_config().get(key, default)))
+        box.toggled.connect(lambda on, k=key: config.update_config(lambda cfg: cfg.update({k: on})))
+        self._layout.addWidget(box)
+        return box
 
     def _fill(self):
         while self._grid.count():

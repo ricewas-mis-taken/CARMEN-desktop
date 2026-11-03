@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QFrame,
     QGraphicsDropShadowEffect,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -31,6 +32,8 @@ import session_manager
 import tasks_store
 from qt_ui import motion
 from qt_ui.ui_kit import (
+    discard_widget,
+    FlowLayout,
     AMBER,
     FAINT,
     GREEN,
@@ -416,8 +419,7 @@ class HistoryTab(QWidget):
         layout.addLayout(head)
 
         # filters
-        filters = QHBoxLayout()
-        filters.setSpacing(6)
+        filters = FlowLayout(spacing=6)            # wraps onto a second line in a narrow window
         self._window_buttons = {}
         window_group = QButtonGroup(self)
         window_group.setExclusive(True)
@@ -432,7 +434,7 @@ class HistoryTab(QWidget):
             self._window_buttons[days] = pill
             filters.addWidget(pill)
         self._window_buttons[7].setChecked(True)
-        filters.addSpacing(14)
+        filters.addWidget(QLabel("  "))         # a small gap between the two groups
         self._kind_buttons = {}
         kind_group = QButtonGroup(self)
         kind_group.setExclusive(True)
@@ -447,18 +449,21 @@ class HistoryTab(QWidget):
             self._kind_buttons[kind] = pill
             filters.addWidget(pill)
         self._kind_buttons[None].setChecked(True)
-        filters.addStretch(1)
         layout.addLayout(filters)
 
         # summary + strip
-        top = QHBoxLayout()
-        top.setSpacing(12)
+        top = QGridLayout()
+        top.setHorizontalSpacing(12)
+        top.setVerticalSpacing(12)
+        self._stat_grid = top
         self.stat_time = _Stat("focused")
         self.stat_sessions = _Stat("sessions")
         self.stat_violations = _Stat("violations")
         self.stat_clean = _Stat("clean sessions")
-        for stat in (self.stat_time, self.stat_sessions, self.stat_violations, self.stat_clean):
-            top.addWidget(stat, 1)
+        self._stats = (self.stat_time, self.stat_sessions, self.stat_violations, self.stat_clean)
+        for column in range(4):
+            top.setColumnStretch(column, 1)
+        self._place_stats(4)
         layout.addLayout(top)
 
         strip_card = QFrame()
@@ -485,6 +490,19 @@ class HistoryTab(QWidget):
         layout.addStretch(1)
 
         self.refresh()
+
+    def _place_stats(self, columns):
+        if columns == getattr(self, "_stat_columns", None):
+            return
+        self._stat_columns = columns
+        for stat in self._stats:
+            self._stat_grid.removeWidget(stat)
+        for index, stat in enumerate(self._stats):
+            self._stat_grid.addWidget(stat, index // columns, index % columns)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._place_stats(4 if event.size().width() >= 640 else 2)
 
     def showEvent(self, event):
         self.refresh()
@@ -538,7 +556,7 @@ class HistoryTab(QWidget):
         while self._timeline.count():
             widget = self._timeline.takeAt(0).widget()
             if widget is not None:
-                widget.setParent(None)
+                discard_widget(widget)
                 widget.deleteLater()
         self._cards = []
         self._day_label_widgets = []

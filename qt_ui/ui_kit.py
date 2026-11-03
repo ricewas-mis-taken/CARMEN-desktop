@@ -9,9 +9,9 @@ accent colour per thing (a task's colour, a subject's colour), and DIN-style num
 import os
 import tempfile
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPainterPath, QPen, QPixmap, QRadialGradient
-from PySide6.QtWidgets import QLabel, QPushButton, QSizePolicy, QWidget
+from PySide6.QtWidgets import QLabel, QLayout, QPushButton, QSizePolicy, QWidget
 
 from qt_ui.day_layout import contrasting_text_color
 
@@ -150,11 +150,16 @@ class Ring(QWidget):
         self._ink, self._muted, self._faint = colors
         self.update()
 
-    def set_state(self, color, fraction, big, small, dim=False):
+    _plain = False
+
+    def set_state(self, color, fraction, big, small, dim=False, plain=False):
+        """plain=True is a count-up with nothing to fill (until burnout, a review): no ring, a tinted
+        plate with a breathing dot instead."""
         fraction = round(max(0.0, fraction), 4)
-        if (QColor(color).name(), fraction, big, small, dim) == (
-                self._color.name(), self._fraction, self._big, self._small, self._dim):
+        if (QColor(color).name(), fraction, big, small, dim, plain) == (
+                self._color.name(), self._fraction, self._big, self._small, self._dim, self._plain):
             return
+        self._plain = plain
         before = self._fraction
         first = not self._has_state
         self._has_state = True
@@ -165,6 +170,32 @@ class Ring(QWidget):
             self._ease_to(fraction)
         self.update()
 
+    def _paint_plate(self, p, rect):
+        """The count-up look: a soft rounded plate, a dot that breathes, the clock and its caption."""
+        import math
+        plate = QColor(self._color)
+        plate.setAlphaF(0.10 if not self._dim else 0.05)
+        p.setPen(Qt.NoPen)
+        p.setBrush(plate)
+        p.drawRoundedRect(rect, 26, 26)
+        dot = QColor(self._color)
+        breathe = 0.5 + 0.5 * math.sin(self._pulse * 6.2832) if self._live and not self._dim else 0.6
+        dot.setAlphaF((0.35 + 0.65 * breathe) * (0.4 if self._dim else 1.0))
+        p.setBrush(dot)
+        radius = 4 + 1.5 * breathe
+        p.drawEllipse(QPointF(self.width() / 2, rect.top() + 20), radius, radius)
+        big = QFont()
+        big.setFamilies(NUM_FONTS)
+        big.setPixelSize(26 if len(self._big) < 6 else 22)
+        p.setFont(big)
+        p.setPen(QColor(self._faint if self._dim else self._ink))
+        p.drawText(QRectF(0, self.height() / 2 - 14, self.width(), 30), Qt.AlignCenter, self._big)
+        small = QFont(TEXT_FONT)
+        small.setPixelSize(11)
+        p.setFont(small)
+        p.setPen(QColor(self._faint if self._dim else self._muted))
+        p.drawText(QRectF(0, self.height() / 2 + 16, self.width(), 18), Qt.AlignCenter, self._small)
+
     def paintEvent(self, _event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
@@ -172,6 +203,9 @@ class Ring(QWidget):
         rect = QRectF(width / 2 + 2, width / 2 + 2, self.width() - width - 4, self.height() - width - 4)
         track = QColor(self._color)
         track.setAlphaF(0.15)
+        if self._plain:
+            self._paint_plate(p, rect)
+            return
         p.setPen(QPen(track, width, Qt.SolidLine, Qt.RoundCap))
         p.drawEllipse(rect)
         if self._live and not self._dim and self._shown > 0:
@@ -553,3 +587,70 @@ def force_light_scheme():
     hints = QGuiApplication.styleHints()
     if hasattr(hints, "setColorScheme"):
         hints.setColorScheme(Qt.ColorScheme.Light)
+
+
+def discard_widget(widget):
+    """Takes a widget out of a layout for good. Hidden first: a visible widget whose parent is cleared
+    becomes a top-level window and flashes on screen as a popup until it is deleted."""
+    widget.hide()
+    widget.setParent(None)
+    widget.deleteLater()
+
+
+class FlowLayout(QLayout):
+    """Left to right, wrapping onto the next line when the row is full (pills, chips)."""
+
+    def __init__(self, parent=None, spacing=6):
+        super().__init__(parent)
+        self._items = []
+        self._space = spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._arrange(QRect(0, 0, width, 0), apply=False)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._arrange(rect, apply=True)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        margins = self.contentsMargins()
+        return size + QSize(margins.left() + margins.right(), margins.top() + margins.bottom())
+
+    def _arrange(self, rect, apply):
+        margins = self.contentsMargins()
+        area = rect.adjusted(margins.left(), margins.top(), -margins.right(), -margins.bottom())
+        x, y, line = area.x(), area.y(), 0
+        for item in self._items:
+            hint = item.sizeHint()
+            if x + hint.width() > area.right() + 1 and line > 0:
+                x, y, line = area.x(), y + line + self._space, 0
+            if apply:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x += hint.width() + self._space
+            line = max(line, hint.height())
+        return y + line - rect.y() + margins.bottom()

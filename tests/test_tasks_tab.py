@@ -41,7 +41,8 @@ def test_review_session_for_linked_task_shows_as_running(qtbot, isolate_tasks, i
     text = card._countdown_label.text()
     assert "Quadratics 1" in text
     assert "Algebra" not in text
-    assert "elapsed" in text.lower()
+    assert "elapsed" not in text.lower()      # the ring carries the time; the line does not repeat it
+    assert card._ring._small == "elapsed"
 
 
 def test_burnout_session_shows_as_stopwatch_even_on_a_fresh_card(qtbot, isolate_tasks, isolate_state):
@@ -61,9 +62,8 @@ def test_burnout_session_shows_as_stopwatch_even_on_a_fresh_card(qtbot, isolate_
     fresh_card.update_dynamic(session_manager.get_status(), session_history.load_all())
 
     text = fresh_card._countdown_label.text().lower()
-    assert "until burnout" in text
-    assert "elapsed" in text
-    assert "remaining" not in text
+    assert text == "until burnout"
+    assert fresh_card._ring._small == "elapsed"
 
 
 def test_review_session_pause_button_works_for_linked_task(qtbot, isolate_tasks, isolate_state):
@@ -180,3 +180,78 @@ def test_pomodoro_and_burnout_buttons_are_distinctly_styled(qtbot, isolate_tasks
     assert card._burnout_button.objectName() == "burnoutButton"
     assert card._pomodoro_button.objectName() == "pomodoroButton"
     assert card._burnout_button.objectName() != card._pomodoro_button.objectName()
+
+
+def test_a_pomodoro_can_start_while_a_review_of_the_task_is_running(qtbot, isolate_tasks, isolate_state, monkeypatch):
+    task = _make_task()
+    card = tasks_tab._TaskCard(task, on_changed=lambda: None)
+    qtbot.addWidget(card)
+    card.show()
+    session_manager.start_session(
+        30, "soft", [], [],
+        source="review", event_id=task["id"], event_title="Study - Algebra review",
+        review_problem_name="Quadratics 1", review_subject_name="Algebra",
+    )
+    card.update_dynamic(session_manager.get_status(), session_history.load_all())
+    assert card._review_pomodoro_button.isVisible()
+
+    monkeypatch.setattr(tasks_tab._PomodoroDialog, "get_settings", staticmethod(lambda parent=None: (25, 5, 4)))
+    card._review_pomodoro_button.click()
+
+    status = session_manager.get_status()
+    assert status["pomodoro"]["focusMinutes"] == 25 and status["source"] == "task" and not status["isPaused"]
+    waiting = status.get("parkedSessions") or []
+    assert [p.get("reviewProblemName") for p in waiting] == ["Quadratics 1"]    # the review waits, not ended
+    card.update_dynamic(status, session_history.load_all())
+    assert not card._review_pomodoro_button.isVisible()
+
+
+def test_burnout_can_start_over_a_paused_review_session(qtbot, isolate_tasks, isolate_state):
+    task = _make_task()
+    card = tasks_tab._TaskCard(task, on_changed=lambda: None)
+    qtbot.addWidget(card)
+    card.show()
+    session_manager.start_session(
+        30, "soft", [], [],
+        source="review", event_id=task["id"], event_title="Study - Algebra review",
+        review_problem_name="Quadratics 1", review_subject_name="Algebra",
+    )
+    session_manager.pause_session()
+    card.update_dynamic(session_manager.get_status(), session_history.load_all())
+    assert card._review_burnout_button.isVisible() and card._review_custom_button.isVisible()
+
+    card._review_burnout_button.click()
+
+    status = session_manager.get_status()
+    assert status["source"] == "task" and not status["isPaused"]
+    assert [p.get("reviewProblemName") for p in status["parkedSessions"]] == ["Quadratics 1"]
+
+
+def test_a_session_over_a_review_leaves_it_counting_beside_it(qtbot, isolate_tasks, isolate_state, isolate_review_db):
+    import review_store
+    from qt_ui import review_tab
+    task = _make_task()
+    topic = review_store.create_topic("Math")
+    subject = review_store.create_subject(topic["id"], "Algebra", "#111111")
+    problem = review_store.create_problem(topic["id"], subject["id"], "Quadratics 1", 3, "text", description_text="x")
+    session_manager.start_session(
+        30, "soft", [], [], source="review", event_id=task["id"], event_title="Study - Algebra review",
+        review_problem_name="Quadratics 1", review_subject_name="Algebra", review_problem_id=problem["id"],
+    )
+    banner = review_tab._ReviewBanner(on_finished=lambda: None)
+    qtbot.addWidget(banner)
+    banner.start({**problem, "id": problem["id"]}, None, end_session_on_finish=True)
+    card = tasks_tab._TaskCard(task, on_changed=lambda: None)
+    qtbot.addWidget(card)
+
+    card._start_burnout()
+
+    status = session_manager.get_status()
+    assert status["source"] == "task" and not status["isPaused"] and not status.get("parkedSessions")
+    active = review_store.get_active_review()
+    assert active["problemId"] == problem["id"] and active["isPaused"] is False
+    assert banner._end_session_on_finish is False
+    session_manager.pause_session()
+    assert review_store.get_active_review()["isPaused"] is True
+    session_manager.resume_session()
+    assert review_store.get_active_review()["isPaused"] is False

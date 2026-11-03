@@ -488,3 +488,161 @@ def test_a_long_line_being_drawn_keeps_its_finished_curve_pieces(qtbot):
         draft["pts"].append(pts[n - 1])
         built = canvas._stroke_path(draft, False)
         assert built == canvas._smooth_path(draft["pts"], False)
+
+
+def _board(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab.resize(900, 600)
+    return tab.canvas
+
+
+def test_copy_and_paste_puts_an_identical_copy_in_the_middle_of_the_screen(qtbot):
+    canvas = _board(qtbot)
+    item = {"type": "rect", "a": [-500, -400], "b": [-300, -300], "stroke": "#E2603B", "fill": "#112233",
+            "width": 7}
+    canvas.doc["layers"][0]["items"].append(item)
+    canvas.view.update({"x": 1000.0, "y": 2000.0})
+    canvas._sel = [item]
+    assert canvas.copy_selection()
+    assert canvas.paste_selection()
+    pasted = canvas.doc["layers"][0]["items"][-1]
+    assert pasted is not item
+    assert (pasted["stroke"], pasted["fill"], pasted["width"]) == ("#E2603B", "#112233", 7)
+    x0, y0, x1, y1 = geo.bounds(pasted)
+    assert ((x0 + x1) / 2, (y0 + y1) / 2) == (1000.0, 2000.0)         # the middle of the screen
+    assert (x1 - x0, y1 - y0) == (geo.bounds(item)[2] - geo.bounds(item)[0],
+                                  geo.bounds(item)[3] - geo.bounds(item)[1])
+    assert canvas._sel == [pasted] and canvas.tool == "select"
+
+
+def test_pasting_twice_in_one_spot_does_not_hide_the_first_copy(qtbot):
+    canvas = _board(qtbot)
+    item = {"type": "line", "a": [0, 0], "b": [100, 0], "stroke": "#000000", "width": 3}
+    canvas.doc["layers"][0]["items"].append(item)
+    canvas._sel = [item]
+    canvas.copy_selection()
+    canvas.paste_selection()
+    canvas.paste_selection()
+    first, second = canvas.doc["layers"][0]["items"][-2:]
+    assert first["a"] != second["a"]
+
+
+def test_cut_removes_the_items_and_paste_brings_them_back_and_undo_works(qtbot):
+    canvas = _board(qtbot)
+    item = {"type": "stroke", "pts": [[0, 0], [20, 30], [40, 0]], "stroke": "#000000", "width": 3}
+    canvas.doc["layers"][0]["items"].append(item)
+    canvas._sel = [item]
+    assert canvas.cut_selection()
+    assert canvas.doc["layers"][0]["items"] == [] and canvas._sel == []
+    assert canvas.paste_selection()
+    assert len(canvas.doc["layers"][0]["items"]) == 1
+    canvas.undo()
+    assert canvas.doc["layers"][0]["items"] == []
+
+
+def test_a_pasted_selection_can_be_recoloured(qtbot):
+    canvas = _board(qtbot)
+    item = {"type": "line", "a": [0, 0], "b": [100, 0], "stroke": "#000000", "width": 3}
+    canvas.doc["layers"][0]["items"].append(item)
+    canvas._sel = [item]
+    canvas.copy_selection()
+    canvas.paste_selection()
+    canvas.set_stroke("#3366FF")
+    assert canvas.doc["layers"][0]["items"][-1]["stroke"] == "#3366FF"
+    assert item["stroke"] == "#000000"
+
+
+def test_ctrl_c_ctrl_x_ctrl_v_and_ctrl_d_work_on_the_board(qtbot):
+    canvas = _board(qtbot)
+    item = {"type": "line", "a": [0, 0], "b": [100, 0], "stroke": "#000000", "width": 3}
+    canvas.doc["layers"][0]["items"].append(item)
+    canvas._sel = [item]
+    QTest.keyClick(canvas, Qt.Key_D, Qt.ControlModifier)
+    assert len(canvas.doc["layers"][0]["items"]) == 2
+    QTest.keyClick(canvas, Qt.Key_X, Qt.ControlModifier)
+    assert len(canvas.doc["layers"][0]["items"]) == 1
+    QTest.keyClick(canvas, Qt.Key_V, Qt.ControlModifier)
+    assert len(canvas.doc["layers"][0]["items"]) == 2
+
+
+def test_the_board_extent_is_worked_out_once_while_panning(qtbot):
+    from PySide6.QtCore import QPointF
+    canvas = _board(qtbot)
+    canvas.doc["layers"][0]["items"].append({"type": "rect", "a": [0, 0], "b": [50, 50], "stroke": "#000000", "width": 2})
+    calls = []
+    real = canvas._work_out_bounds
+    canvas._work_out_bounds = lambda: calls.append(1) or real()
+    canvas._pan = (QPointF(0, 0), 0.0, 0.0)
+    for _ in range(5):
+        canvas._all_bounds()
+    canvas._pan = None
+    assert len(calls) == 1
+
+
+def test_repainting_the_whole_board_does_not_redraw_the_side_panels(qtbot):
+    from PySide6.QtCore import QEvent, QObject
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab.resize(1400, 800)
+    tab.show()
+    qtbot.waitExposed(tab)
+    painted = []
+
+    class Watch(QObject):
+        def eventFilter(self, obj, event):
+            if event.type() == QEvent.Paint:
+                painted.append(obj)
+            return False
+    watch = Watch()
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance().installEventFilter(watch)
+    QApplication.processEvents()
+    painted.clear()
+    tab.canvas.update()
+    QApplication.processEvents()
+    QApplication.instance().removeEventFilter(watch)
+    assert len(painted) < 10     # card shadows reaching the board made every panel repaint (60+ widgets)
+
+
+def test_the_timed_save_runs_off_the_ui_thread(qtbot, monkeypatch):
+    import threading
+    import time
+    import scribe_store
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    gate = threading.Event()
+    seen = []
+
+    def slow_save(doc):
+        seen.append(threading.current_thread())
+        gate.wait(2)
+    monkeypatch.setattr(scribe_store, "save", slow_save)
+    tab.canvas.doc["layers"][0]["items"].append({"type": "rect", "a": [0, 0], "b": [5, 5], "stroke": "#000000", "width": 2})
+    tab._dirty = True
+    started = time.perf_counter()
+    tab._flush_in_background()
+    assert time.perf_counter() - started < 0.5          # did not wait for the write
+    assert not tab._dirty
+    gate.set()
+    tab.flush()                                          # waits for the write already running
+    assert seen and seen[0] is not threading.main_thread()
+
+
+def test_scribe_folds_its_options_into_a_popup_and_trims_the_top_bar_when_narrow(qtbot):
+    from qt_ui.main_window import _scrolling
+    tab = ScribeTab()
+    holder = _scrolling(tab)                      # as in the app: the page sits in a scroll area
+    qtbot.addWidget(holder)
+    holder.resize(1300, 700)
+    holder.show()
+    qtbot.waitExposed(holder)
+    assert tab._side.isVisible() and not tab._options_button.isVisible()
+    holder.resize(700, 560)
+    qtbot.wait(50)
+    assert not tab._side.isVisible() and tab._options_button.isVisible()
+    assert not tab._pan_button.isVisible() and not tab._reset_button.isVisible()    # compact top bar
+    assert tab.minimumSizeHint().width() <= 600                                     # no forced sideways scroll
+    holder.resize(1300, 700)
+    qtbot.wait(50)
+    assert tab._side.isVisible() and tab._pan_button.isVisible()

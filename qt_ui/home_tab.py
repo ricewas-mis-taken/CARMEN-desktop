@@ -35,7 +35,7 @@ import tasks_store
 from qt_ui.history_viewer import minutes_by_day
 from qt_ui.mini_timer import describe as describe_session
 from qt_ui.ui_kit import (
-    BREAK_COLOR, ElidedLabel, Ring, button, format_minutes, safe_color, tint,
+    BREAK_COLOR, ElidedLabel, FlowLayout, Ring, button, format_minutes, safe_color, tint,
 )
 from qt_ui import inkwrite
 from qt_ui.wrap_edit import WrapEdit
@@ -280,12 +280,25 @@ def _text(text, size=13, colour=None, weight=400):
 
 
 def _chip_done(task):
-    label = ElidedLabel("✓  " + task.get("name", "Task"))
-    label.setMaximumWidth(150)
-    label.setStyleSheet(
-        f"color:{INK};background:{tint(safe_color(task.get('color')), 0.16)};"
-        "border-radius:10px;padding:3px 10px;font-size:12px;font-weight:600;")
-    return label
+    """A finished task: a filled tick badge in its colour, then its name in full."""
+    colour = safe_color(task.get("color"))
+    chip = QWidget()
+    chip.setStyleSheet(f"background:{tint(colour, 0.16)};border-radius:11px;")
+    row = QHBoxLayout(chip)
+    row.setContentsMargins(4, 3, 12, 3)
+    row.setSpacing(7)
+    tick = QLabel("✓")
+    tick.setFixedSize(18, 18)
+    tick.setAlignment(Qt.AlignCenter)
+    tick.setStyleSheet(f"background:{colour};color:#FFFFFF;border-radius:9px;font-size:11px;font-weight:800;")
+    row.addWidget(tick)
+    name = QLabel(task.get("name", "Task"))
+    name.setStyleSheet(f"color:{INK};background:transparent;font-size:12px;font-weight:600;")
+    name.setMaximumWidth(180)
+    name.setText(QFontMetricsF(name.font()).elidedText(name.text(), Qt.ElideRight, 180))
+    row.addWidget(name)
+    chip.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+    return chip
 
 
 class _Bar(QWidget):
@@ -758,7 +771,8 @@ class HomeTab(QWidget):
             ring, colour = self._live
             _label, clock, fraction, _can_pause = describe_session(status)
             paused = bool(status.get("isPaused"))
-            ring.set_state(colour, fraction or 0.0, clock, "paused" if paused else "", dim=paused)
+            ring.set_state(colour, fraction or 0.0, clock, "paused" if paused else "", dim=paused,
+                           plain=fraction is None)
 
     def _typing(self):
         widget = self.focusWidget()
@@ -842,7 +856,8 @@ class HomeTab(QWidget):
             colour = BREAK_COLOR if status.get("isBreak") else _GRID_BLUE
             ring = Ring(size)
             ring.set_text_colors(INK, MUTED, FAINT)
-            ring.set_state(colour, fraction or 0.0, clock, "paused" if paused else "", dim=paused)
+            ring.set_state(colour, fraction or 0.0, clock, "paused" if paused else "", dim=paused,
+                           plain=fraction is None)
             ring.set_live(not paused)
             self._live = (ring, colour)
             row.addWidget(ring, 0, Qt.AlignLeft if self._compact else Qt.AlignVCenter)
@@ -914,19 +929,19 @@ class HomeTab(QWidget):
         layout.setContentsMargins(22, 18, 22, 18)
         layout.setSpacing(12)
         done = data["done"]
-        layout.addWidget(_heading("Today" + (f"  ·  {done} done" if done else "")))
+        layout.addWidget(_heading("Today" + (f": {done} done" if done else "")))
         if data["total_required"] > 0:
             layout.addWidget(_text(
                 f"{format_minutes(data['total_logged'])} of {format_minutes(data['total_required'])} goal",
                 15, INK, 600))
             layout.addWidget(_Bar(data["total_logged"] / data["total_required"], _GRID_BLUE, height=10))
         if data["done_tasks"]:
-            chips = QHBoxLayout()
-            chips.setSpacing(6)
+            chips = FlowLayout(spacing=6)
             for task in data["done_tasks"][:4]:
                 chips.addWidget(_chip_done(task))
-            chips.addStretch(1)
-            layout.addLayout(chips)
+            holder = QWidget()
+            holder.setLayout(chips)
+            layout.addWidget(holder)
         # The hero already features the top task when nothing is running.
         skip = 0 if self._live is not None else 1
         rest = data["open"][skip:skip + 5]
@@ -1091,7 +1106,7 @@ class HomeTab(QWidget):
         head = QHBoxLayout()
         for text, size, colour, weight, align in (
                 (f"{streak}-day streak" if streak else "No streak yet: one session today starts it", 17, INK, 700, Qt.AlignLeft),
-                (f"{active} active days  ·  {format_minutes(total)} this year", 13, MUTED, 400, Qt.AlignRight)):
+                (f"{active} active days, {format_minutes(total)} this year", 13, MUTED, 400, Qt.AlignRight)):
             label = QLabel(text)
             label.setAlignment(align | Qt.AlignVCenter)
             label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)     # shrinks with the window

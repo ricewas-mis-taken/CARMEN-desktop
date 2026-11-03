@@ -209,6 +209,13 @@ def _write_doc(cleaned):
     os.replace(tmp, PATH)
 
 
+def _fingerprint(layers):
+    """The layers as text, one small piece per item. Dumping the whole board in one call held the interface
+    for ~40 ms; item by item it lets the pen run in between. Text, not the dicts, because items are edited in place."""
+    return [(layer["id"], layer["name"], layer["visible"], layer["opacity"],
+             [json.dumps(item, sort_keys=True) for item in layer["items"]]) for layer in layers]
+
+
 def _layers_text(layers):
     return json.dumps(layers, sort_keys=True)
 
@@ -237,20 +244,28 @@ def notify_remote():
     _call(_remote_listeners)
 
 
+_saved_text = None   # the layers as last written, so a save need not re-read and re-parse the file
+
+
 def save(doc):
     """Writes the whole board atomically, so a crash mid-save never leaves a
     half-written file in place of the last good one. Panning, zooming and option
     changes stay on this computer; only a change to the layers is stamped (and so shared)."""
+    global _saved_text
     cleaned = clean_doc(doc)
+    layers = _fingerprint(cleaned["layers"])
     changed = False
     with _lock:
-        try:
-            with open(PATH, "r", encoding="utf-8") as f:
-                previous = clean_doc(json.load(f))["layers"]
-        except (OSError, ValueError):
-            previous = None
+        previous = _saved_text[1] if _saved_text and _saved_text[0] == PATH else None   # what the file's layers were; read back only the first time
+        if previous is None:
+            try:
+                with open(PATH, "r", encoding="utf-8") as f:
+                    previous = _fingerprint(clean_doc(json.load(f))["layers"])
+            except (OSError, ValueError):
+                previous = None
         _write_doc(cleaned)
-        if previous is None or _layers_text(previous) != _layers_text(cleaned["layers"]):
+        _saved_text = (PATH, layers)
+        if previous is None or previous != layers:
             _write_stamp(server_clock.next_stamp(_read_stamp()))
             changed = True
     if changed:
@@ -278,6 +293,7 @@ def export():
 def apply_remote(layers, stamp):
     """Takes the layers another computer shared, if they are newer than ours; view, options and
     the active layer stay as they are here. Returns True if it replaced ours."""
+    global _saved_text
     if not isinstance(layers, list) or server_clock.parse(stamp) is None:
         return False
     incoming = clean_doc({"layers": layers})
@@ -289,6 +305,7 @@ def apply_remote(layers, stamp):
         if not 0 <= local["activeLayer"] < len(local["layers"]):
             local["activeLayer"] = 0
         _write_doc(clean_doc(local))
+        _saved_text = None
         _write_stamp(stamp)
     _call(_remote_listeners)
     return True

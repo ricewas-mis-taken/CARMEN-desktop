@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -52,6 +53,7 @@ from qt_ui.ui_kit import (  # noqa: F401 -- aliases keep the older private names
     AMBER as _AMBER,
     BREAK_COLOR as _BREAK_COLOR,
     DANGER_STYLE as _DANGER_STYLE,
+    discard_widget,
     FAINT,
     GREEN as _GREEN,
     GREY as _GREY,
@@ -236,7 +238,7 @@ class _ReviewBox(QFrame):
             item = self._layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
-                widget.setParent(None)
+                discard_widget(widget)
                 widget.deleteLater()
             elif item.layout() is not None:
                 self._drop_layout(item.layout())
@@ -292,7 +294,7 @@ class _ReviewBox(QFrame):
             item = layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
-                widget.setParent(None)
+                discard_widget(widget)
                 widget.deleteLater()
             elif item.layout() is not None:
                 _ReviewBox._drop_layout(item.layout())
@@ -503,8 +505,20 @@ class TasksTab(QWidget):
 
         layout.addLayout(self._build_header())
         self._summary_label = QLabel()
-        self._summary_label.setStyleSheet(f"color:{MUTED};font-size:13px;")
+        self._summary_label.setStyleSheet(f"color:{INK};font-size:22px;font-weight:800;")
+        self._summary_label.setMinimumWidth(0)
+        self._summary_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)  # never widens the window
+        layout.addSpacing(6)
         layout.addWidget(self._summary_label)
+        self._summary_bar = QProgressBar()
+        self._summary_bar.setTextVisible(False)
+        self._summary_bar.setFixedHeight(12)
+        self._summary_bar.setRange(0, 1000)
+        self._summary_bar.setStyleSheet(
+            "QProgressBar{background:#E6E9EF;border:none;border-radius:6px;}"
+            "QProgressBar::chunk{background:#2F9E44;border-radius:6px;}")
+        layout.addWidget(self._summary_bar)
+        layout.addSpacing(10)
 
         scroll = QScrollArea()
         self._scroll = scroll
@@ -624,6 +638,8 @@ class TasksTab(QWidget):
                 scheduled += 1
             elif card.goal_state == "open":
                 scheduled += 1
+        self._summary_bar.setVisible(bool(scheduled))
+        self._summary_bar.setValue(int(1000 * reached / scheduled) if scheduled else 0)
         if not self._cards:
             self._summary_label.setText("")
         elif not scheduled:
@@ -764,7 +780,7 @@ class _TaskCard(QFrame):
         row.addWidget(self._name_label, 1)
         self._state_chip = QLabel()
         self._state_chip.hide()
-        row.addWidget(self._state_chip)
+        row.addWidget(self._state_chip, 0, Qt.AlignVCenter)
         return row
 
     def _build_chips(self):
@@ -877,15 +893,34 @@ class _TaskCard(QFrame):
 
     def _build_running_panel(self):
         panel = QWidget()
-        layout = QHBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        outer = QVBoxLayout(panel)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(8)
+        top = QHBoxLayout()
+        top.setSpacing(8)
         self._pause_button = _button("Pause", _SECONDARY_STYLE)
         self._pause_button.clicked.connect(self._pause_resume)
-        layout.addWidget(self._pause_button, 1)
+        top.addWidget(self._pause_button, 1)
         self._end_button = _button("End", _DANGER_STYLE)
         self._end_button.clicked.connect(self._end_task)
-        layout.addWidget(self._end_button)
+        top.addWidget(self._end_button)
+        outer.addLayout(top)
+        # While a review of this task is the running session: a session can still be started; the review waits.
+        # Own row so no label is squeezed.
+        self._review_row = QWidget()
+        row = QHBoxLayout(self._review_row)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        self._review_pomodoro_button = _button("Pomodoro", _SECONDARY_STYLE)
+        self._review_pomodoro_button.clicked.connect(self._start_pomodoro)
+        self._review_custom_button = _button("Custom", _SECONDARY_STYLE)
+        self._review_custom_button.clicked.connect(self._start_custom_over_review)
+        self._review_burnout_button = _button("Burnout", _SECONDARY_STYLE)
+        self._review_burnout_button.clicked.connect(self._start_burnout)
+        for b in (self._review_pomodoro_button, self._review_custom_button, self._review_burnout_button):
+            row.addWidget(b, 1)
+        self._review_row.hide()
+        outer.addWidget(self._review_row)
         return panel
 
     # --- card look ---
@@ -1000,13 +1035,34 @@ class _TaskCard(QFrame):
         self._begin_session(duration_minutes, is_burnout=False)
 
     def _start_burnout(self):
+        self._set_review_aside()
         self._begin_session(tasks_store.BURNOUT_MINUTES, is_burnout=True)
+
+    def _start_custom_over_review(self):
+        from PySide6.QtWidgets import QInputDialog
+        minutes, ok = QInputDialog.getInt(self, "Custom session", "Minutes", 25, 1, 600)
+        if ok:
+            self._set_review_aside()
+            self._begin_session(float(minutes), is_burnout=False)
+
+    @staticmethod
+    def _set_review_aside():
+        """A review that is the live session waits (paused, frozen) while another session starts over it;
+        a paused one is already waiting and start_session() parks it."""
+        status = session_manager.get_status()
+        if status.get("isActive") and status.get("source") == "review":
+            from qt_ui import review_tab
+            if review_tab.make_live_review_independent():
+                return                           # it now rides beside the session that starts next
+            if not status.get("isPaused"):
+                session_manager.pause_session()
 
     def _start_pomodoro(self):
         settings = _PomodoroDialog.get_settings(self)
         if settings is None:
             return
         focus_minutes, break_minutes, cycles = settings
+        self._set_review_aside()
         session_manager.start_pomodoro_session(
             focus_minutes,
             break_minutes,
@@ -1291,27 +1347,26 @@ class _TaskCard(QFrame):
         pomo = view.get("pomodoro")
         elapsed = tasks_store.worked_seconds(
             view.get("startTime"), None, view.get("violationLog")) if view.get("startTime") else 0
-        elapsed_m, elapsed_s = divmod(elapsed, 60)
 
         ring_color = _BREAK_COLOR if on_break else self._color
+        plain = bool(review_problem or view.get("isBurnout"))
         if review_problem or view.get("isBurnout"):
             # A stopwatch, not a timer: no fixed duration to count down to.
             big, small = _format_clock(elapsed), "elapsed"
             ring_fraction = fraction
             if review_problem:
-                headline = f"{review_problem} · {elapsed_m}m {elapsed_s}s elapsed"
+                headline = str(review_problem)
             else:
-                headline = f"Until burnout · {elapsed_m}m {elapsed_s}s elapsed"
+                headline = "Until burnout"
         else:
             remaining = view.get("secondsRemaining", 0)
-            rem_m, rem_s = divmod(remaining, 60)
             if pomo:
                 phase_minutes = pomo["breakMinutes"] if on_break else pomo["focusMinutes"]
                 label = "Break" if on_break else "Focus"
-                headline = f"{label} {pomo['currentCycle']}/{pomo['totalCycles']} · {rem_m}m {rem_s}s remaining"
+                headline = f"{label} {pomo['currentCycle']}/{pomo['totalCycles']}"
                 total = phase_minutes * 60
             else:
-                headline = f"{rem_m}m {rem_s}s remaining"
+                headline = "Break" if on_break else "Focus session"
                 total = elapsed + remaining
             big, small = _format_clock(remaining), "break" if on_break else "remaining"
             ring_fraction = 0.0 if total <= 0 else 1 - remaining / total
@@ -1321,7 +1376,7 @@ class _TaskCard(QFrame):
             headline = "Waiting while another task runs"
         self._countdown_label.setText(headline)
         self._countdown_label.setStyleSheet(f"font-size:15px;font-weight:600;color:{INK};background:transparent;")
-        self._ring.set_state(ring_color, ring_fraction, big, small, dim=paused or is_waiting)
+        self._ring.set_state(ring_color, ring_fraction, big, small, dim=paused or is_waiting, plain=plain)
 
         phrase = self._snap["phrase"] if self._snap else "today"
         detail = (f"{_format_minutes(logged)} of {_format_amount(required)} {phrase}" if required > 0
@@ -1332,6 +1387,8 @@ class _TaskCard(QFrame):
             detail = "Nothing is blocked during the break."
         self._detail_label.setText(detail)
         self._detail_label.show()
+        over_review = view.get("source") == "review" and not is_waiting   # running, on a break or paused
+        self._review_row.setVisible(over_review)
 
         if violations:
             self._violation_chip.setText(f"{violations} violation{'s' if violations != 1 else ''}")

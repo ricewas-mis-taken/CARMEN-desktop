@@ -37,5 +37,10 @@ def test_review_resumes_when_pomodoro_ends_during_break(isolate_state, isolate_r
         session_manager.start_session(25, "soft", [], [])
 
     active = review_store.get_active_review()
-    assert active["isPaused"] is False
-    assert active["autoPaused"] is False
+    if how == "manual":
+        # No focus is left after the rest, so the review stays paused until the user resumes it.
+        assert active["isPaused"] is True
+    else:
+        # Another session took over: the review follows it.
+        assert active["isPaused"] is False
+        assert active["autoPaused"] is False

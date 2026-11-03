@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QScrollArea, QVBoxLayout, 
 
 import config
 import quicknote_store
+from qt_ui.ui_kit import discard_widget
 from qt_ui.wrap_edit import WrapEdit
 
 SAVE_DELAY_MS = 400
@@ -162,7 +163,7 @@ class NoteList(QWidget):
         event-loop turn, when a new row could already have been put beside it)."""
         row = edit.parentWidget()
         self._layout.removeWidget(row)
-        row.setParent(None)
+        discard_widget(row)
         row.deleteLater()
 
     def _add_row(self, index, text=""):

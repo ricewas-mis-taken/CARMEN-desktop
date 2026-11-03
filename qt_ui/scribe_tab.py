@@ -7,7 +7,9 @@ private/scribe.json a moment later (see scribe_store.py), and again when the tab
 is hidden or the app quits. Shape maths lives in scribe_geometry.py.
 """
 import collections
+import copy
 import math
+import threading
 import time
 
 from PySide6.QtCore import QBuffer, QByteArray, QPointF, QRectF, QSize, Qt, QTimer, Signal
@@ -34,6 +36,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFrame,
+    QScrollArea,
     QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
@@ -298,11 +301,20 @@ class ScribeCanvas(QWidget):
         known = getattr(self, "_drawing_bounds", None)
         if drawing is not None and known is not None and known[0] is drawing:
             return known[1]
-        boxes = [self._bounds_of(i) for layer in self.doc["layers"] if layer["visible"] for i in layer["items"]]
-        result = None if not boxes else (min(b[0] for b in boxes), min(b[1] for b in boxes),
-                                         max(b[2] for b in boxes), max(b[3] for b in boxes))
+        # Panning or one repaint: nothing on the board moves, so the extent is worked out once.
+        hold = self._pan or getattr(self, "_paint_token", None)
+        held = getattr(self, "_bounds_hold", None)
+        if hold is not None and held is not None and held[0] is hold:
+            return held[1]
+        result = self._work_out_bounds()
         self._drawing_bounds = (drawing, result) if drawing is not None else None
+        self._bounds_hold = (hold, result) if hold is not None else None
         return result
+
+    def _work_out_bounds(self):
+        boxes = [self._bounds_of(i) for layer in self.doc["layers"] if layer["visible"] for i in layer["items"]]
+        return None if not boxes else (min(b[0] for b in boxes), min(b[1] for b in boxes),
+                                       max(b[2] for b in boxes), max(b[3] for b in boxes))
 
     def fit_all(self):
         box = self._all_bounds()
@@ -368,6 +380,13 @@ class ScribeCanvas(QWidget):
         return self._images[name]
 
     def paintEvent(self, event):
+        self._paint_token = object()
+        try:
+            self._paint_all()
+        finally:
+            self._paint_token = None
+
+    def _paint_all(self):
         p = QPainter(self)
         # Round the board's corners to match the card it sits in.
         corners = QPainterPath()
@@ -915,6 +934,61 @@ class ScribeCanvas(QWidget):
         names = [n for n in (scribe_store.store_image_file(p) for p in paths) if n]
         self._place_images(names)
 
+    _shelf = None          # what was last copied or cut: (token, [items]); shared by every board
+
+    def _selection_bounds(self, items):
+        boxes = [self._bounds_of(i) for i in items]
+        return (min(b[0] for b in boxes), min(b[1] for b in boxes),
+                max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+    def copy_selection(self):
+        """Remember the selected items exactly as they are (colour, width, fill, everything)."""
+        if not self._sel:
+            return False
+        import copy
+        import uuid
+        token = "carmen-scribe:" + uuid.uuid4().hex
+        ScribeCanvas._shelf = (token, [copy.deepcopy(i) for i in self._sel])
+        QApplication.clipboard().setText(token)         # so a picture copied later wins over this
+        return True
+
+    def cut_selection(self):
+        if not self.copy_selection():
+            return False
+        self._push_undo()
+        for layer in self.doc["layers"]:
+            layer["items"] = [i for i in layer["items"] if not self._is_selected(i)]
+        self._sel = []
+        self.changed.emit()
+        self.update()
+        return True
+
+    def paste_selection(self):
+        """Put the copied items, unchanged, in the middle of the screen, and select them. The middle of
+        the screen is the view's centre (view x/y is the world point under it). Pasting again in the same
+        spot steps down and right so the copies do not hide each other."""
+        shelf = ScribeCanvas._shelf
+        if not shelf or QApplication.clipboard().text() != shelf[0]:
+            return False
+        import copy
+        items = [copy.deepcopy(i) for i in shelf[1]]
+        x0, y0, x1, y1 = self._selection_bounds(items)
+        cx, cy = self.view["x"], self.view["y"]
+        step = getattr(self, "_paste_step", None)
+        count = step[1] + 1 if step and step[0] == (shelf[0], round(cx), round(cy)) else 0
+        self._paste_step = ((shelf[0], round(cx), round(cy)), count)
+        shift = count * 24 / self.zoom
+        for item in items:
+            geo.translate(item, cx - (x0 + x1) / 2 + shift, cy - (y0 + y1) / 2 + shift)
+        self._push_undo()
+        self._active_items().extend(items)
+        if self.tool != "select":
+            self.set_tool("select")                    # so they can be dragged straight away
+        self._sel = items
+        self.changed.emit()
+        self.update()
+        return True
+
     def paste_image(self):
         image = QApplication.clipboard().image()
         if image.isNull():
@@ -1059,8 +1133,8 @@ class ScribeCanvas(QWidget):
                 last = d["pts"][-1]
                 if math.hypot(w[0] - last[0], w[1] - last[1]) >= 1.2 / self.zoom and len(d["pts"]) < 4000:
                     d["pts"].append(list(w))
-                    if not (self.prefs["showGuides"] or self.prefs["showRulers"]):
-                        self._update_around_stroke(d)
+                    if not self.prefs["showGuides"]:     # guide lines reach the board's edge, where the cards'
+                        self._update_around_stroke(d)   # shadows make a repaint redraw the whole window
                         return
             elif kind == "curve" and self._phase == 1:
                 d["c"] = list(self._snap(w))
@@ -1085,7 +1159,7 @@ class ScribeCanvas(QWidget):
 
     def _update_around_stroke(self, d):
         """Repaint only the patch the newest piece of a freehand line can touch (and the minimap),
-        not the whole board."""
+        not the whole board. The rulers never move while drawing, so they no longer force a full repaint."""
         pts = d["pts"][-4:]
         xs = [(x - self.view["x"]) * self.zoom + self.width() / 2 for x, _ in pts]
         ys = [(y - self.view["y"]) * self.zoom + self.height() / 2 for _, y in pts]
@@ -1147,8 +1221,16 @@ class ScribeCanvas(QWidget):
         elif ctrl and key == Qt.Key_A:
             self._sel = [i for i in self._visible_items_top_first()]
             self.update()
+        elif ctrl and key == Qt.Key_C:
+            self.copy_selection()
+        elif ctrl and key == Qt.Key_X:
+            self.cut_selection()
+        elif ctrl and key == Qt.Key_D:
+            if self.copy_selection():
+                self.paste_selection()
         elif ctrl and key == Qt.Key_V:
-            self.paste_image()
+            if not self.paste_selection():
+                self.paste_image()
         elif key in (Qt.Key_Delete, Qt.Key_Backspace) and self._sel:
             self._push_undo()
             for layer in self.doc["layers"]:
@@ -1489,15 +1571,25 @@ class _PaperStack(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         width = self.width()
-        for index, key in enumerate(self._keys):
+        # Farthest from the chosen paper first, the chosen one last: it sits on top of the stack.
+        for index in sorted(range(len(self._keys)), key=lambda i: -abs(i - self._pos)):
+            key = self._keys[index]
             paper, minor, major, dark = _BACKGROUNDS[key]
-            card = QRectF(3, self._top(index), width - 6, self.CARD)
+            near = max(0.0, 1.0 - abs(index - self._pos))            # 1 for the chosen paper, easing to 0
+            inset = 3 + 8 * (1 - near)                                 # the others sit narrower, the chosen sticks out
+            card = QRectF(inset, self._top(index), width - 2 * inset, self.CARD)
             path = QPainterPath()
             path.addRoundedRect(card, self.RADIUS, self.RADIUS)
-            for grow, alpha in ((6, 16), (3, 22)):             # a soft shadow on the card behind
+            p.setPen(Qt.NoPen)
+            for grow, alpha in ((12, 14), (8, 22), (5, 32), (2, 46)):  # a shadow cast up onto the paper behind
+                p.setBrush(QColor(20, 16, 40, int(alpha * (1 + near))))
+                p.drawRoundedRect(card.adjusted(-grow * 0.4, -grow, grow * 0.4, grow * 0.4 * near), self.RADIUS, self.RADIUS)
+            if near > 0.01:                                            # the halo round the lifted paper
+                for ring, alpha in ((7, 26), (5, 44), (3, 70)):
+                    p.setBrush(Qt.NoBrush)
+                    p.setPen(QPen(QColor(59, 130, 246, int(alpha * near)), 2))
+                    p.drawRoundedRect(card.adjusted(-ring, -ring, ring, ring), self.RADIUS + ring, self.RADIUS + ring)
                 p.setPen(Qt.NoPen)
-                p.setBrush(QColor(20, 16, 40, alpha))
-                p.drawRoundedRect(card.adjusted(-grow * 0.3, -grow, grow * 0.3, 0), self.RADIUS, self.RADIUS)
             p.save()
             p.setClipPath(path)
             p.fillRect(card, QColor(paper))
@@ -1521,24 +1613,30 @@ class _PaperStack(QWidget):
             p.restore()
             chosen = key == self._current
             p.setBrush(Qt.NoBrush)
-            p.setPen(QPen(QColor(SCRIBE_INK) if chosen else QColor(255, 255, 255, 40) if dark else QColor(0, 0, 0, 40),
-                          2 if chosen else 1))
+            p.setPen(QPen(QColor(SCRIBE_INK) if chosen else QColor(255, 255, 255, 110) if dark else QColor(0, 0, 0, 105),
+                          2 if chosen else 1.4))                       # a clear edge, so each paper's start and end show
             p.drawRoundedRect(card, self.RADIUS, self.RADIUS)
+            p.setPen(QPen(QColor(255, 255, 255, 150 if not dark else 40), 1))   # a bright lip on the top edge
+            p.drawLine(QPointF(card.left() + self.RADIUS, card.top() + 1.5), QPointF(card.right() - self.RADIUS, card.top() + 1.5))
 
 
 class ScribeTab(QWidget):
+    _saved_now = Signal()           # a background save finished
     _remote_arrived = Signal()      # emitted from the sync thread; handled on the GUI thread
 
     def __init__(self):
         super().__init__()
         self._dirty = False
+        self._saver = None           # the thread writing the board right now, if any
+        self._save_failed = False
         self._remote_arrived.connect(self._reload_shared)
+        self._saved_now.connect(self._after_background_save)
         scribe_store.add_remote_listener(self._remote_arrived.emit)
         self.canvas = ScribeCanvas(scribe_store.load())
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(SAVE_DELAY_MS)
-        self._save_timer.timeout.connect(self.flush)
+        self._save_timer.timeout.connect(self._flush_in_background)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -1549,7 +1647,16 @@ class ScribeTab(QWidget):
         center.addWidget(self._build_topbar())
         center.addWidget(self._build_canvas_card(), 1)
         layout.addLayout(center, 1)
-        layout.addWidget(self._build_right())
+        self._root_layout = layout
+        self._side = QScrollArea()                   # the options card: scrolls when the window is short
+        self._side.setWidgetResizable(True)
+        self._side.setFrameShape(QFrame.NoFrame)
+        self._side.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._side.setFixedWidth(240)
+        self._side.setStyleSheet("QScrollArea{background:transparent;border:none;}"
+                                 "QScrollArea > QWidget > QWidget{background:transparent;}")
+        self._side.setWidget(self._build_right())
+        layout.addWidget(self._side)
 
         self.canvas.changed.connect(self._schedule_save)
         self.canvas.changed.connect(self._refresh_preview)
@@ -1577,7 +1684,47 @@ class ScribeTab(QWidget):
         self._show_saved(False)
         self._save_timer.start()
 
+    def _copy_for_saving(self):
+        """The board as it is now, cheap to copy (point lists are only ever replaced, never edited), so a
+        thread can write it while drawing carries on."""
+        doc = self.canvas.doc
+        copied = {key: (value if key == "layers" else copy.deepcopy(value)) for key, value in doc.items()}
+        copied["layers"] = [dict(layer, items=[dict(item) for item in layer["items"]]) for layer in doc["layers"]]
+        return copied
+
+    def _write(self, doc):
+        try:
+            scribe_store.save(doc)
+        except OSError:
+            self._save_failed = True   # stays dirty; the next change (or quit) tries again
+
+    def _flush_in_background(self):
+        """Saving a big board takes a few hundred ms; on the UI thread that froze the pen mid-stroke."""
+        if not self._dirty:
+            return
+        if self._saver is not None and self._saver.is_alive():
+            self._save_timer.start()               # one write at a time; try again shortly
+            return
+        doc = self._copy_for_saving()
+        self._dirty = False
+        self._save_failed = False
+        self._saver = threading.Thread(target=self._write_and_mark, args=(doc,), daemon=True)
+        self._saver.start()
+
+    def _write_and_mark(self, doc):
+        self._write(doc)
+        if self._save_failed:
+            self._dirty = True
+        else:
+            self._saved_now.emit()
+
     def flush(self):
+        """Save now and wait for it (leaving the tab, quitting)."""
+        if self._saver is not None:
+            self._saver.join()
+        if self._save_failed:
+            self._dirty = True
+            self._save_failed = False
         if not self._dirty:
             return
         try:
@@ -1586,6 +1733,10 @@ class ScribeTab(QWidget):
             self._show_saved(True)
         except OSError:
             pass  # stays dirty; the next change (or quit) tries again
+
+    def _after_background_save(self):
+        if not self._dirty:
+            self._show_saved(True)
 
     def _reload_shared(self):
         """The other computer's drawing (or its images) arrived. Anything not yet saved here
@@ -1606,9 +1757,58 @@ class ScribeTab(QWidget):
         canvas.update()
 
     def _show_saved(self, saved):
+        if getattr(self, "_shown_saved", None) is saved:
+            return                      # restyling on every pan move was costing frames
+        self._shown_saved = saved
         self._saved_label.setText("Saved" if saved else "Saving…")
         self._saved_dot.setStyleSheet(
             f"background: {'#2F9E44' if saved else '#F08C00'}; border-radius: 4px;")
+
+    # ---- small windows -----------------------------------------------------
+    _SIDE_BELOW = 1060       # content width under which the options card becomes a popup
+    _COMPACT_BELOW = 820     # ...and under which the top bar drops its least useful bits
+
+    def minimumSizeHint(self):
+        # What the pieces need only holds at full width; narrower, they fold away (below), so the tab
+        # can shrink to this instead of forcing a sideways scroll.
+        return QSize(600, 420)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        width = event.size().width()
+        self._relayout_side(width < self._SIDE_BELOW)
+        compact = width < self._COMPACT_BELOW
+        for widget in (self._topbar_title, self._saved_label, self._pan_button, self._reset_button):
+            widget.setVisible(not compact)
+
+    def _relayout_side(self, narrow):
+        if narrow == getattr(self, "_side_narrow", None):
+            return
+        self._side_narrow = narrow
+        side = self._side
+        if narrow:
+            self._root_layout.removeWidget(side)
+            side.hide()
+            side.setParent(self)
+            side.hide()
+        else:
+            side.setWindowFlags(Qt.Widget)
+            self._root_layout.addWidget(side)
+            side.setMaximumHeight(16777215)
+            side.show()
+        self._options_button.setVisible(narrow)
+
+    def _show_options_popup(self):
+        side = self._side
+        if side.isVisible():
+            side.hide()
+            return
+        side.setParent(self, Qt.Popup)
+        height = min(side.widget().sizeHint().height() + 4, max(200, self.height() - 90))
+        side.setFixedHeight(height)
+        anchor = self._options_button.mapToGlobal(self._options_button.rect().bottomRight())
+        side.move(anchor.x() - side.width(), anchor.y() + 6)
+        side.show()
 
     def hideEvent(self, event):
         self.flush()
@@ -1623,8 +1823,8 @@ class ScribeTab(QWidget):
         if width:
             frame.setFixedWidth(width)
         shadow = QGraphicsDropShadowEffect(frame)
-        shadow.setBlurRadius(24)
-        shadow.setOffset(0, 5)
+        shadow.setBlurRadius(8)
+        shadow.setOffset(0, 1)
         shadow.setColor(QColor(16, 24, 40, 20))
         frame.setGraphicsEffect(shadow)
         return frame
@@ -1726,6 +1926,11 @@ class ScribeTab(QWidget):
             button.clicked.connect(fn)
             bar.addWidget(button)
         bar.addWidget(self._build_snap_menu())
+        self._options_button = QPushButton("Options")      # only when the options card has no room beside the board
+        self._options_button.clicked.connect(self._show_options_popup)
+        self._options_button.hide()
+        bar.addWidget(self._options_button)
+        self._topbar_title, self._reset_button = title, reset
         return card
 
     def _build_snap_menu(self):

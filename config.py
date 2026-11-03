@@ -25,6 +25,9 @@ DEFAULT_CONFIG = {
     "last_duration_minutes": 25,
     "last_lock_mode": "soft",
     "miniTimerGeometry": None,
+    # Discord "Playing" status (discord_presence.py); names of tasks/problems stay hidden unless asked for.
+    "discordPresence": True,
+    "discordShowNames": False,
     "quickNoteGeometry": None,
     "last_hide_taskbar_badges": False,
     "last_stop_taskbar_flashing": False,

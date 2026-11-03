@@ -135,7 +135,7 @@ def test_running_card_shows_the_session_ring_and_a_running_chip(qtbot, world):
     assert card._state_chip.text() == "Running"
     assert card._ring._small == "remaining"
     assert card._ring._big in ("30:00", "29:59")
-    assert card._pause_button.text() == "Pause" and "remaining" in card._countdown_label.text()
+    assert card._pause_button.text() == "Pause" and card._countdown_label.text() == "Focus session"
 
 
 def test_paused_card_offers_resume(qtbot, world):
@@ -448,3 +448,18 @@ def test_weekly_goal_suggests_a_sitting_not_the_whole_week(qtbot, world):
     card = _card(qtbot, _weekly_task(minutes=600))
     card._arm()
     assert card._duration_edit.text() == "60"
+
+
+def test_a_count_up_ring_draws_a_plate_not_a_circle(qtbot):
+    """Until burnout (and a review) has nothing to fill, so it gets no ring around the clock."""
+    from PySide6.QtGui import QColor
+    from qt_ui.ui_kit import Ring
+    ring = Ring(124)
+    qtbot.addWidget(ring)
+    ring.set_state("#E2603B", 0.0, "12:03", "elapsed", plain=True)
+    plain = ring.grab().toImage()
+    ring.set_state("#E2603B", 0.0, "12:03", "elapsed", plain=False)
+    full = ring.grab().toImage()
+    mid = full.height() // 2
+    assert plain.pixelColor(8, mid).alpha() <= full.pixelColor(8, mid).alpha()
+    assert plain != full

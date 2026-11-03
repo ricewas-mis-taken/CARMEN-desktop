@@ -1,6 +1,7 @@
 import os
 import re
 import uuid
+import weakref
 from datetime import date, datetime, timedelta
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, QUrl
@@ -38,6 +39,7 @@ from qt_ui import confirm_dialog
 import tasks_store
 from qt_ui.safe_link import make_link_label
 from qt_ui.ui_kit import (
+    discard_widget,
     accent,
     danger,
     dialog_title,
@@ -239,78 +241,63 @@ def _session_summary_fields(number, session):
     return (f"#{number}", duration, f"{shakiness_text}{a_marker}", date_text)
 
 
-def _timeline_sessions(sessions):
-    """Picks which of a problem's full session history (newest first, from
-    review_store.list_sessions) to show in the review timeline, each paired
-    with its session number (1 = first ever): everything if there are 5 or
-    fewer, otherwise the newest 3 plus the first-ever and second-ever
-    session (in that chronological order), with a gap marker in between so
-    it's clear there's more history not shown."""
-    total = len(sessions)
-    numbered = [(total - i, session) for i, session in enumerate(sessions)]
-    if total <= 5:
-        return numbered, False
-    newest_three = numbered[:3]
-    first_two_ever = [numbered[-1], numbered[-2]]
-    return newest_three + first_two_ever, True
+def _timeline_row(number, session):
+    """One review as a soft card: its number, how long it took, how shaky it was, and when."""
+    number_text, duration, shakiness_text, date_text = _session_summary_fields(number, session)
+    solved = bool(session.get("selfSolved"))
+    row = QFrame()
+    row.setObjectName("TimelineRow")
+    row.setStyleSheet("QFrame#TimelineRow{background:#F5F6F9;border:none;border-radius:12px;}"
+                      "QFrame#TimelineRow QLabel{background:transparent;}")
+    box = QHBoxLayout(row)
+    box.setContentsMargins(12, 8, 14, 8)
+    box.setSpacing(12)
+    badge = QLabel(number_text)
+    badge.setFixedSize(34, 26)
+    badge.setAlignment(Qt.AlignCenter)
+    badge.setStyleSheet("background:#FFFFFF;color:#4A5160;border-radius:8px;font-size:12px;font-weight:700;")
+    box.addWidget(badge)
+    time_label = QLabel(duration)
+    time_label.setStyleSheet("font-size:15px;font-weight:700;color:#1E2430;")
+    box.addWidget(time_label)
+    verdict = QLabel(shakiness_text.replace(" (A)", "") if solved else "Checked the answer")
+    verdict.setStyleSheet(f"font-size:12px;font-weight:600;color:{'#2F7D4F' if solved else '#B26A00'};")
+    box.addWidget(verdict)
+    box.addStretch(1)
+    date_label = QLabel(date_text)
+    date_label.setStyleSheet("font-size:12px;color:#8A8F98;")
+    box.addWidget(date_label)
+    return row
 
 
-_TIMELINE_HEADER_CELLS = ("#", "Time", "Shakiness", "Date")
-
-
-def _timeline_gap_marker():
-    """3 stacked dot labels, each its own widget centered in a tight
-    QVBoxLayout -- rendering the vertical-ellipsis glyph ("⋮") as a
-    single QLabel comes out visibly off-axis in some fonts, so 3
-    independently-centered dots are used instead to guarantee a straight
-    vertical line."""
-    dots_widget = QWidget()
-    dots_layout = QVBoxLayout(dots_widget)
-    dots_layout.setContentsMargins(0, 4, 0, 4)
-    dots_layout.setSpacing(3)
-    dots_layout.setAlignment(Qt.AlignHCenter)
-    for _ in range(3):
-        dot_label = QLabel("•")
-        dot_label.setStyleSheet("font-size: 13px; font-weight: 700; color: #5A6070;")
-        dot_label.setAlignment(Qt.AlignHCenter)
-        dots_layout.addWidget(dot_label)
-    return dots_widget
+# Room for about four rows; any more scroll, so the popup keeps its size however long the history is.
+_TIMELINE_HEIGHT = 190
 
 
 def _build_review_timeline(layout, problem):
     sessions = review_store.list_sessions(problem["id"])
     if not sessions:
         return
-    shown, has_gap = _timeline_sessions(sessions)
+    total = len(sessions)
 
     layout.addWidget(_bold_label("Review Timeline"))
 
-    # A real grid, not a dash-joined string -- each column (#, Time,
-    # Shakiness, Date) is its own cell so rows and the header actually line
-    # up under each other in a proportional font, instead of drifting based
-    # on how wide each value happens to be.
-    grid_container = QWidget()
-    grid = QGridLayout(grid_container)
-    grid.setContentsMargins(0, 0, 0, 0)
-    grid.setHorizontalSpacing(18)
-    grid.setVerticalSpacing(4)
-    for column, header_text in enumerate(_TIMELINE_HEADER_CELLS):
-        header_label = QLabel(header_text)
-        header_label.setStyleSheet("font-size: 11px; font-weight: 700; color: #8A8F98;")
-        grid.addWidget(header_label, 0, column)
-
-    row = 1
-    for index, (number, session) in enumerate(shown):
-        for column, field_text in enumerate(_session_summary_fields(number, session)):
-            field_label = QLabel(field_text)
-            field_label.setStyleSheet("font-size: 12px; color: #5A6070;")
-            grid.addWidget(field_label, row, column)
-        row += 1
-        if has_gap and index == 2:
-            grid.addWidget(_timeline_gap_marker(), row, 0, 1, len(_TIMELINE_HEADER_CELLS))
-            row += 1
-
-    layout.addWidget(grid_container, alignment=Qt.AlignLeft)
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.NoFrame)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    scroll.setFixedHeight(min(_TIMELINE_HEIGHT, total * 44 + 4))
+    scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}"
+                         "QScrollArea > QWidget > QWidget{background:transparent;}")
+    inner = QWidget()
+    column = QVBoxLayout(inner)
+    column.setContentsMargins(0, 0, 6, 0)
+    column.setSpacing(6)
+    for index, session in enumerate(sessions):          # newest first, every one of them
+        column.addWidget(_timeline_row(total - index, session))
+    column.addStretch(1)
+    scroll.setWidget(inner)
+    layout.addWidget(scroll)
 
 
 def _build_description_content(layout, problem):
@@ -490,6 +477,15 @@ class _ProblemRow(QFrame):
             self.start_button.setEnabled(False)
             self.start_button.setToolTip("You are reviewing this one right now")
         outer.addWidget(self.start_button, 0, Qt.AlignVCenter)
+
+    _NARROW_BELOW = 600
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        narrow = event.size().width() < self._NARROW_BELOW
+        # The due pill gives its room to the name and the subject when the row is tight (its text stays in the tooltip).
+        self.next_pill.setVisible(not narrow)
+        self.setToolTip(self.next_pill.text() if narrow else "")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton and self.childAt(event.position().toPoint()) is not self.start_button:
@@ -1246,7 +1242,7 @@ class _TopicView(QWidget):
         while self._category_box.count():
             widget = self._category_box.takeAt(0).widget()
             if widget is not None:
-                widget.setParent(None)
+                discard_widget(widget)
                 widget.deleteLater()
         self._category_buttons = {}
         counts = {}
@@ -1306,7 +1302,7 @@ class _TopicView(QWidget):
         while self._list_layout.count():
             widget = self._list_layout.takeAt(0).widget()
             if widget is not None:
-                widget.setParent(None)
+                discard_widget(widget)
                 widget.deleteLater()
         self._rows = []
         current_id = self._review_banner.current_problem_id()
@@ -1521,11 +1517,15 @@ class _TopicView(QWidget):
 GONE_TICKS_BEFORE_ABANDON = 4     # seconds a banner's session must stay missing before it counts as ended
 
 
+_live_banners = weakref.WeakSet()
+
+
 class _ReviewBanner(QWidget):
     def __init__(self, on_finished, on_changed=None):
         super().__init__()
         self._on_finished = on_finished
         self._on_changed = on_changed
+        _live_banners.add(self)
         self._session_token = None
         self._end_session_on_finish = False
         self._problem = None
@@ -1746,6 +1746,26 @@ class _ReviewBanner(QWidget):
                 self._first_attempt_callback is not None or problem.get("name") == session_manager.FIRST_ATTEMPT_NAME):
             return "your first attempt"
         return problem.get("name") or "this review"
+
+    def make_independent(self):
+        """A review that owns the live session hands it over: it becomes a review_store review that
+        rides BESIDE whatever session starts next (pausing, resting and resuming with it), keeping
+        its elapsed time. False if this banner is not such a review."""
+        problem_id = (self._problem or {}).get("id")
+        if not self._end_session_on_finish or self._finishing or problem_id is None:
+            return False
+        status, is_parked = self._linked_view()
+        if is_parked or not status.get("isActive"):
+            return False
+        token = review_store.start_review_with_elapsed(
+            problem_id, self._elapsed_seconds_now(), paused=bool(status.get("isPaused")))
+        if token is None:
+            return False
+        self._session_token = token          # first: from here the banner follows review_store
+        self._end_session_on_finish = False
+        session_manager.end_session(end_type="manual")
+        self._changed()
+        return True
 
     def park_current(self):
         """Pauses whatever this banner is timing and stops showing it. Returns
@@ -2062,6 +2082,17 @@ def _can_drive_over(status):
     return not status.get("isActive") or bool(status.get("isPaused"))
 
 
+def make_live_review_independent():
+    """True if the review that owns the live session was handed over to ride beside the next session."""
+    for banner in list(_live_banners):
+        try:
+            if banner.is_running() and banner.make_independent():
+                return True
+        except RuntimeError:          # a banner whose window is already gone
+            _live_banners.discard(banner)
+    return False
+
+
 def _make_room_for(task):
     """True when a review of `task` may start its own blocking session (the linked task's
     app/site rules). Nothing running, or a paused session: yes (the paused one is set
@@ -2092,20 +2123,31 @@ class _ParkedStrip(QWidget):
         self._on_resume = on_resume
         self._on_end = on_end
         self._signature = None
+        self._row_labels = []
         self._rows_layout = QVBoxLayout(self)
         self._rows_layout.setContentsMargins(0, 0, 0, 0)
         self._rows_layout.setSpacing(4)
         self.hide()
 
+    @staticmethod
+    def _row_text(row):
+        return f"⏸  {row['name']}, {_format_mmss(row['seconds'])}, paused"
+
     def set_rows(self, rows):
-        signature = [(r["kind"], r["key"], r["name"], r["seconds"]) for r in rows]
+        signature = [(r["kind"], r["key"], r["name"]) for r in rows]
         if signature == self._signature:
+            # The same rows, only a clock moved: change the text, don't rebuild (and re-show) every row each second.
+            for label, row in zip(self._row_labels, rows):
+                text = self._row_text(row)
+                if label.text() != text:
+                    label.setText(text)
             return
         self._signature = signature
+        self._row_labels = []
         while self._rows_layout.count():
             widget = self._rows_layout.takeAt(0).widget()
             if widget is not None:
-                widget.setParent(None)
+                discard_widget(widget)
                 widget.deleteLater()
         for row in rows:
             frame = QFrame()
@@ -2117,7 +2159,9 @@ class _ParkedStrip(QWidget):
             line = QHBoxLayout(frame)
             line.setContentsMargins(14, 6, 8, 6)
             line.setSpacing(8)
-            line.addWidget(QLabel(f"⏸  {row['name']}  ·  {_format_mmss(row['seconds'])}  ·  paused"), 1)
+            text_label = QLabel(self._row_text(row))
+            self._row_labels.append(text_label)
+            line.addWidget(text_label, 1)
             resume = button("Resume", SECONDARY_STYLE, height=30)
             resume.clicked.connect(lambda checked=False, r=row: self._on_resume(r))
             end = button("End", DANGER_STYLE, height=30)
