@@ -46,6 +46,9 @@ class OptionsDialog(QWidget):
         self._discord_names = self._config_box("Include task and problem names", "discordShowNames", False)
         self._discord_names.setEnabled(self._discord_on.isChecked())
         self._discord_on.toggled.connect(self._discord_names.setEnabled)
+        self._layout.addWidget(field_label("Browser extension"))
+        self._extension_note = role_label(self._extension_text(), "hint", wrap=True)
+        self._layout.addWidget(self._extension_note)
         self._layout.addWidget(field_label("Start-up"))
         self._config_box("Open Carmen's window when I sign in to Windows", "openOnStartup", True)
         self._layout.addWidget(field_label("Help"))
@@ -86,6 +89,29 @@ class OptionsDialog(QWidget):
         from qt_ui import tour_runner
         self.close()
         QTimer.singleShot(250, lambda: tour_runner.start(chapter_ids))
+
+    @staticmethod
+    def _extension_text():
+        """Which computers have the extension linked, in which browser, and whether it is talking right now."""
+        import devices_store
+        rows = [r for r in devices_store.summary() if r["links"]]
+        if not rows:
+            return "Not linked yet. Install the extension and paste its key, and it will show up here."
+        pcs, links, live = devices_store.totals()
+        lines = [f"Linked on {pcs} computer{'s' if pcs != 1 else ''}, {links} browser{'s' if links != 1 else ''}, {live} connected now."]
+        for row in rows:
+            who = f" ({row['account']})" if row["account"] else " (not signed in)"
+            name = row["computer"] + (" - this computer" if row["this_pc"] else "")
+            parts = []
+            for link in row["links"]:
+                if link["connected"]:
+                    parts.append(f"{link['browser']}: connected")
+                else:
+                    mins = link["seen_seconds"] / 60
+                    ago = "a while ago" if mins == float("inf") else (f"{round(mins)} min ago" if mins < 90 else f"{round(mins / 60)} h ago")
+                    parts.append(f"{link['browser']}: last seen {ago}")
+            lines.append(f"{name}{who} - " + ", ".join(parts))
+        return "\n".join(lines)
 
     def _config_box(self, text, key, default):
         box = QCheckBox(text)
