@@ -635,6 +635,8 @@ class TasksTab(QWidget):
         reached = scheduled = 0
         for task_id, card in self._cards.items():
             card.update_dynamic(status, sessions, reviews.get(task_id, []))
+            if tasks_store.is_period_task(card._task):
+                continue                      # a week or month goal is only suggested today: never counted
             if card.goal_state == "reached":
                 reached += 1
                 scheduled += 1
