@@ -905,3 +905,10 @@ two that lay out a table or timeline), at most 90% of the screen, centres it ove
 and, if its content needs more height than the screen, moves its layout into a scroll area so it scrolls
 instead of being cut off. Per-dialog resize() calls stay as the preferred size. Rejected: editing every dialog
 (they drift again) and a fixed size for all (a yes/no box is not an Add Problem form).
+
+2026-11-03  Scribe pen-up stall on a big board
+  Fork: speed up the full minimap heat walk, or stop doing it on pen-up.
+  Chose: keep the heat cache and, when the only change is strokes appended to the end of layers, add just
+  those strokes (verified against a full recompute in a test). Cause found by loading the real 4,600-stroke
+  board: drawing was ~1 ms per move, but every pen-up re-walked ~100k points on the UI thread (~110 ms).
+  Now ~20 ms. Any other change (zoom, pan past bounds, delete, undo) still recomputes in full.
