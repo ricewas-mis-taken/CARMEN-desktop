@@ -48,6 +48,7 @@ stop_event = threading.Event()
 DEV_MODE = "--dev" in sys.argv[1:]
 # Started by the desktop right-click "QuickNote" when the app was not running yet.
 OPEN_QUICKNOTE = "--quicknote" in sys.argv[1:]
+AUTOSTARTED = "--autostart" in sys.argv[1:]
 
 STYLESHEET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "styles.qss")
 
@@ -144,6 +145,12 @@ def main():
         # The app restarted itself into new code: the window comes back where it was.
         import qt_ui.main_window as main_window
         qt_gui_thread.run_on_gui_thread(main_window.reopen_after_restart)
+
+    elif AUTOSTARTED:
+        import config
+        if config.load_config().get("openOnStartup", True):
+            import qt_ui.main_window as main_window
+            qt_gui_thread.run_on_gui_thread(main_window.open_main_window)
 
     if DEV_MODE:
         # Opens the main window automatically on launch/dev-restart, purely

@@ -29,6 +29,7 @@ DEFAULT_CONFIG = {
     "discordPresence": True,
     "discordShowNames": False,
     "restoreWindow": {},        # set just before the app restarts itself into new code: {"open", "page"}
+    "openOnStartup": True,      # sign-in launches Carmen with its window open, not only in the tray
     "tourDone": False,          # the welcome tour has been shown (or skipped) once
     "reportCardWeek": "",       # the Monday of the week whose report card was last shown
     "quickNoteGeometry": None,
