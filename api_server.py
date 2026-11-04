@@ -55,6 +55,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 import config
+import devices_store
 import installed_apps
 import review_store
 import screentime_categories
@@ -180,6 +181,10 @@ def _require_token(fn):
         # surface as a 500 instead of 401.
         if not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
             return jsonify({"error": "missing or invalid X-Carmen-Token header"}), 401
+        try:
+            devices_store.note_extension(request.headers.get("Origin", ""), request.headers.get("User-Agent", ""))
+        except Exception:
+            pass
         return fn(*args, **kwargs)
     return wrapper
 
