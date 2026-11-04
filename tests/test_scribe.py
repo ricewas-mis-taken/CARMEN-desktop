@@ -669,3 +669,141 @@ def test_adding_a_stroke_updates_the_minimap_heat_without_a_full_walk(qtbot, tmp
     assert sum(again.values()) > sum(first.values())
     fresh = canvas._heat_compute(rect, 1.0, 0, 0)
     assert again == fresh                        # and the result matches a full recompute
+
+
+def _stroke_item(x0):
+    return {"type": "stroke", "pts": [[x0, 0], [x0 + 20, 10], [x0 + 40, 0]], "stroke": "#000000", "width": 4,
+            "fill": None, "dashed": False, "round": True, "scale": True}
+
+
+def test_a_new_stroke_is_drawn_onto_the_picture_not_the_whole_board_again(qtbot, monkeypatch):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab.resize(900, 600)
+    tab.show()
+    qtbot.waitExposed(tab)
+    canvas = tab.canvas
+    canvas.prefs["tool"] = "freehand"
+    for k in range(5):
+        canvas._active_items().append(_stroke_item(k * 60))
+    canvas._board_picture()                                   # the picture exists and is fresh
+    drawn = []
+    real = canvas._paint_scene
+    monkeypatch.setattr(canvas, "_paint_scene", lambda *a, **k: drawn.append(1) or real(*a, **k))
+    canvas._commit(_stroke_item(400))
+    canvas._board_picture()
+    canvas.grab()
+    assert drawn == []                                        # extended in place; no full redraw at pen-up
+
+
+def test_the_picture_is_rebuilt_after_a_shape_is_moved_or_undone(qtbot):
+    from PySide6.QtGui import QColor
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab.resize(900, 600)
+    tab.show()
+    qtbot.waitExposed(tab)
+    canvas = tab.canvas
+    canvas.prefs["tool"] = "freehand"
+    canvas.prefs["background"] = "white"
+    canvas.view.update({"x": 0.0, "y": 0.0})
+    canvas.set_zoom(1.0)
+    stroke = {**_stroke_item(-20), "width": 20}
+    canvas._active_items().append(stroke)
+
+    def at_stroke():
+        image = canvas.grab().toImage()
+        x, y = canvas._to_screen(0, 5)
+        ratio = image.devicePixelRatio()
+        return QColor(image.pixelColor(int(x * ratio), int(y * ratio)))
+
+    drawn = at_stroke()
+    assert drawn.red() < 50                                   # ink under that point
+    canvas._sel = [stroke]
+    canvas._push_undo()
+    import scribe_geometry as geo
+    geo.translate(stroke, 300, 0)                             # moved with the select tool, same length
+    canvas._sel = []
+    assert at_stroke().red() > 200                            # the ink is gone from there: not a stale picture
+    canvas.undo()
+    assert at_stroke().red() < 50
+
+
+def test_undo_and_redo_of_added_strokes_do_not_copy_the_board(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    canvas = tab.canvas
+    for k in range(3):
+        canvas._active_items().append(_stroke_item(k * 50))
+    snapshots = []
+    real = canvas._snapshot
+    canvas._snapshot = lambda: snapshots.append(1) or real()
+    a, b = _stroke_item(300), _stroke_item(400)
+    canvas._commit(a)
+    canvas._commit(b)
+    assert snapshots == []                                    # adding a stroke costs no copy of the board
+    assert len(canvas._active_items()) == 5
+    canvas.undo()
+    assert canvas._active_items()[-1] is a and len(canvas._active_items()) == 4
+    canvas.redo()
+    assert canvas._active_items()[-1] is b and len(canvas._active_items()) == 5
+    canvas.undo()
+    canvas.undo()
+    assert len(canvas._active_items()) == 3
+    canvas.undo()                                              # nothing left: no change
+    assert len(canvas._active_items()) == 3
+
+
+def test_added_steps_and_edit_steps_undo_in_order(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    canvas = tab.canvas
+    first = _stroke_item(0)
+    canvas._commit(first)                                      # step 1: added
+    canvas._sel = [first]
+    canvas._apply_to_selection(lambda i: i.__setitem__("stroke", "#FF0000"), "stroke")   # step 2: an edit
+    second = _stroke_item(100)
+    canvas._commit(second)                                     # step 3: added
+    canvas.undo()                                              # the second stroke goes
+    assert [i["stroke"] for i in canvas._active_items()] == ["#FF0000"]
+    canvas.undo()                                              # the colour change goes
+    assert [i["stroke"] for i in canvas._active_items()] == ["#000000"]
+    canvas.undo()                                              # the first stroke goes (it is a copy now, still the last item)
+    assert canvas._active_items() == []
+    canvas.redo()
+    canvas.redo()
+    canvas.redo()
+    assert [i["stroke"] for i in canvas._active_items()] == ["#FF0000", "#000000"][:1] + ["#000000"]
+
+
+def test_a_new_stroke_adds_to_the_boards_extent_without_walking_the_board(qtbot, monkeypatch):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    canvas = tab.canvas
+    for k in range(4):
+        canvas._active_items().append(_stroke_item(k * 50))
+    first = canvas._all_bounds()
+    walked = []
+    real = canvas._work_out_bounds
+    monkeypatch.setattr(canvas, "_work_out_bounds", lambda: walked.append(1) or real())
+    canvas._commit(_stroke_item(500))
+    grown = canvas._all_bounds()
+    assert walked == [] and grown[2] > first[2]
+    assert grown == real()                                     # and it is the same answer a full walk gives
+
+
+def test_the_extent_is_worked_out_again_after_a_shape_moves_or_a_layer_hides(qtbot):
+    import scribe_geometry as geo
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    canvas = tab.canvas
+    stroke = _stroke_item(0)
+    canvas._active_items().append(stroke)
+    before = canvas._all_bounds()
+    canvas._sel = [stroke]
+    canvas._push_undo()
+    geo.translate(stroke, 1000, 0)
+    assert canvas._all_bounds()[0] > before[0] + 900
+    canvas.doc["layers"][0]["visible"] = False
+    canvas.layer_edited()
+    assert canvas._all_bounds() is None
