@@ -990,3 +990,17 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   window to open and for a task to be saved, and the note tucks into the corner while the user works.
   Shown once automatically (config tourDone, set when it is finished OR skipped), and Options > Help replays all of it or one chapter.
   Not done: the Focus and Review chapters talk about the page, not individual buttons; no live check that the extension connected.
+
+2026-11-03  Updates apply to the running app (code_watcher.py)
+  Before: auto_updater only restarted for a git pull of a newer origin commit; code that changed locally (an edit, a
+  commit) needed a manual relaunch. Fork: hot-reload modules in the live interpreter vs. restart into the new code.
+  Chose restart: reloading modules under live Qt widgets, threads and module-level state (queues, caches, singletons)
+  is fragile, and a restart takes a couple of seconds if it keeps your place.
+  How: every 15 s the tracked .py/.qss files are fingerprinted (name, size, mtime). A change must stay still for 20 s
+  (an edit in progress is not ready), then the new code is imported in a throwaway process with its own empty data
+  folder; only if that works is the app restarted, so broken code never replaces a working app (the check runs once
+  per version and is logged). The restart waits for a quiet moment: no session, review or first attempt running, and
+  either the window is closed or nobody has touched the keyboard or mouse for 20 s (can't tell = don't interrupt).
+  Before leaving, the page and whether the window was open go to config.restoreWindow; the new copy reopens it there.
+  Uses the same quit path and Windows detached re-exec as auto_updater, so Scribe's board is saved by aboutToQuit.
+  Not covered: a change that imports fine but crashes later is not caught by the smoke check.

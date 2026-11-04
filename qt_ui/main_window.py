@@ -96,8 +96,29 @@ def _scrolling(page):
     return area
 
 
+_remembered = {"open": False, "page": "home"}
+
+
+def remembered():
+    """Where the window was (open or not, which page), for reopening it after a restart into new code."""
+    return dict(_remembered)
+
+
+def reopen_after_restart():
+    """Called once on start-up after the app restarted itself: the window comes back on the same page."""
+    import config
+    state = config.load_config().get("restoreWindow") or {}
+    config.update_config(lambda cfg: cfg.update(restoreWindow={}))
+    if not state.get("open"):
+        return
+    open_main_window()
+    if _win is not None and state.get("page") in _win._pages:
+        _win._show_tab(state["page"])
+
+
 def open_main_window():
     global _win
+    _remembered["open"] = True
     if _win is not None:
         _win.show()
         _win.raise_()
@@ -295,6 +316,7 @@ class _MainWindow(QWidget):
         QTimer.singleShot(1500, tour_runner.start_if_new)
 
     def showEvent(self, event):
+        _remembered["open"] = True
         super().showEvent(event)
         QTimer.singleShot(0, lambda: self._move_marker(animated=False))
 
@@ -383,7 +405,12 @@ class _MainWindow(QWidget):
         except Exception:
             pass
 
+    def hideEvent(self, event):
+        _remembered["open"] = False
+        super().hideEvent(event)
+
     def _show_tab(self, key):
+        _remembered["page"] = key
         changed = getattr(self, "_current_key", None) != key
         self._stack.setCurrentWidget(self._pages[key])
         self._current_key = key
