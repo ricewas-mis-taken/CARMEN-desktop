@@ -916,3 +916,16 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
 2026-11-03  Scribe lag: cloud sync stalled drawing
   Cause: each save made the sync lane re-read and re-encode the whole 4.9 MB board (export + two json dumps), each one a single C call holding the GIL ~100 ms, so the UI froze mid-stroke and got worse as the board grew.
   Fork: chunk the encoding, or sync later. Chose to wait: the board is only gathered once untouched for 20 s (scribe_store.is_settled). Other tables are unaffected; the board still syncs, just after you stop.
+
+2026-11-03  Carmen Score: permanent 0-1000 ledger
+  Replaces the rolling 4-week idea: the score starts at 500, goes up and down, is clamped to 0..1000 after every
+  event and is never reset by a week or month ending. It is the sum of a ledger (private/score.json) of events with
+  deterministic keys (goal:<date>, period:<task>:<start>, review:<id>:<time>, overdue:<problem>:<due>:<day>), and
+  an existing key is ignored, so settling twice or catching up after days closed can't double count.
+  Judged only from the day the ledger began; catch-up is capped at 60 days.
+  Week / month / custom goals count ONLY when their period ends (+20 met, down to -30 untouched); per-day goals
+  daily (+12 .. -18); reviews on time +6, late costs 3 a day, overdue -3 a day for at most 10 days per due date.
+  Out-of-rotation problems are never due or scored.
+  Fork: sync the ledger or keep it local. Kept local for now (listed in test_sync_coverage). Because event keys are
+  deterministic from synced data, merging two devices' ledgers later is a union by key. Not built yet.
+  Approximation: past days' overdue lists use today's next_review_date (history of due dates isn't kept).
