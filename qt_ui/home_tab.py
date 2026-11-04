@@ -324,6 +324,8 @@ class _GoalBar(QWidget):
     """Today's goal as one bar. What is suggested (week and month pace) hangs off the end as a dashed,
     unfilled-looking extension: it is there if you want it, and never counts against the day."""
 
+    SUGGESTED_SHARE = 0.2
+
     def __init__(self, logged, required, suggested, suggested_logged, colour, height=10):
         super().__init__()
         self._logged, self._required = max(0.0, logged), max(0.0, required)
@@ -335,12 +337,14 @@ class _GoalBar(QWidget):
     def paintEvent(self, _event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        total = (self._required + self._suggested) or 1.0
         gap = 8.0 if self._required and self._suggested else 0.0
         usable = self.width() - gap
         h, top = float(self._height), 1.0
         r = h / 2
-        main_w = usable * self._required / total
+        # The goal is the bar; the suggestion is a short tail after it and never takes the goal's room, so
+        # a met goal reads as a full bar however much is suggested.
+        sug_share = min(self.SUGGESTED_SHARE, self._suggested / (self._required + self._suggested)) if self._suggested and self._required else (1.0 if self._suggested else 0.0)
+        main_w = usable * (1.0 - sug_share) if self._required else 0.0
         track = QColor(self._colour)
         track.setAlphaF(0.16)
         p.setPen(Qt.NoPen)
@@ -353,7 +357,7 @@ class _GoalBar(QWidget):
                 p.drawRoundedRect(QRectF(0, top, w, h), r, r)
         if self._suggested:
             x = main_w + gap
-            sug_w = usable * self._suggested / total
+            sug_w = usable * sug_share
             soft = QColor(self._colour)
             soft.setAlphaF(0.55)
             pen = QPen(soft, 1.4, Qt.DashLine)
