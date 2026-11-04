@@ -53,5 +53,5 @@ def test_the_dialog_builds_and_plan_goes_to_the_week_page(qtbot):
     went = []
     dialog = report_card_dialog.show(report_card.build(MON), on_plan=lambda: went.append(1))
     qtbot.addWidget(dialog)
-    dialog._plan()
-    assert went == [1]
+    dialog._plan()                      # closes itself and goes on to planning
+    assert went == [1] and not dialog.isVisible()

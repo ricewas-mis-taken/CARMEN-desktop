@@ -535,8 +535,14 @@ class ReviewTab(QWidget):
 
         title = QLabel("Review")
         title.setStyleSheet(f"font-size: 26px; font-weight: 700; color: {INK}; background: transparent;")
-        title.setContentsMargins(28, 24, 28, 10)
-        layout.addWidget(title)
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(28, 24, 28, 10)
+        title_row.addWidget(title)
+        title_row.addStretch(1)
+        week_button = button("The week ahead", SECONDARY_STYLE, height=36)
+        week_button.clicked.connect(lambda: __import__("qt_ui.week_dialog", fromlist=["show"]).show())
+        title_row.addWidget(week_button)
+        layout.addLayout(title_row)
 
         # The one review banner for every topic, above the tab strip: a review
         # of one topic stays in view while another topic's tab is open.

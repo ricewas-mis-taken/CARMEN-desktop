@@ -27,6 +27,8 @@ import board_store
 import calendar_recurrence
 import calendar_store
 import quicknote_store
+import report_card
+import score_store
 import theme
 import review_store
 import session_history
@@ -366,6 +368,31 @@ class _GoalBar(QWidget):
                 p.setBrush(fill)
                 w = max(h, sug_w * min(1.0, self._suggested_logged / self._suggested))
                 p.drawRoundedRect(QRectF(x, top, w, h), r, r)
+
+
+class _ScoreTrack(QWidget):
+    """0 to 1000 as one line. The part earned is solid, the rest a quiet rail, with a tick where each
+    grade starts, so the number is read against something."""
+
+    def __init__(self, value):
+        super().__init__()
+        self._value = value
+        self.setFixedHeight(18)
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, y = float(self.width()), 9.0
+        rail = QColor(INK)
+        rail.setAlphaF(0.12)
+        p.setPen(QPen(rail, 4, Qt.SolidLine, Qt.RoundCap))
+        p.drawLine(QPointF(2, y), QPointF(w - 2, y))
+        p.setPen(QPen(QColor(INK), 4, Qt.SolidLine, Qt.RoundCap))
+        p.drawLine(QPointF(2, y), QPointF(max(2.0, 2 + (w - 4) * self._value / 1000), y))
+        p.setPen(QPen(rail, 1))
+        for mark in (350, 500, 650, 800):
+            x = 2 + (w - 4) * mark / 1000
+            p.drawLine(QPointF(x, y - 7), QPointF(x, y - 3))
 
 
 class _Grid(QWidget):
@@ -840,6 +867,7 @@ class HomeTab(QWidget):
             _Banner(now, self._reveal),
             self._hero(data, status),
             self._today(data),
+            self._score_card(),
             self._needs_you(data, status, now),
             self._consistency(data),
             self._streak_card(data),
@@ -851,7 +879,7 @@ class HomeTab(QWidget):
         """Wide: banner on top; the live card beside the streak and notes box; today and needs-you
         under the live card, the board down the right; the year underneath. Narrow: one column."""
         self._wide = wide
-        banner, hero, today, needs, consistency, streak, board = self._blocks
+        banner, hero, today, score, needs, consistency, streak, board = self._blocks
         for block in self._blocks:
             self._grid.removeWidget(block)
         for column in range(2):
@@ -861,13 +889,14 @@ class HomeTab(QWidget):
             self._grid.addWidget(hero, 1, 0)
             self._grid.addWidget(streak, 1, 1)
             self._grid.addWidget(today, 2, 0)
-            self._grid.addWidget(board, 2, 1, 2, 1)
+            self._grid.addWidget(score, 2, 1)
             self._grid.addWidget(needs, 3, 0)
+            self._grid.addWidget(board, 3, 1)
             self._grid.addWidget(consistency, 4, 0, 1, 2)
             self._grid.setColumnStretch(0, 3)
             self._grid.setColumnStretch(1, 2)
         else:
-            for row, block in enumerate((banner, hero, streak, today, needs, board, consistency)):
+            for row, block in enumerate((banner, hero, streak, score, today, needs, board, consistency)):
                 self._grid.addWidget(block, row, 0)
             self._grid.setColumnStretch(0, 1)
         self._grid.setRowStretch(8, 1)
@@ -1026,6 +1055,47 @@ class HomeTab(QWidget):
         layout.addLayout(line)
         layout.addWidget(_GoalBar(fraction, 1.0, 0, 0, colour, height=6) if not dashed
                          else _GoalBar(0, 0, 1.0, fraction, colour, height=6))
+
+    def _score_card(self):
+        """The Carmen Score: the number, its letter, how the week moved it, and a track from 0 to 1000."""
+        value = score_store.score()
+        data = score_store.load()
+        today = date.today()
+        monday = report_card.week_start(today)
+        change = value - score_store.score_through(monday - timedelta(days=1), data)
+        card = _card()
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(22, 18, 22, 18)
+        layout.setSpacing(10)
+        layout.addWidget(_heading("Score"))
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        number = QLabel(str(value))
+        number.setStyleSheet(f"color:{INK};font-size:46px;font-weight:800;background:transparent;")
+        row.addWidget(number, 0, Qt.AlignBottom)
+        out_of = QLabel("/ 1000")
+        out_of.setStyleSheet(f"color:{FAINT};font-size:15px;background:transparent;")
+        row.addWidget(out_of, 0, Qt.AlignBottom)
+        row.addStretch(1)
+        grade = QLabel(score_store.grade(value))
+        grade.setStyleSheet(f"color:{INK};font-size:30px;font-weight:800;background:transparent;")
+        row.addWidget(grade, 0, Qt.AlignBottom)
+        layout.addLayout(row)
+        layout.addWidget(_ScoreTrack(value))
+        moved = QLabel(f"{'+' if change > 0 else ''}{change} this week" if change else "No change this week")
+        moved.setStyleSheet(
+            f"color:{'#2F9E44' if change > 0 else '#D9363E' if change < 0 else MUTED};"
+            "font-size:13.5px;font-weight:600;background:transparent;")
+        layout.addWidget(moved)
+        last = button("Last week's report", SECONDARY_STYLE, height=34)
+        last.clicked.connect(self._show_report_card)
+        layout.addWidget(last, 0, Qt.AlignLeft)
+        return card
+
+    def _show_report_card(self):
+        from qt_ui import report_card_dialog, week_dialog
+        card = report_card.build(report_card.last_week(), session_history.load_all())
+        report_card_dialog.show(card, on_plan=lambda: week_dialog.show())
 
     def _needs_you(self, data, status, now):
         card = _card()
