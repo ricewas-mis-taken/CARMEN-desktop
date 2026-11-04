@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QPushButton, QWidget
 import config
 from calendar_log import logger
 import session_manager
+from qt_ui import pause_reason
 import tasks_store
 
 REFRESH_MS = 500
@@ -212,9 +213,9 @@ class MiniTimer(QWidget):
     def _toggle_pause(self):
         if session_manager.get_status()["isPaused"]:
             session_manager.resume_session()
+            self.refresh()
         else:
-            session_manager.pause_session()
-        self.refresh()
+            pause_reason.ask(self, self.refresh)
 
     def refresh(self):
         status = session_manager.get_status()

@@ -5,6 +5,7 @@ import pytest
 
 import qt_ui.focus_tab as focus_tab
 import session_manager
+from qt_ui import pause_reason
 
 # The Focus tab also reads the review engine, so every test here runs on a throwaway review
 # database, never the real one.
@@ -45,8 +46,11 @@ def test_pause_resume_button_toggles_session_state(qtbot, isolate_state):
     qtbot.addWidget(tab)
 
     assert not session_manager.get_status()["isPaused"]
-    tab._pause_resume()
+    tab._pause_resume()                                   # asks what the pause is for
+    assert not session_manager.get_status()["isPaused"]
+    pause_reason._OPEN[-1]._choose("break")
     assert session_manager.get_status()["isPaused"]
+    assert session_manager._state["violationLog"][-1]["pauseReason"] == "break"
     tab._pause_resume()
     assert not session_manager.get_status()["isPaused"]
 

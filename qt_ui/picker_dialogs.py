@@ -533,7 +533,7 @@ def start_manual_session(duration_minutes, lock_mode, parent=None):
 
     running = session_manager.get_status()
     if running["isActive"] and not running["isPaused"]:
-        session_manager.pause_session()
+        session_manager.pause_session("aside")
 
     # Calls the same function POST /session/start uses, so this session
     # is immediately visible to the browser extension via GET /status.

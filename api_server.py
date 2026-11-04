@@ -463,7 +463,11 @@ def session_pause():
     enforcement (handled entirely by the extension/window_tracker, not this
     endpoint) is untouched. Idempotent: no active session, or a session
     that's already paused, just returns the current status unchanged."""
-    return jsonify(session_manager.pause_session())
+    body = request.get_json(silent=True) or {}
+    reason = body.get("reason") if isinstance(body, dict) else None
+    if reason not in (None, "break", "interrupted", "stuck", "checking"):
+        reason = None
+    return jsonify(session_manager.pause_session(reason))
 
 
 @app.route("/session/resume", methods=["POST"])

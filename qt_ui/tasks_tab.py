@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
 import review_store
 import session_history
 import session_manager
+from qt_ui import pause_reason
 import tasks_store
 from qt_ui.day_layout import contrasting_text_color
 from qt_ui.ui_kit import (  # noqa: F401 -- aliases keep the older private names working
@@ -1055,7 +1056,7 @@ class _TaskCard(QFrame):
             if review_tab.make_live_review_independent():
                 return                           # it now rides beside the session that starts next
             if not status.get("isPaused"):
-                session_manager.pause_session()
+                session_manager.pause_session("aside")
 
     def _start_pomodoro(self):
         settings = _PomodoroDialog.get_settings(self)
@@ -1110,7 +1111,7 @@ class _TaskCard(QFrame):
         if session_manager.get_status()["isPaused"]:
             session_manager.resume_session()
         else:
-            session_manager.pause_session()
+            pause_reason.ask(self)
 
     def _end_task(self):
         parked = self._parked_entry(session_manager.get_status())

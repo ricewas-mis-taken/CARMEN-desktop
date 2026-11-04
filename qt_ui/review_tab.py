@@ -1798,7 +1798,7 @@ class _ReviewBanner(QWidget):
         if self._end_session_on_finish:
             status, is_parked = self._linked_view()
             if status.get("isActive") and not is_parked and not status.get("isPaused"):
-                session_manager.pause_session()
+                session_manager.pause_session("aside")
         elif self._is_independent_review():
             review_store.park_active_review()
         else:
@@ -1949,7 +1949,7 @@ class _ReviewBanner(QWidget):
             self._start_time = None
             self._pause_btn.setText("Resume")
             if self._end_session_on_finish:
-                session_manager.pause_session()
+                session_manager.pause_session("aside")
 
     def _abandon_after_external_end(self):
         """Same cleanup as _end_early(), minus the session_manager.end_session()
@@ -2119,7 +2119,7 @@ def _make_room_for(task):
     if _can_drive_over(status):
         return True
     if status.get("source") == "task" and status.get("eventId") != task["id"]:
-        session_manager.pause_session()
+        session_manager.pause_session("aside")
         return True
     return False
 

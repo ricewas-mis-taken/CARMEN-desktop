@@ -80,6 +80,8 @@ def test_review_session_pause_button_works_for_linked_task(qtbot, isolate_tasks,
     assert card._pause_button.text() == "Pause"
 
     card._pause_resume()
+    from qt_ui import pause_reason
+    pause_reason._OPEN[-1]._choose("break")
     assert session_manager.get_status()["isPaused"]
     card.update_dynamic(session_manager.get_status(), session_history.load_all())
     assert card._pause_button.text() == "Resume"
