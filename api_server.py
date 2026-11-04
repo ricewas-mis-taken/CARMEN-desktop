@@ -54,6 +54,7 @@ from logging.handlers import RotatingFileHandler
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
+import activity
 import config
 import devices_store
 import installed_apps
@@ -293,6 +294,23 @@ def events_wait():
     timeout = max(0.0, min(timeout, _MAX_EVENT_WAIT_SECONDS))
     version, changed = state_events.wait_for_change(since, timeout)
     return jsonify({"version": version, "changed": changed})
+
+
+@app.route("/activity", methods=["GET"])
+def activity_state():
+    # Open like /status: the extension asks before crediting a stretch of screen time, so time spent away
+    # from the keyboard is not counted as use. Loopback only, and it reveals nothing but an idle count.
+    idle = activity.idle_seconds()
+    return jsonify({"idleSeconds": idle, "idleAfter": activity.IDLE_AFTER_SECONDS,
+                    "active": activity.is_active()})
+
+
+@app.route("/activity/media", methods=["POST"])
+@_require_token
+def activity_media():
+    body = request.get_json(silent=True) or {}
+    activity.note_media(bool(body.get("playing")))
+    return jsonify({"ok": True})
 
 
 @app.route("/device/info", methods=["GET"])
