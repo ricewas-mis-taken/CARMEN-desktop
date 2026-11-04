@@ -107,6 +107,11 @@ def main():
     # thread below is the one that matters most — it can trigger
     # enforcer.py's lock overlays at any time once it starts).
     app = QApplication(sys.argv)
+    # Background threads (sync, saving, the API) share the interpreter lock with the interface. The default
+    # lets one of them hold it for 5 ms at a time, which is felt under a pen; 0.5 ms hands it back sooner.
+    sys.setswitchinterval(0.0005)
+    import gc
+    gc.set_threshold(10000, 20, 20)     # collect far less often: a big Scribe board holds ~200k objects
     import qt_ui.popup_fit as popup_fit
     popup_fit.install(app)                      # every popup opens a sensible size, on screen
     from PySide6.QtGui import QIcon
