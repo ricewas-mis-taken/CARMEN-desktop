@@ -290,6 +290,9 @@ class _MainWindow(QWidget):
         self._show_tab("home")
         QTimer.singleShot(0, lambda: self._move_marker(animated=False))
         QTimer.singleShot(4000, self._maybe_show_report_card)
+        from qt_ui import tour_runner
+        tour_runner.register(self)
+        QTimer.singleShot(1500, tour_runner.start_if_new)
 
     def showEvent(self, event):
         super().showEvent(event)

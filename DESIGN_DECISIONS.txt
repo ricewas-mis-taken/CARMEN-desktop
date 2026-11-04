@@ -975,3 +975,18 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   Found, not a lag cause: the board is over MAX_SYNC_BYTES (6 MB), so it does NOT sync to other devices any more.
   export() now measures it once per version instead of re-encoding it every sync pass. Raising the limit or syncing
   deltas is a separate decision.
+
+2026-11-03  Welcome tour and Help
+  Research (vendor and NN/g articles, so directional): keep tours short, skippable from the start and at every
+  step, learn by doing for the one thing that matters, let people replay it from a help menu, and teach each thing when
+  it becomes relevant. Sources: nngroup.com/articles/onboarding-tutorials, appcues.com/blog/user-onboarding-ui-ux-patterns,
+  stepskit.com/blog/onboarding-tours.
+  Built (qt_ui/tour.py, tour_content.py, tour_runner.py): the window dims with one bright, click-through hole
+  (the hole is cut out of the layer's mask, so the part being explained is the only thing that works); a note beside it with
+  Back / Next, "Skip this part" (jump to the next chapter) and "Skip the tour". The note is a separate frameless window so
+  it can sit over popups. 8 chapters of 1 to 8 steps each (welcome, getting around, first task, focus, reviews, score,
+  browser extension, options). Fork: one long linear tour vs chapters. Chapters, because the sources say completion falls
+  off with length and chapters give a skip unit; the first-task chapter is the only interactive one: it waits for the New Task
+  window to open and for a task to be saved, and the note tucks into the corner while the user works.
+  Shown once automatically (config tourDone, set when it is finished OR skipped), and Options > Help replays all of it or one chapter.
+  Not done: the Focus and Review chapters talk about the page, not individual buttons; no live check that the extension connected.

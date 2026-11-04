@@ -1064,6 +1064,7 @@ class HomeTab(QWidget):
         monday = report_card.week_start(today)
         change = value - score_store.score_through(monday - timedelta(days=1), data)
         card = _card()
+        card.setProperty("tourId", "score")           # the tour points at it
         layout = QVBoxLayout(card)
         layout.setContentsMargins(22, 18, 22, 18)
         layout.setSpacing(10)
