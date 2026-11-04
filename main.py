@@ -13,6 +13,14 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from calendar_log import logger
 
+try:                                    # a hard crash of the interpreter or Qt leaves its stack here
+    import faulthandler
+    import paths as _paths
+    _crash_file = open(_paths.private_path("crash.log"), "a", buffering=1)
+    faulthandler.enable(_crash_file, all_threads=True)
+except Exception:
+    pass
+
 import api_server
 import auto_updater
 from qt_ui import ui_kit
