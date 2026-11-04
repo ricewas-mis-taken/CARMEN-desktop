@@ -835,6 +835,20 @@ def list_problems(topic_id, due_only=True):
             return []
 
 
+def overdue_on(day):
+    """[(problem id, due date)] of the problems that were overdue on `day`: due before it, not set aside."""
+    with _lock:
+        try:
+            conn = _get_conn()
+            rows = conn.execute(
+                "SELECT id, next_review_date FROM review_problems "
+                "WHERE is_deleted = 0 AND out_of_rotation = 0 AND next_review_date < ?", (day.isoformat(),)).fetchall()
+            return [(r["id"], date.fromisoformat(str(r["next_review_date"])[:10])) for r in rows]
+        except Exception:
+            logger.exception("review_store.overdue_on failed")
+            return []
+
+
 def set_out_of_rotation(problem_id, out):
     """Sets a problem aside (out=True) or brings it back. Costs nothing: an aside problem is never due,
     never overdue and never scored. Coming back it is due again after its first interval from today, so
@@ -1531,8 +1545,8 @@ def _apply_review_outcome(problem_id, duration_seconds, self_solved, shakiness, 
         try:
             conn = _get_conn()
             row = conn.execute(
-                "SELECT stars, schedule_stage, fastest_time_seconds, fastest_time_is_solved, review_count "
-                "FROM review_problems WHERE id = ?",
+                "SELECT name, stars, schedule_stage, fastest_time_seconds, fastest_time_is_solved, review_count, "
+                "next_review_date, original_due_date FROM review_problems WHERE id = ?",
                 (problem_id,),
             ).fetchone()
             if row is None:
@@ -1585,6 +1599,7 @@ def _apply_review_outcome(problem_id, duration_seconds, self_solved, shakiness, 
             # the answer" never collects it, so it must never be persisted
             # (or later displayed) as if it had been.
             is_first_attempt = row["review_count"] == 0
+            score_due = score_name = None
             first_attempt_seconds = duration_seconds if is_first_attempt else None
             first_attempt_shakiness = shakiness if (is_first_attempt and self_solved) else None
             first_attempt_self_solved = int(self_solved) if is_first_attempt else None
@@ -1598,6 +1613,7 @@ def _apply_review_outcome(problem_id, duration_seconds, self_solved, shakiness, 
                     fastest_time_is_solved = ?,
                     schedule_stage = ?,
                     next_review_date = ?,
+                    original_due_date = NULL,
                     first_attempt_seconds = COALESCE(first_attempt_seconds, ?),
                     first_attempt_shakiness = COALESCE(first_attempt_shakiness, ?),
                     first_attempt_self_solved = COALESCE(first_attempt_self_solved, ?),
@@ -1614,6 +1630,8 @@ def _apply_review_outcome(problem_id, duration_seconds, self_solved, shakiness, 
                 ),
             )
             conn.commit()
+            if not is_first_attempt:
+                score_due, score_name = row["original_due_date"] or row["next_review_date"], row["name"]
         except Exception:
             logger.exception("review_store._apply_review_outcome failed for problem %s", problem_id)
             try:
@@ -1621,6 +1639,13 @@ def _apply_review_outcome(problem_id, duration_seconds, self_solved, shakiness, 
             except Exception:
                 pass
             return None
+
+    if score_due:
+        try:
+            import score_store
+            score_store.record_review(f"{problem_id}:{finished_at.isoformat()}", score_due, finished_at.date(), score_name)
+        except Exception:
+            logger.exception("score_store.record_review failed")
 
     sync_trigger.note_change()
     return get_problem(problem_id)

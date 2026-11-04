@@ -23,6 +23,7 @@ import sync_live
 import sync_photos
 import quicknote_store
 import scribe_store
+import score_store
 import screentime_store
 import session_history
 import session_manager
@@ -135,6 +136,7 @@ def isolate_real_data_paths(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(sync_live, "QUICKNOTE_PUSHED_PATH", str(base / "live_quicknote_pushed.txt"))
     monkeypatch.setattr(quicknote_store, "PATH", str(base / "quicknote.json"))
     monkeypatch.setattr(scribe_store, "PATH", str(base / "scribe.json"))
+    monkeypatch.setattr(score_store, "PATH", str(base / "score.json"))
     monkeypatch.setattr(scribe_store, "IMAGES_DIR", str(base / "scribe_images"))
     monkeypatch.setattr(scribe_store, "STAMP_PATH", str(base / "scribe_stamp.txt"))
     monkeypatch.setattr(sync_live, "SCRIBE_PUSHED_PATH", str(base / "live_scribe_pushed.txt"))
