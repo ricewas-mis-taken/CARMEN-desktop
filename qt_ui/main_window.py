@@ -383,10 +383,57 @@ class _MainWindow(QWidget):
         layout.addStretch(1)
         self._marker = _NavMarker(sidebar)
 
+        self._update_button = QPushButton("Update ready")
+        self._update_button.setCursor(Qt.PointingHandCursor)
+        self._update_button.setFixedHeight(34)
+        self._update_button.setStyleSheet(
+            "QPushButton{margin:0 12px 6px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.35);"
+            "background:rgba(255,255,255,0.12);color:#FFFFFF;font-weight:700;font-size:13px;}"
+            "QPushButton:hover{background:rgba(255,255,255,0.22);}QPushButton:disabled{color:rgba(255,255,255,0.6);}")
+        self._update_button.clicked.connect(self._apply_update)
+        self._update_button.hide()
+        layout.addWidget(self._update_button)
+        self._update_timer = QTimer(self)
+        self._update_timer.timeout.connect(self._sync_update_button)
+        self._update_timer.start(3000)
+
         self._account_area = AccountArea()
         layout.addWidget(self._account_area)
 
         return sidebar
+
+    def _sync_update_button(self):
+        import update_center
+        state = update_center.snapshot()
+        if state["busy"]:
+            self._update_button.setText("Updating...")
+            self._update_button.setEnabled(False)
+            self._update_button.show()
+            return
+        self._update_button.setEnabled(True)
+        if state["message"]:
+            self._update_button.setText(state["message"])
+            self._update_button.show()
+            return
+        self._update_button.setText("Update" if self._compact else "Update ready")
+        self._update_button.setVisible(state["available"])
+
+    def _apply_update(self):
+        """Pull what is waiting and put it into this running window; nothing closes."""
+        import qt_gui_thread
+        import update_center
+
+        def done(result):
+            if "error" in result:
+                update_center.set_message("Update failed")
+            elif result["later"]:
+                update_center.set_message("Updated (some parts apply on next start)")
+            else:
+                update_center.set_message("Updated")
+            self._sync_update_button()
+            QTimer.singleShot(4000, lambda: (update_center.set_message(""), self._sync_update_button()))
+        update_center.apply_async(qt_gui_thread.run_on_gui_thread, done)
+        self._sync_update_button()
 
     def _maybe_show_report_card(self):
         """Once per week, the first time Carmen is open after the week ends: last week's report card."""
