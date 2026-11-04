@@ -1367,7 +1367,7 @@ def resolve_domain_violation():
         _save()
 
 
-def add_domain_to_whitelist(domain, reason):
+def add_domain_to_whitelist(domain, reason, plan=None, minutes=None):
     """Adds domain to domainWhitelist mid-session (e.g. via POST
     /whitelist/domains/add) and logs why in domainWhitelistAdditions — the
     audit trail of every site let in outside the original allow list picked
@@ -1402,12 +1402,14 @@ def add_domain_to_whitelist(domain, reason):
             "reason": reason,
             "timestamp": now.isoformat(),
         }
+        if plan:
+            addition.update(plan=plan, minutes=minutes)
         _state["domainWhitelistAdditions"].append(addition)
         _save()
         return list(_state["domainWhitelist"]), addition
 
 
-def remove_process_from_blocklist(process_name, reason):
+def remove_process_from_blocklist(process_name, reason, plan=None, minutes=None):
     """Removes process_name from processBlocklist mid-session (e.g. via the
     lock overlay's "Unblock" button on a violation, or the "Pick Apps to
     Blocklist" picker's own remove flow, opened while a session is already
@@ -1439,6 +1441,8 @@ def remove_process_from_blocklist(process_name, reason):
             "reason": reason,
             "timestamp": now.isoformat(),
         }
+        if plan:
+            exception_entry.update(plan=plan, minutes=minutes)
         _state["processBlocklistExceptions"].append(exception_entry)
         _save()
         return list(_state["processBlocklist"]), exception_entry
