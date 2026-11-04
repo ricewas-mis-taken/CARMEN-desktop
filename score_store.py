@@ -238,14 +238,6 @@ def start(stop_event, every_seconds=3600):
     """Settles at start-up and again every hour, so a day that ends while Carmen is open is settled
     without a restart."""
     def run():
-        try:
-            import config
-            if not config.load_config().get("scoreBackfilled"):
-                backfill()          # once: score the days from before the score began
-                config.update_config(lambda cfg: cfg.update(scoreBackfilled=True))
-        except Exception:
-            import logging
-            logging.getLogger(__name__).exception("score backfill failed")
         while not stop_event.is_set():
             try:
                 settle_now()
