@@ -9,6 +9,7 @@ closed for days, can therefore never count a day twice. Settling only looks at d
 
 What earns and costs points (all small: a good day is about +12, a bad one about -18):
   - the day's per-day goals: from +12 when all met, down to -18 when none of it was done
+  - time beyond the day's goals: up to +8 more (half again as much as asked earns the full +8)
   - a week / month / custom goal: only at the END of its period, +20 if met, down to -30 if untouched
   - a review done on or before its due date: +6; later than that costs 3 more per day (to -15)
   - a review left overdue: -3 for each day, for at most 10 days per due date
@@ -29,6 +30,9 @@ MAX_SCORE = 1000
 MAX_CATCH_UP_DAYS = 60
 OVERDUE_DAY_COST = 3
 OVERDUE_MAX_DAYS = 10
+OVER_BONUS_MAX = 8            # most a day can earn for time beyond its goals
+PERIOD_OVER_BONUS_MAX = 10
+OVER_FULL_BONUS_AT = 0.5      # going 50% past the goal earns the most
 
 _lock = threading.RLock()
 
@@ -182,7 +186,7 @@ def backfill(today=None, days=90, tasks=None, sessions=None):
 
 def _settle_day(data, day, tasks, sessions, overdue, tasks_store):
     before = len(data["events"])
-    required = logged = 0.0
+    required = logged = extra = 0.0
     for task in tasks:
         if _created_after(task, day):
             continue                      # the goal did not exist yet
@@ -195,10 +199,15 @@ def _settle_day(data, day, tasks, sessions, overdue, tasks_store):
         if snap["required"] > 0:
             required += snap["required"]
             logged += min(snap["logged"], snap["required"])
+            extra += max(0.0, snap["logged"] - snap["required"])
     if required > 0:
         ratio = logged / required
         add_event(f"goal:{day.isoformat()}", day, "goals", round((ratio - 0.6) * 30),
                   f"{round(ratio * 100)}% of the day's goals", _data=data)
+        bonus = round(min(1.0, extra / required / OVER_FULL_BONUS_AT) * OVER_BONUS_MAX)
+        if bonus > 0:
+            add_event(f"extra:{day.isoformat()}", day, "extra", bonus,
+                      f"{round(extra)} min beyond the day's goals", _data=data)
     if overdue is not None:
         for problem_id, due in overdue(day):
             days = (day - due).days
@@ -223,6 +232,11 @@ def _settle_period(data, task, day, sessions, tasks_store):
     logged = tasks_store.logged_seconds_for_period(task, day, sessions) / 60
     ratio = min(1.0, logged / required)
     points = 20 if ratio >= 1.0 else -round(30 * (1 - ratio))
+    if logged > required:
+        more = round(min(1.0, (logged / required - 1) / OVER_FULL_BONUS_AT) * PERIOD_OVER_BONUS_MAX)
+        if more > 0:
+            add_event(f"periodextra:{task.get('id')}:{start.isoformat()}", day, "extra", more,
+                      f"{task.get('name', 'Goal')}: beyond its {tasks_store.period_phrase(task)} goal", _data=data)
     add_event(f"period:{task.get('id')}:{start.isoformat()}", day, "period", points,
               f"{task.get('name', 'Goal')}: {round(ratio * 100)}% of its {tasks_store.period_phrase(task)} goal",
               _data=data)

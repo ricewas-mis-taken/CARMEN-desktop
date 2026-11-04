@@ -124,3 +124,16 @@ def test_a_goal_is_not_judged_before_it_was_created():
     score_store.backfill(today=today, tasks=[task], sessions=[_entry("other", today - timedelta(days=5), 10)])
     days = sorted(e["date"] for e in score_store.load()["events"])
     assert days == [(today - timedelta(days=1)).isoformat()]        # only yesterday, the day it existed
+
+
+def test_time_beyond_the_days_goals_earns_a_bonus_up_to_a_cap(tmp_path, monkeypatch):
+    import tasks_store
+    from datetime import date
+    monkeypatch.setattr(score_store, "PATH", str(tmp_path / "score.json"))
+    task = {"id": "t", "name": "Read", "recurrence": "daily", "targetMinutes": 60, "createdAt": "2020-01-01T00:00:00"}
+    day = date(2024, 3, 5)
+    sessions = [{"eventId": "t", "source": "task", "startTime": "2024-03-05T09:00:00", "endTime": "2024-03-05T11:30:00"}]
+    data = score_store.load()
+    score_store._settle_day(data, day, [task], sessions, None, tasks_store)
+    extra = [e for e in data["events"] if e["kind"] == "extra"]
+    assert extra and extra[0]["points"] == score_store.OVER_BONUS_MAX
