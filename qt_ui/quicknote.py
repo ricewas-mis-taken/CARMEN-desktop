@@ -137,6 +137,7 @@ class _BulletEdit(WrapEdit):
 class NoteList(QWidget):
     """The bullets themselves: a column of one-line editors."""
     changed = Signal()
+    row_added = Signal(object)            # the new row's widget, so a scroll area can follow it
 
     def __init__(self):
         super().__init__()
@@ -207,6 +208,7 @@ class NoteList(QWidget):
         new.setFocus()
         new.setCursorPosition(0)
         self.changed.emit()
+        self.row_added.emit(new.parentWidget())
 
     def _on_backspace_on_empty(self, edit):
         if len(self._edits) == 1:
@@ -258,6 +260,8 @@ class QuickNoteWindow(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self._list)
+        self._scroll = scroll
+        self._list.row_added.connect(self._follow_row)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 16)
         layout.addWidget(scroll)
@@ -277,6 +281,10 @@ class QuickNoteWindow(QWidget):
 
         self._restore_geometry()
         self._load()
+
+    def _follow_row(self, row):
+        """Scrolls so the bullet just started is in view (after the layout has grown to hold it)."""
+        QTimer.singleShot(0, lambda: self._scroll.ensureWidgetVisible(row, 0, 24))
 
     # --- saving and loading ---
 
