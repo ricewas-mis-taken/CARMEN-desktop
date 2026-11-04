@@ -1720,7 +1720,7 @@ class ScribeTab(QWidget):
 
     def _write(self, doc):
         try:
-            scribe_store.save(doc)
+            scribe_store.save(doc, trusted=True)
         except OSError:
             self._save_failed = True   # stays dirty; the next change (or quit) tries again
 
@@ -1754,7 +1754,7 @@ class ScribeTab(QWidget):
         if not self._dirty:
             return
         try:
-            scribe_store.save(self.canvas.doc)
+            scribe_store.save(self.canvas.doc, trusted=True)
             self._dirty = False
             self._show_saved(True)
         except OSError:

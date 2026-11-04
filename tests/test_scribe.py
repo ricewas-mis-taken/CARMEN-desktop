@@ -614,7 +614,7 @@ def test_the_timed_save_runs_off_the_ui_thread(qtbot, monkeypatch):
     gate = threading.Event()
     seen = []
 
-    def slow_save(doc):
+    def slow_save(doc, trusted=False):
         seen.append(threading.current_thread())
         gate.wait(2)
     monkeypatch.setattr(scribe_store, "save", slow_save)
