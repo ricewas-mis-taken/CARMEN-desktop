@@ -2,12 +2,14 @@
 breakdown, and one suggestion. Weeks run Monday to Sunday. Past misses are history here, never debt."""
 from datetime import date, timedelta
 
+import goal_raise
 import pause_budget
 import score_store
 
 KIND_LABELS = {
     "goals": "Daily goals",
     "period": "Week and month goals",
+    "extra": "Beyond the goal",
     "review": "Reviews done",
     "overdue": "Reviews left overdue",
     "pauses": "Pauses to look at other things",
@@ -36,6 +38,7 @@ def build(start, sessions=None, data=None):
     rows = [{"kind": k, "label": KIND_LABELS.get(k, k), "points": v}
             for k, v in sorted(kinds.items(), key=lambda kv: kv[1])]
     pause = _pauses(start, end, sessions or [])
+    raises = _raises(end, sessions)
     overdue_days = sum(1 for e in events if e["kind"] == "overdue")
     reviews_done = [e for e in events if e["kind"] == "review"]
     late = sum(1 for e in reviews_done if e["points"] < 6)
@@ -44,9 +47,22 @@ def build(start, sessions=None, data=None):
         "grade": score_store.grade(after), "rows": rows,
         "reviews_done": len(reviews_done), "reviews_late": late, "overdue_days": overdue_days,
         "pause": pause,
-        "suggestion": suggestion(kinds, pause, overdue_days, late),
+        "raises": raises,
+        "suggestion": suggestion(kinds, pause, overdue_days, late, raises),
         "empty": not events,
     }
+
+
+def _raises(end, sessions):
+    """[(goal name, new minutes per day)] for goals that were beaten by a wide margin most days."""
+    if not sessions:
+        return []
+    try:
+        import tasks_store
+        found = goal_raise.suggestions(tasks_store.load_tasks(), end + timedelta(days=1), sessions, tasks_store)
+        return [(task.get("name", "Goal"), minutes) for task, minutes in found]
+    except Exception:
+        return []
 
 
 def _pauses(start, end, sessions):
@@ -65,9 +81,12 @@ def _pauses(start, end, sessions):
     return {"free_seconds": free, "escape_seconds": escape, "over_seconds": over}
 
 
-def suggestion(kinds, pause, overdue_days, late):
+def suggestion(kinds, pause, overdue_days, late, raises=()):
     """One thing to change next week, the biggest leak first. Empty when nothing needs changing."""
     leaks = {k: v for k, v in kinds.items() if v < 0}
+    if not leaks and raises:
+        name, minutes = raises[0]
+        return f"You keep going well past {name}. Raise it to {minutes} minutes a day so it asks for what you really do."
     if not leaks:
         return "Nothing leaked this week. Keep the same plan."
     worst = min(leaks, key=leaks.get)
