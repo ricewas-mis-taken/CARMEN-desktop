@@ -219,7 +219,10 @@ def main():
     # user-initiated Quit and an auto-update restart is what main() does
     # after app.exec() returns (os._exit vs. os.execv into the freshly
     # pulled code; see below).
-    auto_updater.start(stop_event, on_quit)
+    # Updates no longer restart the app: a button in the window applies them to the running copy.
+    import update_center
+    update_center.start_baseline()
+    update_center.watch(stop_event)
 
     def _busy():
         """A session, a review or a first attempt is running: not a moment to restart."""
@@ -233,17 +236,14 @@ def main():
         return main_window.remembered()["open"]
 
     def on_code_changed():
-        """New code on disk, checked, and a quiet moment: remember the page, then leave through the same
-        path as Quit. The re-exec below starts the new copy, which reopens the window where it was."""
-        import qt_ui.main_window as main_window
-        import config
-        state = main_window.remembered()
-        config.update_config(lambda cfg: cfg.update(restoreWindow=state))
-        os.environ["CARMEN_RESTARTED"] = "1"
-        on_quit()
-        icon.stop()
+        """New code on disk and it imports cleanly: offer it as an update. Nothing restarts; the window's
+        Update button applies it to the running app, and the watcher starts again from the new state."""
+        code_watcher.clear_restart_request()
+        update_center.set_local(True)
 
-    code_watcher.start(stop_event, on_code_changed, _busy, _window_open, auto_updater.user_idle_seconds)
+    code_watcher.start(stop_event, on_code_changed, lambda: False, lambda: True, lambda: 10 ** 6)
+    update_center.watcher_restart = lambda: code_watcher.start(stop_event, on_code_changed, lambda: False,
+                                                               lambda: True, lambda: 10 ** 6)
 
     if DEV_MODE:
         def on_dev_restart():
