@@ -27,6 +27,7 @@ _CREATE_NO_WINDOW = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_N
 
 _restart_requested = threading.Event()
 _last_problem = None
+_generation = [0]
 
 
 def restart_was_requested():
@@ -37,6 +38,23 @@ def _tracked_sources():
     result = subprocess.run(["git", "ls-files", "--", "*.py", "*.qss"], cwd=REPO_ROOT, capture_output=True,
                             text=True, timeout=30, creationflags=_CREATE_NO_WINDOW)
     return [p for p in result.stdout.splitlines() if p] if result.returncode == 0 else []
+
+
+def file_stamps():
+    """{tracked file: (size, modified time)}"""
+    stamps = {}
+    for name in _tracked_sources():
+        try:
+            stat = os.stat(os.path.join(REPO_ROOT, name))
+            stamps[name] = (stat.st_size, stat.st_mtime_ns)
+        except OSError:
+            stamps[name] = None
+    return stamps
+
+
+def clear_restart_request():
+    """The watcher now only announces new code; nothing should restart when the app is later quit."""
+    _restart_requested.clear()
 
 
 def fingerprint():
@@ -87,10 +105,12 @@ def safe_to_restart(busy, window_open, idle_seconds):
     return idle is not None and idle >= IDLE_SECONDS
 
 
-def _loop(stop_event, on_ready, busy, window_open, idle_seconds):
+def _loop(stop_event, on_ready, busy, window_open, idle_seconds, generation=None):
     baseline = fingerprint()
     seen, changed_at, checked, verified = baseline, None, None, None
     while not stop_event.wait(CHECK_SECONDS):
+        if generation is not None and generation != _generation[0]:
+            return                                      # a newer watcher took over
         try:
             current = fingerprint()
             if current == baseline:
@@ -116,7 +136,8 @@ def _loop(stop_event, on_ready, busy, window_open, idle_seconds):
 
 
 def start(stop_event, on_ready, busy, window_open, idle_seconds):
-    thread = threading.Thread(target=_loop, args=(stop_event, on_ready, busy, window_open, idle_seconds),
+    _generation[0] += 1
+    thread = threading.Thread(target=_loop, args=(stop_event, on_ready, busy, window_open, idle_seconds, _generation[0]),
                               daemon=True, name="code-watcher")
     thread.start()
     return thread
