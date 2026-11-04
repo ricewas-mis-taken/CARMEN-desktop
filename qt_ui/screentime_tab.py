@@ -333,7 +333,7 @@ class ScreenTimeTab(QWidget):
         outer.addWidget(scroll, 1)
 
         self._timer = QTimer(self)
-        self._timer.timeout.connect(self.refresh)
+        self._timer.timeout.connect(self._refresh_if_visible)
         self._timer.start(REFRESH_MS)
 
         self.refresh()
@@ -434,6 +434,19 @@ class ScreenTimeTab(QWidget):
             self._legend.addWidget(label)
             self._legend_labels.append(label)
         self._legend.addStretch(1)
+
+    def _refresh_if_visible(self):
+        """Rebuilding every row every few seconds behind another page cost frames; it refreshes when shown."""
+        if self.isVisible():
+            self.refresh()
+        else:
+            self._stale = True
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if getattr(self, "_stale", False):
+            self._stale = False
+            self.refresh()
 
     def refresh(self):
         self._sync_device_buttons()

@@ -283,7 +283,7 @@ class FocusTab(QWidget):
         self._was_active = session_manager.get_status()["isActive"]
 
         self._status_timer = QTimer(self)
-        self._status_timer.timeout.connect(self._refresh_status)
+        self._status_timer.timeout.connect(self._refresh_status_if_visible)
         self._status_timer.start(STATUS_REFRESH_MS)
         self._refresh_status()
 
@@ -487,6 +487,20 @@ class FocusTab(QWidget):
         nuclear_dialog.open_nuclear_reason_dialog(_NullIcon(), tray.format_end_summary)
 
     # --- refresh ---
+
+    def _refresh_status_if_visible(self):
+        """Only while this page is showing: reading the config and tasks files every second from the
+        page behind another one was a hitch under the pen in Scribe. It refreshes again when shown."""
+        if self.isVisible():
+            self._refresh_status()
+        else:
+            self._stale = True
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if getattr(self, "_stale", False):
+            self._stale = False
+            self._refresh_status()
 
     def _refresh_status(self):
         status = session_manager.get_status()
