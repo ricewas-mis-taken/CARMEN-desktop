@@ -51,7 +51,7 @@ RECEIVER_STAMPED = {
 # Files under private/ that hold data. Synced ones are covered by the JSON
 # tests below or the SQLite tests above; the rest stay on the device by design
 # (see FEATURE_IMPLEMENT.txt item 7: the running session and history sync through sync_live).
-SYNCED_FILES = {"tasks.json", "board.json", "calendar.db", "session_history.json", "session_state.json", "quicknote.json", "scribe.json"}
+SYNCED_FILES = {"tasks.json", "board.json", "calendar.db", "session_history.json", "session_state.json", "quicknote.json", "scribe.json", "devices.json"}
 LOCAL_ONLY_FILES = {
     "config.json", "screentime.json",
     "daily_summaries.json", "active_review.json", "device_id.txt", "last_sync.txt",
@@ -59,9 +59,11 @@ LOCAL_ONLY_FILES = {
     "live_cursor.txt", "live_history_pushed.txt", "live_state_pushed.txt",
     "live_review_pushed.txt", "live_screentime_pushed.json", "live_settings_pushed.txt", "live_quicknote_pushed.txt", "hang_trace.txt", "taskbar_quiet_pending.json", "other_device_seen.txt", "screentime_remote.json", "parked_reviews.json",
     "scribe_stamp.txt", "live_scribe_pushed.txt",
+    "score.json",   # the Carmen Score ledger: keys are deterministic so a later merge cannot double count (see DESIGN_DECISIONS)
 }
 # Reference data that ships with the app, not something a user creates.
-SHIPPED_REFERENCE_FILES = {"screentime_domains.json", "screentime_domains_curated.json"}
+SHIPPED_REFERENCE_FILES = {"screentime_domains.json", "screentime_domains_curated.json",
+                          "manifest.json"}   # named in the tour's extension steps, not a data file
 
 
 @pytest.fixture

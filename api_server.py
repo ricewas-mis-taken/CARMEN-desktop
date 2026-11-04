@@ -54,7 +54,9 @@ from logging.handlers import RotatingFileHandler
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
+import activity
 import config
+import devices_store
 import installed_apps
 import review_store
 import screentime_categories
@@ -180,6 +182,10 @@ def _require_token(fn):
         # surface as a 500 instead of 401.
         if not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
             return jsonify({"error": "missing or invalid X-Carmen-Token header"}), 401
+        try:
+            devices_store.note_extension(request.headers.get("Origin", ""), request.headers.get("User-Agent", ""))
+        except Exception:
+            pass
         return fn(*args, **kwargs)
     return wrapper
 
@@ -288,6 +294,23 @@ def events_wait():
     timeout = max(0.0, min(timeout, _MAX_EVENT_WAIT_SECONDS))
     version, changed = state_events.wait_for_change(since, timeout)
     return jsonify({"version": version, "changed": changed})
+
+
+@app.route("/activity", methods=["GET"])
+def activity_state():
+    # Open like /status: the extension asks before crediting a stretch of screen time, so time spent away
+    # from the keyboard is not counted as use. Loopback only, and it reveals nothing but an idle count.
+    idle = activity.idle_seconds()
+    return jsonify({"idleSeconds": idle, "idleAfter": activity.IDLE_AFTER_SECONDS,
+                    "active": activity.is_active()})
+
+
+@app.route("/activity/media", methods=["POST"])
+@_require_token
+def activity_media():
+    body = request.get_json(silent=True) or {}
+    activity.note_media(bool(body.get("playing")))
+    return jsonify({"ok": True})
 
 
 @app.route("/device/info", methods=["GET"])
@@ -463,7 +486,11 @@ def session_pause():
     enforcement (handled entirely by the extension/window_tracker, not this
     endpoint) is untouched. Idempotent: no active session, or a session
     that's already paused, just returns the current status unchanged."""
-    return jsonify(session_manager.pause_session())
+    body = request.get_json(silent=True) or {}
+    reason = body.get("reason") if isinstance(body, dict) else None
+    if reason not in (None, "break", "interrupted", "stuck", "checking"):
+        reason = None
+    return jsonify(session_manager.pause_session(reason))
 
 
 @app.route("/session/resume", methods=["POST"])
@@ -719,6 +746,28 @@ def whitelist_domains_set():
     return jsonify({"domainWhitelist": cfg["domainWhitelist"]})
 
 
+
+def _unblock_details(body):
+    """(plan, minutes) from an unblock request. Both are optional (an older client sends neither); a plan
+    without a sensible length is kept without one."""
+    plan = body.get("plan")
+    minutes = body.get("minutes")
+    plan = plan.strip()[:_MAX_REASON_LENGTH] if isinstance(plan, str) and plan.strip() else None
+    if not isinstance(minutes, int) or isinstance(minutes, bool) or not (0 < minutes <= 240):
+        minutes = None
+    return plan, minutes
+
+
+def _unblock_gate_response(key):
+    """None when this unblock may go ahead, else the 429 telling the client how long to wait."""
+    import unblock_gate
+    allowed, wait = unblock_gate.check(key)
+    if allowed:
+        return None
+    return jsonify({"error": "wait", "waitSeconds": wait, "dailyBudget": unblock_gate.DAILY_FREE,
+                    "usedToday": unblock_gate.used_today()}), 429
+
+
 @app.route("/blocklist/apps/remove", methods=["POST"])
 @_require_token
 def blocklist_apps_remove():
@@ -742,11 +791,18 @@ def blocklist_apps_remove():
     # under the same lock as the write itself, rather than as a separate
     # check-then-act step here — a session can end in the gap between a
     # pre-check and the write actually happening.
+    import unblock_gate
+    plan, minutes = _unblock_details(body)
+    waiting = _unblock_gate_response(f"process:{process_name.strip().lower()}")
+    if waiting is not None:
+        return waiting
+    over = unblock_gate.used_today() >= unblock_gate.DAILY_FREE
     process_blocklist, exception_entry = session_manager.remove_process_from_blocklist(
-        process_name.strip(), reason.strip()
+        process_name.strip(), reason.strip(), plan, minutes
     )
     if exception_entry is None:
         return jsonify({"error": "no active session"}), 409
+    unblock_gate.record(exception_entry, over)
     return jsonify({"processBlocklist": process_blocklist, "exception": exception_entry})
 
 
@@ -771,11 +827,18 @@ def whitelist_domains_add():
     # See blocklist_apps_remove() above for why is_active() is checked
     # atomically inside add_domain_to_whitelist rather than as a separate
     # pre-check here.
+    import unblock_gate
+    plan, minutes = _unblock_details(body)
+    waiting = _unblock_gate_response(f"domain:{domain.strip().lower()}")
+    if waiting is not None:
+        return waiting
+    over = unblock_gate.used_today() >= unblock_gate.DAILY_FREE
     domain_whitelist, addition = session_manager.add_domain_to_whitelist(
-        domain.strip(), reason.strip()
+        domain.strip(), reason.strip(), plan, minutes
     )
     if addition is None:
         return jsonify({"error": "no active session"}), 409
+    unblock_gate.record(addition, over)
     return jsonify({"domainWhitelist": domain_whitelist, "addition": addition})
 
 

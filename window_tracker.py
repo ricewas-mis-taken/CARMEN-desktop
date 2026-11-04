@@ -11,6 +11,7 @@ import time
 # branch would raise NameError on its first tick -- silently, since the loop's
 # own try/except swallows it, spinning forever while doing nothing.
 import enforcer
+import activity
 import screentime_store
 import session_manager
 import taskbar_quiet
@@ -276,7 +277,7 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
             process_name = window["process_name"]
             pid = window["pid"]
             hwnd = window["hwnd"]
-            if process_name and not session_manager.is_exempt(process_name, pid):
+            if process_name and not session_manager.is_exempt(process_name, pid) and activity.is_active(process_name):
                 screentime_store.add_app_seconds(process_name, POLL_INTERVAL_SECONDS)
 
             if status["isActive"] and not status["isPaused"] and not status["isBreak"]:

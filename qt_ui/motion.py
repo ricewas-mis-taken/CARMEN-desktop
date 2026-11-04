@@ -25,6 +25,7 @@ REVEAL_MS = 620       # one card rising into place
 MAX_STAGGERED = 8     # cards after this arrive together with the last one
 
 _os_allows = None
+HOLD = 0              # >0 while something (the tour) covers the window: entrances would paint patches of its dimmed colours
 FORCE = None          # tests set this to turn motion on (pytest otherwise keeps it off)
 
 
@@ -228,7 +229,7 @@ class _EndOnResize(QObject):
 def reveal(page):
     """Page entrance: headings glide in from the left, the cards rise one after another, and rings,
     bars and grids that asked to (an attribute `replay_on_enter`) draw themselves again."""
-    if not enabled() or not page.isVisible():
+    if not enabled() or HOLD > 0 or not page.isVisible():
         return
     old = getattr(page, "_motion_stage", None)
     if old is not None:
@@ -246,6 +247,11 @@ def reveal(page):
     heads = _big_labels(page, cards)
     if not cards and not heads:
         return
+    # Only cards that are entirely on screen get the entrance: a clipped one would be pictured half black.
+    cards = [c for c in cards if c.visibleRegion().boundingRect().size() == c.size()]
+    heads = [h for h in heads if h.visibleRegion().boundingRect().size() == h.size()]
+    if not cards and not heads:
+        return
     window = page.window()
     image = window.grab().toImage()                       # the colour behind each card comes from here
     ratio = image.devicePixelRatio()
@@ -255,7 +261,9 @@ def reveal(page):
         origin = widget.mapTo(window, QPoint(0, 0))
         sx = max(0, min(image.width() - 1, int((origin.x() - 10) * ratio)))
         sy = max(0, min(image.height() - 1, int((origin.y() + widget.height() // 2) * ratio)))
-        return image.pixelColor(sx, sy)
+        colour = image.pixelColor(sx, sy)
+        colour.setAlpha(255)                              # never a see-through or half-black patch
+        return colour
 
     for label in heads:
         rect = QRect(label.mapTo(page, QPoint(0, 0)), label.size())

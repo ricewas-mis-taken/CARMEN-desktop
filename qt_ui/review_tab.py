@@ -394,15 +394,17 @@ class _CategoryRow(QPushButton):
 
 def _next_review_pill(problem):
     """(text, tone) for the "when is it due" pill on a problem's row."""
+    if problem.get("outOfRotation"):
+        return "Set aside", GREY
     when = problem.get("nextReviewDate")
     if not when:
         return "Not scheduled", GREY
     display = _next_review_display(when)
     if _is_overdue(when):
-        return f"Overdue · {display}", RED
+        return f"Overdue: {display}", RED
     if display == "Today":
         return "Due today", AMBER
-    return f"Next · {display}", GREY
+    return f"Next: {display}", GREY
 
 
 def _problem_meta(problem):
@@ -415,7 +417,7 @@ def _problem_meta(problem):
     fastest = _fastest_display(problem)
     if fastest != "--:--":
         parts.append(f"fastest {fastest}")
-    return " · ".join(parts)
+    return ", ".join(parts)
 
 
 class _ProblemRow(QFrame):
@@ -423,9 +425,10 @@ class _ProblemRow(QFrame):
     one quiet line, and the Start button. Click anywhere else to read its description;
     right-click to edit."""
 
-    def __init__(self, problem, is_current, on_start, on_open, on_edit, on_score=None, on_delete=None):
+    def __init__(self, problem, is_current, on_start, on_open, on_edit, on_score=None, on_delete=None, on_aside=None):
         super().__init__()
         self.problem = problem
+        self._on_aside = on_aside
         self._on_open = on_open
         self._on_edit = on_edit
         self._on_score = on_score
@@ -496,6 +499,11 @@ class _ProblemRow(QFrame):
         menu = QMenu(self)
         edit_action = menu.addAction("Edit Problem")
         score_action = menu.addAction("Score as a set...") if self._on_score else None
+        aside_action = None
+        if self._on_aside:
+            aside_action = menu.addAction(
+                "Put back in rotation" if self.problem.get("outOfRotation") else "Set aside (no cost)")
+            aside_action.setToolTip("An aside problem is never due, never overdue and never scored")
         delete_action = None
         if self._on_delete:
             menu.addSeparator()
@@ -510,6 +518,8 @@ class _ProblemRow(QFrame):
             self._on_edit(self.problem)
         elif chosen == score_action:
             self._on_score(self.problem)
+        elif chosen == aside_action:
+            self._on_aside(self.problem)
         elif chosen == delete_action:
             self._on_delete(self.problem)
 
@@ -525,8 +535,15 @@ class ReviewTab(QWidget):
 
         title = QLabel("Review")
         title.setStyleSheet(f"font-size: 26px; font-weight: 700; color: {INK}; background: transparent;")
-        title.setContentsMargins(28, 24, 28, 10)
-        layout.addWidget(title)
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(28, 24, 28, 10)
+        title_row.addWidget(title)
+        title_row.addStretch(1)
+        week_button = button("The week ahead", SECONDARY_STYLE, height=36)
+        self._week_button = week_button            # the tour points at it
+        week_button.clicked.connect(lambda: __import__("qt_ui.week_dialog", fromlist=["show"]).show())
+        title_row.addWidget(week_button)
+        layout.addLayout(title_row)
 
         # The one review banner for every topic, above the tab strip: a review
         # of one topic stays in view while another topic's tab is open.
@@ -1291,9 +1308,9 @@ class _TopicView(QWidget):
         everything = len(review_store.list_problems(self._topic_id, due_only=False))
         due = len(review_store.list_problems(self._topic_id, due_only=True))
         lead = f"{due} due" if due else "Nothing due"
-        text = f"{lead} · {everything} problem{'s' if everything != 1 else ''}"
+        text = f"{lead}, {everything} problem{'s' if everything != 1 else ''}"
         if in_view is not None and len(self._problems) != in_view:
-            text += f" · showing {len(self._problems)}"
+            text += f", showing {len(self._problems)}"
         self._summary_label.setText(text)
 
     def _render_table(self):
@@ -1311,7 +1328,7 @@ class _TopicView(QWidget):
                 problem, is_current=problem["id"] == current_id, on_start=self._start_problem,
                 on_open=lambda p: _DescriptionPopup(p), on_edit=self._open_edit_problem,
                 on_score=lambda p: _register_popup(_ScoreDialog(p, on_done=self.refresh)),
-                on_delete=self._delete_problem)
+                on_delete=self._delete_problem, on_aside=self._toggle_aside)
             self._rows.append(row)
             self._list_layout.addWidget(row)
         if not self._rows:
@@ -1350,6 +1367,10 @@ class _TopicView(QWidget):
         if self._subject_filter == subject_id:
             self._subject_filter = None
         review_store.delete_subject(subject_id)
+        self.refresh()
+
+    def _toggle_aside(self, problem):
+        review_store.set_out_of_rotation(problem["id"], not problem.get("outOfRotation"))
         self.refresh()
 
     def _open_edit_problem(self, problem):
@@ -1784,7 +1805,7 @@ class _ReviewBanner(QWidget):
         if self._end_session_on_finish:
             status, is_parked = self._linked_view()
             if status.get("isActive") and not is_parked and not status.get("isPaused"):
-                session_manager.pause_session()
+                session_manager.pause_session("aside")
         elif self._is_independent_review():
             review_store.park_active_review()
         else:
@@ -1935,7 +1956,7 @@ class _ReviewBanner(QWidget):
             self._start_time = None
             self._pause_btn.setText("Resume")
             if self._end_session_on_finish:
-                session_manager.pause_session()
+                session_manager.pause_session("aside")
 
     def _abandon_after_external_end(self):
         """Same cleanup as _end_early(), minus the session_manager.end_session()
@@ -2105,7 +2126,7 @@ def _make_room_for(task):
     if _can_drive_over(status):
         return True
     if status.get("source") == "task" and status.get("eventId") != task["id"]:
-        session_manager.pause_session()
+        session_manager.pause_session("aside")
         return True
     return False
 

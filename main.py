@@ -13,6 +13,14 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from calendar_log import logger
 
+try:                                    # a hard crash of the interpreter or Qt leaves its stack here
+    import faulthandler
+    import paths as _paths
+    _crash_file = open(_paths.private_path("crash.log"), "a", buffering=1)
+    faulthandler.enable(_crash_file, all_threads=True)
+except Exception:
+    pass
+
 import api_server
 import auto_updater
 from qt_ui import ui_kit
@@ -21,6 +29,7 @@ import desktop_menu
 import calendar_scheduler
 import calendar_toast
 import config
+import code_watcher
 import dev_watcher
 import enforcer
 import qt_gui_thread
@@ -39,6 +48,7 @@ stop_event = threading.Event()
 DEV_MODE = "--dev" in sys.argv[1:]
 # Started by the desktop right-click "QuickNote" when the app was not running yet.
 OPEN_QUICKNOTE = "--quicknote" in sys.argv[1:]
+AUTOSTARTED = "--autostart" in sys.argv[1:]
 
 STYLESHEET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "styles.qss")
 
@@ -107,6 +117,11 @@ def main():
     # thread below is the one that matters most — it can trigger
     # enforcer.py's lock overlays at any time once it starts).
     app = QApplication(sys.argv)
+    # Background threads (sync, saving, the API) share the interpreter lock with the interface. The default
+    # lets one of them hold it for 5 ms at a time, which is felt under a pen; 0.5 ms hands it back sooner.
+    sys.setswitchinterval(0.0005)
+    import gc
+    gc.set_threshold(10000, 20, 20)     # collect far less often: a big Scribe board holds ~200k objects
     import qt_ui.popup_fit as popup_fit
     popup_fit.install(app)                      # every popup opens a sensible size, on screen
     from PySide6.QtGui import QIcon
@@ -125,6 +140,17 @@ def main():
     if OPEN_QUICKNOTE:
         import qt_ui.quicknote as quicknote
         qt_gui_thread.run_on_gui_thread(quicknote.open_quicknote)
+
+    if os.environ.pop("CARMEN_RESTARTED", None):
+        # The app restarted itself into new code: the window comes back where it was.
+        import qt_ui.main_window as main_window
+        qt_gui_thread.run_on_gui_thread(main_window.reopen_after_restart)
+
+    elif AUTOSTARTED:
+        import config
+        if config.load_config().get("openOnStartup", True):
+            import qt_ui.main_window as main_window
+            qt_gui_thread.run_on_gui_thread(main_window.open_main_window)
 
     if DEV_MODE:
         # Opens the main window automatically on launch/dev-restart, purely
@@ -193,7 +219,31 @@ def main():
     # user-initiated Quit and an auto-update restart is what main() does
     # after app.exec() returns (os._exit vs. os.execv into the freshly
     # pulled code; see below).
-    auto_updater.start(stop_event, on_quit)
+    # Updates no longer restart the app: a button in the window applies them to the running copy.
+    import update_center
+    update_center.start_baseline()
+    update_center.watch(stop_event)
+
+    def _busy():
+        """A session, a review or a first attempt is running: not a moment to restart."""
+        import review_store
+        import session_manager
+        return bool(session_manager.get_status().get("isActive") or review_store.get_active_review()
+                    or review_store.get_first_attempt())
+
+    def _window_open():
+        import qt_ui.main_window as main_window
+        return main_window.remembered()["open"]
+
+    def on_code_changed():
+        """New code on disk and it imports cleanly: offer it as an update. Nothing restarts; the window's
+        Update button applies it to the running app, and the watcher starts again from the new state."""
+        code_watcher.clear_restart_request()
+        update_center.set_local(True)
+
+    code_watcher.start(stop_event, on_code_changed, lambda: False, lambda: True, lambda: 10 ** 6)
+    update_center.watcher_restart = lambda: code_watcher.start(stop_event, on_code_changed, lambda: False,
+                                                               lambda: True, lambda: 10 ** 6)
 
     if DEV_MODE:
         def on_dev_restart():
@@ -237,7 +287,9 @@ def main():
     polling_thread.start()
 
     import discord_presence
+    import score_store
     discord_presence.start(stop_event)
+    score_store.start(stop_event)
 
     # Instant re-minimize on click (hard lock only) -- a WinEvent hook, not
     # part of window_tracker's poll loop, so it needs a real Windows message
@@ -274,7 +326,8 @@ def main():
     exit_code = app.exec()  # main thread blocks here instead of icon.run()
 
     stop_event.set()
-    if auto_updater.restart_was_requested() or dev_watcher.restart_was_requested():
+    if (auto_updater.restart_was_requested() or dev_watcher.restart_was_requested()
+            or code_watcher.restart_was_requested()):
         # Re-exec in place (same PID, fresh interpreter) rather than
         # spawning a new process and exiting this one -- avoids a race
         # where the child tries to rebind api_server's port before this

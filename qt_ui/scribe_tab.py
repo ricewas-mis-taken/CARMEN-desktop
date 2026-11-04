@@ -8,6 +8,7 @@ is hidden or the app quits. Shape maths lives in scribe_geometry.py.
 """
 import collections
 import copy
+import gc
 import math
 import threading
 import time
@@ -60,6 +61,7 @@ from qt_ui.ui_kit import with_check_icon
 
 GRID = 20.0  # world units between grid lines at 100% zoom
 SAVE_DELAY_MS = 600
+_ADDED = object()         # marks an undo step that only adds one shape (see ScribeCanvas._push_added)
 MAX_UNDO = 100
 RULER = 20
 
@@ -154,11 +156,13 @@ class ScribeCanvas(QWidget):
         return layers, self.doc["activeLayer"]
 
     def _push_undo(self):
+        self._board_edited()               # every edit starts here: whatever follows may change the board
         self._undo.append(self._snapshot())
         del self._undo[:-MAX_UNDO]
         self._redo.clear()
 
     def _restore(self, snapshot):
+        self._board_edited()
         self.doc["layers"], self.doc["activeLayer"] = snapshot
         self.doc["activeLayer"] = min(self.doc["activeLayer"], len(self.doc["layers"]) - 1)
         self._sel = []
@@ -167,15 +171,62 @@ class ScribeCanvas(QWidget):
         self.changed.emit()
         self.update()
 
+    def _push_added(self, item):
+        """Undo for adding one shape: remember only that it was added (to the active layer), not a copy of
+        the whole board. On a board of thousands of strokes the copy cost ~35 ms at every pen-up, and a
+        hundred kept steps held half a million dicts."""
+        self._picture_fresh = False        # (the extent stays: one stroke is added to it in _commit)
+        self._undo.append((_ADDED, self.doc["activeLayer"], item))
+        del self._undo[:-MAX_UNDO]
+        self._redo.clear()
+
+    def _remove_last(self, layer_index):
+        layers = self.doc["layers"]
+        layer_index = min(layer_index, len(layers) - 1)
+        items = layers[layer_index]["items"]
+        item = items.pop() if items else None
+        self.doc["activeLayer"] = layer_index
+        self._sel = []
+        self._draft = None
+        self._board_edited()
+        self.layersChanged.emit()
+        self.changed.emit()
+        self.update()
+        return item
+
+    def _add_back(self, layer_index, item):
+        layers = self.doc["layers"]
+        layer_index = min(layer_index, len(layers) - 1)
+        layers[layer_index]["items"].append(item)
+        self.doc["activeLayer"] = layer_index
+        self._sel = []
+        self._draft = None
+        self._board_edited()
+        self.layersChanged.emit()
+        self.changed.emit()
+        self.update()
+
     def undo(self):
-        if self._undo:
+        if not self._undo:
+            return
+        step = self._undo.pop()
+        if step[0] is _ADDED:
+            item = self._remove_last(step[1])
+            self._redo.append((_ADDED, step[1], item if item is not None else step[2]))
+        else:
             self._redo.append(self._snapshot())
-            self._restore(self._undo.pop())
+            self._restore(step)
 
     def redo(self):
-        if self._redo:
+        if not self._redo:
+            return
+        step = self._redo.pop()
+        if step[0] is _ADDED:
+            self._add_back(step[1], step[2])
+            self._undo.append((_ADDED, step[1], step[2]))
+        else:
             self._undo.append(self._snapshot())
-            self._restore(self._redo.pop())
+            self._restore(step)
 
     # ---- options ---------------------------------------------------------
     def set_tool(self, tool):
@@ -200,6 +251,7 @@ class ScribeCanvas(QWidget):
         if not (self._last_edit and self._last_edit[0] == marker and now - self._last_edit[1] < 1.5):
             self._push_undo()
         self._last_edit = (marker, now)
+        self._board_edited()
         for item in self._sel:
             fn(item)
         self.update()
@@ -306,7 +358,10 @@ class ScribeCanvas(QWidget):
         held = getattr(self, "_bounds_hold", None)
         if hold is not None and held is not None and held[0] is hold:
             return held[1]
+        if self._bounds_fresh and self._bounds_shape == self._board_shape():
+            return self._bounds_full
         result = self._work_out_bounds()
+        self._bounds_full, self._bounds_fresh, self._bounds_shape = result, True, self._board_shape()
         self._drawing_bounds = (drawing, result) if drawing is not None else None
         self._bounds_hold = (hold, result) if hold is not None else None
         return result
@@ -364,6 +419,7 @@ class ScribeCanvas(QWidget):
 
     def layer_edited(self):
         """The layer list changed a name or visibility (no undo step)."""
+        self._board_edited()
         self.changed.emit()
         self.update()
 
@@ -404,6 +460,8 @@ class ScribeCanvas(QWidget):
             p.translate(-self.view["x"], -self.view["y"])
             self._paint_item(p, self._draft, self.zoom)
             p.restore()
+        elif not self._sel and not self._band and self._draft is None and self.prefs["tool"] == "freehand":
+            p.drawPixmap(0, 0, self._board_picture())      # nothing sits on top of the board: show the picture
         else:
             self._paint_background(p)
             p.setRenderHint(QPainter.Antialiasing, True)
@@ -426,15 +484,52 @@ class ScribeCanvas(QWidget):
         self._drawing_version = (drawing, version) if drawing is not None else None
         return version
 
+    def _picture_key(self, version):
+        return (self.width(), self.height(), self.devicePixelRatioF(), self.zoom, self.view["x"], self.view["y"],
+                self.prefs["background"], version, len(self.doc["layers"]),
+                tuple((layer["visible"], layer["opacity"]) for layer in self.doc["layers"]))
+
+    _picture_fresh = False     # True only while nothing on the board was edited since the picture was drawn
+    _bounds_full = None        # the extent of the whole board, kept while _bounds_fresh
+    _bounds_fresh = False
+    _bounds_shape = None
+
+    def _board_shape(self):
+        return tuple((layer["visible"], len(layer["items"])) for layer in self.doc["layers"])
+
+    def _board_edited(self):
+        """Something on the board may have changed: the picture and the board's extent are worked out again."""
+        self._picture_fresh = False
+        self._bounds_fresh = False
+
+    def _extend_picture(self, item, fresh):
+        """A stroke was just added: draw it onto the picture of the board instead of throwing the picture
+        away, so the next paint (and the next stroke) does not redraw thousands of strokes."""
+        known = getattr(self, "_picture", None)
+        layer = self.doc["layers"][self.doc["activeLayer"]]
+        if not fresh or known is None or not layer["visible"] or layer["opacity"] != 100:
+            return
+        old_key, image = known
+        new_key = self._picture_key(self._content_version())
+        if old_key[:7] != new_key[:7] or old_key[8:] != new_key[8:]:
+            return                     # the view, paper or layers changed too: rebuild as before
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.translate(self.width() / 2, self.height() / 2)
+        painter.scale(self.zoom, self.zoom)
+        painter.translate(-self.view["x"], -self.view["y"])
+        self._paint_item(painter, item, self.zoom)
+        painter.end()
+        self._picture = (new_key, image)
+        self._picture_fresh = True
+
     def _board_picture(self):
         """The paper and everything drawn so far, as one picture, kept until the view or the content changes."""
         ratio = self.devicePixelRatioF()
         version = self._content_version()
-        key = (self.width(), self.height(), ratio, self.zoom, self.view["x"], self.view["y"],
-               self.prefs["background"], version, len(self.doc["layers"]),
-               tuple((layer["visible"], layer["opacity"]) for layer in self.doc["layers"]))
+        key = self._picture_key(version)
         known = getattr(self, "_picture", None)
-        if known is not None and known[0] == key:
+        if known is not None and known[0] == key and self._picture_fresh:
             return known[1]
         image = QPixmap(int(self.width() * ratio), int(self.height() * ratio))
         image.setDevicePixelRatio(ratio)
@@ -444,6 +539,7 @@ class ScribeCanvas(QWidget):
         self._paint_scene(picture, self.width(), self.height(), self.zoom, self.view["x"], self.view["y"], ui=False)
         picture.end()
         self._picture = (key, image)
+        self._picture_fresh = True
         return image
 
     # ---- minimap ---------------------------------------------------------
@@ -483,47 +579,73 @@ class ScribeCanvas(QWidget):
 
     def _heat(self, rect, scale, ox, oy):
         """The heat cells, remembered while nothing under them has changed (it walks every point of every
-        stroke, so doing it on each mouse move made drawing lag)."""
+        stroke, so doing it on each mouse move made drawing lag). When the only change is strokes added
+        to the end of a layer, just those strokes are added, so pen-up on a big board stays instant."""
+        geometry = (round(rect.width()), round(rect.height()), round(scale, 5), round(ox), round(oy))
         version = self._content_version()
-        key = (round(rect.width()), round(rect.height()), round(scale, 5), round(ox), round(oy), version)
+        shape = tuple((id(layer), layer["visible"], len(layer["items"])) for layer in self.doc["layers"])
+        last = tuple(layer["items"][-1] if layer["items"] else None for layer in self.doc["layers"])
         known = getattr(self, "_heat_cache", None)
-        if known is not None and known[0] == key:
-            return known[1]
+        if known is not None and known["geometry"] == geometry:
+            if known["version"] == version:
+                return known["heat"]
+            if self._appended_only(known, shape, last):
+                cell = self.HEAT_CELL
+                for layer, before in zip(self.doc["layers"], known["shape"]):
+                    if layer["visible"]:
+                        for item in layer["items"][before[2]:]:
+                            self._heat_add_item(known["heat"], item, rect, scale, ox, oy, cell)
+                known.update(version=version, shape=shape, last=last)
+                return known["heat"]
         heat = self._heat_compute(rect, scale, ox, oy)
-        self._heat_cache = (key, heat)
+        self._heat_cache = {"geometry": geometry, "version": version, "shape": shape, "last": last, "heat": heat}
         return heat
+
+    @staticmethod
+    def _appended_only(known, shape, last):
+        old = known["shape"]
+        if len(old) != len(shape):
+            return False
+        for (lid0, vis0, n0), (lid1, vis1, n1), seen in zip(old, shape, known["last"]):
+            if lid0 != lid1 or vis0 != vis1 or n1 < n0:
+                return False
+        # every layer that did not grow must still end in the same item it did before
+        for (lid0, vis0, n0), (lid1, vis1, n1), seen, now in zip(old, shape, known["last"], last):
+            if n1 == n0 and now is not seen:
+                return False
+        return True
 
     def _heat_compute(self, rect, scale, ox, oy):
         """{(col, row): weight}: how much is drawn in each cell of the map, so busy areas glow."""
-        cell = self.HEAT_CELL
-        cols, rows = int(rect.width() // cell) + 1, int(rect.height() // cell) + 1
         heat = {}
-
-        def mark(mx, my, amount=1.0):
-            c, r = int((mx - rect.left()) // cell), int((my - rect.top()) // cell)
-            if 0 <= c < cols and 0 <= r < rows:
-                heat[(c, r)] = heat.get((c, r), 0.0) + amount
-
         for layer in self.doc["layers"]:
-            if not layer["visible"]:
-                continue
-            for item in layer["items"]:
-                if item.get("type") == "stroke" and len(item["pts"]) > 1:
-                    pts = item["pts"]
-                    for a, b in zip(pts, pts[1:]):
-                        ax, ay, bx, by = a[0] * scale + ox, a[1] * scale + oy, b[0] * scale + ox, b[1] * scale + oy
-                        steps = max(1, int(max(abs(bx - ax), abs(by - ay)) // (cell / 2)))
-                        for i in range(steps):
-                            t = i / steps
-                            mark(ax + (bx - ax) * t, ay + (by - ay) * t, 0.5)
-                    continue
-                x0, y0, x1, y1 = geo.bounds(item)
-                c0, r0 = int((x0 * scale + ox - rect.left()) // cell), int((y0 * scale + oy - rect.top()) // cell)
-                c1, r1 = int((x1 * scale + ox - rect.left()) // cell), int((y1 * scale + oy - rect.top()) // cell)
-                for c in range(max(c0, 0), min(c1, cols - 1) + 1):
-                    for r in range(max(r0, 0), min(r1, rows - 1) + 1):
-                        heat[(c, r)] = heat.get((c, r), 0.0) + 1.5
+            if layer["visible"]:
+                for item in layer["items"]:
+                    self._heat_add_item(heat, item, rect, scale, ox, oy, self.HEAT_CELL)
         return heat
+
+    @staticmethod
+    def _heat_add_item(heat, item, rect, scale, ox, oy, cell):
+        cols, rows = int(rect.width() // cell) + 1, int(rect.height() // cell) + 1
+        left, top = rect.left(), rect.top()
+        if item.get("type") == "stroke" and len(item["pts"]) > 1:
+            pts = item["pts"]
+            half = cell / 2
+            for a, b in zip(pts, pts[1:]):
+                ax, ay, bx, by = a[0] * scale + ox, a[1] * scale + oy, b[0] * scale + ox, b[1] * scale + oy
+                steps = max(1, int(max(abs(bx - ax), abs(by - ay)) // half))
+                for i in range(steps):
+                    t = i / steps
+                    c, r = int((ax + (bx - ax) * t - left) // cell), int((ay + (by - ay) * t - top) // cell)
+                    if 0 <= c < cols and 0 <= r < rows:
+                        heat[(c, r)] = heat.get((c, r), 0.0) + 0.5
+            return
+        x0, y0, x1, y1 = geo.bounds(item)
+        c0, r0 = int((x0 * scale + ox - left) // cell), int((y0 * scale + oy - top) // cell)
+        c1, r1 = int((x1 * scale + ox - left) // cell), int((y1 * scale + oy - top) // cell)
+        for c in range(max(c0, 0), min(c1, cols - 1) + 1):
+            for r in range(max(r0, 0), min(r1, rows - 1) + 1):
+                heat[(c, r)] = heat.get((c, r), 0.0) + 1.5
 
     def _paint_heat(self, p, rect, scale, ox, oy):
         heat = self._heat(rect, scale, ox, oy)
@@ -880,14 +1002,24 @@ class ScribeCanvas(QWidget):
         return pt
 
     def _commit(self, item):
-        self._push_undo()
+        gc.enable()
+        fresh = self._picture_fresh
+        extent, extent_fresh = self._bounds_full, self._bounds_fresh and self._bounds_shape == self._board_shape()
+        self._push_added(item)
         self._active_items().append(item)
+        if extent_fresh and extent is not None and self.doc["layers"][self.doc["activeLayer"]]["visible"]:
+            b = self._bounds_of(item)
+            self._bounds_full = (min(extent[0], b[0]), min(extent[1], b[1]), max(extent[2], b[2]), max(extent[3], b[3]))
+            self._bounds_fresh, self._bounds_shape = True, self._board_shape()
+        if item.get("type") == "stroke":
+            self._extend_picture(item, fresh)
         self._draft = None
         self._phase = 0
         self.changed.emit()
         self.update()
 
     def _cancel_draft(self):
+        gc.enable()
         self._draft = None
         self._phase = 0
         self._band = None
@@ -1080,6 +1212,7 @@ class ScribeCanvas(QWidget):
             self._commit(self._draft)
         elif tool == "freehand":
             self._draft = self._make("stroke", w)
+            gc.disable()          # no collection pause mid-stroke; it is turned back on when the pen lifts
         elif tool in ("line", "arrow", "curve"):
             self._draft = self._make(tool, self._snap(w))
             self._phase = 0
@@ -1148,6 +1281,7 @@ class ScribeCanvas(QWidget):
             if not self._moved:
                 self._push_undo()
                 self._moved = True
+            self._board_edited()
             for item in self._sel:
                 geo.translate(item, dx, dy)
             self._move_last = w
@@ -1694,7 +1828,7 @@ class ScribeTab(QWidget):
 
     def _write(self, doc):
         try:
-            scribe_store.save(doc)
+            scribe_store.save(doc, trusted=True)
         except OSError:
             self._save_failed = True   # stays dirty; the next change (or quit) tries again
 
@@ -1728,7 +1862,7 @@ class ScribeTab(QWidget):
         if not self._dirty:
             return
         try:
-            scribe_store.save(self.canvas.doc)
+            scribe_store.save(self.canvas.doc, trusted=True)
             self._dirty = False
             self._show_saved(True)
         except OSError:
@@ -1752,6 +1886,7 @@ class ScribeTab(QWidget):
         canvas._undo.clear()
         canvas._redo.clear()
         canvas._sel = []
+        canvas._board_edited()
         canvas._draft = None
         canvas.layersChanged.emit()
         canvas.update()
@@ -1811,7 +1946,8 @@ class ScribeTab(QWidget):
         side.show()
 
     def hideEvent(self, event):
-        self.flush()
+        gc.enable()                     # never left off if the page closes mid-stroke
+        self.flush()                    # quick now: the board's text is remembered between saves
         super().hideEvent(event)
 
     # ---- layout helpers --------------------------------------------------

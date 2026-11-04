@@ -545,7 +545,7 @@ def _advance_pomodoro_locked(now):
         # non-working spans from the tally, same mechanism a manual
         # pause_session() uses. Without this, a 5x(25+5) pomodoro would
         # credit 150 minutes of work instead of the 125 actually focused.
-        _state["violationLog"].append({"kind": "pause", "timestamp": now.isoformat()})
+        _state["violationLog"].append({"kind": "pause", "timestamp": now.isoformat(), "pauseReason": "rest"})
         _pending_phase_change["value"] = {
             "phase": "break",
             "cycle": pomo["currentCycle"],
@@ -716,6 +716,7 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None, restore_pa
                 "sessionId": session_id,
             }
         )
+        _score_pauses(session_id, start_time, now.isoformat(), summary_log)
 
     _state["isActive"] = False
     _state["startTime"] = None
@@ -1086,7 +1087,7 @@ def swap_with_parked(park_id=None):
             _state["pausedAt"] = now.isoformat()
             _state["frozenSecondsRemaining"] = remaining
             if not _state["isBreak"]:
-                _state["violationLog"].append({"kind": "pause", "timestamp": now.isoformat()})
+                _state["violationLog"].append({"kind": "pause", "timestamp": now.isoformat(), "pauseReason": "rest"})
         _resolve_open_violation_locked("process", now)
         _resolve_open_violation_locked("domain", now)
         chosen = _take_parked_locked(park_id)
@@ -1108,7 +1109,7 @@ def swap_with_parked(park_id=None):
     return status
 
 
-def pause_session():
+def pause_session(reason=None):
     """Freezes the countdown only — isActive, lockMode, blocklists, and
     violation tracking are all untouched, so lock enforcement keeps working
     exactly as before while paused. Idempotent: no active session, or a
@@ -1117,7 +1118,9 @@ def pause_session():
     The frozen secondsRemaining is computed once here and stored, rather than
     just remembering pausedAt, so get_status() can return the exact same
     number on every poll without redoing "now vs endTime" math that would
-    have to account for the pause itself."""
+    have to account for the pause itself.
+
+    `reason` is what the pause is for (see pause_budget). Left out, the pause counts against the budget."""
     with _lock:
         if not _state["isActive"] or _state["isPaused"]:
             return _get_status_locked()
@@ -1152,7 +1155,8 @@ def pause_session():
         # began -- worked-time replay must keep treating the whole break as
         # not worked, so no extra markers while isBreak.
         if not _state["isBreak"]:
-            _state["violationLog"].append({"kind": "pause", "timestamp": now.isoformat()})
+            _state["violationLog"].append(
+                {"kind": "pause", "timestamp": now.isoformat(), "pauseReason": reason or None})
         _save()
         state_events.bump()
         import review_store
@@ -1183,6 +1187,20 @@ def resume_session():
         _save()
         state_events.bump()
         return _get_status_locked()
+
+
+def _score_pauses(session_id, start_iso, end_iso, log):
+    """Escape pauses past the budget cost points, once per session (the event key is the session id)."""
+    try:
+        import pause_budget
+        import score_store
+        result = pause_budget.summarize({"violationLog": log, "startTime": start_iso, "endTime": end_iso})
+        if result["cost"] and session_id:
+            minutes = round(result["escape_seconds"] / 60)
+            score_store.add_event(f"pause:{session_id}", datetime.fromisoformat(end_iso).date(), "pauses",
+                                  -result["cost"], f"{minutes} min of pauses to look at other things")
+    except Exception:
+        pass
 
 
 def pop_pending_natural_end():
@@ -1349,7 +1367,7 @@ def resolve_domain_violation():
         _save()
 
 
-def add_domain_to_whitelist(domain, reason):
+def add_domain_to_whitelist(domain, reason, plan=None, minutes=None):
     """Adds domain to domainWhitelist mid-session (e.g. via POST
     /whitelist/domains/add) and logs why in domainWhitelistAdditions — the
     audit trail of every site let in outside the original allow list picked
@@ -1384,12 +1402,14 @@ def add_domain_to_whitelist(domain, reason):
             "reason": reason,
             "timestamp": now.isoformat(),
         }
+        if plan:
+            addition.update(plan=plan, minutes=minutes)
         _state["domainWhitelistAdditions"].append(addition)
         _save()
         return list(_state["domainWhitelist"]), addition
 
 
-def remove_process_from_blocklist(process_name, reason):
+def remove_process_from_blocklist(process_name, reason, plan=None, minutes=None):
     """Removes process_name from processBlocklist mid-session (e.g. via the
     lock overlay's "Unblock" button on a violation, or the "Pick Apps to
     Blocklist" picker's own remove flow, opened while a session is already
@@ -1421,6 +1441,8 @@ def remove_process_from_blocklist(process_name, reason):
             "reason": reason,
             "timestamp": now.isoformat(),
         }
+        if plan:
+            exception_entry.update(plan=plan, minutes=minutes)
         _state["processBlocklistExceptions"].append(exception_entry)
         _save()
         return list(_state["processBlocklist"]), exception_entry

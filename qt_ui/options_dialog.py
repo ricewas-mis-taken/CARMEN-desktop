@@ -1,7 +1,7 @@
 """Options: the popup behind the profile menu. For now it holds the colours."""
 import os
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QColorDialog, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
@@ -30,7 +30,7 @@ class OptionsDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle("Options")
-        self.resize(500, 500)
+        self.resize(500, 640)
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(24, 22, 24, 20)
         self._layout.setSpacing(10)
@@ -46,6 +46,15 @@ class OptionsDialog(QWidget):
         self._discord_names = self._config_box("Include task and problem names", "discordShowNames", False)
         self._discord_names.setEnabled(self._discord_on.isChecked())
         self._discord_on.toggled.connect(self._discord_names.setEnabled)
+        self._layout.addWidget(field_label("Browser extension"))
+        self._extension_note = role_label(self._extension_text(), "hint", wrap=True)
+        self._layout.addWidget(self._extension_note)
+        self._layout.addWidget(field_label("Start-up"))
+        self._config_box("Open Carmen's window when I sign in to Windows", "openOnStartup", True)
+        self._layout.addWidget(field_label("Help"))
+        self._layout.addWidget(role_label(
+            "Play the welcome tour again, or just the part you want.", "hint", wrap=True))
+        self._add_help()
         self._layout.addWidget(role_label(
             "Buttons and numbers pick up a new colour the next time Carmen starts.", "hint", wrap=True))
         self._layout.addStretch(1)
@@ -57,6 +66,52 @@ class OptionsDialog(QWidget):
         self._layout.addLayout(row)
         self._fill()
         self.show()
+
+    def _add_help(self):
+        from qt_ui import tour_runner
+        from qt_ui.ui_kit import FlowLayout
+        play = accent(QPushButton("Play the whole tour"))
+        play.clicked.connect(lambda: self._play(None))
+        self._layout.addWidget(play, 0, Qt.AlignLeft)
+        holder = QWidget()
+        flow = FlowLayout(holder, spacing=6)
+        for chapter_id, title, summary in tour_runner.chapter_list():
+            chip = QPushButton(title)
+            chip.setToolTip(summary)
+            chip.setCursor(Qt.PointingHandCursor)
+            chip.setStyleSheet(SECONDARY_STYLE)
+            chip.clicked.connect(lambda _=False, c=chapter_id: self._play([c]))
+            flow.addWidget(chip)
+        self._layout.addWidget(holder)
+
+    def _play(self, chapter_ids):
+        """Closes Options, then starts the tour over the main window."""
+        from qt_ui import tour_runner
+        self.close()
+        QTimer.singleShot(250, lambda: tour_runner.start(chapter_ids))
+
+    @staticmethod
+    def _extension_text():
+        """Which computers have the extension linked, in which browser, and whether it is talking right now."""
+        import devices_store
+        rows = [r for r in devices_store.summary() if r["links"]]
+        if not rows:
+            return "Not linked yet. Install the extension and paste its key, and it will show up here."
+        pcs, links, live = devices_store.totals()
+        lines = [f"Linked on {pcs} computer{'s' if pcs != 1 else ''}, {links} browser{'s' if links != 1 else ''}, {live} connected now."]
+        for row in rows:
+            who = f" ({row['account']})" if row["account"] else " (not signed in)"
+            name = row["computer"] + (" - this computer" if row["this_pc"] else "")
+            parts = []
+            for link in row["links"]:
+                if link["connected"]:
+                    parts.append(f"{link['browser']}: connected")
+                else:
+                    mins = link["seen_seconds"] / 60
+                    ago = "a while ago" if mins == float("inf") else (f"{round(mins)} min ago" if mins < 90 else f"{round(mins / 60)} h ago")
+                    parts.append(f"{link['browser']}: last seen {ago}")
+            lines.append(f"{name}{who} - " + ", ".join(parts))
+        return "\n".join(lines)
 
     def _config_box(self, text, key, default):
         box = QCheckBox(text)

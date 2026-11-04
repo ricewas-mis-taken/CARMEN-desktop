@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import threading
+import time
 import uuid
 import paths
 import server_clock
@@ -47,6 +48,8 @@ DEFAULT_PREFS = {
 }
 
 _lock = threading.Lock()
+SETTLE_SECONDS = 20   # the board is only shared once it has been left alone this long
+_changed_at = 0.0     # monotonic time of the last edit
 
 
 def new_layer(name, layer_id=None):
@@ -131,10 +134,11 @@ def _valid_item(item):
     return True
 
 
-def _clean_layer(raw, index):
+def _clean_layer(raw, index, trusted=False):
     if not isinstance(raw, dict):
         return None
-    items = [i for i in raw.get("items", []) if isinstance(i, dict) and _valid_item(i)] \
+    check = (lambda item: True) if trusted else _valid_item
+    items = [i for i in raw.get("items", []) if isinstance(i, dict) and check(i)] \
         if isinstance(raw.get("items"), list) else []
     layer_id = raw.get("id") if isinstance(raw.get("id"), str) and raw.get("id") else uuid.uuid4().hex[:8]
     name = raw.get("name") if isinstance(raw.get("name"), str) and raw.get("name") else f"Layer {index + 1}"
@@ -146,14 +150,16 @@ def _clean_layer(raw, index):
     }
 
 
-def clean_doc(raw):
+def clean_doc(raw, trusted=False):
     """A valid document from whatever was read -- anything missing or malformed
-    falls back to its default, so a damaged file never stops Scribe opening."""
+    falls back to its default, so a damaged file never stops Scribe opening.
+    `trusted` is for a board the canvas itself holds (every shape in it was already checked when it was
+    loaded or drawn): the structure is still tidied, but not every point of every stroke again."""
     if not isinstance(raw, dict):
         return default_doc()
     layers = []
     for i, layer in enumerate(raw.get("layers") if isinstance(raw.get("layers"), list) else []):
-        cleaned = _clean_layer(layer, i)
+        cleaned = _clean_layer(layer, i, trusted)
         if cleaned:
             layers.append(cleaned)
     if not layers:
@@ -201,19 +207,55 @@ def _write_stamp(stamp):
         f.write(stamp)
 
 
-def _write_doc(cleaned):
+def _write_doc(cleaned, fingerprint=None):
+    """Writes the board. With a fingerprint (the text of every item, already worked out) the file is put
+    together from that text and written in one go: the json module's own file writer is pure Python, and
+    on a 6 MB board it kept the interface waiting for a third of a second on every save."""
     os.makedirs(os.path.dirname(PATH), exist_ok=True)
     tmp = PATH + ".tmp"
+    if fingerprint is None:
+        text = json.dumps(cleaned)
+    else:
+        head = json.dumps({k: v for k, v in cleaned.items() if k != "layers"})[:-1]
+        layers = []
+        for (layer_id, name, visible, opacity, texts) in fingerprint:
+            meta = json.dumps({"id": layer_id, "name": name, "visible": visible, "opacity": opacity})[:-1]
+            layers.append(meta + ', "items": [' + ",".join(texts) + "]}")
+        text = head + ', "layers": [' + ",".join(layers) + "]}"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(cleaned, f)
+        f.write(text)
     os.replace(tmp, PATH)
 
 
-def _fingerprint(layers):
+_text_cache = {}     # id(points list) -> (points list, stamp, text): a stroke's text, kept between saves
+
+
+def _item_text(item, keep):
+    """One item as JSON text. A stroke's text is remembered while its points are the same list with the
+    same ends, length and style, so a save only pays for what changed (moving a shape builds a new list)."""
+    pts = item.get("pts")
+    if item.get("type") == "stroke" and isinstance(pts, list) and pts:
+        stamp = (len(pts), tuple(pts[0]), tuple(pts[-1]), tuple(sorted((k, v) for k, v in item.items() if k != "pts")))
+        hit = _text_cache.get(id(pts))
+        if hit is not None and hit[0] is pts and hit[1] == stamp:
+            keep[id(pts)] = hit
+            return hit[2]
+        text = json.dumps(item, sort_keys=True)
+        keep[id(pts)] = (pts, stamp, text)
+        return text
+    return json.dumps(item, sort_keys=True)
+
+
+def _fingerprint(layers, remember=True):
     """The layers as text, one small piece per item. Dumping the whole board in one call held the interface
     for ~40 ms; item by item it lets the pen run in between. Text, not the dicts, because items are edited in place."""
-    return [(layer["id"], layer["name"], layer["visible"], layer["opacity"],
-             [json.dumps(item, sort_keys=True) for item in layer["items"]]) for layer in layers]
+    global _text_cache
+    keep = {}
+    result = [(layer["id"], layer["name"], layer["visible"], layer["opacity"],
+               [_item_text(item, keep) for item in layer["items"]]) for layer in layers]
+    if remember:
+        _text_cache = keep       # only what is still on the board stays remembered
+    return result
 
 
 def _layers_text(layers):
@@ -244,15 +286,17 @@ def notify_remote():
     _call(_remote_listeners)
 
 
+_too_big_for = None   # the stamp of a board that was over MAX_SYNC_BYTES
 _saved_text = None   # the layers as last written, so a save need not re-read and re-parse the file
 
 
-def save(doc):
+def save(doc, trusted=False):
     """Writes the whole board atomically, so a crash mid-save never leaves a
     half-written file in place of the last good one. Panning, zooming and option
-    changes stay on this computer; only a change to the layers is stamped (and so shared)."""
+    changes stay on this computer; only a change to the layers is stamped (and so shared).
+    `trusted`: the board is the canvas's own (see clean_doc)."""
     global _saved_text
-    cleaned = clean_doc(doc)
+    cleaned = clean_doc(doc, trusted)
     layers = _fingerprint(cleaned["layers"])
     changed = False
     with _lock:
@@ -260,16 +304,28 @@ def save(doc):
         if previous is None:
             try:
                 with open(PATH, "r", encoding="utf-8") as f:
-                    previous = _fingerprint(clean_doc(json.load(f))["layers"])
+                    previous = _fingerprint(clean_doc(json.load(f))["layers"], remember=False)
             except (OSError, ValueError):
                 previous = None
-        _write_doc(cleaned)
+        _write_doc(cleaned, layers)
         _saved_text = (PATH, layers)
         if previous is None or previous != layers:
             _write_stamp(server_clock.next_stamp(_read_stamp()))
+            _mark_changed()
             changed = True
     if changed:
         _call(_change_listeners)
+
+
+def _mark_changed():
+    global _changed_at
+    _changed_at = time.monotonic()
+
+
+def is_settled():
+    """False while the board is being drawn on. Sharing it means re-reading and re-encoding the whole
+    board, which stalls the app for a moment, so it waits until you stop."""
+    return time.monotonic() - _changed_at >= SETTLE_SECONDS
 
 
 def export():
@@ -284,8 +340,12 @@ def export():
                 return None
             stamp = server_clock.next_stamp()
             _write_stamp(stamp)
+    global _too_big_for
+    if _too_big_for == stamp:
+        return None
     text = _layers_text(doc["layers"])
     if len(text.encode("utf-8")) > MAX_SYNC_BYTES:
+        _too_big_for = stamp         # not shared; no need to measure it again until it changes
         return None
     return {"layers": doc["layers"], "updatedAt": stamp}
 

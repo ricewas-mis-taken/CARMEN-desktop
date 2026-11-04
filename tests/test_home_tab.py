@@ -94,6 +94,8 @@ def test_home_shows_a_running_session_with_pause_and_resume(qtbot, isolate_state
     labels = {b.text() for b in tab.findChildren(home.QPushButton)}
     assert "Pause" in labels and "Open Focus" in labels and "Start a session" not in labels
     next(b for b in tab.findChildren(home.QPushButton) if b.text() == "Pause").click()
+    from qt_ui import pause_reason
+    pause_reason._OPEN[-1]._choose("break")
     assert sm.get_status()["isPaused"]
     assert "Resume" in {b.text() for b in tab.findChildren(home.QPushButton)}
 
@@ -117,10 +119,12 @@ def test_a_weekly_goal_shows_today_share_not_the_whole_week(isolate_state, tmp_p
     task = tasks_store.create_task({"name": "Weekly", "targetMinutes": 600, "recurrence": "biweekly_total"})
     today = date.today()
     data = home.summary([task], [], 0, today)
-    item = data["open"][0]
+    item = data["suggested"][0]
     days = tasks_store.days_left_in_period(task, today)
-    assert round(item["required"], 3) == round(600 / days, 3)
-    assert item["period_left"] == 600 and item["days_left"] == days
+    assert round(item["minutes"], 3) == round(600 / days, 3)
+    assert item["days_left"] == days
+    # Suggested only: it never becomes a daily goal or part of the day's total.
+    assert data["open"] == [] and data["total_required"] == 0 and data["done"] == 0
 
 
 def test_year_grid_reports_the_hovered_day(qtbot):

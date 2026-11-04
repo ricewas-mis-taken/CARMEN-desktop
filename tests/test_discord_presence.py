@@ -7,7 +7,7 @@ def _status(**kw):
             "eventTitle": "Maths", **kw}
 
 
-POMO = {"currentCycle": 2, "totalCycles": 4}
+POMO = {"currentCycle": 2, "totalCycles": 4, "focusMinutes": 25, "breakMinutes": 5}
 
 
 def test_idle_shows_nothing():
@@ -16,7 +16,7 @@ def test_idle_shows_nothing():
 
 def test_pomodoro_focus_counts_down_and_shows_the_cycle():
     card = dp.describe(_status(pomodoro=POMO), None)
-    assert card["details"] == "Pomodoro focus" and card["state"] == "Cycle"
+    assert card["details"] == "Pomodoro focus" and card["state"] == "25 min focus"
     assert card["party_size"] == [2, 4] and card["end"] and "start" not in card
 
 
@@ -38,9 +38,50 @@ def test_reviews_and_burnout_count_up():
     burnout = dp.describe(_status(isBurnout=True), None)
     assert burnout["details"] == "Working until burnout" and burnout["start"] and "end" not in burnout
     side = dp.describe({"isActive": False}, {"problemName": "P", "isPaused": True})
-    assert side is None
+    assert side["state"] == "Paused · 0 min elapsed"
 
 
 def test_paused_shows_no_clock():
     card = dp.describe(_status(isPaused=True), None)
-    assert card is None
+    assert card["state"].startswith("Paused · ") and card["state"].endswith(" left")
+    assert "start" not in card and "end" not in card
+
+
+def test_a_break_says_how_long_it_is():
+    card = dp.describe(_status(pomodoro=POMO, isBreak=True), None)
+    assert card["state"] == "5 min break"
+
+
+def test_a_custom_length_says_its_length_and_counts_down():
+    card = dp.describe(_status(), None)
+    assert card["state"] == "25 min session" and card["end"]
+
+
+def test_quick_switching_is_not_shown(monkeypatch):
+    import threading
+    sent = []
+
+    class Client:
+        def update(self, **kw): sent.append(kw)
+        def clear(self): sent.append(None)
+
+    p = dp.Presence(threading.Event())
+    p._client = Client()
+    cards = iter([dp.describe(_status(isBurnout=True), None), dp.describe(_status(), None),
+                  dp.describe(_status(isBurnout=True), None), dp.describe(_status(isBurnout=True), None)])
+    monkeypatch.setattr(dp, "describe", lambda *a, **k: next(cards))
+    monkeypatch.setattr(dp.session_manager, "get_status", lambda: {})
+    monkeypatch.setattr(dp.review_store, "get_active_review", lambda: None)
+    for _ in range(4):
+        p._update({})
+    assert len(sent) == 1 and sent[0]["details"] == "Working until burnout"
+
+
+def test_paused_shows_minutes_left_for_a_countdown_and_elapsed_for_a_stopwatch():
+    left = dp.describe(_status(isPaused=True, secondsRemaining=754), None)
+    assert left["state"] == "Paused · 13 min left"
+    watch = dp.describe(_status(isPaused=True, isBurnout=True, startTime="2026-11-03T10:00:00",
+                                pausedAt="2026-11-03T11:20:00"), None)
+    assert watch["state"] == "Paused · 1 h 20 min elapsed"
+    review = dp.describe({"isActive": False}, {"problemName": "P", "isPaused": True, "elapsedSeconds": 600})
+    assert review["state"] == "Paused · 10 min elapsed"

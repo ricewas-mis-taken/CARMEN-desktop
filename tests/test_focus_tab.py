@@ -5,6 +5,7 @@ import pytest
 
 import qt_ui.focus_tab as focus_tab
 import session_manager
+from qt_ui import pause_reason
 
 # The Focus tab also reads the review engine, so every test here runs on a throwaway review
 # database, never the real one.
@@ -45,8 +46,11 @@ def test_pause_resume_button_toggles_session_state(qtbot, isolate_state):
     qtbot.addWidget(tab)
 
     assert not session_manager.get_status()["isPaused"]
-    tab._pause_resume()
+    tab._pause_resume()                                   # asks what the pause is for
+    assert not session_manager.get_status()["isPaused"]
+    pause_reason._OPEN[-1]._choose("break")
     assert session_manager.get_status()["isPaused"]
+    assert session_manager._state["violationLog"][-1]["pauseReason"] == "break"
     tab._pause_resume()
     assert not session_manager.get_status()["isPaused"]
 
@@ -156,7 +160,7 @@ def test_a_running_review_is_the_big_time_and_the_session_sits_behind_it(qtbot, 
     assert tab._clock_label.text() in ("04:38", "04:39", "04:40") and tab._clock_caption.text() == "elapsed"
     assert "Chinese" in tab._status_label.text() and "hard" in tab._status_label.text()
     assert tab._behind_row is not None and tab._behind_row.name_label.text() == "Chinese"
-    assert tab._summary_label.text() == "1 reviewing · 1 waiting"
+    assert tab._summary_label.text() == "1 reviewing, 1 waiting"
 
 
 def test_pause_pauses_the_review_not_the_session(qtbot, isolate_state, isolate_review_db):

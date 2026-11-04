@@ -28,6 +28,10 @@ DEFAULT_CONFIG = {
     # Discord "Playing" status (discord_presence.py); names of tasks/problems stay hidden unless asked for.
     "discordPresence": True,
     "discordShowNames": False,
+    "restoreWindow": {},        # set just before the app restarts itself into new code: {"open", "page"}
+    "openOnStartup": True,      # sign-in launches Carmen with its window open, not only in the tray
+    "tourDone": False,          # the welcome tour has been shown (or skipped) once
+    "reportCardWeek": "",       # the Monday of the week whose report card was last shown
     "quickNoteGeometry": None,
     "last_hide_taskbar_badges": False,
     "last_stop_taskbar_flashing": False,

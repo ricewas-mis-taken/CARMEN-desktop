@@ -33,6 +33,7 @@ import config
 import picker_gui
 import review_store
 import session_manager
+from qt_ui import pause_reason
 import tasks_store
 import qt_ui.nuclear_dialog as nuclear_dialog
 import qt_ui.picker_dialogs as picker_dialogs
@@ -190,10 +191,10 @@ class _WaitingRow(QFrame):
         self._dot.setStyleSheet(f"background:{color};border-radius:5px;")
         self.name_label.setText(_session_name(session))
         big, caption = _clock_for(session)
-        detail = f"{big} {caption} · {_session_kind(session)}"
+        detail = f"{big} {caption}, {_session_kind(session)}"
         if session.get("pomodoro"):
             pomo = session["pomodoro"]
-            detail += f" · pomodoro {pomo['currentCycle']}/{pomo['totalCycles']}"
+            detail += f", pomodoro {pomo['currentCycle']}/{pomo['totalCycles']}"
         self.detail_label.setText(detail)
 
 
@@ -218,7 +219,7 @@ class _NoteRow(QFrame):
         self.name_label.setStyleSheet(f"font-size:14.5px;font-weight:700;color:{INK};background:transparent;")
         text.addWidget(self.name_label)
         self.detail_label = ElidedLabel(
-            f"{format_clock(review.get('elapsedSeconds', 0))} elapsed · paused · resume it in the Review tab")
+            f"{format_clock(review.get('elapsedSeconds', 0))} elapsed, paused, resume it in the Review tab")
         self.detail_label.setStyleSheet(f"font-size:12.5px;color:{MUTED};background:transparent;")
         text.addWidget(self.detail_label)
         row.addLayout(text, 1)
@@ -282,7 +283,7 @@ class FocusTab(QWidget):
         self._was_active = session_manager.get_status()["isActive"]
 
         self._status_timer = QTimer(self)
-        self._status_timer.timeout.connect(self._refresh_status)
+        self._status_timer.timeout.connect(self._refresh_status_if_visible)
         self._status_timer.start(STATUS_REFRESH_MS)
         self._refresh_status()
 
@@ -377,7 +378,7 @@ class FocusTab(QWidget):
                  f"{sites} website{'s' if sites != 1 else ''} allowed"]
         if profiles:
             parts.append(f"{profiles} browser profile{'s' if profiles != 1 else ''} blocked")
-        self._rules_summary.setText(" · ".join(parts))
+        self._rules_summary.setText(", ".join(parts))
 
     def _start_clicked(self):
         minutes = self._chosen_minutes()
@@ -462,7 +463,7 @@ class FocusTab(QWidget):
         if session_manager.get_status()["isPaused"]:
             session_manager.resume_session()
         else:
-            session_manager.pause_session()
+            pause_reason.ask(self, self._refresh_status)
 
     def _resume_session_over_review(self):
         """"Resume" on the session behind a review: the review is set aside, the session comes back."""
@@ -486,6 +487,20 @@ class FocusTab(QWidget):
         nuclear_dialog.open_nuclear_reason_dialog(_NullIcon(), tray.format_end_summary)
 
     # --- refresh ---
+
+    def _refresh_status_if_visible(self):
+        """Only while this page is showing: reading the config and tasks files every second from the
+        page behind another one was a hitch under the pen in Scribe. It refreshes again when shown."""
+        if self.isVisible():
+            self._refresh_status()
+        else:
+            self._stale = True
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if getattr(self, "_stale", False):
+            self._stale = False
+            self._refresh_status()
 
     def _refresh_status(self):
         status = session_manager.get_status()
@@ -521,7 +536,7 @@ class FocusTab(QWidget):
             waiting += 1  # a paused review
         if waiting:
             parts.append(f"{waiting} waiting")
-        self._summary_label.setText(" · ".join(parts) if parts else "Nothing running")
+        self._summary_label.setText(", ".join(parts) if parts else "Nothing running")
 
     def _show_chip(self, text, tone):
         self._now_chip.setText(text)
@@ -616,7 +631,7 @@ class FocusTab(QWidget):
     def _update_waiting(self, parked, set_aside):
         total = len(parked) + len(set_aside)
         self._waiting_title.setVisible(bool(total))
-        self._waiting_title.setText(f"Waiting · {total}")
+        self._waiting_title.setText(f"Waiting: {total}")
         keep = {p.get("parkId") for p in parked}
         for park_id in list(self._waiting_rows):
             if park_id not in keep:
@@ -648,7 +663,7 @@ class FocusTab(QWidget):
                 self._waiting_box.addWidget(row)
             else:
                 self._review_rows[token].detail_label.setText(
-                    f"{format_clock(review.get('elapsedSeconds', 0))} elapsed · paused · resume it in the Review tab")
+                    f"{format_clock(review.get('elapsedSeconds', 0))} elapsed, paused, resume it in the Review tab")
         self._parked_note = ""
 
     def _update_start_note(self, status, active):

@@ -905,3 +905,117 @@ two that lay out a table or timeline), at most 90% of the screen, centres it ove
 and, if its content needs more height than the screen, moves its layout into a scroll area so it scrolls
 instead of being cut off. Per-dialog resize() calls stay as the preferred size. Rejected: editing every dialog
 (they drift again) and a fixed size for all (a yes/no box is not an Add Problem form).
+
+2026-11-03  Scribe pen-up stall on a big board
+  Fork: speed up the full minimap heat walk, or stop doing it on pen-up.
+  Chose: keep the heat cache and, when the only change is strokes appended to the end of layers, add just
+  those strokes (verified against a full recompute in a test). Cause found by loading the real 4,600-stroke
+  board: drawing was ~1 ms per move, but every pen-up re-walked ~100k points on the UI thread (~110 ms).
+  Now ~20 ms. Any other change (zoom, pan past bounds, delete, undo) still recomputes in full.
+
+2026-11-03  Scribe lag: cloud sync stalled drawing
+  Cause: each save made the sync lane re-read and re-encode the whole 4.9 MB board (export + two json dumps), each one a single C call holding the GIL ~100 ms, so the UI froze mid-stroke and got worse as the board grew.
+  Fork: chunk the encoding, or sync later. Chose to wait: the board is only gathered once untouched for 20 s (scribe_store.is_settled). Other tables are unaffected; the board still syncs, just after you stop.
+
+2026-11-03  Carmen Score: permanent 0-1000 ledger
+  Replaces the rolling 4-week idea: the score starts at 500, goes up and down, is clamped to 0..1000 after every
+  event and is never reset by a week or month ending. It is the sum of a ledger (private/score.json) of events with
+  deterministic keys (goal:<date>, period:<task>:<start>, review:<id>:<time>, overdue:<problem>:<due>:<day>), and
+  an existing key is ignored, so settling twice or catching up after days closed can't double count.
+  Judged only from the day the ledger began; catch-up is capped at 60 days.
+  Week / month / custom goals count ONLY when their period ends (+20 met, down to -30 untouched); per-day goals
+  daily (+12 .. -18); reviews on time +6, late costs 3 a day, overdue -3 a day for at most 10 days per due date.
+  Out-of-rotation problems are never due or scored.
+  Fork: sync the ledger or keep it local. Kept local for now (listed in test_sync_coverage). Because event keys are
+  deterministic from synced data, merging two devices' ledgers later is a union by key. Not built yet.
+  Approximation: past days' overdue lists use today's next_review_date (history of due dates isn't kept).
+
+2026-11-03  Week page, report card, honest pauses, unblock budget, set-aside problems
+  Out of rotation: review_problems.out_of_rotation (+ original_due_date), synced. An aside problem is never due,
+  overdue or scored; bringing it back restarts its first interval from today so it can't return overdue.
+  Moving a review: earlier is free; each day later is 3 points, up to 7 days past its ORIGINAL due date (remembered
+  on the first push later so repeated moves can't launder lateness). The cost lands when it is finished late.
+  Week page (week_plan.py + qt_ui/week_tab.py): reviews per day plus daily-goal minutes; a day is heavy at 25%
+  above the week's average load (never under 40 min). Week/month goals are suggestions there too (no load).
+  Drag and drop shows the cost while hovering; the drop calls review_store.move_review, which is what is tested.
+  Pauses (pause_budget.py): every pause has a reason in the session log. break / interrupted / stuck / the automatic
+  pomodoro rest / "aside" (Carmen parking a session) are free. "checking" and NO reason count against a budget of 10%
+  of the session (min 2 min); past it 1 point per 3 minutes, max 15 a session. No reason deliberately counts as
+  checking so an old extension or the tray can't use "nothing" as the free option.
+  Unblocks (unblock_gate.py): 3 free a day, then a 2 minute wait enforced by the desktop (first request starts it,
+  429 with waitSeconds). plan + minutes are optional in the API; a detailed unblock inside the budget earns +1,
+  one past it costs 3. A client that sends no plan is never penalised (the lock overlay and old extensions can't ask).
+  Report card (report_card.py): Monday to Sunday, shown once the first time Carmen opens after a week ends
+  (config reportCardWeek) and from the Week page. Grades are centred on the start: A 800, B 650, C 500, D 350.
+  NOT BUILT YET: the extension's unblock prompt (why / plan / how long / wait countdown) and its pause reason
+  picker, in chrome/ and firefox/. Until then an extension pause counts as "checking" and an extension unblock
+  works without a plan. The "did you do what you said?" follow-up is also not built.
+
+2026-11-03  Scribe lag, full audit (real 5,600-stroke, 6 MB board, whole app running)
+  Method: a UI-thread watchdog (5 ms tick + a sampler that grabs the main thread's stack when it is late) while
+  scripted strokes are drawn at pen rate in the real MainWindow with a copy of the real data. Before: 29 stalls
+  over 40 ms in 15 strokes (1.6 s total). After: 1 stall in 25 strokes.
+  Causes found, biggest first:
+   1. Every save (after every stroke AND every pan, since pans emit `changed`) took 500-780 ms of Python on a
+      background thread (clean_doc re-checked every point, a per-item fingerprint, then json.dump, which is pure
+      Python). Threads share the GIL, so the pen waited a switch interval (5 ms) on every event for that whole time.
+      Fix: a stroke's JSON text is remembered between saves keyed by its point list (moving builds a new list), the
+      file is written from that text in one write, and the canvas's own board skips per-point re-validation.
+      A save after one new stroke is now ~17 ms. Also sys.setswitchinterval(0.0005).
+   2. Pen-up copied every item dict for undo (~35 ms, and 100 steps held ~500k dicts for the GC). Adding a stroke now
+      pushes an "added" marker; undo pops the last item. Edits still snapshot.
+   3. The board picture and the board's extent were rebuilt (a full redraw / walk of every stroke) after every stroke.
+      Both now grow by the new stroke. Guarded by a fresh flag cleared by every edit path; a count-based check also
+      catches direct edits.
+   4. Hidden pages kept working: Focus (config + tasks files each second) and Screen Time (rebuilt rows each 5 s).
+      They now refresh only when shown. Tasks already did.
+   5. Collection pauses: gc thresholds raised, gc disabled during a stroke (re-enabled on commit, cancel, hide).
+   6. Leaving the Scribe page still saves synchronously (a background thread there could write into the wrong path in
+      tests); it is cheap now.
+  Found, not a lag cause: the board is over MAX_SYNC_BYTES (6 MB), so it does NOT sync to other devices any more.
+  export() now measures it once per version instead of re-encoding it every sync pass. Raising the limit or syncing
+  deltas is a separate decision.
+
+2026-11-03  Welcome tour and Help
+  Research (vendor and NN/g articles, so directional): keep tours short, skippable from the start and at every
+  step, learn by doing for the one thing that matters, let people replay it from a help menu, and teach each thing when
+  it becomes relevant. Sources: nngroup.com/articles/onboarding-tutorials, appcues.com/blog/user-onboarding-ui-ux-patterns,
+  stepskit.com/blog/onboarding-tours.
+  Built (qt_ui/tour.py, tour_content.py, tour_runner.py): the window dims with one bright, click-through hole
+  (the hole is cut out of the layer's mask, so the part being explained is the only thing that works); a note beside it with
+  Back / Next, "Skip this part" (jump to the next chapter) and "Skip the tour". The note is a separate frameless window so
+  it can sit over popups. 8 chapters of 1 to 8 steps each (welcome, getting around, first task, focus, reviews, score,
+  browser extension, options). Fork: one long linear tour vs chapters. Chapters, because the sources say completion falls
+  off with length and chapters give a skip unit; the first-task chapter is the only interactive one: it waits for the New Task
+  window to open and for a task to be saved, and the note tucks into the corner while the user works.
+  Shown once automatically (config tourDone, set when it is finished OR skipped), and Options > Help replays all of it or one chapter.
+  Not done: the Focus and Review chapters talk about the page, not individual buttons; no live check that the extension connected.
+
+2026-11-03  Updates apply to the running app (code_watcher.py)
+  Before: auto_updater only restarted for a git pull of a newer origin commit; code that changed locally (an edit, a
+  commit) needed a manual relaunch. Fork: hot-reload modules in the live interpreter vs. restart into the new code.
+  Chose restart: reloading modules under live Qt widgets, threads and module-level state (queues, caches, singletons)
+  is fragile, and a restart takes a couple of seconds if it keeps your place.
+  How: every 15 s the tracked .py/.qss files are fingerprinted (name, size, mtime). A change must stay still for 20 s
+  (an edit in progress is not ready), then the new code is imported in a throwaway process with its own empty data
+  folder; only if that works is the app restarted, so broken code never replaces a working app (the check runs once
+  per version and is logged). The restart waits for a quiet moment: no session, review or first attempt running, and
+  either the window is closed or nobody has touched the keyboard or mouse for 20 s (can't tell = don't interrupt).
+  Before leaving, the page and whether the window was open go to config.restoreWindow; the new copy reopens it there.
+  Uses the same quit path and Windows detached re-exec as auto_updater, so Scribe's board is saved by aboutToQuit.
+  Not covered: a change that imports fine but crashes later is not caught by the smoke check.
+
+[2026-11-03] Updates apply to the running app from a button; extension links are recorded by the desktop
+  Before: new code restarted the app by itself at a quiet moment (code_watcher, auto_updater). People using the
+  app never hit a quiet moment, and a restart loses where they were. Fork: keep restarting vs. swap code in live.
+  Chose a button ("Update ready", sidebar) that pulls what is waiting and swaps it into the live app. Only code
+  that holds no live state is swapped (hot_update.SAFE: pages, dialogs, pure logic). A page is rebuilt in place on
+  the same tab; classes and functions imported with `from x import y` are rebound to the reloaded ones.
+  Everything that owns a running session, threads, the API or the tray cannot be reloaded without resetting its
+  module-level state, so it is reported as "later" and applies at the next natural start. We did NOT make every
+  module reloadable: re-running a stateful module's body would silently reset live sessions.
+  The old auto-restart watchers still exist but only announce now (update_center); nothing restarts by itself.
+  Extension links: no change to the extension. The desktop notes the Origin / User-Agent of every request that
+  carries its key (devices_store), keeps one row per computer, and syncs the rows like tasks, so any computer can
+  list "computers, browsers, account, connected now". A link is per computer by design (the key is local).
+  Browser profile / which person in the browser is not knowable without the identity permission; not added.

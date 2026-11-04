@@ -62,6 +62,7 @@ from dotenv import load_dotenv
 
 import auth_manager
 import board_store
+import devices_store
 import calendar_store
 import device_id
 import multi_device
@@ -444,6 +445,7 @@ def _gather_review_problems(conn, cutoff_local):
             "reviewCount": row["review_count"], "lastReviewedAt": row["last_reviewed_at"],
             "fastestTimeSeconds": row["fastest_time_seconds"], "fastestTimeIsSolved": row["fastest_time_is_solved"],
             "scheduleStage": row["schedule_stage"], "nextReviewDate": row["next_review_date"],
+            "outOfRotation": row["out_of_rotation"], "originalDueDate": row["original_due_date"],
             "firstAttemptSeconds": row["first_attempt_seconds"], "firstAttemptShakiness": row["first_attempt_shakiness"],
             "firstAttemptSelfSolved": row["first_attempt_self_solved"],
             "topicSyncId": topic_sync_id, "subjectSyncId": subject_sync_id,
@@ -504,8 +506,13 @@ def _gather_calendar_records(cutoff_local):
         return records
 
 
+def _gather_devices(cutoff_local):
+    return _gather_json_store(devices_store.load(include_deleted=True), "devices", "id", cutoff_local)
+
+
 def _gather_all(cutoff_local):
-    return _gather_tasks(cutoff_local) + _gather_board(cutoff_local) + _gather_calendar_records(cutoff_local)
+    return (_gather_tasks(cutoff_local) + _gather_board(cutoff_local) + _gather_devices(cutoff_local)
+            + _gather_calendar_records(cutoff_local))
 
 
 # --- apply: tasks.json / board.json ---
@@ -633,6 +640,10 @@ def _apply_tasks(records):
         records, tasks_store.load_tasks, tasks_store.save_tasks, "id",
         normalize=_normalize_task, lock=tasks_store._lock,
     )
+
+
+def _apply_devices(records):
+    return _apply_json_store(records, devices_store.load, devices_store.save, "id", lock=devices_store._lock)
 
 
 def _apply_board(records):
@@ -884,6 +895,7 @@ def _apply_review_problems(conn, records):
                 data.get("fastestTimeSeconds"), data.get("fastestTimeIsSolved"),
                 data.get("scheduleStage", 0), data.get("nextReviewDate"),
                 data.get("firstAttemptSeconds"), data.get("firstAttemptShakiness"), data.get("firstAttemptSelfSolved"),
+                int(data.get("outOfRotation") or 0), data.get("originalDueDate"),
             )
             if row:
                 conn.execute(
@@ -895,6 +907,7 @@ def _apply_review_problems(conn, records):
                         fastest_time_seconds=?, fastest_time_is_solved=?,
                         schedule_stage=?, next_review_date=?,
                         first_attempt_seconds=?, first_attempt_shakiness=?, first_attempt_self_solved=?,
+                        out_of_rotation=?, original_due_date=?,
                         updated_at=?, device_id=?, is_deleted=?
                     WHERE id=?
                     """,
@@ -910,8 +923,9 @@ def _apply_review_problems(conn, records):
                         fastest_time_seconds, fastest_time_is_solved,
                         schedule_stage, next_review_date,
                         first_attempt_seconds, first_attempt_shakiness, first_attempt_self_solved,
+                        out_of_rotation, original_due_date,
                         sync_id, updated_at, device_id, is_deleted
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     values + (record["sync_id"], incoming_updated_at, record["device_id"], int(record["is_deleted"])),
                 )
@@ -1007,6 +1021,10 @@ def _apply_all(pulled_records):
     skipped += s
     failed += f
     a, s, f = _apply_board(by_table.get("board", []))
+    applied += a
+    skipped += s
+    failed += f
+    a, s, f = _apply_devices(by_table.get("devices", []))
     applied += a
     skipped += s
     failed += f

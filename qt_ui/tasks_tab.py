@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
 import review_store
 import session_history
 import session_manager
+from qt_ui import pause_reason
 import tasks_store
 from qt_ui.day_layout import contrasting_text_color
 from qt_ui.ui_kit import (  # noqa: F401 -- aliases keep the older private names working
@@ -245,7 +246,7 @@ class _ReviewBox(QFrame):
         self._time_labels = []
         self.pause_buttons = []
         if len(rows) > 1:
-            head = QLabel(f"Reviews · {len(rows)}")
+            head = QLabel(f"Reviews: {len(rows)}")
             head.setStyleSheet(f"font-size:12px;font-weight:700;color:{MUTED};")
             self._layout.addWidget(head)
         for row in rows:
@@ -555,6 +556,7 @@ class TasksTab(QWidget):
         header.addStretch(1)
         add_button = QPushButton("+  Add recurring task")
         add_button.setProperty("class", "AccentButton")
+        self._add_button = add_button              # the tour points at it
         add_button.clicked.connect(lambda: open_task_editor(on_saved=lambda _t: self.refresh()))
         header.addWidget(add_button)
         return header
@@ -633,6 +635,8 @@ class TasksTab(QWidget):
         reached = scheduled = 0
         for task_id, card in self._cards.items():
             card.update_dynamic(status, sessions, reviews.get(task_id, []))
+            if tasks_store.is_period_task(card._task):
+                continue                      # a week or month goal is only suggested today: never counted
             if card.goal_state == "reached":
                 reached += 1
                 scheduled += 1
@@ -646,7 +650,7 @@ class TasksTab(QWidget):
             self._summary_label.setText("Nothing scheduled today")
         else:
             self._summary_label.setText(
-                f"Today · {reached} of {scheduled} goal{'s' if scheduled != 1 else ''} reached")
+                f"Today: {reached} of {scheduled} goal{'s' if scheduled != 1 else ''} reached")
 
 
 class _TaskCard(QFrame):
@@ -1055,7 +1059,7 @@ class _TaskCard(QFrame):
             if review_tab.make_live_review_independent():
                 return                           # it now rides beside the session that starts next
             if not status.get("isPaused"):
-                session_manager.pause_session()
+                session_manager.pause_session("aside")
 
     def _start_pomodoro(self):
         settings = _PomodoroDialog.get_settings(self)
@@ -1110,7 +1114,7 @@ class _TaskCard(QFrame):
         if session_manager.get_status()["isPaused"]:
             session_manager.resume_session()
         else:
-            session_manager.pause_session()
+            pause_reason.ask(self)
 
     def _end_task(self):
         parked = self._parked_entry(session_manager.get_status())
@@ -1256,7 +1260,7 @@ class _TaskCard(QFrame):
             return ["No restrictions set", "No rules"], False
         a = f"{apps} app{'s' if apps != 1 else ''}"
         t = f"{sites} site{'s' if sites != 1 else ''}"
-        return [f"{a} blocked · {t} ok", f"{a} · {t}", f"{apps} · {sites}"], True
+        return [f"{a} blocked, {t} ok", f"{a}, {t}", f"{apps}, {sites}"], True
 
     def _set_restrictions(self, variants, clickable):
         self._restrictions_variants = variants
@@ -1318,7 +1322,7 @@ class _TaskCard(QFrame):
             if period:
                 days = max(1, snap["daysLeft"])
                 pace = _format_minutes(math.ceil(left / days))
-                detail = "Due today" if days == 1 else f"{_days_text(days, 'left')} · about {pace} a day"
+                detail = "Due today" if days == 1 else f"{_days_text(days, 'left')}, about {pace} a day"
         self._countdown_label.setText(headline)
         self._countdown_label.setStyleSheet(
             f"font-size:15px;font-weight:600;color:{'#8A93A3' if locked_by_other else INK};background:transparent;")

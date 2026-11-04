@@ -96,8 +96,29 @@ def _scrolling(page):
     return area
 
 
+_remembered = {"open": False, "page": "home"}
+
+
+def remembered():
+    """Where the window was (open or not, which page), for reopening it after a restart into new code."""
+    return dict(_remembered)
+
+
+def reopen_after_restart():
+    """Called once on start-up after the app restarted itself: the window comes back on the same page."""
+    import config
+    state = config.load_config().get("restoreWindow") or {}
+    config.update_config(lambda cfg: cfg.update(restoreWindow={}))
+    if not state.get("open"):
+        return
+    open_main_window()
+    if _win is not None and state.get("page") in _win._pages:
+        _win._show_tab(state["page"])
+
+
 def open_main_window():
     global _win
+    _remembered["open"] = True
     if _win is not None:
         _win.show()
         _win.raise_()
@@ -256,6 +277,7 @@ class _MainWindow(QWidget):
         self.resize(*_NORMAL_SIZE)
         self.setMinimumSize(_SIDEBAR_COMPACT + 480, _MIN_HEIGHT)
         self._compact = False
+        self._short = False
         self._was_maximized = False
         self._drag_frame_size = None  # (width, height) in physical px, set only during a title-bar move
 
@@ -288,8 +310,13 @@ class _MainWindow(QWidget):
         motion.install()
         self._show_tab("home")
         QTimer.singleShot(0, lambda: self._move_marker(animated=False))
+        QTimer.singleShot(4000, self._maybe_show_report_card)
+        from qt_ui import tour_runner
+        tour_runner.register(self)
+        QTimer.singleShot(1500, tour_runner.start_if_new)
 
     def showEvent(self, event):
+        _remembered["open"] = True
         super().showEvent(event)
         QTimer.singleShot(0, lambda: self._move_marker(animated=False))
 
@@ -356,12 +383,81 @@ class _MainWindow(QWidget):
         layout.addStretch(1)
         self._marker = _NavMarker(sidebar)
 
+        self._update_button = QPushButton("Update ready")
+        self._update_button.setCursor(Qt.PointingHandCursor)
+        self._update_button.setFixedHeight(34)
+        self._update_button.setStyleSheet(
+            "QPushButton{margin:0 12px 6px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.35);"
+            "background:rgba(255,255,255,0.12);color:#FFFFFF;font-weight:700;font-size:13px;}"
+            "QPushButton:hover{background:rgba(255,255,255,0.22);}QPushButton:disabled{color:rgba(255,255,255,0.6);}")
+        self._update_button.clicked.connect(self._apply_update)
+        self._update_button.hide()
+        layout.addWidget(self._update_button)
+        self._update_timer = QTimer(self)
+        self._update_timer.timeout.connect(self._sync_update_button)
+        self._update_timer.start(3000)
+
         self._account_area = AccountArea()
         layout.addWidget(self._account_area)
 
         return sidebar
 
+    def _sync_update_button(self):
+        import update_center
+        state = update_center.snapshot()
+        if state["busy"]:
+            self._update_button.setText("Updating...")
+            self._update_button.setEnabled(False)
+            self._update_button.show()
+            return
+        self._update_button.setEnabled(True)
+        if state["message"]:
+            self._update_button.setText(state["message"])
+            self._update_button.show()
+            return
+        self._update_button.setText("Update" if self._compact else "Update ready")
+        self._update_button.setVisible(state["available"])
+
+    def _apply_update(self):
+        """Pull what is waiting and put it into this running window; nothing closes."""
+        import qt_gui_thread
+        import update_center
+
+        def done(result):
+            if "error" in result:
+                update_center.set_message("Update failed")
+            elif result["later"]:
+                update_center.set_message("Updated (some parts apply on next start)")
+            else:
+                update_center.set_message("Updated")
+            self._sync_update_button()
+            QTimer.singleShot(4000, lambda: (update_center.set_message(""), self._sync_update_button()))
+        update_center.apply_async(qt_gui_thread.run_on_gui_thread, done)
+        self._sync_update_button()
+
+    def _maybe_show_report_card(self):
+        """Once per week, the first time Carmen is open after the week ends: last week's report card."""
+        try:
+            import config
+            import report_card
+            import session_history
+            from qt_ui import report_card_dialog, week_dialog
+            start = report_card.last_week()
+            if config.load_config().get("reportCardWeek") == start.isoformat():
+                return
+            config.update_config(lambda cfg: cfg.update(reportCardWeek=start.isoformat()))
+            card = report_card.build(start, session_history.load_all())
+            if not card["empty"]:
+                report_card_dialog.show(card, on_plan=lambda: week_dialog.show())
+        except Exception:
+            pass
+
+    def hideEvent(self, event):
+        _remembered["open"] = False
+        super().hideEvent(event)
+
     def _show_tab(self, key):
+        _remembered["page"] = key
         changed = getattr(self, "_current_key", None) != key
         self._stack.setCurrentWidget(self._pages[key])
         self._current_key = key
@@ -397,16 +493,36 @@ class _MainWindow(QWidget):
         self._brand_title.setVisible(not compact)
         self._brand_row.setAlignment(self._logo, (Qt.AlignHCenter if compact else Qt.AlignLeft) | Qt.AlignVCenter)
         self._brand_row.setContentsMargins(*((0, 24, 0, 18) if compact else (20, 24, 18, 18)))
-        for caption in self._group_captions:
-            caption.setVisible(not compact)
+        self._show_captions()
         for button in self._nav_buttons.values():
             full = button.property("fullLabel")
             button.setText("" if compact else full)
             button.setToolTip(full if compact else "")
         self._account_area.set_compact(compact)
-        self._sidebar.setStyleSheet(
-            "QPushButton.NavButton { margin: 1px 8px; padding: 9px 0px; text-align: center; }" if compact else "")
+        self._restyle_sidebar()
         self._apply_min_size()
+        QTimer.singleShot(0, lambda: self._move_marker(animated=False))
+
+    def _show_captions(self):
+        for caption in self._group_captions:
+            caption.setVisible(not (self._compact or self._short))
+
+    def _restyle_sidebar(self):
+        rules = []
+        if self._compact:
+            rules.append("margin: 1px 8px; padding: 9px 0px; text-align: center;")
+        if self._short:
+            rules.append("padding-top: 5px; padding-bottom: 5px;")
+        self._sidebar.setStyleSheet("QPushButton.NavButton { %s }" % " ".join(rules) if rules else "")
+
+    def _set_short(self, short):
+        """On a short window the group headings go and the buttons tighten, so the account
+        buttons at the bottom are never squeezed into each other."""
+        if short == self._short:
+            return
+        self._short = short
+        self._show_captions()
+        self._restyle_sidebar()
         QTimer.singleShot(0, lambda: self._move_marker(animated=False))
 
     def changeEvent(self, event):
@@ -444,6 +560,7 @@ class _MainWindow(QWidget):
         # there's nothing left for this backstop to correct.
         super().resizeEvent(event)
         self._set_compact(event.size().width() < _COMPACT_BELOW)
+        self._set_short(event.size().height() < 800)
 
     def nativeEvent(self, eventType, message):
         # No macOS equivalent needed here -- this guards a Windows-specific
