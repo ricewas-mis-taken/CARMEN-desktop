@@ -483,47 +483,73 @@ class ScribeCanvas(QWidget):
 
     def _heat(self, rect, scale, ox, oy):
         """The heat cells, remembered while nothing under them has changed (it walks every point of every
-        stroke, so doing it on each mouse move made drawing lag)."""
+        stroke, so doing it on each mouse move made drawing lag). When the only change is strokes added
+        to the end of a layer, just those strokes are added, so pen-up on a big board stays instant."""
+        geometry = (round(rect.width()), round(rect.height()), round(scale, 5), round(ox), round(oy))
         version = self._content_version()
-        key = (round(rect.width()), round(rect.height()), round(scale, 5), round(ox), round(oy), version)
+        shape = tuple((id(layer), layer["visible"], len(layer["items"])) for layer in self.doc["layers"])
+        last = tuple(layer["items"][-1] if layer["items"] else None for layer in self.doc["layers"])
         known = getattr(self, "_heat_cache", None)
-        if known is not None and known[0] == key:
-            return known[1]
+        if known is not None and known["geometry"] == geometry:
+            if known["version"] == version:
+                return known["heat"]
+            if self._appended_only(known, shape, last):
+                cell = self.HEAT_CELL
+                for layer, before in zip(self.doc["layers"], known["shape"]):
+                    if layer["visible"]:
+                        for item in layer["items"][before[2]:]:
+                            self._heat_add_item(known["heat"], item, rect, scale, ox, oy, cell)
+                known.update(version=version, shape=shape, last=last)
+                return known["heat"]
         heat = self._heat_compute(rect, scale, ox, oy)
-        self._heat_cache = (key, heat)
+        self._heat_cache = {"geometry": geometry, "version": version, "shape": shape, "last": last, "heat": heat}
         return heat
+
+    @staticmethod
+    def _appended_only(known, shape, last):
+        old = known["shape"]
+        if len(old) != len(shape):
+            return False
+        for (lid0, vis0, n0), (lid1, vis1, n1), seen in zip(old, shape, known["last"]):
+            if lid0 != lid1 or vis0 != vis1 or n1 < n0:
+                return False
+        # every layer that did not grow must still end in the same item it did before
+        for (lid0, vis0, n0), (lid1, vis1, n1), seen, now in zip(old, shape, known["last"], last):
+            if n1 == n0 and now is not seen:
+                return False
+        return True
 
     def _heat_compute(self, rect, scale, ox, oy):
         """{(col, row): weight}: how much is drawn in each cell of the map, so busy areas glow."""
-        cell = self.HEAT_CELL
-        cols, rows = int(rect.width() // cell) + 1, int(rect.height() // cell) + 1
         heat = {}
-
-        def mark(mx, my, amount=1.0):
-            c, r = int((mx - rect.left()) // cell), int((my - rect.top()) // cell)
-            if 0 <= c < cols and 0 <= r < rows:
-                heat[(c, r)] = heat.get((c, r), 0.0) + amount
-
         for layer in self.doc["layers"]:
-            if not layer["visible"]:
-                continue
-            for item in layer["items"]:
-                if item.get("type") == "stroke" and len(item["pts"]) > 1:
-                    pts = item["pts"]
-                    for a, b in zip(pts, pts[1:]):
-                        ax, ay, bx, by = a[0] * scale + ox, a[1] * scale + oy, b[0] * scale + ox, b[1] * scale + oy
-                        steps = max(1, int(max(abs(bx - ax), abs(by - ay)) // (cell / 2)))
-                        for i in range(steps):
-                            t = i / steps
-                            mark(ax + (bx - ax) * t, ay + (by - ay) * t, 0.5)
-                    continue
-                x0, y0, x1, y1 = geo.bounds(item)
-                c0, r0 = int((x0 * scale + ox - rect.left()) // cell), int((y0 * scale + oy - rect.top()) // cell)
-                c1, r1 = int((x1 * scale + ox - rect.left()) // cell), int((y1 * scale + oy - rect.top()) // cell)
-                for c in range(max(c0, 0), min(c1, cols - 1) + 1):
-                    for r in range(max(r0, 0), min(r1, rows - 1) + 1):
-                        heat[(c, r)] = heat.get((c, r), 0.0) + 1.5
+            if layer["visible"]:
+                for item in layer["items"]:
+                    self._heat_add_item(heat, item, rect, scale, ox, oy, self.HEAT_CELL)
         return heat
+
+    @staticmethod
+    def _heat_add_item(heat, item, rect, scale, ox, oy, cell):
+        cols, rows = int(rect.width() // cell) + 1, int(rect.height() // cell) + 1
+        left, top = rect.left(), rect.top()
+        if item.get("type") == "stroke" and len(item["pts"]) > 1:
+            pts = item["pts"]
+            half = cell / 2
+            for a, b in zip(pts, pts[1:]):
+                ax, ay, bx, by = a[0] * scale + ox, a[1] * scale + oy, b[0] * scale + ox, b[1] * scale + oy
+                steps = max(1, int(max(abs(bx - ax), abs(by - ay)) // half))
+                for i in range(steps):
+                    t = i / steps
+                    c, r = int((ax + (bx - ax) * t - left) // cell), int((ay + (by - ay) * t - top) // cell)
+                    if 0 <= c < cols and 0 <= r < rows:
+                        heat[(c, r)] = heat.get((c, r), 0.0) + 0.5
+            return
+        x0, y0, x1, y1 = geo.bounds(item)
+        c0, r0 = int((x0 * scale + ox - left) // cell), int((y0 * scale + oy - top) // cell)
+        c1, r1 = int((x1 * scale + ox - left) // cell), int((y1 * scale + oy - top) // cell)
+        for c in range(max(c0, 0), min(c1, cols - 1) + 1):
+            for r in range(max(r0, 0), min(r1, rows - 1) + 1):
+                heat[(c, r)] = heat.get((c, r), 0.0) + 1.5
 
     def _paint_heat(self, p, rect, scale, ox, oy):
         heat = self._heat(rect, scale, ox, oy)
