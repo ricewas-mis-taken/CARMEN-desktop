@@ -522,6 +522,15 @@ def _nav_pixmap(key, color):
         p.drawLine(QPointF(18.9, 8.8), QPointF(14.9, 9.4))
         p.drawLine(QPointF(6.3, 19.2), QPointF(5.1, 15.2))
         p.drawLine(QPointF(5.1, 15.2), QPointF(9.1, 14.6))
+    elif key == "week":      # a calendar page with the days in a row
+        p.drawRoundedRect(QRectF(4, 5.5, 16, 14), 2.5, 2.5)
+        p.drawLine(QPointF(4, 10), QPointF(20, 10))
+        p.drawLine(QPointF(8.5, 4), QPointF(8.5, 7))
+        p.drawLine(QPointF(15.5, 4), QPointF(15.5, 7))
+        p.setBrush(QColor(color))
+        for x in (8, 12, 16):
+            p.drawEllipse(QPointF(x, 14.5), 1, 1)
+        p.setBrush(Qt.NoBrush)
     elif key == "scribe":    # a pencil
         body = QPainterPath(QPointF(5, 19))
         body.lineTo(6, 14.6)
