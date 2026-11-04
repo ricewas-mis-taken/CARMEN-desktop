@@ -1,7 +1,7 @@
 """Options: the popup behind the profile menu. For now it holds the colours."""
 import os
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QColorDialog, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
@@ -30,7 +30,7 @@ class OptionsDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle("Options")
-        self.resize(500, 500)
+        self.resize(500, 640)
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(24, 22, 24, 20)
         self._layout.setSpacing(10)
@@ -46,6 +46,10 @@ class OptionsDialog(QWidget):
         self._discord_names = self._config_box("Include task and problem names", "discordShowNames", False)
         self._discord_names.setEnabled(self._discord_on.isChecked())
         self._discord_on.toggled.connect(self._discord_names.setEnabled)
+        self._layout.addWidget(field_label("Help"))
+        self._layout.addWidget(role_label(
+            "Play the welcome tour again, or just the part you want.", "hint", wrap=True))
+        self._add_help()
         self._layout.addWidget(role_label(
             "Buttons and numbers pick up a new colour the next time Carmen starts.", "hint", wrap=True))
         self._layout.addStretch(1)
@@ -57,6 +61,29 @@ class OptionsDialog(QWidget):
         self._layout.addLayout(row)
         self._fill()
         self.show()
+
+    def _add_help(self):
+        from qt_ui import tour_runner
+        from qt_ui.ui_kit import FlowLayout
+        play = accent(QPushButton("Play the whole tour"))
+        play.clicked.connect(lambda: self._play(None))
+        self._layout.addWidget(play, 0, Qt.AlignLeft)
+        holder = QWidget()
+        flow = FlowLayout(holder, spacing=6)
+        for chapter_id, title, summary in tour_runner.chapter_list():
+            chip = QPushButton(title)
+            chip.setToolTip(summary)
+            chip.setCursor(Qt.PointingHandCursor)
+            chip.setStyleSheet(SECONDARY_STYLE)
+            chip.clicked.connect(lambda _=False, c=chapter_id: self._play([c]))
+            flow.addWidget(chip)
+        self._layout.addWidget(holder)
+
+    def _play(self, chapter_ids):
+        """Closes Options, then starts the tour over the main window."""
+        from qt_ui import tour_runner
+        self.close()
+        QTimer.singleShot(250, lambda: tour_runner.start(chapter_ids))
 
     def _config_box(self, text, key, default):
         box = QCheckBox(text)

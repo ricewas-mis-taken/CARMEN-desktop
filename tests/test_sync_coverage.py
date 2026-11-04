@@ -62,7 +62,8 @@ LOCAL_ONLY_FILES = {
     "score.json",   # the Carmen Score ledger: keys are deterministic so a later merge cannot double count (see DESIGN_DECISIONS)
 }
 # Reference data that ships with the app, not something a user creates.
-SHIPPED_REFERENCE_FILES = {"screentime_domains.json", "screentime_domains_curated.json"}
+SHIPPED_REFERENCE_FILES = {"screentime_domains.json", "screentime_domains_curated.json",
+                          "manifest.json"}   # named in the tour's extension steps, not a data file
 
 
 @pytest.fixture

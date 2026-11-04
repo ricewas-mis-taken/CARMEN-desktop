@@ -540,6 +540,7 @@ class ReviewTab(QWidget):
         title_row.addWidget(title)
         title_row.addStretch(1)
         week_button = button("The week ahead", SECONDARY_STYLE, height=36)
+        self._week_button = week_button            # the tour points at it
         week_button.clicked.connect(lambda: __import__("qt_ui.week_dialog", fromlist=["show"]).show())
         title_row.addWidget(week_button)
         layout.addLayout(title_row)

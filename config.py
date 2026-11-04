@@ -28,6 +28,7 @@ DEFAULT_CONFIG = {
     # Discord "Playing" status (discord_presence.py); names of tasks/problems stay hidden unless asked for.
     "discordPresence": True,
     "discordShowNames": False,
+    "tourDone": False,          # the welcome tour has been shown (or skipped) once
     "reportCardWeek": "",       # the Monday of the week whose report card was last shown
     "quickNoteGeometry": None,
     "last_hide_taskbar_badges": False,

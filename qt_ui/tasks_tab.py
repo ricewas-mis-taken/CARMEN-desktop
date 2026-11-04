@@ -556,6 +556,7 @@ class TasksTab(QWidget):
         header.addStretch(1)
         add_button = QPushButton("+  Add recurring task")
         add_button.setProperty("class", "AccentButton")
+        self._add_button = add_button              # the tour points at it
         add_button.clicked.connect(lambda: open_task_editor(on_saved=lambda _t: self.refresh()))
         header.addWidget(add_button)
         return header
