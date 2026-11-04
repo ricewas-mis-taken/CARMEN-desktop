@@ -66,3 +66,31 @@ def test_a_pause_with_no_reason_is_recorded_as_none_not_break(isolate_state):
     session_manager.pause_session()
     assert session_manager._state["violationLog"][-1]["pauseReason"] is None
     assert pause_budget.reason_of(session_manager._state["violationLog"][-1]) == "unspecified"
+
+
+def test_the_api_pause_takes_a_reason_and_ignores_unknown_ones(isolate_state):
+    import api_server
+    import config
+    client = api_server.app.test_client()
+    client.environ_base["HTTP_X_CARMEN_TOKEN"] = config.get_api_token()
+    session_manager.start_session(25, "soft", [], [])
+    client.post("/session/pause", json={"reason": "stuck"})
+    assert session_manager._state["violationLog"][-1]["pauseReason"] == "stuck"
+    session_manager.resume_session()
+    client.post("/session/pause", json={"reason": "made-up"})
+    assert session_manager._state["violationLog"][-1]["pauseReason"] is None
+    session_manager.resume_session()
+    client.post("/session/pause")                                  # an old extension: no body at all
+    assert session_manager._state["violationLog"][-1]["pauseReason"] is None
+
+
+def test_the_reason_popup_pauses_with_the_chosen_reason(qtbot, isolate_state):
+    from qt_ui import pause_reason
+    session_manager.start_session(25, "soft", [], [])
+    done = []
+    popup = pause_reason.ask(None, lambda: done.append(1))
+    qtbot.addWidget(popup)
+    assert not session_manager.get_status()["isPaused"]
+    popup._choose("checking")
+    assert session_manager.get_status()["isPaused"] and done == [1]
+    assert session_manager._state["violationLog"][-1]["pauseReason"] == "checking"

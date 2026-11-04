@@ -94,6 +94,8 @@ def test_home_shows_a_running_session_with_pause_and_resume(qtbot, isolate_state
     labels = {b.text() for b in tab.findChildren(home.QPushButton)}
     assert "Pause" in labels and "Open Focus" in labels and "Start a session" not in labels
     next(b for b in tab.findChildren(home.QPushButton) if b.text() == "Pause").click()
+    from qt_ui import pause_reason
+    pause_reason._OPEN[-1]._choose("break")
     assert sm.get_status()["isPaused"]
     assert "Resume" in {b.text() for b in tab.findChildren(home.QPushButton)}
 

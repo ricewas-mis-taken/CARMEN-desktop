@@ -33,6 +33,7 @@ import config
 import picker_gui
 import review_store
 import session_manager
+from qt_ui import pause_reason
 import tasks_store
 import qt_ui.nuclear_dialog as nuclear_dialog
 import qt_ui.picker_dialogs as picker_dialogs
@@ -462,7 +463,7 @@ class FocusTab(QWidget):
         if session_manager.get_status()["isPaused"]:
             session_manager.resume_session()
         else:
-            session_manager.pause_session()
+            pause_reason.ask(self, self._refresh_status)
 
     def _resume_session_over_review(self):
         """"Resume" on the session behind a review: the review is set aside, the session comes back."""

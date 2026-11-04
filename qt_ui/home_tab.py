@@ -31,6 +31,7 @@ import theme
 import review_store
 import session_history
 import session_manager
+from qt_ui import pause_reason
 import tasks_store
 from qt_ui.history_viewer import minutes_by_day
 from qt_ui.mini_timer import describe as describe_session
@@ -960,9 +961,9 @@ class HomeTab(QWidget):
     def _toggle_pause(self):
         if session_manager.get_status().get("isPaused"):
             session_manager.resume_session()
+            self.refresh()
         else:
-            session_manager.pause_session()
-        self.refresh()
+            pause_reason.ask(self, self.refresh)
 
     def _today(self, data):
         card = _card()

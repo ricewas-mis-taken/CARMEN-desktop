@@ -33,6 +33,8 @@ def test_pause_button_pauses_and_resumes(qtbot, isolate_state):
     qtbot.addWidget(win)
     assert win._button.text() == "Pause"
     win._button.click()
+    from qt_ui import pause_reason
+    pause_reason._OPEN[-1]._choose("break")
     assert sm.get_status()["isPaused"] and win._button.text() == "Resume"
     assert "paused" not in win._label
     win._button.click()

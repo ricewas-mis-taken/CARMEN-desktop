@@ -312,6 +312,8 @@ def test_the_pause_button_still_works_and_does_not_open_quicknote(timer_window, 
     sm.start_session(25, "soft", [], [])
     timer_window.refresh()
     qtbot.mouseClick(timer_window._button, Qt.LeftButton)
+    from qt_ui import pause_reason
+    pause_reason._OPEN[-1]._choose("break")
     assert sm.get_status()["isPaused"] and timer_window.opened == []
 
 
