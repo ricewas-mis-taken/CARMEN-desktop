@@ -66,7 +66,7 @@ def _current_branch():
     return branch
 
 
-def _check_and_pull():
+def _check_and_pull(pull=True):
     branch = _current_branch()
     if branch is None:
         return False
@@ -99,13 +99,25 @@ def _check_and_pull():
         logger.info("auto_updater: update available on origin/%s but working tree is dirty -- skipping", branch)
         return False
 
-    pull = _run_git("pull", "--ff-only", "origin", branch)
-    if pull.returncode != 0:
-        _log_failure_once(f"git pull --ff-only failed: {pull.stderr.strip()}")
+    if not pull:
+        return True                         # only asked whether an update is waiting
+    pulled = _run_git("pull", "--ff-only", "origin", branch)
+    if pulled.returncode != 0:
+        _log_failure_once(f"git pull --ff-only failed: {pulled.stderr.strip()}")
         return False
 
     logger.info("auto_updater: pulled update on %s, restarting", branch)
     return True
+
+
+def update_waiting():
+    """True when origin has commits this copy lacks and they can be applied cleanly (nothing is pulled)."""
+    return _check_and_pull(pull=False)
+
+
+def pull_now():
+    """Pulls the waiting update. True when the code on disk changed."""
+    return _check_and_pull(pull=True)
 
 
 IDLE_BEFORE_RESTART_SECONDS = 120
