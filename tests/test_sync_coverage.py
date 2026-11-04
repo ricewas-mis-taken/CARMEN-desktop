@@ -51,7 +51,7 @@ RECEIVER_STAMPED = {
 # Files under private/ that hold data. Synced ones are covered by the JSON
 # tests below or the SQLite tests above; the rest stay on the device by design
 # (see FEATURE_IMPLEMENT.txt item 7: the running session and history sync through sync_live).
-SYNCED_FILES = {"tasks.json", "board.json", "calendar.db", "session_history.json", "session_state.json", "quicknote.json", "scribe.json"}
+SYNCED_FILES = {"tasks.json", "board.json", "calendar.db", "session_history.json", "session_state.json", "quicknote.json", "scribe.json", "devices.json"}
 LOCAL_ONLY_FILES = {
     "config.json", "screentime.json",
     "daily_summaries.json", "active_review.json", "device_id.txt", "last_sync.txt",
