@@ -723,6 +723,28 @@ def whitelist_domains_set():
     return jsonify({"domainWhitelist": cfg["domainWhitelist"]})
 
 
+
+def _unblock_details(body):
+    """(plan, minutes) from an unblock request. Both are optional (an older client sends neither); a plan
+    without a sensible length is kept without one."""
+    plan = body.get("plan")
+    minutes = body.get("minutes")
+    plan = plan.strip()[:_MAX_REASON_LENGTH] if isinstance(plan, str) and plan.strip() else None
+    if not isinstance(minutes, int) or isinstance(minutes, bool) or not (0 < minutes <= 240):
+        minutes = None
+    return plan, minutes
+
+
+def _unblock_gate_response(key):
+    """None when this unblock may go ahead, else the 429 telling the client how long to wait."""
+    import unblock_gate
+    allowed, wait = unblock_gate.check(key)
+    if allowed:
+        return None
+    return jsonify({"error": "wait", "waitSeconds": wait, "dailyBudget": unblock_gate.DAILY_FREE,
+                    "usedToday": unblock_gate.used_today()}), 429
+
+
 @app.route("/blocklist/apps/remove", methods=["POST"])
 @_require_token
 def blocklist_apps_remove():
@@ -746,11 +768,18 @@ def blocklist_apps_remove():
     # under the same lock as the write itself, rather than as a separate
     # check-then-act step here — a session can end in the gap between a
     # pre-check and the write actually happening.
+    import unblock_gate
+    plan, minutes = _unblock_details(body)
+    waiting = _unblock_gate_response(f"process:{process_name.strip().lower()}")
+    if waiting is not None:
+        return waiting
+    over = unblock_gate.used_today() >= unblock_gate.DAILY_FREE
     process_blocklist, exception_entry = session_manager.remove_process_from_blocklist(
-        process_name.strip(), reason.strip()
+        process_name.strip(), reason.strip(), plan, minutes
     )
     if exception_entry is None:
         return jsonify({"error": "no active session"}), 409
+    unblock_gate.record(exception_entry, over)
     return jsonify({"processBlocklist": process_blocklist, "exception": exception_entry})
 
 
@@ -775,11 +804,18 @@ def whitelist_domains_add():
     # See blocklist_apps_remove() above for why is_active() is checked
     # atomically inside add_domain_to_whitelist rather than as a separate
     # pre-check here.
+    import unblock_gate
+    plan, minutes = _unblock_details(body)
+    waiting = _unblock_gate_response(f"domain:{domain.strip().lower()}")
+    if waiting is not None:
+        return waiting
+    over = unblock_gate.used_today() >= unblock_gate.DAILY_FREE
     domain_whitelist, addition = session_manager.add_domain_to_whitelist(
-        domain.strip(), reason.strip()
+        domain.strip(), reason.strip(), plan, minutes
     )
     if addition is None:
         return jsonify({"error": "no active session"}), 409
+    unblock_gate.record(addition, over)
     return jsonify({"domainWhitelist": domain_whitelist, "addition": addition})
 
 
