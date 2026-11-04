@@ -343,6 +343,8 @@ _scribe_images_wanted = False     # set when new layers arrived: their images st
 
 
 def _gather_scribe():
+    if not scribe_store.is_settled():
+        return [], None
     exported = scribe_store.export()
     if not exported:
         return [], None

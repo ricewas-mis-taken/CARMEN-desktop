@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import threading
+import time
 import uuid
 import paths
 import server_clock
@@ -47,6 +48,8 @@ DEFAULT_PREFS = {
 }
 
 _lock = threading.Lock()
+SETTLE_SECONDS = 20   # the board is only shared once it has been left alone this long
+_changed_at = 0.0     # monotonic time of the last edit
 
 
 def new_layer(name, layer_id=None):
@@ -267,9 +270,21 @@ def save(doc):
         _saved_text = (PATH, layers)
         if previous is None or previous != layers:
             _write_stamp(server_clock.next_stamp(_read_stamp()))
+            _mark_changed()
             changed = True
     if changed:
         _call(_change_listeners)
+
+
+def _mark_changed():
+    global _changed_at
+    _changed_at = time.monotonic()
+
+
+def is_settled():
+    """False while the board is being drawn on. Sharing it means re-reading and re-encoding the whole
+    board, which stalls the app for a moment, so it waits until you stop."""
+    return time.monotonic() - _changed_at >= SETTLE_SECONDS
 
 
 def export():

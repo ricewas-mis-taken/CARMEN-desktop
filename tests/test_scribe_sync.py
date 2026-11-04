@@ -45,7 +45,8 @@ def test_a_newer_remote_board_replaces_layers_but_keeps_the_local_view(isolate_s
     assert not scribe_store.apply_remote("junk", "2999-02-01T00:00:00+00:00")
 
 
-def test_live_lane_gathers_once_and_applies_remote(isolate_state):
+def test_live_lane_gathers_once_and_applies_remote(isolate_state, monkeypatch):
+    monkeypatch.setattr(scribe_store, "SETTLE_SECONDS", 0)
     scribe_store.save(_doc_with("hi"))
     records, stamp = sync_live._gather_scribe()
     assert records[0]["table_name"] == "scribe" and records[0]["sync_id"] == "board" and stamp
@@ -80,3 +81,11 @@ def test_a_second_save_does_not_reread_the_file_and_still_sees_in_place_edits(is
     doc["layers"][0]["items"][0]["stroke"] = "#ff0000"       # edited in place, as the canvas does
     scribe_store.save(doc)
     assert scribe_store.export()["updatedAt"] != stamp
+
+
+def test_the_board_is_not_shared_while_it_is_being_drawn_on(monkeypatch):
+    import sync_live
+    monkeypatch.setattr(scribe_store, "export", lambda: (_ for _ in ()).throw(AssertionError("walked the board")))
+    scribe_store._mark_changed()
+    assert not scribe_store.is_settled()
+    assert sync_live._gather_scribe() == ([], None)
