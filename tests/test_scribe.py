@@ -646,3 +646,26 @@ def test_scribe_folds_its_options_into_a_popup_and_trims_the_top_bar_when_narrow
     holder.resize(1300, 700)
     qtbot.wait(50)
     assert tab._side.isVisible() and tab._pan_button.isVisible()
+
+
+def test_adding_a_stroke_updates_the_minimap_heat_without_a_full_walk(qtbot, tmp_path, monkeypatch):
+    monkeypatch.setattr(scribe_store, "PATH", str(tmp_path / "scribe.json"))
+    from PySide6.QtCore import QRect
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    canvas = tab.canvas
+    items = canvas._active_items()
+    for k in range(5):
+        items.append({"type": "stroke", "pts": [[k * 10, 0], [k * 10 + 5, 40], [k * 10 + 9, 80]], "stroke": "#000000", "width": 3})
+    rect = QRect(0, 0, 150, 100)
+    first = dict(canvas._heat(rect, 1.0, 0, 0))
+    walked = []
+    real = canvas._heat_add_item
+    monkeypatch.setattr(type(canvas), "_heat_add_item", staticmethod(lambda *a, **k: walked.append(1) or real(*a, **k)))
+    items.append({"type": "stroke", "pts": [[100, 0], [105, 40], [109, 80]], "stroke": "#000000", "width": 3})
+    canvas._bump_version() if hasattr(canvas, "_bump_version") else None
+    again = canvas._heat(rect, 1.0, 0, 0)
+    assert len(walked) == 1                      # only the new stroke was added
+    assert sum(again.values()) > sum(first.values())
+    fresh = canvas._heat_compute(rect, 1.0, 0, 0)
+    assert again == fresh                        # and the result matches a full recompute
