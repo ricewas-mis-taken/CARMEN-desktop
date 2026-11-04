@@ -13,6 +13,7 @@ from PySide6.QtCore import QEvent, QObject, QPointF, QRect, QRectF, QTimer, Qt, 
 from PySide6.QtGui import QColor, QKeyEvent, QPainter, QPainterPath, QPen, QRegion
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
+from qt_ui import motion
 from qt_ui.ui_kit import INK, MUTED, FAINT
 
 DIM = QColor(16, 12, 38, 178)
@@ -72,6 +73,7 @@ class Tour(QObject):
             self.chapters = [c for c in self.chapters if c.id in chapter_ids] or self.chapters
         self.chapter, self.index, self.active = 0, 0, True
         self.dim.resize(self.window.size())
+        motion.HOLD += 1                         # no page entrances under the dimmed window
         self.dim.show()
         self.dim.raise_()
         self._follow.start()
@@ -114,6 +116,7 @@ class Tour(QObject):
         if not self.active:
             return
         self.active = False
+        motion.HOLD = max(0, motion.HOLD - 1)
         self._follow.stop()
         self._poll.stop()
         self.dim.hide()
