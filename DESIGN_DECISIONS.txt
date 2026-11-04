@@ -1004,3 +1004,18 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   Before leaving, the page and whether the window was open go to config.restoreWindow; the new copy reopens it there.
   Uses the same quit path and Windows detached re-exec as auto_updater, so Scribe's board is saved by aboutToQuit.
   Not covered: a change that imports fine but crashes later is not caught by the smoke check.
+
+[2026-11-03] Updates apply to the running app from a button; extension links are recorded by the desktop
+  Before: new code restarted the app by itself at a quiet moment (code_watcher, auto_updater). People using the
+  app never hit a quiet moment, and a restart loses where they were. Fork: keep restarting vs. swap code in live.
+  Chose a button ("Update ready", sidebar) that pulls what is waiting and swaps it into the live app. Only code
+  that holds no live state is swapped (hot_update.SAFE: pages, dialogs, pure logic). A page is rebuilt in place on
+  the same tab; classes and functions imported with `from x import y` are rebound to the reloaded ones.
+  Everything that owns a running session, threads, the API or the tray cannot be reloaded without resetting its
+  module-level state, so it is reported as "later" and applies at the next natural start. We did NOT make every
+  module reloadable: re-running a stateful module's body would silently reset live sessions.
+  The old auto-restart watchers still exist but only announce now (update_center); nothing restarts by itself.
+  Extension links: no change to the extension. The desktop notes the Origin / User-Agent of every request that
+  carries its key (devices_store), keeps one row per computer, and syncs the rows like tasks, so any computer can
+  list "computers, browsers, account, connected now". A link is per computer by design (the key is local).
+  Browser profile / which person in the browser is not knowable without the identity permission; not added.
