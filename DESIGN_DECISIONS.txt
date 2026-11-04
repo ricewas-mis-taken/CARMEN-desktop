@@ -912,3 +912,7 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   those strokes (verified against a full recompute in a test). Cause found by loading the real 4,600-stroke
   board: drawing was ~1 ms per move, but every pen-up re-walked ~100k points on the UI thread (~110 ms).
   Now ~20 ms. Any other change (zoom, pan past bounds, delete, undo) still recomputes in full.
+
+2026-11-03  Scribe lag: cloud sync stalled drawing
+  Cause: each save made the sync lane re-read and re-encode the whole 4.9 MB board (export + two json dumps), each one a single C call holding the GIL ~100 ms, so the UI froze mid-stroke and got worse as the board grew.
+  Fork: chunk the encoding, or sync later. Chose to wait: the board is only gathered once untouched for 20 s (scribe_store.is_settled). Other tables are unaffected; the board still syncs, just after you stop.
