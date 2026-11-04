@@ -950,3 +950,28 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   NOT BUILT YET: the extension's unblock prompt (why / plan / how long / wait countdown) and its pause reason
   picker, in chrome/ and firefox/. Until then an extension pause counts as "checking" and an extension unblock
   works without a plan. The "did you do what you said?" follow-up is also not built.
+
+2026-11-03  Scribe lag, full audit (real 5,600-stroke, 6 MB board, whole app running)
+  Method: a UI-thread watchdog (5 ms tick + a sampler that grabs the main thread's stack when it is late) while
+  scripted strokes are drawn at pen rate in the real MainWindow with a copy of the real data. Before: 29 stalls
+  over 40 ms in 15 strokes (1.6 s total). After: 1 stall in 25 strokes.
+  Causes found, biggest first:
+   1. Every save (after every stroke AND every pan, since pans emit `changed`) took 500-780 ms of Python on a
+      background thread (clean_doc re-checked every point, a per-item fingerprint, then json.dump, which is pure
+      Python). Threads share the GIL, so the pen waited a switch interval (5 ms) on every event for that whole time.
+      Fix: a stroke's JSON text is remembered between saves keyed by its point list (moving builds a new list), the
+      file is written from that text in one write, and the canvas's own board skips per-point re-validation.
+      A save after one new stroke is now ~17 ms. Also sys.setswitchinterval(0.0005).
+   2. Pen-up copied every item dict for undo (~35 ms, and 100 steps held ~500k dicts for the GC). Adding a stroke now
+      pushes an "added" marker; undo pops the last item. Edits still snapshot.
+   3. The board picture and the board's extent were rebuilt (a full redraw / walk of every stroke) after every stroke.
+      Both now grow by the new stroke. Guarded by a fresh flag cleared by every edit path; a count-based check also
+      catches direct edits.
+   4. Hidden pages kept working: Focus (config + tasks files each second) and Screen Time (rebuilt rows each 5 s).
+      They now refresh only when shown. Tasks already did.
+   5. Collection pauses: gc thresholds raised, gc disabled during a stroke (re-enabled on commit, cancel, hide).
+   6. Leaving the Scribe page still saves synchronously (a background thread there could write into the wrong path in
+      tests); it is cheap now.
+  Found, not a lag cause: the board is over MAX_SYNC_BYTES (6 MB), so it does NOT sync to other devices any more.
+  export() now measures it once per version instead of re-encoding it every sync pass. Raising the limit or syncing
+  deltas is a separate decision.
