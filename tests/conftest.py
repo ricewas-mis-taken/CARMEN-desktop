@@ -267,3 +267,10 @@ def isolate_review_db(isolate_calendar_db, tmp_path, monkeypatch):
     monkeypatch.setattr(review_store, "_first_attempt_request", None)
     monkeypatch.setattr(review_store, "PHOTOS_DIR", str(tmp_path / "review_photos"))
     yield
+
+
+@pytest.fixture(autouse=True)
+def _someone_is_at_the_computer(monkeypatch):
+    """Screen time only counts while there is input; tests must not depend on how long the machine sat idle."""
+    import activity
+    monkeypatch.setattr(activity, "idle_seconds", lambda: 0.0)
