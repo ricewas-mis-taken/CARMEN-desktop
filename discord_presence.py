@@ -22,12 +22,11 @@ def describe(status, review, show_names=False):
     """The card to show now, as Rich Presence fields, or None when idle.
 
     A countdown (pomodoro focus or rest, a custom length) shows Discord's own "12:30 left" through `end`;
-    a stopwatch (until burnout, a review) shows elapsed time through `start`; a pause shows neither."""
+    a stopwatch (until burnout, a review) shows elapsed time through `start`; a pause shows neither and says how much is left or has gone."""
     if status.get("isActive"):
         pomo = status.get("pomodoro")
         on_break = bool(status.get("isBreak"))
-        if status.get("isPaused") and not on_break:
-            return None   # a pause is not "doing something": no card, so a parked session never reads as live
+        paused = bool(status.get("isPaused")) and not on_break
         reviewing = status.get("source") == "review"
         if reviewing:
             details, state = "Reviewing", "Problem review"
@@ -46,6 +45,12 @@ def describe(status, review, show_names=False):
         if show_names and not reviewing and status.get("eventTitle"):
             details = f"{details}: {status['eventTitle']}"
         fields = {"details": details, "state": state}
+        if paused:
+            countdown = bool(pomo) or not (reviewing or status.get("isBurnout"))
+            fields["state"] = "Paused · " + (
+                f"{_clock(status.get('secondsRemaining'))} left" if countdown
+                else f"{_clock(_elapsed(status, review))} elapsed")
+            return fields    # no clock while paused: Discord's own timer would keep running
         if pomo and not on_break:
             fields["party_size"] = [int(pomo["currentCycle"]), int(pomo["totalCycles"])]   # "Cycle (2 of 4)"
         countdown = bool(pomo) or not (reviewing or status.get("isBurnout"))
@@ -59,9 +64,29 @@ def describe(status, review, show_names=False):
         if show_names and review.get("problemName"):
             details = f"Reviewing: {review['problemName']}"
         if review.get("isPaused"):
-            return None
+            return {"details": details, "state": f"Paused · {_clock(review.get('elapsedSeconds'))} elapsed"}
         return {"details": details, "state": "Problem review"}
     return None
+
+
+def _clock(seconds):
+    """Whole minutes as "12 min" or "1 h 20 min"."""
+    try:
+        minutes = max(0, int(round(float(seconds) / 60)))
+    except (TypeError, ValueError):
+        minutes = 0
+    hours, rest = divmod(minutes, 60)
+    if not hours:
+        return f"{minutes} min"
+    return f"{hours} h {rest} min" if rest else f"{hours} h"
+
+
+def _elapsed(status, review):
+    """Seconds worked so far, for a stopwatch that is paused."""
+    if status.get("source") == "review" and review and review.get("elapsedSeconds") is not None:
+        return review["elapsedSeconds"]
+    start, paused_at = _epoch(status.get("startTime")), _epoch(status.get("pausedAt"))
+    return max(0, paused_at - start) if start and paused_at else 0
 
 
 def _minutes(value):
