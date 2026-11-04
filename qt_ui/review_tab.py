@@ -394,6 +394,8 @@ class _CategoryRow(QPushButton):
 
 def _next_review_pill(problem):
     """(text, tone) for the "when is it due" pill on a problem's row."""
+    if problem.get("outOfRotation"):
+        return "Set aside", GREY
     when = problem.get("nextReviewDate")
     if not when:
         return "Not scheduled", GREY
@@ -423,9 +425,10 @@ class _ProblemRow(QFrame):
     one quiet line, and the Start button. Click anywhere else to read its description;
     right-click to edit."""
 
-    def __init__(self, problem, is_current, on_start, on_open, on_edit, on_score=None, on_delete=None):
+    def __init__(self, problem, is_current, on_start, on_open, on_edit, on_score=None, on_delete=None, on_aside=None):
         super().__init__()
         self.problem = problem
+        self._on_aside = on_aside
         self._on_open = on_open
         self._on_edit = on_edit
         self._on_score = on_score
@@ -496,6 +499,11 @@ class _ProblemRow(QFrame):
         menu = QMenu(self)
         edit_action = menu.addAction("Edit Problem")
         score_action = menu.addAction("Score as a set...") if self._on_score else None
+        aside_action = None
+        if self._on_aside:
+            aside_action = menu.addAction(
+                "Put back in rotation" if self.problem.get("outOfRotation") else "Set aside (no cost)")
+            aside_action.setToolTip("An aside problem is never due, never overdue and never scored")
         delete_action = None
         if self._on_delete:
             menu.addSeparator()
@@ -510,6 +518,8 @@ class _ProblemRow(QFrame):
             self._on_edit(self.problem)
         elif chosen == score_action:
             self._on_score(self.problem)
+        elif chosen == aside_action:
+            self._on_aside(self.problem)
         elif chosen == delete_action:
             self._on_delete(self.problem)
 
@@ -1311,7 +1321,7 @@ class _TopicView(QWidget):
                 problem, is_current=problem["id"] == current_id, on_start=self._start_problem,
                 on_open=lambda p: _DescriptionPopup(p), on_edit=self._open_edit_problem,
                 on_score=lambda p: _register_popup(_ScoreDialog(p, on_done=self.refresh)),
-                on_delete=self._delete_problem)
+                on_delete=self._delete_problem, on_aside=self._toggle_aside)
             self._rows.append(row)
             self._list_layout.addWidget(row)
         if not self._rows:
@@ -1350,6 +1360,10 @@ class _TopicView(QWidget):
         if self._subject_filter == subject_id:
             self._subject_filter = None
         review_store.delete_subject(subject_id)
+        self.refresh()
+
+    def _toggle_aside(self, problem):
+        review_store.set_out_of_rotation(problem["id"], not problem.get("outOfRotation"))
         self.refresh()
 
     def _open_edit_problem(self, problem):
