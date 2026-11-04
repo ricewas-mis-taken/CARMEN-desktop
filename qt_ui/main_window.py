@@ -41,6 +41,7 @@ from qt_ui.review_tab import ReviewTab
 from qt_ui.scribe_tab import ScribeTab
 from qt_ui.screentime_tab import ScreenTimeTab
 from qt_ui.tasks_tab import TasksTab
+from qt_ui.week_tab import WeekTab
 
 # Dragging the title bar could snap the window into a taller rectangle.
 # Root cause: Qt's QStackedWidget aggregates sizeHint()/heightForWidth()
@@ -146,7 +147,7 @@ _NORMAL_SIZE = (800, 800)
 # squeezed until buttons and titles lost their text. Content widths, beside the sidebar.
 _PAGE_MIN_WIDTH = {
     "home": 480, "focus": 630, "tasks": 520, "board": 600,
-    "review": 640, "scribe": 640, "screentime": 480, "history": 540, "openings": 640,
+    "review": 640, "week": 640, "scribe": 640, "screentime": 480, "history": 540, "openings": 640,
 }
 _MIN_HEIGHT = 560
 _SIDEBAR_FULL = 180
@@ -281,6 +282,7 @@ class _MainWindow(QWidget):
         self._add_page("tasks", TasksTab())
         self._add_page("board", BoardTab())
         self._add_page("review", ReviewTab())
+        self._add_page("week", WeekTab())
         self._add_page("scribe", _scrolling(ScribeTab()))
         self._add_page("screentime", ScreenTimeTab())
         self._add_page("history", HistoryTab())
@@ -328,7 +330,7 @@ class _MainWindow(QWidget):
         nav_groups = [
             ("Today", [("home", "Home")]),
             ("Work", [("focus", "Focus"), ("tasks", "Tasks"), ("board", "The Board")]),
-            ("Study", [("review", "Review"), ("scribe", "Scribe")]),
+            ("Study", [("review", "Review"), ("week", "Week"), ("scribe", "Scribe")]),
             ("Look back", [("screentime", "Screen Time"), ("history", "Session History")]),
             ("Extras", [("openings", "Openings")]),
         ]
@@ -365,6 +367,8 @@ class _MainWindow(QWidget):
     def _show_tab(self, key):
         changed = getattr(self, "_current_key", None) != key
         self._stack.setCurrentWidget(self._pages[key])
+        if key == "week":
+            self._pages[key].refresh()
         self._current_key = key
         button = self._nav_buttons.get(key)
         if button is not None:

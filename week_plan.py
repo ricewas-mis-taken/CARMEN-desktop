@@ -6,7 +6,7 @@ import review_store
 import tasks_store
 
 REVIEW_WEIGHT = 8.0        # minutes of work a review is assumed to take
-HEAVY_FACTOR = 1.35        # a day this much above the week's average load is heavy
+HEAVY_FACTOR = 1.25        # a day this much above the week's average load is heavy
 HEAVY_MINIMUM = 40.0       # ...but never call a light day heavy
 
 
