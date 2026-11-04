@@ -151,10 +151,41 @@ def settle(today=None, tasks=None, sessions=None, overdue=None):
     return added
 
 
+def backfill(today=None, days=90, tasks=None, sessions=None):
+    """Scores the days before the score began, from the history that exists: each day's goals and each
+    week / month goal that ended. Reviews, overdue time and pauses are left out because what they
+    were judged against (due dates, pause reasons) was never recorded. Days already scored are skipped, so
+    running it again changes nothing. Returns the number of events added."""
+    import tasks_store
+    today = today or date.today()
+    yesterday = today - timedelta(days=1)
+    tasks = tasks if tasks is not None else tasks_store.load_tasks()
+    if sessions is None:
+        import session_history
+        sessions = session_history.load_all()
+    starts = [str(e.get("startTime"))[:10] for e in sessions if e.get("startTime")]
+    if not starts:
+        return 0
+    first = max(date.fromisoformat(min(starts)), yesterday - timedelta(days=days - 1))
+    added = 0
+    with _lock:
+        data = load()
+        day = first
+        while day <= yesterday:
+            added += _settle_day(data, day, tasks, sessions, None, tasks_store)
+            day += timedelta(days=1)
+        if data["settledThrough"] is None:
+            data["settledThrough"] = yesterday.isoformat()
+        _save(data)
+    return added
+
+
 def _settle_day(data, day, tasks, sessions, overdue, tasks_store):
     before = len(data["events"])
     required = logged = 0.0
     for task in tasks:
+        if _created_after(task, day):
+            continue                      # the goal did not exist yet
         if tasks_store.is_period_task(task):
             _, end = tasks_store.period_bounds(task, day)
             if end == day:
@@ -175,6 +206,13 @@ def _settle_day(data, day, tasks, sessions, overdue, tasks_store):
                 add_event(f"overdue:{problem_id}:{due.isoformat()}:{day.isoformat()}", day, "overdue",
                           -OVERDUE_DAY_COST, f"review {days} day{'s' if days != 1 else ''} overdue", _data=data)
     return len(data["events"]) - before
+
+
+def _created_after(task, day):
+    try:
+        return date.fromisoformat(str(task.get("createdAt") or "")[:10]) > day
+    except ValueError:
+        return False
 
 
 def _settle_period(data, task, day, sessions, tasks_store):
@@ -200,6 +238,14 @@ def start(stop_event, every_seconds=3600):
     """Settles at start-up and again every hour, so a day that ends while Carmen is open is settled
     without a restart."""
     def run():
+        try:
+            import config
+            if not config.load_config().get("scoreBackfilled"):
+                backfill()          # once: score the days from before the score began
+                config.update_config(lambda cfg: cfg.update(scoreBackfilled=True))
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("score backfill failed")
         while not stop_event.is_set():
             try:
                 settle_now()
