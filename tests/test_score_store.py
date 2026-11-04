@@ -89,3 +89,38 @@ def test_overdue_reviews_cost_a_little_each_day_but_stop_after_ten():
 
 def test_grade_bands():
     assert [score_store.grade(v) for v in (850, 700, 520, 400, 100)] == ["A", "B", "C", "D", "F"]
+
+
+def test_backfill_scores_past_days_from_history_and_is_idempotent():
+    today = date(2026, 11, 4)
+    task = _task()
+    sessions = [_entry("t1", today - timedelta(days=3), 60), _entry("t1", today - timedelta(days=2), 30)]
+    added = score_store.backfill(today=today, tasks=[task], sessions=sessions)
+    assert added == 3                                         # day -3 met, day -2 half done, day -1 nothing
+    events = {e["date"]: e["points"] for e in score_store.load()["events"]}
+    assert events[(today - timedelta(days=3)).isoformat()] == 12
+    assert events[(today - timedelta(days=1)).isoformat()] == -18
+    assert score_store.backfill(today=today, tasks=[task], sessions=sessions) == 0
+
+
+def test_backfill_never_scores_pauses_reviews_or_overdue_time():
+    today = date(2026, 11, 4)
+    score_store.backfill(today=today, tasks=[_task()], sessions=[_entry("t1", today - timedelta(days=2), 60)])
+    assert {e["kind"] for e in score_store.load()["events"]} == {"goals"}
+
+
+def test_backfill_then_settle_does_not_count_a_day_twice():
+    today = date(2026, 11, 4)
+    sessions = [_entry("t1", today - timedelta(days=2), 60)]
+    score_store.backfill(today=today, tasks=[_task()], sessions=sessions)
+    before = score_store.score()
+    assert score_store.settle(today=today, tasks=[_task()], sessions=sessions) == 0
+    assert score_store.score() == before
+
+
+def test_a_goal_is_not_judged_before_it_was_created():
+    today = date(2026, 11, 4)
+    task = _task(createdAt=(today - timedelta(days=1)).isoformat() + "T09:00:00")
+    score_store.backfill(today=today, tasks=[task], sessions=[_entry("other", today - timedelta(days=5), 10)])
+    days = sorted(e["date"] for e in score_store.load()["events"])
+    assert days == [(today - timedelta(days=1)).isoformat()]        # only yesterday, the day it existed

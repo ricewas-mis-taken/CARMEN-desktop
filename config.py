@@ -28,6 +28,7 @@ DEFAULT_CONFIG = {
     # Discord "Playing" status (discord_presence.py); names of tasks/problems stay hidden unless asked for.
     "discordPresence": True,
     "discordShowNames": False,
+    "scoreBackfilled": False,   # the days before the score began were scored once from history
     "reportCardWeek": "",       # the Monday of the week whose report card was last shown
     "quickNoteGeometry": None,
     "last_hide_taskbar_badges": False,
