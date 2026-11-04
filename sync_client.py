@@ -444,6 +444,7 @@ def _gather_review_problems(conn, cutoff_local):
             "reviewCount": row["review_count"], "lastReviewedAt": row["last_reviewed_at"],
             "fastestTimeSeconds": row["fastest_time_seconds"], "fastestTimeIsSolved": row["fastest_time_is_solved"],
             "scheduleStage": row["schedule_stage"], "nextReviewDate": row["next_review_date"],
+            "outOfRotation": row["out_of_rotation"], "originalDueDate": row["original_due_date"],
             "firstAttemptSeconds": row["first_attempt_seconds"], "firstAttemptShakiness": row["first_attempt_shakiness"],
             "firstAttemptSelfSolved": row["first_attempt_self_solved"],
             "topicSyncId": topic_sync_id, "subjectSyncId": subject_sync_id,
@@ -884,6 +885,7 @@ def _apply_review_problems(conn, records):
                 data.get("fastestTimeSeconds"), data.get("fastestTimeIsSolved"),
                 data.get("scheduleStage", 0), data.get("nextReviewDate"),
                 data.get("firstAttemptSeconds"), data.get("firstAttemptShakiness"), data.get("firstAttemptSelfSolved"),
+                int(data.get("outOfRotation") or 0), data.get("originalDueDate"),
             )
             if row:
                 conn.execute(
@@ -895,6 +897,7 @@ def _apply_review_problems(conn, records):
                         fastest_time_seconds=?, fastest_time_is_solved=?,
                         schedule_stage=?, next_review_date=?,
                         first_attempt_seconds=?, first_attempt_shakiness=?, first_attempt_self_solved=?,
+                        out_of_rotation=?, original_due_date=?,
                         updated_at=?, device_id=?, is_deleted=?
                     WHERE id=?
                     """,
@@ -910,8 +913,9 @@ def _apply_review_problems(conn, records):
                         fastest_time_seconds, fastest_time_is_solved,
                         schedule_stage, next_review_date,
                         first_attempt_seconds, first_attempt_shakiness, first_attempt_self_solved,
+                        out_of_rotation, original_due_date,
                         sync_id, updated_at, device_id, is_deleted
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     values + (record["sync_id"], incoming_updated_at, record["device_id"], int(record["is_deleted"])),
                 )
