@@ -8,6 +8,7 @@ is hidden or the app quits. Shape maths lives in scribe_geometry.py.
 """
 import collections
 import copy
+import gc
 import math
 import threading
 import time
@@ -60,6 +61,7 @@ from qt_ui.ui_kit import with_check_icon
 
 GRID = 20.0  # world units between grid lines at 100% zoom
 SAVE_DELAY_MS = 600
+_ADDED = object()         # marks an undo step that only adds one shape (see ScribeCanvas._push_added)
 MAX_UNDO = 100
 RULER = 20
 
@@ -154,11 +156,13 @@ class ScribeCanvas(QWidget):
         return layers, self.doc["activeLayer"]
 
     def _push_undo(self):
+        self._board_edited()               # every edit starts here: whatever follows may change the board
         self._undo.append(self._snapshot())
         del self._undo[:-MAX_UNDO]
         self._redo.clear()
 
     def _restore(self, snapshot):
+        self._board_edited()
         self.doc["layers"], self.doc["activeLayer"] = snapshot
         self.doc["activeLayer"] = min(self.doc["activeLayer"], len(self.doc["layers"]) - 1)
         self._sel = []
@@ -167,15 +171,62 @@ class ScribeCanvas(QWidget):
         self.changed.emit()
         self.update()
 
+    def _push_added(self, item):
+        """Undo for adding one shape: remember only that it was added (to the active layer), not a copy of
+        the whole board. On a board of thousands of strokes the copy cost ~35 ms at every pen-up, and a
+        hundred kept steps held half a million dicts."""
+        self._picture_fresh = False        # (the extent stays: one stroke is added to it in _commit)
+        self._undo.append((_ADDED, self.doc["activeLayer"], item))
+        del self._undo[:-MAX_UNDO]
+        self._redo.clear()
+
+    def _remove_last(self, layer_index):
+        layers = self.doc["layers"]
+        layer_index = min(layer_index, len(layers) - 1)
+        items = layers[layer_index]["items"]
+        item = items.pop() if items else None
+        self.doc["activeLayer"] = layer_index
+        self._sel = []
+        self._draft = None
+        self._board_edited()
+        self.layersChanged.emit()
+        self.changed.emit()
+        self.update()
+        return item
+
+    def _add_back(self, layer_index, item):
+        layers = self.doc["layers"]
+        layer_index = min(layer_index, len(layers) - 1)
+        layers[layer_index]["items"].append(item)
+        self.doc["activeLayer"] = layer_index
+        self._sel = []
+        self._draft = None
+        self._board_edited()
+        self.layersChanged.emit()
+        self.changed.emit()
+        self.update()
+
     def undo(self):
-        if self._undo:
+        if not self._undo:
+            return
+        step = self._undo.pop()
+        if step[0] is _ADDED:
+            item = self._remove_last(step[1])
+            self._redo.append((_ADDED, step[1], item if item is not None else step[2]))
+        else:
             self._redo.append(self._snapshot())
-            self._restore(self._undo.pop())
+            self._restore(step)
 
     def redo(self):
-        if self._redo:
+        if not self._redo:
+            return
+        step = self._redo.pop()
+        if step[0] is _ADDED:
+            self._add_back(step[1], step[2])
+            self._undo.append((_ADDED, step[1], step[2]))
+        else:
             self._undo.append(self._snapshot())
-            self._restore(self._redo.pop())
+            self._restore(step)
 
     # ---- options ---------------------------------------------------------
     def set_tool(self, tool):
@@ -200,6 +251,7 @@ class ScribeCanvas(QWidget):
         if not (self._last_edit and self._last_edit[0] == marker and now - self._last_edit[1] < 1.5):
             self._push_undo()
         self._last_edit = (marker, now)
+        self._board_edited()
         for item in self._sel:
             fn(item)
         self.update()
@@ -306,7 +358,10 @@ class ScribeCanvas(QWidget):
         held = getattr(self, "_bounds_hold", None)
         if hold is not None and held is not None and held[0] is hold:
             return held[1]
+        if self._bounds_fresh and self._bounds_shape == self._board_shape():
+            return self._bounds_full
         result = self._work_out_bounds()
+        self._bounds_full, self._bounds_fresh, self._bounds_shape = result, True, self._board_shape()
         self._drawing_bounds = (drawing, result) if drawing is not None else None
         self._bounds_hold = (hold, result) if hold is not None else None
         return result
@@ -364,6 +419,7 @@ class ScribeCanvas(QWidget):
 
     def layer_edited(self):
         """The layer list changed a name or visibility (no undo step)."""
+        self._board_edited()
         self.changed.emit()
         self.update()
 
@@ -404,6 +460,8 @@ class ScribeCanvas(QWidget):
             p.translate(-self.view["x"], -self.view["y"])
             self._paint_item(p, self._draft, self.zoom)
             p.restore()
+        elif not self._sel and not self._band and self._draft is None and self.prefs["tool"] == "freehand":
+            p.drawPixmap(0, 0, self._board_picture())      # nothing sits on top of the board: show the picture
         else:
             self._paint_background(p)
             p.setRenderHint(QPainter.Antialiasing, True)
@@ -426,15 +484,52 @@ class ScribeCanvas(QWidget):
         self._drawing_version = (drawing, version) if drawing is not None else None
         return version
 
+    def _picture_key(self, version):
+        return (self.width(), self.height(), self.devicePixelRatioF(), self.zoom, self.view["x"], self.view["y"],
+                self.prefs["background"], version, len(self.doc["layers"]),
+                tuple((layer["visible"], layer["opacity"]) for layer in self.doc["layers"]))
+
+    _picture_fresh = False     # True only while nothing on the board was edited since the picture was drawn
+    _bounds_full = None        # the extent of the whole board, kept while _bounds_fresh
+    _bounds_fresh = False
+    _bounds_shape = None
+
+    def _board_shape(self):
+        return tuple((layer["visible"], len(layer["items"])) for layer in self.doc["layers"])
+
+    def _board_edited(self):
+        """Something on the board may have changed: the picture and the board's extent are worked out again."""
+        self._picture_fresh = False
+        self._bounds_fresh = False
+
+    def _extend_picture(self, item, fresh):
+        """A stroke was just added: draw it onto the picture of the board instead of throwing the picture
+        away, so the next paint (and the next stroke) does not redraw thousands of strokes."""
+        known = getattr(self, "_picture", None)
+        layer = self.doc["layers"][self.doc["activeLayer"]]
+        if not fresh or known is None or not layer["visible"] or layer["opacity"] != 100:
+            return
+        old_key, image = known
+        new_key = self._picture_key(self._content_version())
+        if old_key[:7] != new_key[:7] or old_key[8:] != new_key[8:]:
+            return                     # the view, paper or layers changed too: rebuild as before
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.translate(self.width() / 2, self.height() / 2)
+        painter.scale(self.zoom, self.zoom)
+        painter.translate(-self.view["x"], -self.view["y"])
+        self._paint_item(painter, item, self.zoom)
+        painter.end()
+        self._picture = (new_key, image)
+        self._picture_fresh = True
+
     def _board_picture(self):
         """The paper and everything drawn so far, as one picture, kept until the view or the content changes."""
         ratio = self.devicePixelRatioF()
         version = self._content_version()
-        key = (self.width(), self.height(), ratio, self.zoom, self.view["x"], self.view["y"],
-               self.prefs["background"], version, len(self.doc["layers"]),
-               tuple((layer["visible"], layer["opacity"]) for layer in self.doc["layers"]))
+        key = self._picture_key(version)
         known = getattr(self, "_picture", None)
-        if known is not None and known[0] == key:
+        if known is not None and known[0] == key and self._picture_fresh:
             return known[1]
         image = QPixmap(int(self.width() * ratio), int(self.height() * ratio))
         image.setDevicePixelRatio(ratio)
@@ -444,6 +539,7 @@ class ScribeCanvas(QWidget):
         self._paint_scene(picture, self.width(), self.height(), self.zoom, self.view["x"], self.view["y"], ui=False)
         picture.end()
         self._picture = (key, image)
+        self._picture_fresh = True
         return image
 
     # ---- minimap ---------------------------------------------------------
@@ -906,14 +1002,24 @@ class ScribeCanvas(QWidget):
         return pt
 
     def _commit(self, item):
-        self._push_undo()
+        gc.enable()
+        fresh = self._picture_fresh
+        extent, extent_fresh = self._bounds_full, self._bounds_fresh and self._bounds_shape == self._board_shape()
+        self._push_added(item)
         self._active_items().append(item)
+        if extent_fresh and extent is not None and self.doc["layers"][self.doc["activeLayer"]]["visible"]:
+            b = self._bounds_of(item)
+            self._bounds_full = (min(extent[0], b[0]), min(extent[1], b[1]), max(extent[2], b[2]), max(extent[3], b[3]))
+            self._bounds_fresh, self._bounds_shape = True, self._board_shape()
+        if item.get("type") == "stroke":
+            self._extend_picture(item, fresh)
         self._draft = None
         self._phase = 0
         self.changed.emit()
         self.update()
 
     def _cancel_draft(self):
+        gc.enable()
         self._draft = None
         self._phase = 0
         self._band = None
@@ -1106,6 +1212,7 @@ class ScribeCanvas(QWidget):
             self._commit(self._draft)
         elif tool == "freehand":
             self._draft = self._make("stroke", w)
+            gc.disable()          # no collection pause mid-stroke; it is turned back on when the pen lifts
         elif tool in ("line", "arrow", "curve"):
             self._draft = self._make(tool, self._snap(w))
             self._phase = 0
@@ -1174,6 +1281,7 @@ class ScribeCanvas(QWidget):
             if not self._moved:
                 self._push_undo()
                 self._moved = True
+            self._board_edited()
             for item in self._sel:
                 geo.translate(item, dx, dy)
             self._move_last = w
@@ -1778,6 +1886,7 @@ class ScribeTab(QWidget):
         canvas._undo.clear()
         canvas._redo.clear()
         canvas._sel = []
+        canvas._board_edited()
         canvas._draft = None
         canvas.layersChanged.emit()
         canvas.update()
@@ -1837,7 +1946,8 @@ class ScribeTab(QWidget):
         side.show()
 
     def hideEvent(self, event):
-        self.flush()
+        gc.enable()                     # never left off if the page closes mid-stroke
+        self.flush()                    # quick now: the board's text is remembered between saves
         super().hideEvent(event)
 
     # ---- layout helpers --------------------------------------------------
