@@ -835,6 +835,60 @@ def list_problems(topic_id, due_only=True):
             return []
 
 
+MAX_MOVE_DAYS = 7    # a review can be pushed at most this far past the day it first fell due
+
+
+def problems_between(first, last):
+    """Every live problem due on or before `last` (anything already overdue counts as `first`),
+    soonest first. Problems set aside are never listed."""
+    with _lock:
+        try:
+            conn = _get_conn()
+            rows = conn.execute(
+                f"{_PROBLEM_SELECT} WHERE p.is_deleted = 0 AND p.out_of_rotation = 0 AND p.next_review_date <= ? "
+                "ORDER BY p.next_review_date ASC, p.stars DESC", (last.isoformat(),)).fetchall()
+            return [_row_to_problem(r) for r in rows]
+        except Exception:
+            logger.exception("review_store.problems_between failed")
+            return []
+
+
+def move_cost(original_due, new_date):
+    """Points a review will cost if it is done on `new_date` rather than `original_due` (never positive).
+    Moving earlier, or not at all, is free; each day later costs 3, so a week costs 21 at most."""
+    late = max(0, (new_date - original_due).days)
+    return -min(late, MAX_MOVE_DAYS) * 3
+
+
+def move_review(problem_id, new_date, today=None):
+    """Moves when a review is due. Returns the updated problem, or None if it can't be moved (unknown, set
+    aside, or more than MAX_MOVE_DAYS past its original due date). The first time it is pushed later its
+    original due date is remembered, because that is what a late finish is judged against."""
+    with _lock:
+        try:
+            conn = _get_conn()
+            row = conn.execute(
+                "SELECT next_review_date, original_due_date, out_of_rotation FROM review_problems "
+                "WHERE id = ? AND is_deleted = 0", (problem_id,)).fetchone()
+            if row is None or row["out_of_rotation"]:
+                return None
+            current = date.fromisoformat(str(row["next_review_date"])[:10])
+            original = date.fromisoformat(str(row["original_due_date"])[:10]) if row["original_due_date"] else current
+            if (new_date - original).days > MAX_MOVE_DAYS:
+                return None
+            keep = original if new_date > original else None      # back at or before its due date: nothing to remember
+            conn.execute(
+                "UPDATE review_problems SET next_review_date = ?, original_due_date = ?, updated_at = ?, device_id = ? WHERE id = ?",
+                (new_date.isoformat(), keep.isoformat() if keep else None, datetime.now().isoformat(),
+                 device_id.get_device_id(), problem_id))
+            conn.commit()
+        except Exception:
+            logger.exception("review_store.move_review failed for %s", problem_id)
+            return None
+    sync_trigger.note_change()
+    return get_problem(problem_id)
+
+
 def overdue_on(day):
     """[(problem id, due date)] of the problems that were overdue on `day`: due before it, not set aside."""
     with _lock:
