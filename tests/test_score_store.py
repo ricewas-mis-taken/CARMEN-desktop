@@ -88,4 +88,4 @@ def test_overdue_reviews_cost_a_little_each_day_but_stop_after_ten():
 
 
 def test_grade_bands():
-    assert [score_store.grade(v) for v in (950, 850, 750, 650, 100)] == ["A", "B", "C", "D", "F"]
+    assert [score_store.grade(v) for v in (850, 700, 520, 400, 100)] == ["A", "B", "C", "D", "F"]

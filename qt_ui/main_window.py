@@ -291,6 +291,7 @@ class _MainWindow(QWidget):
         motion.install()
         self._show_tab("home")
         QTimer.singleShot(0, lambda: self._move_marker(animated=False))
+        QTimer.singleShot(4000, self._maybe_show_report_card)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -363,6 +364,23 @@ class _MainWindow(QWidget):
         layout.addWidget(self._account_area)
 
         return sidebar
+
+    def _maybe_show_report_card(self):
+        """Once per week, the first time Carmen is open after the week ends: last week's report card."""
+        try:
+            import config
+            import report_card
+            import session_history
+            from qt_ui import report_card_dialog
+            start = report_card.last_week()
+            if config.load_config().get("reportCardWeek") == start.isoformat():
+                return
+            config.update_config(lambda cfg: cfg.update(reportCardWeek=start.isoformat()))
+            card = report_card.build(start, session_history.load_all())
+            if not card["empty"]:
+                report_card_dialog.show(card, on_plan=lambda: self._show_tab("week"))
+        except Exception:
+            pass
 
     def _show_tab(self, key):
         changed = getattr(self, "_current_key", None) != key

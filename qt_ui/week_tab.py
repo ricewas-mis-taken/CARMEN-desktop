@@ -11,8 +11,11 @@ from PySide6.QtWidgets import (
 
 import review_store
 import score_store
+import report_card
+import session_history
 import week_plan
-from qt_ui.ui_kit import FAINT, INK, MUTED, format_minutes, safe_color, tint
+from qt_ui import report_card_dialog
+from qt_ui.ui_kit import FAINT, INK, MUTED, SECONDARY_STYLE, button, format_minutes, safe_color, tint
 
 MIME = "application/x-carmen-review"
 AMBER = "#F5A524"
@@ -176,6 +179,9 @@ class WeekTab(QWidget):
         title.setStyleSheet(f"font-size:26px;font-weight:700;color:{INK};background:transparent;")
         head.addWidget(title)
         head.addStretch(1)
+        last = button("Last week", SECONDARY_STYLE, height=34)
+        last.clicked.connect(self._show_last_week)
+        head.addWidget(last)
         self._score = QLabel("")
         self._score.setStyleSheet(f"color:{INK};font-size:15px;font-weight:700;background:transparent;")
         head.addWidget(self._score)
@@ -234,6 +240,10 @@ class WeekTab(QWidget):
             text += f" Heaviest: {names}. {_day_name(light, self._today)} is the lightest."
         text += " Drag a review to another day. Earlier is free, each day later costs 3 points."
         return text
+
+    def _show_last_week(self):
+        card = report_card.build(report_card.last_week(), session_history.load_all())
+        report_card_dialog.show(card, on_plan=self.refresh)
 
     def _show_hint(self, day, cost, problem):
         if day is None:

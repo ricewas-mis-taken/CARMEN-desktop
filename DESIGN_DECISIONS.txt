@@ -929,3 +929,24 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   Fork: sync the ledger or keep it local. Kept local for now (listed in test_sync_coverage). Because event keys are
   deterministic from synced data, merging two devices' ledgers later is a union by key. Not built yet.
   Approximation: past days' overdue lists use today's next_review_date (history of due dates isn't kept).
+
+2026-11-03  Week page, report card, honest pauses, unblock budget, set-aside problems
+  Out of rotation: review_problems.out_of_rotation (+ original_due_date), synced. An aside problem is never due,
+  overdue or scored; bringing it back restarts its first interval from today so it can't return overdue.
+  Moving a review: earlier is free; each day later is 3 points, up to 7 days past its ORIGINAL due date (remembered
+  on the first push later so repeated moves can't launder lateness). The cost lands when it is finished late.
+  Week page (week_plan.py + qt_ui/week_tab.py): reviews per day plus daily-goal minutes; a day is heavy at 25%
+  above the week's average load (never under 40 min). Week/month goals are suggestions there too (no load).
+  Drag and drop shows the cost while hovering; the drop calls review_store.move_review, which is what is tested.
+  Pauses (pause_budget.py): every pause has a reason in the session log. break / interrupted / stuck / the automatic
+  pomodoro rest / "aside" (Carmen parking a session) are free. "checking" and NO reason count against a budget of 10%
+  of the session (min 2 min); past it 1 point per 3 minutes, max 15 a session. No reason deliberately counts as
+  checking so an old extension or the tray can't use "nothing" as the free option.
+  Unblocks (unblock_gate.py): 3 free a day, then a 2 minute wait enforced by the desktop (first request starts it,
+  429 with waitSeconds). plan + minutes are optional in the API; a detailed unblock inside the budget earns +1,
+  one past it costs 3. A client that sends no plan is never penalised (the lock overlay and old extensions can't ask).
+  Report card (report_card.py): Monday to Sunday, shown once the first time Carmen opens after a week ends
+  (config reportCardWeek) and from the Week page. Grades are centred on the start: A 800, B 650, C 500, D 350.
+  NOT BUILT YET: the extension's unblock prompt (why / plan / how long / wait countdown) and its pause reason
+  picker, in chrome/ and firefox/. Until then an extension pause counts as "checking" and an extension unblock
+  works without a plan. The "did you do what you said?" follow-up is also not built.

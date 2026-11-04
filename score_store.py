@@ -70,8 +70,19 @@ def score(data=None):
     return total
 
 
+def score_through(day, data=None):
+    """What the score was at the end of `day`."""
+    data = data or load()
+    cut = day.isoformat()
+    total = BASE
+    for event in sorted(data["events"], key=lambda e: (e["date"], e["key"])):
+        if event["date"] <= cut:
+            total = clamp(total + event["points"])
+    return total
+
+
 def grade(value):
-    return "A" if value >= 900 else "B" if value >= 800 else "C" if value >= 700 else "D" if value >= 600 else "F"
+    return "A" if value >= 800 else "B" if value >= 650 else "C" if value >= 500 else "D" if value >= 350 else "F"
 
 
 def add_event(key, day, kind, points, note="", _data=None):
