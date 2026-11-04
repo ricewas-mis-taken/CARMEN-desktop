@@ -69,3 +69,23 @@ def test_a_moved_review_is_scored_against_its_first_due_date(isolate_review_db):
     review_store.finish_review_for_problem(p["id"], 60, True, 3)
     events = [e for e in score_store.load()["events"] if e["kind"] == "review"]
     assert len(events) == 1 and events[0]["points"] == 6 - 6      # two days after the original due date
+
+
+def test_the_week_page_snaps_a_dropped_review_to_its_new_day(isolate_review_db, qtbot, monkeypatch):
+    from qt_ui.week_tab import WeekTab
+    p = _problem("a", date.today())
+    tab = WeekTab()
+    qtbot.addWidget(tab)
+    day = date.today() + timedelta(days=2)
+    tab._moved(p, day)
+    qtbot.waitUntil(lambda: review_store.get_problem(p["id"])["nextReviewDate"] == day.isoformat(), timeout=2000)
+    assert "Score" in tab._score.text()
+
+
+def test_the_page_says_when_a_move_is_too_far(isolate_review_db, qtbot):
+    from qt_ui.week_tab import WeekTab
+    p = _problem("a", date.today())
+    tab = WeekTab()
+    qtbot.addWidget(tab)
+    tab._moved(p, date.today() + timedelta(days=9))
+    assert "week" in tab._hint.text()
