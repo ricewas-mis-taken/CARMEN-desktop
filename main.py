@@ -21,6 +21,7 @@ import desktop_menu
 import calendar_scheduler
 import calendar_toast
 import config
+import code_watcher
 import dev_watcher
 import enforcer
 import qt_gui_thread
@@ -131,6 +132,11 @@ def main():
         import qt_ui.quicknote as quicknote
         qt_gui_thread.run_on_gui_thread(quicknote.open_quicknote)
 
+    if os.environ.pop("CARMEN_RESTARTED", None):
+        # The app restarted itself into new code: the window comes back where it was.
+        import qt_ui.main_window as main_window
+        qt_gui_thread.run_on_gui_thread(main_window.reopen_after_restart)
+
     if DEV_MODE:
         # Opens the main window automatically on launch/dev-restart, purely
         # a dev-loop convenience so window-geometry changes can be reverified
@@ -199,6 +205,30 @@ def main():
     # after app.exec() returns (os._exit vs. os.execv into the freshly
     # pulled code; see below).
     auto_updater.start(stop_event, on_quit)
+
+    def _busy():
+        """A session, a review or a first attempt is running: not a moment to restart."""
+        import review_store
+        import session_manager
+        return bool(session_manager.get_status().get("isActive") or review_store.get_active_review()
+                    or review_store.get_first_attempt())
+
+    def _window_open():
+        import qt_ui.main_window as main_window
+        return main_window.remembered()["open"]
+
+    def on_code_changed():
+        """New code on disk, checked, and a quiet moment: remember the page, then leave through the same
+        path as Quit. The re-exec below starts the new copy, which reopens the window where it was."""
+        import qt_ui.main_window as main_window
+        import config
+        state = main_window.remembered()
+        config.update_config(lambda cfg: cfg.update(restoreWindow=state))
+        os.environ["CARMEN_RESTARTED"] = "1"
+        on_quit()
+        icon.stop()
+
+    code_watcher.start(stop_event, on_code_changed, _busy, _window_open, auto_updater.user_idle_seconds)
 
     if DEV_MODE:
         def on_dev_restart():
@@ -281,7 +311,8 @@ def main():
     exit_code = app.exec()  # main thread blocks here instead of icon.run()
 
     stop_event.set()
-    if auto_updater.restart_was_requested() or dev_watcher.restart_was_requested():
+    if (auto_updater.restart_was_requested() or dev_watcher.restart_was_requested()
+            or code_watcher.restart_was_requested()):
         # Re-exec in place (same PID, fresh interpreter) rather than
         # spawning a new process and exiting this one -- avoids a race
         # where the child tries to rebind api_server's port before this
