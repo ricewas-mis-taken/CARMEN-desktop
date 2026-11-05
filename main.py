@@ -147,7 +147,6 @@ def main():
         qt_gui_thread.run_on_gui_thread(main_window.reopen_after_restart)
 
     elif AUTOSTARTED:
-        import config
         if config.load_config().get("openOnStartup", True):
             import qt_ui.main_window as main_window
             qt_gui_thread.run_on_gui_thread(main_window.open_main_window)
