@@ -26,6 +26,7 @@ PAGES = {                      # page key -> (module, class)
     "screentime": ("qt_ui.screentime_tab", "ScreenTimeTab"),
     "history": ("qt_ui.history_viewer", "HistoryTab"),
     "openings": ("qt_ui.openings_tab", "OpeningsTab"),
+    "scribe": ("qt_ui.scribe_tab", "ScribeTab"),      # sits in a scroll area; saved before it is replaced
 }
 SAFE = PURE + DIALOGS + [m for m, _ in PAGES.values()]       # in the order they are reloaded (dependencies first)
 
@@ -123,7 +124,14 @@ def _rebuild_pages(reloaded):
         was_current = window._stack.currentWidget() is old
         kwargs = {"on_navigate": window._show_tab} if key == "home" else {}
         try:
-            new = cls(**kwargs)
+            if key == "scribe":
+                from qt_ui.main_window import _scrolling
+                inner = old.widget() if hasattr(old, "widget") else old
+                if hasattr(inner, "flush"):
+                    inner.flush()                      # the board on screen is written out first
+                new = _scrolling(cls())
+            else:
+                new = cls(**kwargs)
         except Exception:
             logger.exception("hot_update: could not rebuild the %s page", key)
             continue
