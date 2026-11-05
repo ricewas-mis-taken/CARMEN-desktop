@@ -25,6 +25,19 @@ def show():
     return dialog
 
 
+def _refresh_review_page():
+    """A move changes what is due, so the Review page's lists catch up now rather than on the next click."""
+    try:
+        from qt_ui import main_window
+        page = main_window._win._pages["review"] if main_window._win is not None else None
+        page = page.widget() if hasattr(page, "widget") else page
+        for view in page._topic_views.values():
+            view.refresh()
+        page._refresh_strip()
+    except Exception:
+        pass
+
+
 def cost_text(cost):
     return "free" if cost == 0 else f"{cost} points"
 
@@ -283,3 +296,4 @@ class WeekDialog(QWidget):
         if review_store.move_review(problem["id"], day) is None:
             self._hint.setText("A review can't go more than a week past its due date.")
         QTimer.singleShot(0, self.refresh)
+        QTimer.singleShot(0, _refresh_review_page)
