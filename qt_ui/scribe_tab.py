@@ -231,6 +231,8 @@ class ScribeCanvas(QWidget):
     # ---- options ---------------------------------------------------------
     def set_tool(self, tool):
         self._cancel_draft()
+        if tool != "select":
+            self._sel = []         # a selection only lives while the select tool is in use
         self.prefs["tool"] = tool
         self.pan_mode = False
         self._update_cursor()
@@ -1207,6 +1209,8 @@ class ScribeCanvas(QWidget):
             return
         w = self._to_world(pos)
         tool = self.tool
+        if tool != "select" and self._sel:
+            self._sel = []         # drawing, or a click on the board, always drops any leftover selection
         if tool == "curve" and self._draft and self._phase == 1:
             self._draft["c"] = list(self._snap(w))
             self._commit(self._draft)
@@ -1353,6 +1357,8 @@ class ScribeCanvas(QWidget):
             self._space = True
             self._update_cursor()
         elif ctrl and key == Qt.Key_A:
+            if self.tool != "select":
+                self.set_tool("select")
             self._sel = [i for i in self._visible_items_top_first()]
             self.update()
         elif ctrl and key == Qt.Key_C:

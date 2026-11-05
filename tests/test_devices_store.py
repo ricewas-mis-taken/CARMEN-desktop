@@ -44,3 +44,9 @@ def test_another_computers_row_counts_as_a_second_pc():
                  "extensions": [{"browser": "Edge", "extensionId": "q", "lastSeen": "2026-01-01T00:00:00+00:00"}]})
     devices_store.save(rows)
     assert devices_store.totals() == (2, 2, 1)       # the laptop's link was last seen long ago: not connected
+
+
+def test_a_zoned_timestamp_can_be_compared_with_a_local_one():
+    import sync_client
+    assert sync_client._is_newer("2026-11-05T03:16:41+00:00", "2020-01-01T00:00:00")
+    assert not sync_client._is_newer("2020-01-01T00:00:00+00:00", "2026-11-05T00:00:00")
