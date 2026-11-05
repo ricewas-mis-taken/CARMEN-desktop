@@ -242,7 +242,13 @@ def _is_newer(candidate_iso, cutoff_iso):
         return False
     if not cutoff_iso:
         return True
-    return datetime.fromisoformat(candidate_iso) > datetime.fromisoformat(cutoff_iso)
+    return _naive_local(candidate_iso) > _naive_local(cutoff_iso)
+
+
+def _naive_local(iso):
+    """Some stores write local time with no zone, others UTC with one; compare them on the same footing."""
+    when = datetime.fromisoformat(iso)
+    return when.astimezone().replace(tzinfo=None) if when.tzinfo else when
 
 
 # --- gather: tasks.json / board.json ---
