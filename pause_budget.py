@@ -59,6 +59,23 @@ def summarize(entry):
             "over_seconds": over, "cost": cost, "pauses": items}
 
 
+def live(status, now=None):
+    """The budget of the session running now: {budget_seconds, used_seconds, left_seconds, over_seconds}, or
+    None with no session. The length is the time already gone plus what is left, so the budget is the one
+    the finished session will be judged by."""
+    start = _parse((status or {}).get("startTime"))
+    if not status or not status.get("isActive") or not start:
+        return None
+    now = now or datetime.now()
+    length = max(0, int((now - start).total_seconds())) + int(status.get("secondsRemaining") or 0)
+    result = summarize({"violationLog": status.get("violationLog"), "startTime": start.isoformat(),
+                        "endTime": now.isoformat()})
+    budget = max(BUDGET_MINIMUM_SECONDS, int(length * BUDGET_SHARE))
+    used = result["escape_seconds"]
+    return {"budget_seconds": budget, "used_seconds": used,
+            "left_seconds": max(0, budget - used), "over_seconds": max(0, used - budget)}
+
+
 def _parse(iso):
     try:
         return datetime.fromisoformat(iso) if iso else None
