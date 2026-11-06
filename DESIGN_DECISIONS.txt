@@ -1019,3 +1019,12 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   carries its key (devices_store), keeps one row per computer, and syncs the rows like tasks, so any computer can
   list "computers, browsers, account, connected now". A link is per computer by design (the key is local).
   Browser profile / which person in the browser is not knowable without the identity permission; not added.
+
+2026-11-05  Pause popup shows the budget and takes a note
+  The pause popup (qt_ui/pause_reason.py) now picks a reason, then Pause: a reason is highlighted, a one-line note
+  is typed (required for "Checking something else"), and the budget left is shown on top (pause_budget.live). The
+  note is stored on the pause marker as pauseNote and accepted as {"note"} on POST /session/pause.
+  Chose a live budget function over reading the finished-session summary: the same rules, but it counts the pause
+  that is still open and plans the length as time gone plus time left.
+  Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-11-05] (the popup's own panel, which works the budget
+  out itself from the status log).
