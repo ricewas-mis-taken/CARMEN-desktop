@@ -1109,7 +1109,7 @@ def swap_with_parked(park_id=None):
     return status
 
 
-def pause_session(reason=None):
+def pause_session(reason=None, note=None):
     """Freezes the countdown only — isActive, lockMode, blocklists, and
     violation tracking are all untouched, so lock enforcement keeps working
     exactly as before while paused. Idempotent: no active session, or a
@@ -1156,7 +1156,8 @@ def pause_session(reason=None):
         # not worked, so no extra markers while isBreak.
         if not _state["isBreak"]:
             _state["violationLog"].append(
-                {"kind": "pause", "timestamp": now.isoformat(), "pauseReason": reason or None})
+                {"kind": "pause", "timestamp": now.isoformat(), "pauseReason": reason or None,
+                 **({"pauseNote": note} if note else {})})
         _save()
         state_events.bump()
         import review_store

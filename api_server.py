@@ -490,7 +490,9 @@ def session_pause():
     reason = body.get("reason") if isinstance(body, dict) else None
     if reason not in (None, "break", "interrupted", "stuck", "checking"):
         reason = None
-    return jsonify(session_manager.pause_session(reason))
+    note = body.get("note") if isinstance(body, dict) else None
+    note = note.strip()[:200] if isinstance(note, str) and note.strip() else None
+    return jsonify(session_manager.pause_session(reason, note))
 
 
 @app.route("/session/resume", methods=["POST"])
