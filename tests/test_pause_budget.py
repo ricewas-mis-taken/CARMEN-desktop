@@ -91,6 +91,37 @@ def test_the_reason_popup_pauses_with_the_chosen_reason(qtbot, isolate_state):
     popup = pause_reason.ask(None, lambda: done.append(1))
     qtbot.addWidget(popup)
     assert not session_manager.get_status()["isPaused"]
-    popup._choose("checking")
+    popup._choose("checking")                       # checking something needs a word on what
+    assert not session_manager.get_status()["isPaused"] and done == []
+    popup._choose("checking", "looking up the formula")
     assert session_manager.get_status()["isPaused"] and done == [1]
-    assert session_manager._state["violationLog"][-1]["pauseReason"] == "checking"
+    marker = session_manager._state["violationLog"][-1]
+    assert marker["pauseReason"] == "checking" and marker["pauseNote"] == "looking up the formula"
+
+
+def test_the_reason_popup_shows_the_budget_left(qtbot, isolate_state):
+    from qt_ui import pause_reason
+    session_manager.start_session(50, "soft", [], [])
+    popup = pause_reason.ask(None)
+    qtbot.addWidget(popup)
+    assert "left" in popup._budget.text() and not popup._budget.isHidden()
+    popup.close()
+
+
+def test_live_budget_counts_an_open_checking_pause():
+    from datetime import timedelta
+    log = _log((10, "pause", "checking"))
+    now = T0 + timedelta(minutes=13)
+    live = pause_budget.live({"isActive": True, "startTime": T0.isoformat(), "secondsRemaining": 47 * 60,
+                              "violationLog": log}, now)
+    assert live["budget_seconds"] == 12 * 60 - 12 * 60 + 360 or live["budget_seconds"] == 360
+    assert live["used_seconds"] == 180 and live["left_seconds"] == 180 and live["over_seconds"] == 0
+    assert pause_budget.live({"isActive": False}) is None
+
+
+def test_break_pauses_are_not_in_the_live_budget():
+    from datetime import timedelta
+    log = _log((10, "pause", "break"))
+    live = pause_budget.live({"isActive": True, "startTime": T0.isoformat(), "secondsRemaining": 1800,
+                              "violationLog": log}, T0 + timedelta(minutes=20))
+    assert live["used_seconds"] == 0
