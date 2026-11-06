@@ -223,6 +223,9 @@ class MiniTimer(QWidget):
         self._button.setEnabled(can_pause)
         self._button.setText("Resume" if status["isPaused"] else "Pause")
         self._button.adjustSize()
+        note = pause_reason.budget_note(status)
+        self._budget = note
+        self.setToolTip(pause_reason.EXPLAIN if note else "")
         self._place_buttons()
         self.update()
 
@@ -265,6 +268,16 @@ class MiniTimer(QWidget):
             painter.setPen(QPen(RING_BLUE, width, Qt.SolidLine, Qt.RoundCap))
             painter.drawArc(ring, 90 * 16, -int(self._fraction * 360 * 16))
 
+        if getattr(self, "_budget", None):
+            text, colour = self._budget
+            small = QFont(self.font())
+            small.setPixelSize(12)
+            painter.setFont(small)
+            painter.setPen(QColor(colour))
+            painter.drawText(QRectF(0, self._button.y() - 22, self.width(), 18), Qt.AlignCenter,
+                             painter.fontMetrics().elidedText(text, Qt.ElideRight, self.width() - 16))
+            font = QFont(self.font())
+            font.setPixelSize(14)
         font.setPixelSize(max(16, int(side * (0.28 if self._fraction is not None else 0.34))))
         font.setWeight(QFont.Light)
         painter.setFont(font)
@@ -275,7 +288,7 @@ class MiniTimer(QWidget):
         """The square holding the ring and the time (also what opens QuickNote)."""
         top = 8
         label_height = 26
-        bottom = self._button.y() - 6
+        bottom = self._button.y() - 6 - (18 if getattr(self, "_budget", None) else 0)
         side = max(1.0, min(self.width() - 28, bottom - top - label_height))
         return QRectF((self.width() - side) / 2, top + label_height, side, side)
 
