@@ -1038,6 +1038,7 @@ class _TaskCard(QFrame):
                 raise ValueError
         except ValueError:
             return
+        self._set_review_aside()
         self._begin_session(duration_minutes, is_burnout=False)
 
     def _start_burnout(self):
@@ -1062,6 +1063,9 @@ class _TaskCard(QFrame):
                 return                           # it now rides beside the session that starts next
             if not status.get("isPaused"):
                 session_manager.pause_session("aside")
+            return
+        if status.get("isActive") and not status.get("isPaused") and status.get("source") != "review":
+            session_manager.pause_session("aside")     # another task's session waits, free, and comes back after
 
     def _start_pomodoro(self):
         settings = _PomodoroDialog.get_settings(self)
@@ -1191,16 +1195,9 @@ class _TaskCard(QFrame):
         return status.get("source") in ("task", "review") and status.get("eventId") == self._task["id"]
 
     def _is_locked_by_other_session(self):
-        status = session_manager.get_status()
-        if not status["isActive"]:
-            return False
-        if self._belongs_to_this_task(status):
-            return False
-        # A paused session doesn't block starting a different task: it just waits.
-        if status["isPaused"]:
-            return False
-        # This task's own session may be one of the waiting ones.
-        return self._parked_entry(status) is None
+        # Nothing locks a task: starting it while another session runs sets that one aside (free, no pause
+        # needed first) and it comes back when this one ends.
+        return False
 
     def _is_running(self):
         status = session_manager.get_status()
