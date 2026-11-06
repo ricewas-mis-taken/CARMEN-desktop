@@ -115,14 +115,13 @@ def test_pomodoro_bar_opens_the_window_then_starts(qtbot, world, monkeypatch):
     assert sm.get_status()["pomodoro"]["totalCycles"] == 4
 
 
-def test_a_busy_card_cannot_be_started(qtbot, world):
+def test_a_card_can_be_started_while_another_task_runs(qtbot, world):
     a, b = _task("Alpha"), _task("Beta")
     sm.start_session(30, "soft", [], [], source="task", event_id=a["id"], event_title="Alpha")
     card = _card(qtbot, b)
-    assert not card._start_button.isEnabled()
-    assert card._busy_note.text() == "Alpha is running"
-    card._arm()                                                    # a stray call must not arm it
-    assert not card._armed_panel.isVisible()
+    assert card._start_button.isEnabled() and not card._busy_note.isVisible()
+    card._arm()
+    assert card._armed                                               # no pause needed first
 
 
 # ------------------------------------------------------------- running ----
