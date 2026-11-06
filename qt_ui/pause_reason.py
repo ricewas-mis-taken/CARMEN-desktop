@@ -1,7 +1,8 @@
 """Pausing asks what the pause is for. Break, interrupted and stuck are free; checking something else comes
 out of a small budget (see pause_budget), so a pause can't quietly turn into an escape. The popup shows
 that budget as it stands, lets the reason be explained in a line, and pauses on one button."""
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QRectF, QTimer, Qt
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QButtonGroup, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget,
 )
@@ -183,3 +184,42 @@ class _Popup(QWidget):
         if self in _OPEN:
             _OPEN.remove(self)
         super().closeEvent(event)
+
+
+class BudgetRing(QWidget):
+    """A small ring that drains as the pause budget is used, with the minutes left inside. Hover for what it is."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(38, 38)
+        self._fraction, self._text, self._colour = 1.0, "", _GREEN
+        self.hide()
+
+    def update_from(self, status):
+        live = pause_budget.live(status)
+        if not live:
+            self.hide()
+            return
+        over = live["over_seconds"] > 0
+        self._fraction = 1.0 if over else live["left_seconds"] / max(1, live["budget_seconds"])
+        self._text = "!" if over else str(max(0, live["left_seconds"]) // 60 + (1 if live["left_seconds"] % 60 else 0))
+        self._colour = _RED if over else (_AMBER if self._fraction < 0.3 else _GREEN)
+        note = budget_note(status)
+        self.setToolTip(f"{note[0]}\n{EXPLAIN}" if note else EXPLAIN)
+        self.show()
+        self.update()
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(4, 4, -4, -4)
+        p.setPen(QPen(QColor(128, 128, 128, 55), 3.5))
+        p.drawEllipse(rect)
+        p.setPen(QPen(QColor(self._colour), 3.5, Qt.SolidLine, Qt.RoundCap))
+        p.drawArc(rect, 90 * 16, -int(self._fraction * 360 * 16))
+        font = QFont(self.font())
+        font.setPixelSize(13)
+        font.setWeight(QFont.DemiBold)
+        p.setFont(font)
+        p.setPen(QColor(self._colour))
+        p.drawText(self.rect(), Qt.AlignCenter, self._text)

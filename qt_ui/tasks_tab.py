@@ -905,15 +905,12 @@ class _TaskCard(QFrame):
         self._pause_button = _button("Pause", _SECONDARY_STYLE)
         self._pause_button.clicked.connect(self._pause_resume)
         top.addWidget(self._pause_button, 1)
+        self._budget_ring = pause_reason.BudgetRing()
+        top.addWidget(self._budget_ring)
         self._end_button = _button("End", _DANGER_STYLE)
         self._end_button.clicked.connect(self._end_task)
         top.addWidget(self._end_button)
         outer.addLayout(top)
-        self._budget_label = QLabel("")
-        self._budget_label.setWordWrap(True)
-        self._budget_label.setToolTip(pause_reason.EXPLAIN)
-        self._budget_label.hide()
-        outer.addWidget(self._budget_label)
         # While a review of this task is the running session: a session can still be started; the review waits.
         # Own row so no label is squeezed.
         self._review_row = QWidget()
@@ -1422,12 +1419,10 @@ class _TaskCard(QFrame):
                 self._set_chip("Running", _GREEN)
             self._pause_button.setText("Resume" if paused else "Pause")
             self._pause_button.setStyleSheet(_primary_style(self._color) if paused else _SECONDARY_STYLE)
-        note = None if is_waiting or on_break else pause_reason.budget_note(session_manager.get_status())
-        if note:
-            self._budget_label.setText(f"{note[0]}. Only \"Checking something else\" uses it; "
-                                       "past it, every 3 minutes costs a point.")
-            self._budget_label.setStyleSheet(f"font-size:12px;color:{note[1]};background:transparent;")
-        self._budget_label.setVisible(bool(note))
+        if is_waiting or on_break:
+            self._budget_ring.hide()
+        else:
+            self._budget_ring.update_from(session_manager.get_status())
 
         self._idle_actions.hide()
         self._armed_panel.hide()
