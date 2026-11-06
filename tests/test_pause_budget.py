@@ -99,13 +99,14 @@ def test_the_reason_popup_pauses_with_the_chosen_reason(qtbot, isolate_state):
     assert marker["pauseReason"] == "checking" and marker["pauseNote"] == "looking up the formula"
 
 
-def test_the_reason_popup_shows_the_budget_left(qtbot, isolate_state):
+def test_the_budget_note_for_the_task_and_mini_timer(qtbot, isolate_state):
     from qt_ui import pause_reason
     session_manager.start_session(50, "soft", [], [])
     popup = pause_reason.ask(None)
     qtbot.addWidget(popup)
-    assert "left" in popup._budget.text() and not popup._budget.isHidden()
     popup.close()
+    text, _colour = pause_reason.budget_note(session_manager.get_status())
+    assert text.startswith("Pause budget:") and "left" in text
 
 
 def test_live_budget_counts_an_open_checking_pause():

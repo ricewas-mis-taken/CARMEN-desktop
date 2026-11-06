@@ -28,14 +28,19 @@ def clock(seconds):
     return f"{seconds // 60}:{seconds % 60:02d}"
 
 
-def budget_line(live):
-    """('2:00 of 5:00 left', colour) for the running session's budget, or ('', MUTED) with none."""
+EXPLAIN = ("Pause budget: time you can spend paused on 'Checking something else'. Break, interrupted and "
+           "stuck pauses are free. Past the budget, every 3 minutes costs a point.")
+
+
+def budget_note(status):
+    """(short line, colour) for the running session's pause budget, or None with no session."""
+    live = pause_budget.live(status)
     if not live:
-        return "", MUTED
+        return None
     if live["over_seconds"]:
-        return f"Over budget by {clock(live['over_seconds'])}. Each 3 minutes more costs a point.", _RED
-    colour = _GREEN if live["left_seconds"] > live["budget_seconds"] * 0.3 else _AMBER
-    return f"{clock(live['left_seconds'])} of {clock(live['budget_seconds'])} left", colour
+        return f"Pause budget used up, {clock(live['over_seconds'])} over", _RED
+    low = live["left_seconds"] < live["budget_seconds"] * 0.3
+    return f"Pause budget: {clock(live['left_seconds'])} left", _AMBER if low else _GREEN
 
 
 def ask(anchor, done=None, on_stuck=None):
@@ -68,14 +73,6 @@ class _Popup(QWidget):
         title = QLabel("Pause the timer")
         title.setStyleSheet(f"color:{INK};font-size:20px;font-weight:700;background:transparent;")
         layout.addWidget(title)
-
-        text, colour = budget_line(pause_budget.live(status))
-        self._budget = QLabel(text)
-        self._budget.setObjectName("PauseBudget")
-        self._budget.setVisible(bool(text))
-        self._budget.setStyleSheet(
-            f"color:{colour};font-size:13px;font-weight:600;background:transparent;")
-        layout.addWidget(self._budget)
 
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
@@ -166,7 +163,10 @@ class _Popup(QWidget):
             return
         key = self._key
         note = self._note.text().strip() or None
-        session_manager.pause_session(key, note)
+        try:
+            session_manager.pause_session(key, note)
+        except TypeError:                     # a session_manager from before notes existed (not restarted yet)
+            session_manager.pause_session(key)
         self.close()
         if key == "stuck" and self._on_stuck:
             self._on_stuck()
