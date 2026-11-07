@@ -1109,7 +1109,7 @@ def swap_with_parked(park_id=None):
     return status
 
 
-def pause_session(reason=None, note=None):
+def pause_session(reason=None, note=None, minutes=None):
     """Freezes the countdown only — isActive, lockMode, blocklists, and
     violation tracking are all untouched, so lock enforcement keeps working
     exactly as before while paused. Idempotent: no active session, or a
@@ -1157,12 +1157,33 @@ def pause_session(reason=None, note=None):
         if not _state["isBreak"]:
             _state["violationLog"].append(
                 {"kind": "pause", "timestamp": now.isoformat(), "pauseReason": reason or None,
-                 **({"pauseNote": note} if note else {})})
+                 **({"pauseNote": note} if note else {}),
+                 **({"pauseMinutes": int(minutes)} if reason == "long_break" and minutes else {})})
         _save()
         state_events.bump()
         import review_store
         review_store.auto_pause_for_break()      # a review riding beside this session pauses with it
         return _get_status_locked()
+
+
+_break_told = set()          # pause markers already told "your break is up" (once each)
+
+
+def pop_break_over(now=None):
+    """Minutes of the long break that has just run out, once per pause, else None. Polled by the tracker so
+    a toast can ask "still on break?"; the time after it counts against the budget."""
+    with _lock:
+        if not _state["isActive"] or not _state["isPaused"]:
+            return None
+        marker = next((m for m in reversed(_state["violationLog"]) if m.get("kind") == "pause"), None)
+        if not marker or marker.get("pauseReason") != "long_break" or not marker.get("pauseMinutes"):
+            return None
+        stamp = marker.get("timestamp")
+        started = datetime.fromisoformat(stamp)
+        if stamp in _break_told or (now or datetime.now()) < started + timedelta(minutes=int(marker["pauseMinutes"])):
+            return None
+        _break_told.add(stamp)
+        return int(marker["pauseMinutes"])
 
 
 def resume_session():
