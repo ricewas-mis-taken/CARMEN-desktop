@@ -146,14 +146,14 @@ def test_paused_card_offers_resume(qtbot, world):
     assert card._pause_button.text() == "Resume"
 
 
-def test_pomodoro_break_is_labelled_and_says_nothing_is_blocked(qtbot, world):
+def test_pomodoro_break_is_labelled(qtbot, world):
     task = _task()
     sm.start_pomodoro_session(1, 1, 2, "soft", [], [], source="task", event_id=task["id"], event_title="Study")
     sm._state["endTime"] = (sm.datetime.now() - sm.timedelta(seconds=2)).isoformat()
     sm.get_status()                                                # the focus block ends -> break
     card = _card(qtbot, task)
     assert card._state_chip.text() == "Break" and card._ring._small == "break"
-    assert "Nothing is blocked" in card._detail_label.text()
+    assert "Nothing is blocked" not in card._detail_label.text()      # a break being unblocked is obvious
 
 
 def test_waiting_card_has_a_dashed_frame_and_switches_back(qtbot, world):

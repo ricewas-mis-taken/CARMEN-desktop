@@ -1386,8 +1386,6 @@ class _TaskCard(QFrame):
                   else f"{_format_minutes(logged)} logged {phrase}")
         if is_waiting:
             detail = "Time is frozen. Nothing is blocked for this task."
-        elif on_break:
-            detail = "Nothing is blocked during the break."
         self._detail_label.setText(detail)
         self._detail_label.show()
         over_review = view.get("source") == "review" and not is_waiting   # running, on a break or paused
