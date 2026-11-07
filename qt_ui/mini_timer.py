@@ -223,7 +223,7 @@ class MiniTimer(QWidget):
         self._button.setEnabled(can_pause)
         self._button.setText("Resume" if status["isPaused"] else "Pause")
         self._button.adjustSize()
-        note = pause_reason.budget_note(status)
+        note = None if status.get("isBreak") else pause_reason.budget_note(status)    # a break is free
         self._budget = note
         self.setToolTip(pause_reason.EXPLAIN if note else "")
         self._place_buttons()
