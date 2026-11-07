@@ -592,6 +592,10 @@ class ReviewTab(QWidget):
 
     def showEvent(self, event):
         self._refresh_strip()
+        # Reviews can change behind this page's back (a sync, a change made elsewhere), so opening the page
+        # reads them again rather than showing what was loaded last time.
+        for view in self._topic_views.values():
+            view.refresh()
         super().showEvent(event)
 
     def _follow_active_review(self):
