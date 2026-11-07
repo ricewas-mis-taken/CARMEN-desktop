@@ -49,7 +49,7 @@ def merge_remote(entries):
 
 def entries_ended_after(watermark):
     """Entries whose endTime is later than `watermark` (all of them when None)."""
-    return [e for e in load_all() if watermark is None or (e.get("endTime") or "") > watermark]
+    return [e for e in load_all(include_beside=True) if watermark is None or (e.get("endTime") or "") > watermark]
 
 
 def _append_entries(new_entries):
@@ -98,10 +98,13 @@ def _append_entries(new_entries):
         return added
 
 
-def load_all():
-    """Returns all recorded sessions, oldest first."""
+def load_all(include_beside=False):
+    """Returns all recorded sessions, oldest first. A review that was timed beside a session of the same task
+    ("beside": True) is on file so the history can show it, but its time is already inside that session, so
+    everything that adds time up leaves it out; the history page and the sync ask for it with include_beside."""
     with _lock:
-        return _load_all_locked()
+        everything = _load_all_locked()
+    return everything if include_beside else [e for e in everything if not e.get("beside")]
 
 
 # The parsed file, with the (path, mtime, size) it was read at. The Tasks tab
