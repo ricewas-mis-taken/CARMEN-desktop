@@ -2,6 +2,7 @@
 
 A pause is recorded in the session's log as a marker with a reason. The reasons:
   break        a real rest                                      free
+  long_break   a rest you set a length for (pauseMinutes)       free for that long, then counts as checking
   interrupted  something outside your control                   free
   stuck        you are blocked on the work                      free (it leads into the unblock flow)
   rest         the automatic pause of a Pomodoro break          free
@@ -14,33 +15,46 @@ The budget is 10% of the session's length, at least 2 minutes. Past it, every 3 
 import math
 from datetime import datetime
 
-FREE = {"break", "interrupted", "stuck", "rest", "aside"}
-REASONS = ("break", "interrupted", "stuck", "checking")      # what the picker offers
+FREE = {"break", "long_break", "interrupted", "stuck", "rest", "aside"}
+REASONS = ("break", "long_break", "interrupted", "stuck", "checking")      # what the picker offers
 BUDGET_SHARE = 0.10
 BUDGET_MINIMUM_SECONDS = 120
 POINT_EVERY_SECONDS = 180
 MAX_COST = 15
+LONG_BREAK_MAX_MINUTES = 480
+LONG_BREAK_GRACE_SECONDS = 60       # a minute of slack past the time set before it counts
 
 
 def reason_of(marker):
     return marker.get("pauseReason") or "unspecified"
 
 
+def _pieces(reason, seconds, minutes):
+    """One pause as budget items. A long break is free for the time it was set for (plus a minute's grace);
+    whatever runs past that is "overrun", which counts against the budget like checking something else."""
+    if reason == "long_break" and minutes:
+        free = int(minutes) * 60 + LONG_BREAK_GRACE_SECONDS
+        if seconds > free:
+            return [{"reason": reason, "seconds": free}, {"reason": "overrun", "seconds": seconds - free}]
+    return [{"reason": reason, "seconds": seconds}]
+
+
 def pauses(log, start_iso, end_iso):
     """[{reason, seconds}] from a session's violation log. A pause still open at the end runs to the end."""
-    out, open_at, open_reason = [], None, None
+    out, open_at, open_reason, open_minutes = [], None, None, None
     for marker in log or []:
         kind = marker.get("kind")
         if kind == "pause" and open_at is None:
             open_at, open_reason = _parse(marker.get("timestamp")), reason_of(marker)
+            open_minutes = marker.get("pauseMinutes")
         elif kind == "resume" and open_at is not None:
             at = _parse(marker.get("timestamp"))
             if at and open_at:
-                out.append({"reason": open_reason, "seconds": max(0, int((at - open_at).total_seconds()))})
+                out += _pieces(open_reason, max(0, int((at - open_at).total_seconds())), open_minutes)
             open_at = None
     end = _parse(end_iso)
     if open_at is not None and end:
-        out.append({"reason": open_reason, "seconds": max(0, int((end - open_at).total_seconds()))})
+        out += _pieces(open_reason, max(0, int((end - open_at).total_seconds())), open_minutes)
     return out
 
 
