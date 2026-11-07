@@ -1186,6 +1186,47 @@ def pop_break_over(now=None):
         return int(marker["pauseMinutes"])
 
 
+_pending_label = {"value": None}
+
+
+def _settle_undecided_pause_locked(now):
+    """A pause made with "decide later" ends now: a short one is simply called a break; a longer one is queued so
+    the user can say what it was (pop_pending_label). Must hold _lock."""
+    import pause_budget
+    marker = next((m for m in reversed(_state["violationLog"]) if m.get("kind") in ("pause", "resume")), None)
+    if not marker or marker.get("kind") != "pause" or marker.get("pauseReason") != "later":
+        return
+    seconds = max(0, int((now - datetime.fromisoformat(marker["timestamp"])).total_seconds()))
+    if seconds < pause_budget.LATER_AUTO_SECONDS:
+        marker["pauseReason"] = "break"
+    else:
+        _pending_label["value"] = {"timestamp": marker["timestamp"], "seconds": seconds}
+
+
+def pop_pending_label():
+    """{"timestamp", "seconds"} of the pause that just ended and still needs a reason, once; else None."""
+    with _lock:
+        value = _pending_label["value"]
+        _pending_label["value"] = None
+        return value
+
+
+def label_pause(timestamp, reason):
+    """Sets what a pause (found by its marker's timestamp) was for, in the running session. False when no such
+    pause is there or the reason is not one the picker offers."""
+    import pause_budget
+    if reason not in pause_budget.REASONS or reason in ("later", "long_break"):
+        return False
+    with _lock:
+        for marker in _state["violationLog"]:
+            if marker.get("kind") == "pause" and marker.get("timestamp") == timestamp:
+                marker["pauseReason"] = reason
+                _save()
+                state_events.bump()
+                return True
+    return False
+
+
 def resume_session():
     """Resumes the countdown from exactly the secondsRemaining it was frozen
     at — shifts endTime forward by however long the pause lasted, rather than
@@ -1203,6 +1244,7 @@ def resume_session():
         _state["pausedAt"] = None
         _state["frozenSecondsRemaining"] = None
         if not _state["isBreak"]:
+            _settle_undecided_pause_locked(now)
             _state["violationLog"].append({"kind": "resume", "timestamp": now.isoformat()})
             import review_store
             review_store.auto_resume_from_break()   # ...and resumes with it (not mid-break: the break still pauses it)

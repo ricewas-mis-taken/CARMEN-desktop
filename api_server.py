@@ -490,7 +490,7 @@ def session_pause():
     that's already paused, just returns the current status unchanged."""
     body = request.get_json(silent=True) or {}
     reason = body.get("reason") if isinstance(body, dict) else None
-    if reason not in (None, "break", "long_break", "interrupted", "stuck", "checking"):
+    if reason not in (None, "break", "long_break", "interrupted", "stuck", "checking", "later"):
         reason = None
     note = body.get("note") if isinstance(body, dict) else None
     note = note.strip()[:200] if isinstance(note, str) and note.strip() else None
