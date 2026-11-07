@@ -1,10 +1,12 @@
 """Small always-on-top timer window, opened from the tray menu.
 
-Counts down inside a blue ring for timed sessions; for count-up sessions
-(until burnout, reviews) it shows a plain stopwatch with no ring. One Pause /
-Resume button, nothing else. Frameless: drag anywhere to move, drag any edge
-or corner to resize, the small x (top right) closes it. Position and size are
-remembered between launches.
+Counts down inside a ring for timed sessions; for count-up sessions (until
+burnout, reviews) it shows a plain stopwatch with no ring. A long Pause /
+Resume button with a small End beside it, like the task cards, and arrows at
+the bottom corners to switch between the timers there are (the running
+session, sessions waiting behind it, reviews). It wears the chosen colour
+theme. Frameless: drag anywhere to move, drag any edge or corner to resize,
+the small x (top right) closes it. Position and size are remembered.
 """
 import sys
 import traceback
@@ -15,19 +17,19 @@ from PySide6.QtWidgets import QPushButton, QWidget
 
 import config
 from calendar_log import logger
+import review_store
 import session_manager
-from qt_ui import pause_reason
 import tasks_store
+import theme
+from qt_ui import pause_reason
 
 REFRESH_MS = 500
-RING_BLUE = QColor("#2D8CFF")
-RING_TRACK = QColor(128, 128, 128, 45)
-BACKGROUND = QColor(0, 0, 0)
-TEXT = QColor("#F2F4F7")
-MUTED = QColor("#8A8F98")
+RING_TRACK = QColor(255, 255, 255, 38)
+TEXT = QColor("#F7F8FA")
 RESIZE_MARGIN = 6
 MAX_SIZE = (480, 540)     # a runaway drag can never make it huge
-DEFAULT_SIZE = (220, 250)
+DEFAULT_SIZE = (250, 270)
+MIN_SIZE = (210, 200)
 SAVE_DELAY_MS = 400
 CLICK_SLOP = 5     # pixels of movement that still count as a click, not a drag
 
@@ -89,12 +91,50 @@ def describe(status):
     return label, format_clock(remaining), min(1.0, max(0.0, done)), True
 
 
+def timers():
+    """Every timer the mini window can show, running one first: [{"key", "kind", "view"}]. kind is "session"
+    (the running one), "parked" (a session waiting behind it) or "review" (a review timed on its own; "active"
+    in its view when it is the one running or paused beside the session)."""
+    status = session_manager.get_status()
+    items = []
+    if status["isActive"]:
+        items.append({"key": ("session",), "kind": "session", "view": status})
+    for parked in status.get("parkedSessions") or []:
+        items.append({"key": ("parked", parked["parkId"]), "kind": "parked",
+                      "view": {**parked, "isActive": True, "isPaused": True}})
+    try:
+        active = review_store.get_active_review()
+        if active:
+            items.append({"key": ("review", active["token"]), "kind": "review", "view": {**active, "active": True}})
+        for parked in review_store.list_parked_reviews():
+            items.append({"key": ("review", parked["token"]), "kind": "review",
+                          "view": {**parked, "active": False, "isPaused": True}})
+    except Exception:
+        logger.exception("mini timer: could not list the reviews")
+    return items
+
+
+def describe_timer(item):
+    """(label, clock, ring fraction or None, action text, can act, can end, paused) for one timer."""
+    kind, view = item["kind"], item["view"]
+    if kind == "review":
+        label = f"Review: {view['problemName']}"
+        paused = bool(view.get("isPaused"))
+        action = "Resume" if paused else "Pause"
+        return label, format_clock(view["elapsedSeconds"]), None, action, True, bool(view.get("active")), paused
+    label, clock, fraction, can_pause = describe(view)
+    if kind == "parked":
+        return label, clock, fraction, "Switch to this", True, True, True
+    paused = bool(view.get("isPaused"))
+    return label, clock, fraction, "Resume" if paused else "Pause", can_pause, can_pause, paused
+
+
 class MiniTimer(QWidget):
     def __init__(self):
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setMouseTracking(True)
-        self.setMinimumSize(150, 170)
+        self.setMinimumSize(*MIN_SIZE)
         self.setMaximumSize(*MAX_SIZE)
         self._resize_edges = Qt.Edge(0)
         self._resize_start = None
@@ -108,23 +148,32 @@ class MiniTimer(QWidget):
         self._clock = "--:--"
         self._fraction = None
 
+        self._key = ("session",)      # which timer is showing (see timers())
+        self._items = []
+        self._index = 0
+        self._colours = None
+        self._can_end = False
+        self._paused = False
+
         self._button = QPushButton("Pause", self)
         self._button.setCursor(Qt.PointingHandCursor)
-        self._button.setStyleSheet(
-            "QPushButton { background: transparent; color: #F2F4F7; border: 1px solid #5A5F69;"
-            " border-radius: 11px; padding: 4px 16px; font-size: 14px; }"
-            "QPushButton:hover { border-color: #2D8CFF; }"
-            "QPushButton:disabled { color: #5A5F69; }"
-        )
         self._button.clicked.connect(self._toggle_pause)
 
-        self._close = QPushButton("✕", self)
+        self._end = QPushButton("End", self)
+        self._end.setCursor(Qt.PointingHandCursor)
+        self._end.clicked.connect(self._end_timer)
+
+        self._prev = QPushButton("\u2039", self)
+        self._next = QPushButton("\u203a", self)
+        for arrow, step in ((self._prev, -1), (self._next, 1)):
+            arrow.setFixedSize(24, 30)
+            arrow.setCursor(Qt.PointingHandCursor)
+            arrow.setToolTip("Previous timer" if step < 0 else "Next timer")
+            arrow.clicked.connect(lambda _=False, d=step: self._step(d))
+
+        self._close = QPushButton("\u2715", self)
         self._close.setFixedSize(18, 18)
         self._close.setCursor(Qt.PointingHandCursor)
-        self._close.setStyleSheet(
-            "QPushButton { background: transparent; color: #8A8F98; border: none; font-size: 11px; }"
-            "QPushButton:hover { color: #F2F4F7; }"
-        )
         self._close.clicked.connect(self._close_by_user)
 
         self._save_timer = QTimer(self)
@@ -210,28 +259,120 @@ class MiniTimer(QWidget):
 
     # --- behaviour ---
 
+    def _current(self):
+        for item in self._items:
+            if item["key"] == self._key:
+                return item
+        return self._items[0] if self._items else None
+
+    def _step(self, direction):
+        if len(self._items) < 2:
+            return
+        here = next((i for i, item in enumerate(self._items) if item["key"] == self._key), 0)
+        self._key = self._items[(here + direction) % len(self._items)]["key"]
+        self.refresh()
+
     def _toggle_pause(self):
-        if session_manager.get_status()["isPaused"]:
-            session_manager.resume_session()
+        item = self._current()
+        if item is None:
+            return
+        kind, view = item["kind"], item["view"]
+        if kind == "session":
+            if view["isPaused"]:
+                session_manager.resume_session()
+                self.refresh()
+            else:
+                pause_reason.ask(self, self.refresh)
+        elif kind == "parked":
+            session_manager.swap_with_parked(view["parkId"])        # it becomes the running one
+            self._key = ("session",)
             self.refresh()
         else:
-            pause_reason.ask(self, self.refresh)
+            if view.get("active"):
+                (review_store.resume_active_review if view.get("isPaused") else review_store.pause_active_review)()
+            else:
+                if review_store.get_active_review():
+                    review_store.park_active_review()               # one review at a time: the other waits
+                review_store.unpark_review(view["token"])
+            self.refresh()
+
+    def _end_timer(self):
+        item = self._current()
+        if item is None:
+            return
+        kind, view = item["kind"], item["view"]
+        if kind == "session":
+            session_manager.end_session(end_type="manual")
+        elif kind == "parked":
+            session_manager.end_parked_session(park_id=view["parkId"], end_type="manual")
+        elif view.get("active"):
+            from qt_ui import review_tab
+            review_tab.finish_review_from_card(view["token"], view["problemName"], view["elapsedSeconds"])
+        self._key = ("session",)
+        self.refresh()
 
     def refresh(self):
-        status = session_manager.get_status()
-        self._label, self._clock, self._fraction, can_pause = describe(status)
-        self._button.setEnabled(can_pause)
-        self._button.setText("Resume" if status["isPaused"] else "Pause")
-        self._button.adjustSize()
-        note = None if status.get("isBreak") else pause_reason.budget_note(status)    # a break is free
-        self._budget = note
-        self.setToolTip(pause_reason.EXPLAIN if note else "")
+        self._items = timers()
+        item = self._current()
+        if item is None:
+            self._label, self._clock, self._fraction = "No session", "--:--", None
+            self._can_end, self._paused, action, can_act = False, False, "Pause", False
+        else:
+            self._key = item["key"]
+            self._index = self._items.index(item)
+            (self._label, self._clock, self._fraction, action, can_act,
+             self._can_end, self._paused) = describe_timer(item)
+        self._button.setText(action)
+        self._button.setEnabled(can_act)
+        self._end.setEnabled(self._can_end)
+        self._end.setToolTip("" if self._can_end or item is None else "Resume this review to end it")
+        many = len(self._items) > 1
+        self._prev.setVisible(many)
+        self._next.setVisible(many)
+        self._apply_theme(action in ("Resume", "Switch to this"))
         self._place_buttons()
         self.update()
 
+    def _apply_theme(self, primary):
+        """Colours come from the chosen theme (accent, sidebar, faint), and the buttons look like the cards':
+        a long Pause with a small End beside it, the Resume one filled."""
+        colours = theme.current_colours()
+        key = (tuple(colours.items()), primary)
+        if key == self._colours:
+            return
+        self._colours = key
+        accent = colours["accent"]
+        long_style = (
+            "QPushButton{background:%s;color:#FFFFFF;border:none;border-radius:13px;padding:0 14px;"
+            "font-size:14px;font-weight:600;}QPushButton:hover{background:%s;}"
+            "QPushButton:disabled{background:rgba(255,255,255,0.08);color:rgba(255,255,255,0.35);}")
+        if primary:
+            self._button.setStyleSheet(long_style % (accent, theme.darken(accent, 0.12)))
+        else:
+            self._button.setStyleSheet(long_style % ("rgba(255,255,255,0.16)", "rgba(255,255,255,0.26)"))
+        self._end.setStyleSheet(
+            "QPushButton{background:rgba(255,92,100,0.20);color:#FFB3B8;border:none;border-radius:13px;"
+            "padding:0 14px;font-size:14px;font-weight:600;}QPushButton:hover{background:rgba(255,92,100,0.34);}"
+            "QPushButton:disabled{background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.3);}")
+        arrow = ("QPushButton{background:transparent;color:rgba(255,255,255,0.55);border:none;font-size:24px;"
+                 "padding-bottom:3px;}QPushButton:hover{color:#FFFFFF;}")
+        self._prev.setStyleSheet(arrow)
+        self._next.setStyleSheet(arrow)
+        self._close.setStyleSheet(
+            "QPushButton{background:transparent;color:rgba(255,255,255,0.5);border:none;font-size:11px;}"
+            "QPushButton:hover{color:#FFFFFF;}")
+
     def _place_buttons(self):
-        self._button.move((self.width() - self._button.width()) // 2,
-                          self.height() - self._button.height() - 14)
+        height = 32
+        y = self.height() - height - 12
+        many = len(self._items) > 1
+        left = 10 + (24 + 4 if many else 4)
+        right = self.width() - 10 - (24 + 4 if many else 4)
+        end_width, gap = 56, 6
+        self._end.setGeometry(right - end_width, y, end_width, height)
+        self._button.setGeometry(left, y, right - end_width - gap - left, height)
+        self._prev.move(10, y + (height - self._prev.height()) // 2)
+        self._next.move(self.width() - 10 - self._next.width(), y + (height - self._next.height()) // 2)
         self._close.move(self.width() - self._close.width() - 8, 6)
 
     def resizeEvent(self, event):
@@ -240,18 +381,19 @@ class MiniTimer(QWidget):
         self._save_timer.start()
 
     def paintEvent(self, _event):
+        colours = theme.current_colours()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setPen(Qt.NoPen)
-        painter.setBrush(BACKGROUND)
-        painter.drawRoundedRect(self.rect(), 14, 14)
+        painter.setBrush(QColor(colours["sidebar"]))
+        painter.drawRoundedRect(self.rect(), 16, 16)
 
         top = 8
         label_height = 26
         box = self._clock_rect()
         side = box.width()
 
-        painter.setPen(MUTED)
+        painter.setPen(QColor(colours["faint"]))
         font = QFont(self.font())
         font.setPixelSize(14)
         painter.setFont(font)
@@ -265,30 +407,31 @@ class MiniTimer(QWidget):
             painter.setBrush(Qt.NoBrush)
             painter.setPen(QPen(RING_TRACK, width))
             painter.drawEllipse(ring)
-            painter.setPen(QPen(RING_BLUE, width, Qt.SolidLine, Qt.RoundCap))
+            painter.setPen(QPen(QColor(colours["accent"]), width, Qt.SolidLine, Qt.RoundCap))
             painter.drawArc(ring, 90 * 16, -int(self._fraction * 360 * 16))
 
-        if getattr(self, "_budget", None):
-            text, colour = self._budget
-            small = QFont(self.font())
-            small.setPixelSize(12)
-            painter.setFont(small)
-            painter.setPen(QColor(colour))
-            painter.drawText(QRectF(0, self._button.y() - 22, self.width(), 18), Qt.AlignCenter,
-                             painter.fontMetrics().elidedText(text, Qt.ElideRight, self.width() - 16))
-            font = QFont(self.font())
-            font.setPixelSize(14)
         font.setPixelSize(max(16, int(side * (0.28 if self._fraction is not None else 0.34))))
         font.setWeight(QFont.Light)
         painter.setFont(font)
         painter.setPen(TEXT)
         painter.drawText(box, Qt.AlignCenter, self._clock)
 
+        if len(self._items) > 1:                        # which timer of how many: one dot each
+            dot, gap = 5.0, 7.0
+            total = len(self._items) * dot + (len(self._items) - 1) * gap
+            x = (self.width() - total) / 2
+            y = self._button.y() - 11
+            painter.setPen(Qt.NoPen)
+            for i in range(len(self._items)):
+                painter.setBrush(TEXT if i == self._index else QColor(255, 255, 255, 70))
+                painter.drawEllipse(QPointF(x + dot / 2, y), dot / 2, dot / 2)
+                x += dot + gap
+
     def _clock_rect(self):
         """The square holding the ring and the time (also what opens QuickNote)."""
         top = 8
         label_height = 26
-        bottom = self._button.y() - 6 - (18 if getattr(self, "_budget", None) else 0)
+        bottom = self._button.y() - 6 - (14 if len(self._items) > 1 else 0)
         side = max(1.0, min(self.width() - 28, bottom - top - label_height))
         return QRectF((self.width() - side) / 2, top + label_height, side, side)
 
