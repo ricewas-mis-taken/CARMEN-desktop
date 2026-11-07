@@ -1019,3 +1019,29 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   carries its key (devices_store), keeps one row per computer, and syncs the rows like tasks, so any computer can
   list "computers, browsers, account, connected now". A link is per computer by design (the key is local).
   Browser profile / which person in the browser is not knowable without the identity permission; not added.
+
+2026-11-05  Pause popup shows the budget and takes a note
+  The pause popup (qt_ui/pause_reason.py) now picks a reason, then Pause: a reason is highlighted, a one-line note
+  is typed (required for "Checking something else"), and the budget left is shown on top (pause_budget.live). The
+  note is stored on the pause marker as pauseNote and accepted as {"note"} on POST /session/pause.
+  Chose a live budget function over reading the finished-session summary: the same rules, but it counts the pause
+  that is still open and plans the length as time gone plus time left.
+  Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-11-05] (the popup's own panel, which works the budget
+  out itself from the status log).
+
+2026-11-06  Long break: a pause with a length, free for that long
+  Pauses past the budget cost points, but a long rest is sometimes wanted. Chose a "long_break" reason with a length
+  set up front over a per-pause cap or a daily allowance (see the options weighed in the chat that day): declared
+  time can be free, and what runs past it plus a minute's grace is "overrun", counted like checking something else
+  (pause_budget._pieces). pauseMinutes is stored on the pause marker, accepted as {"minutes"} (1 to 480) on
+  POST /session/pause, and session_manager.pop_break_over() lets the tracker toast "your break is up" once.
+  Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-11-06] (same rule in its pause panel).
+
+2026-11-06  "Not sure yet": say what a pause was when it ends
+  A pause's reason is often unknown when it starts. Chose a "later" reason over capping cost or idle-aware counting
+  (see the options weighed that day): the pause is free while open (pause_budget.live passes pending_free), and
+  session_manager.resume_session settles it: under 2 minutes it becomes a break, longer is queued
+  (pop_pending_label) and window_tracker hands it to qt_ui/pause_label.py, whose answer is written onto the pause
+  marker (label_pause). Never answered, it counts like checking. Only the current session's markers can be labelled.
+  Left for later: auto-ending a pause left open for days, idle time not counting.
+  Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-11-06] "Not sure yet".

@@ -415,6 +415,7 @@ class _MainWindow(QWidget):
             self._update_button.setText(state["message"])
             self._update_button.show()
             return
+        self._update_button.setToolTip("")
         self._update_button.setText("Update" if self._compact else "Update ready")
         self._update_button.setVisible(state["available"])
 
@@ -427,11 +428,15 @@ class _MainWindow(QWidget):
             if "error" in result:
                 update_center.set_message("Update failed")
             elif result["later"]:
-                update_center.set_message("Updated (some parts apply on next start)")
+                update_center.set_message("Restart to finish")      # short: the button is narrow
+                names = ", ".join(sorted({f.replace("\\", "/").split("/")[-1] for f in result["later"]}))
+                self._update_button.setToolTip(
+                    "Updated, but these files only take effect the next time Carmen starts: " + names)
             else:
                 update_center.set_message("Updated")
             self._sync_update_button()
-            QTimer.singleShot(4000, lambda: (update_center.set_message(""), self._sync_update_button()))
+            hold = 15000 if result.get("later") and "error" not in result else 4000
+            QTimer.singleShot(hold, lambda: (update_center.set_message(""), self._sync_update_button()))
         update_center.apply_async(qt_gui_thread.run_on_gui_thread, done)
         self._sync_update_button()
 

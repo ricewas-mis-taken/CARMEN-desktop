@@ -714,9 +714,11 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None, restore_pa
                 "reviewSubjectName": review_subject_name,
                 "pomodoro": pomodoro,
                 "sessionId": session_id,
+                "isBurnout": bool(_state.get("isBurnout")),
             }
         )
-        _score_pauses(session_id, start_time, now.isoformat(), summary_log)
+        _score_pauses(session_id, start_time, now.isoformat(), summary_log,
+                      burnout=bool(_state.get("isBurnout")), source=source)
 
     _state["isActive"] = False
     _state["startTime"] = None
@@ -1109,7 +1111,7 @@ def swap_with_parked(park_id=None):
     return status
 
 
-def pause_session(reason=None):
+def pause_session(reason=None, note=None, minutes=None):
     """Freezes the countdown only — isActive, lockMode, blocklists, and
     violation tracking are all untouched, so lock enforcement keeps working
     exactly as before while paused. Idempotent: no active session, or a
@@ -1156,12 +1158,75 @@ def pause_session(reason=None):
         # not worked, so no extra markers while isBreak.
         if not _state["isBreak"]:
             _state["violationLog"].append(
-                {"kind": "pause", "timestamp": now.isoformat(), "pauseReason": reason or None})
+                {"kind": "pause", "timestamp": now.isoformat(), "pauseReason": reason or None,
+                 **({"pauseNote": note} if note else {}),
+                 **({"pauseMinutes": int(minutes)} if reason == "long_break" and minutes else {})})
         _save()
         state_events.bump()
         import review_store
         review_store.auto_pause_for_break()      # a review riding beside this session pauses with it
         return _get_status_locked()
+
+
+_break_told = set()          # pause markers already told "your break is up" (once each)
+
+
+def pop_break_over(now=None):
+    """Minutes of the long break that has just run out, once per pause, else None. Polled by the tracker so
+    a toast can ask "still on break?"; the time after it counts against the budget."""
+    with _lock:
+        if not _state["isActive"] or not _state["isPaused"]:
+            return None
+        marker = next((m for m in reversed(_state["violationLog"]) if m.get("kind") == "pause"), None)
+        if not marker or marker.get("pauseReason") != "long_break" or not marker.get("pauseMinutes"):
+            return None
+        stamp = marker.get("timestamp")
+        started = datetime.fromisoformat(stamp)
+        if stamp in _break_told or (now or datetime.now()) < started + timedelta(minutes=int(marker["pauseMinutes"])):
+            return None
+        _break_told.add(stamp)
+        return int(marker["pauseMinutes"])
+
+
+_pending_label = {"value": None}
+
+
+def _settle_undecided_pause_locked(now):
+    """A pause made with "decide later" ends now: a short one is simply called a break; a longer one is queued so
+    the user can say what it was (pop_pending_label). Must hold _lock."""
+    import pause_budget
+    marker = next((m for m in reversed(_state["violationLog"]) if m.get("kind") in ("pause", "resume")), None)
+    if not marker or marker.get("kind") != "pause" or marker.get("pauseReason") != "later":
+        return
+    seconds = max(0, int((now - datetime.fromisoformat(marker["timestamp"])).total_seconds()))
+    if seconds < pause_budget.LATER_AUTO_SECONDS:
+        marker["pauseReason"] = "break"
+    else:
+        _pending_label["value"] = {"timestamp": marker["timestamp"], "seconds": seconds}
+
+
+def pop_pending_label():
+    """{"timestamp", "seconds"} of the pause that just ended and still needs a reason, once; else None."""
+    with _lock:
+        value = _pending_label["value"]
+        _pending_label["value"] = None
+        return value
+
+
+def label_pause(timestamp, reason):
+    """Sets what a pause (found by its marker's timestamp) was for, in the running session. False when no such
+    pause is there or the reason is not one the picker offers."""
+    import pause_budget
+    if reason not in pause_budget.REASONS or reason in ("later", "long_break"):
+        return False
+    with _lock:
+        for marker in _state["violationLog"]:
+            if marker.get("kind") == "pause" and marker.get("timestamp") == timestamp:
+                marker["pauseReason"] = reason
+                _save()
+                state_events.bump()
+                return True
+    return False
 
 
 def resume_session():
@@ -1181,6 +1246,7 @@ def resume_session():
         _state["pausedAt"] = None
         _state["frozenSecondsRemaining"] = None
         if not _state["isBreak"]:
+            _settle_undecided_pause_locked(now)
             _state["violationLog"].append({"kind": "resume", "timestamp": now.isoformat()})
             import review_store
             review_store.auto_resume_from_break()   # ...and resumes with it (not mid-break: the break still pauses it)
@@ -1189,12 +1255,13 @@ def resume_session():
         return _get_status_locked()
 
 
-def _score_pauses(session_id, start_iso, end_iso, log):
+def _score_pauses(session_id, start_iso, end_iso, log, burnout=False, source=None):
     """Escape pauses past the budget cost points, once per session (the event key is the session id)."""
     try:
         import pause_budget
         import score_store
-        result = pause_budget.summarize({"violationLog": log, "startTime": start_iso, "endTime": end_iso})
+        result = pause_budget.summarize({"violationLog": log, "startTime": start_iso, "endTime": end_iso,
+                                         "isBurnout": burnout, "source": source})
         if result["cost"] and session_id:
             minutes = round(result["escape_seconds"] / 60)
             score_store.add_event(f"pause:{session_id}", datetime.fromisoformat(end_iso).date(), "pauses",

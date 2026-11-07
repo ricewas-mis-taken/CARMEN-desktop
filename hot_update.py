@@ -14,8 +14,8 @@ import sys
 
 from calendar_log import logger
 
-PURE = ["pause_budget", "unblock_gate", "week_plan", "goal_raise", "report_card"]
-DIALOGS = ["qt_ui.pause_reason", "qt_ui.week_dialog", "qt_ui.report_card_dialog", "qt_ui.options_dialog",
+PURE = ["vacation", "pause_budget", "unblock_gate", "week_plan", "goal_raise", "report_card"]
+DIALOGS = ["qt_ui.explainer", "qt_ui.pause_reason", "qt_ui.pause_label", "qt_ui.week_dialog", "qt_ui.report_card_dialog", "qt_ui.options_dialog",
            "qt_ui.tour_content", "qt_ui.tour"]
 PAGES = {                      # page key -> (module, class)
     "home": ("qt_ui.home_tab", "HomeTab"),

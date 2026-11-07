@@ -115,14 +115,13 @@ def test_pomodoro_bar_opens_the_window_then_starts(qtbot, world, monkeypatch):
     assert sm.get_status()["pomodoro"]["totalCycles"] == 4
 
 
-def test_a_busy_card_cannot_be_started(qtbot, world):
+def test_a_card_can_be_started_while_another_task_runs(qtbot, world):
     a, b = _task("Alpha"), _task("Beta")
     sm.start_session(30, "soft", [], [], source="task", event_id=a["id"], event_title="Alpha")
     card = _card(qtbot, b)
-    assert not card._start_button.isEnabled()
-    assert card._busy_note.text() == "Alpha is running"
-    card._arm()                                                    # a stray call must not arm it
-    assert not card._armed_panel.isVisible()
+    assert card._start_button.isEnabled() and not card._busy_note.isVisible()
+    card._arm()
+    assert card._armed                                               # no pause needed first
 
 
 # ------------------------------------------------------------- running ----
@@ -147,14 +146,14 @@ def test_paused_card_offers_resume(qtbot, world):
     assert card._pause_button.text() == "Resume"
 
 
-def test_pomodoro_break_is_labelled_and_says_nothing_is_blocked(qtbot, world):
+def test_pomodoro_break_is_labelled(qtbot, world):
     task = _task()
     sm.start_pomodoro_session(1, 1, 2, "soft", [], [], source="task", event_id=task["id"], event_title="Study")
     sm._state["endTime"] = (sm.datetime.now() - sm.timedelta(seconds=2)).isoformat()
     sm.get_status()                                                # the focus block ends -> break
     card = _card(qtbot, task)
     assert card._state_chip.text() == "Break" and card._ring._small == "break"
-    assert "Nothing is blocked" in card._detail_label.text()
+    assert "Nothing is blocked" not in card._detail_label.text()      # a break being unblocked is obvious
 
 
 def test_waiting_card_has_a_dashed_frame_and_switches_back(qtbot, world):
@@ -463,3 +462,28 @@ def test_a_count_up_ring_draws_a_plate_not_a_circle(qtbot):
     mid = full.height() // 2
     assert plain.pixelColor(8, mid).alpha() <= full.pixelColor(8, mid).alpha()
     assert plain != full
+
+
+def test_a_review_row_on_the_card_can_be_finished(qtbot, world, isolate_review_db):
+    import review_store
+    from qt_ui import review_tab
+    topic = review_store.create_topic("Math")
+    subject = review_store.create_subject(topic["id"], "Algebra", "#5B8DEF")
+    problem = review_store.create_problem(topic["id"], subject["id"], "Solve", stars=3,
+                                          description_type="text", description_text="x")
+    token = review_store.start_review(problem["id"])
+    box = tasks_tab._ReviewBox()
+    qtbot.addWidget(box)
+    finished = []
+    row = {"name": "Solve", "seconds": 61, "state": "running", "token": token, "active": True}
+    box.set_rows([row], lambda r: None, False, finished.append)
+    box.show()
+    assert len(box.finish_buttons) == 1 and len(box.pause_buttons) == 1
+    box.finish_buttons[0].click()
+    assert finished == [row]
+    review_tab._popup_refs.clear()                                  # leftovers from other tests
+    review_tab.finish_review_from_card(token, "Solve", 61)
+    dialog = next(p for p in review_tab._popup_refs if isinstance(p, review_tab._PostReviewDialog) and not p._submitted)
+    dialog._solved_btn.setChecked(True)
+    dialog._submit()
+    assert review_store.get_problem(problem["id"])["reviewCount"] == 1

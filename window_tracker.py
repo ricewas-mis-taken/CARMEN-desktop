@@ -184,7 +184,7 @@ def release_hidden_windows_unless_hard_locked(status):
         enforcer.restore_all_taskbar_previews()
 
 
-def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_change=None):
+def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_change=None, on_pause_label=None):
     """Runs until stop_event is set. Intended to be launched in its own thread.
 
     on_session_end(summary), if given, is called once whenever a session's
@@ -212,6 +212,7 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
     changes made elsewhere (the API, a session ending naturally, etc).
     """
     last_flagged_process = None
+    last_goal_check = 0.0
     last_menu_state = None
     last_hard_redirect = {"process": None, "hwnd": None, "time": 0.0}
     last_soft_warning = {}  # process_name -> {"hwnd": hwnd, "time": time.time()} of last soft-lock overlay shown
@@ -247,6 +248,38 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
             if pending is not None and on_session_end is not None:
                 try:
                     on_session_end(pending)
+                except Exception:
+                    pass
+
+            now_tick = time.time()
+            if status["isActive"] and now_tick - last_goal_check >= 5:
+                last_goal_check = now_tick
+                try:
+                    import goal_notify
+                    reached = goal_notify.check(status)
+                    if reached:
+                        import calendar_toast
+                        minutes = int(round(reached["required"]))
+                        calendar_toast.show_toast(
+                            "Daily target reached",
+                            f"{reached['name']}: {minutes} minute{'s' if minutes != 1 else ''} done for today.")
+                except Exception:
+                    pass
+
+            to_label = session_manager.pop_pending_label()
+            if to_label is not None and on_pause_label is not None:
+                try:
+                    on_pause_label(to_label)
+                except Exception:
+                    pass
+
+            break_over = session_manager.pop_break_over()
+            if break_over is not None:
+                try:
+                    import calendar_toast
+                    calendar_toast.show_toast(
+                        "Your break is up",
+                        f"The {break_over} minutes you set are over. Still on break? Time past now uses your pause budget.")
                 except Exception:
                     pass
 

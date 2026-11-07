@@ -592,6 +592,10 @@ class ReviewTab(QWidget):
 
     def showEvent(self, event):
         self._refresh_strip()
+        # Reviews can change behind this page's back (a sync, a change made elsewhere), so opening the page
+        # reads them again rather than showing what was loaded last time.
+        for view in self._topic_views.values():
+            view.refresh()
         super().showEvent(event)
 
     def _follow_active_review(self):
@@ -601,7 +605,11 @@ class ReviewTab(QWidget):
         if self.banner.is_running():
             return
         for view in self._topic_views.values():
-            if view._resume_linked_session() or view._resume_independent_review():
+            # The review being timed now comes first: the live session if it is one, then an independent
+            # review (running or paused). Reviews set aside behind it only fill the banner when nothing
+            # else is live, and otherwise wait in the strip.
+            if (view._resume_linked_session(include_waiting=False) or view._resume_independent_review()
+                    or view._resume_linked_session()):
                 self._refresh_strip()
                 return
 
@@ -999,16 +1007,17 @@ class _TopicView(QWidget):
 
     def _show_banner_for_linked_session(self):
         if not self._review_banner.is_running():
-            self._resume_linked_session() or self._resume_independent_review()
+            self._resume_linked_session(include_waiting=False) or self._resume_independent_review()                 or self._resume_linked_session()
 
-    def _resume_linked_session(self):
+    def _resume_linked_session(self, include_waiting=True):
         """Starts the banner for this topic's task session if one exists,
-        running or waiting behind another task. Returns True if it did."""
+        running or (with include_waiting) waiting behind another task. Returns True if it did."""
         status = session_manager.get_status()
         candidates = []
         if status.get("isActive"):
             candidates.append(status)
-        candidates.extend(status.get("parkedSessions") or [])
+        if include_waiting:
+            candidates.extend(status.get("parkedSessions") or [])
         topic = review_store.get_topic(self._topic_id)
         if not topic or not topic.get("linkedTaskId"):
             return False
@@ -2101,6 +2110,30 @@ def _can_drive_over(status):
     """True when a review may start its own blocking session: nothing is running, or
     what is running is paused (it is set aside and comes back when the review ends)."""
     return not status.get("isActive") or bool(status.get("isPaused"))
+
+
+def finish_review_from_card(token, name, seconds):
+    """Finishes the review with this token from outside the Review tab (a task card's Finish). Through its
+    live banner when there is one, so the banner and the card stay in step; otherwise straight to the
+    "How did it go?" step and the store."""
+    for banner in list(_live_banners):
+        try:
+            if banner.is_running() and banner._session_token == token:
+                banner._finish()
+                return True
+        except RuntimeError:
+            _live_banners.discard(banner)
+
+    def submit(self_solved, shakiness):
+        review_store.finish_review(token, self_solved=self_solved, shakiness=shakiness, duration_seconds=seconds)
+        for banner in list(_live_banners):
+            try:
+                banner.hide()
+            except RuntimeError:
+                _live_banners.discard(banner)
+
+    _register_popup(_PostReviewDialog(problem_name=name, on_submit=submit))
+    return True
 
 
 def make_live_review_independent():

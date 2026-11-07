@@ -58,10 +58,12 @@ import activity
 import config
 import devices_store
 import installed_apps
+import pause_budget
 import review_store
 import screentime_categories
 import screentime_store
 import session_history
+import pause_budget
 import session_manager
 import state_events
 import tasks_store
@@ -488,9 +490,14 @@ def session_pause():
     that's already paused, just returns the current status unchanged."""
     body = request.get_json(silent=True) or {}
     reason = body.get("reason") if isinstance(body, dict) else None
-    if reason not in (None, "break", "interrupted", "stuck", "checking"):
+    if reason not in (None, "break", "long_break", "interrupted", "stuck", "checking", "later"):
         reason = None
-    return jsonify(session_manager.pause_session(reason))
+    note = body.get("note") if isinstance(body, dict) else None
+    note = note.strip()[:200] if isinstance(note, str) and note.strip() else None
+    minutes = body.get("minutes") if isinstance(body, dict) else None
+    if reason != "long_break" or isinstance(minutes, bool) or not isinstance(minutes, (int, float))             or not 1 <= minutes <= pause_budget.LONG_BREAK_MAX_MINUTES:
+        minutes = None
+    return jsonify(session_manager.pause_session(reason, note, int(minutes) if minutes else None))
 
 
 @app.route("/session/resume", methods=["POST"])

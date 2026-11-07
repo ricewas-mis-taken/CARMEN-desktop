@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 import pytest
 
 import tasks_store
+import vacation
 
 
 @pytest.fixture
@@ -144,14 +145,14 @@ def test_vacation_balance_earns_surplus_from_past_days():
             "source": "task", "eventId": "t1",
             "startTime": _iso(yesterday, 9, 0), "endTime": _iso(yesterday, 9, 50),
             "violationLog": [],
-        },  # 50m logged, 30m required -> 20m surplus
+        },  # 50m logged, 30m required -> 20m past the target, banked on the ladder
         {
             "source": "task", "eventId": "t1",
             "startTime": _iso(two_days_ago, 9, 0), "endTime": _iso(two_days_ago, 9, 20),
             "violationLog": [],
         },  # 20m logged, under target -> 0 surplus
     ]
-    assert tasks_store.vacation_balance_minutes(task, sessions) == 20
+    assert tasks_store.vacation_balance_minutes(task, sessions) == pytest.approx(vacation.ladder(20, 30))
 
 
 def test_vacation_balance_excludes_today():
@@ -181,7 +182,8 @@ def test_vacation_balance_unaffected_by_later_goal_time_increase(isolate_tasks):
         "violationLog": [],
     }]  # 50m logged yesterday against a 30m target -> 20m banked
 
-    assert tasks_store.vacation_balance_minutes(task, sessions) == 20
+    banked = vacation.ladder(20, 30)
+    assert tasks_store.vacation_balance_minutes(task, sessions) == pytest.approx(banked)
 
     # Raising today's goal to 200m appends a new history entry dated today
     # (mirroring what update_task does) instead of overwriting the old one.
@@ -189,8 +191,8 @@ def test_vacation_balance_unaffected_by_later_goal_time_increase(isolate_tasks):
     task["targetMinutesHistory"].append({"date": date.today().isoformat(), "minutes": 200})
 
     # Yesterday's target must still resolve to 30, and its already-banked
-    # 20m of vacation must be untouched by today's goal-time change.
-    assert tasks_store.vacation_balance_minutes(task, sessions) == 20
+    # vacation must be untouched by today's goal-time change.
+    assert tasks_store.vacation_balance_minutes(task, sessions) == pytest.approx(banked)
     assert tasks_store.required_minutes_for_date(task, yesterday) == 30
     assert tasks_store.required_minutes_for_date(task, date.today()) == 200
 
@@ -227,12 +229,13 @@ def test_cash_in_reduces_balance_and_todays_requirement(isolate_tasks):
             "violationLog": [],
         },
     ]
-    assert tasks_store.vacation_balance_minutes(task, sessions) == 20
+    banked = vacation.ladder(20, 30)
+    assert tasks_store.vacation_balance_minutes(task, sessions) == pytest.approx(banked)
 
-    updated = tasks_store.cash_in(task["id"], date.today(), 15, sessions)
-    assert updated["cashedInDates"][date.today().isoformat()] == 15
-    assert tasks_store.required_minutes_for_date(updated, date.today()) == 15
-    assert tasks_store.vacation_balance_minutes(updated, sessions) == 5
+    updated = tasks_store.cash_in(task["id"], date.today(), 10, sessions)
+    assert updated["cashedInDates"][date.today().isoformat()] == 10
+    assert tasks_store.required_minutes_for_date(updated, date.today()) == 20
+    assert tasks_store.vacation_balance_minutes(updated, sessions) == pytest.approx(banked - 10)
 
 
 def test_cash_in_rejects_overspend(isolate_tasks):
