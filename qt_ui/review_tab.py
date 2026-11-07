@@ -2112,6 +2112,30 @@ def _can_drive_over(status):
     return not status.get("isActive") or bool(status.get("isPaused"))
 
 
+def finish_review_from_card(token, name, seconds):
+    """Finishes the review with this token from outside the Review tab (a task card's Finish). Through its
+    live banner when there is one, so the banner and the card stay in step; otherwise straight to the
+    "How did it go?" step and the store."""
+    for banner in list(_live_banners):
+        try:
+            if banner.is_running() and banner._session_token == token:
+                banner._finish()
+                return True
+        except RuntimeError:
+            _live_banners.discard(banner)
+
+    def submit(self_solved, shakiness):
+        review_store.finish_review(token, self_solved=self_solved, shakiness=shakiness, duration_seconds=seconds)
+        for banner in list(_live_banners):
+            try:
+                banner.hide()
+            except RuntimeError:
+                _live_banners.discard(banner)
+
+    _register_popup(_PostReviewDialog(problem_name=name, on_submit=submit))
+    return True
+
+
 def make_live_review_independent():
     """True if the review that owns the live session was handed over to ride beside the next session."""
     for banner in list(_live_banners):
