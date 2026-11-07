@@ -657,6 +657,15 @@ class ReviewTab(QWidget):
                 "seconds": tasks_store.worked_seconds(session["startTime"], None, session.get("violationLog"))
                 if session.get("startTime") else 0,
             })
+        # The review being timed beside the session is not "set aside", but when the banner is showing
+        # something else it has to be listed too, or it is nowhere on this page.
+        active = review_store.get_active_review()
+        if active and (not self.banner.is_running() or self.banner._session_token != active["token"]):
+            rows.append({
+                "kind": "independent", "key": active["token"], "parked": active, "active": True,
+                "name": active["problemName"], "problemId": active["problemId"],
+                "seconds": active["elapsedSeconds"],
+            })
         for parked in review_store.list_parked_reviews():
             rows.append({
                 "kind": "independent", "key": parked["token"], "parked": parked,
@@ -730,7 +739,10 @@ class ReviewTab(QWidget):
             snapshot = self.take_first_attempt_stash(event_id=session.get("eventId"))
             cancelled = snapshot["first_attempt_cancelled_callback"] if snapshot else None
         elif kind == "independent":
-            review_store.abandon_parked_review(row["key"])
+            if row.get("active"):
+                review_store.abandon_review(row["key"])
+            else:
+                review_store.abandon_parked_review(row["key"])
         else:
             snapshot = row["snapshot"]
             self._stash.remove(snapshot)
