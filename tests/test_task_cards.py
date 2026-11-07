@@ -434,7 +434,7 @@ def test_weekly_goal_card_shows_the_week_not_today(qtbot, world):
 def test_weekly_goal_is_reached_by_work_on_any_day_of_the_week(qtbot, world, monkeypatch):
     task = _weekly_task(minutes=60)
     day = date.today()
-    monkeypatch.setattr(session_history, "load_all", lambda: [{
+    monkeypatch.setattr(session_history, "load_all", lambda include_beside=False: [{
         "source": "task", "eventId": task["id"], "violationLog": [],
         "startTime": f"{day.isoformat()}T09:00:00", "endTime": f"{day.isoformat()}T10:05:00",
     }])
