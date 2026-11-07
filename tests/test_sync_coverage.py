@@ -59,6 +59,7 @@ LOCAL_ONLY_FILES = {
     "live_cursor.txt", "live_history_pushed.txt", "live_state_pushed.txt",
     "live_review_pushed.txt", "live_screentime_pushed.json", "live_settings_pushed.txt", "live_quicknote_pushed.txt", "hang_trace.txt", "taskbar_quiet_pending.json", "other_device_seen.txt", "screentime_remote.json", "parked_reviews.json",
     "scribe_stamp.txt", "live_scribe_pushed.txt",
+    "goal_notified.json",   # which tasks already told this computer their daily target was reached today
     "score.json",   # the Carmen Score ledger: keys are deterministic so a later merge cannot double count (see DESIGN_DECISIONS)
 }
 # Reference data that ships with the app, not something a user creates.
