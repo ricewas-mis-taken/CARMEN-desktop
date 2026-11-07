@@ -212,6 +212,7 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
     changes made elsewhere (the API, a session ending naturally, etc).
     """
     last_flagged_process = None
+    last_goal_check = 0.0
     last_menu_state = None
     last_hard_redirect = {"process": None, "hwnd": None, "time": 0.0}
     last_soft_warning = {}  # process_name -> {"hwnd": hwnd, "time": time.time()} of last soft-lock overlay shown
@@ -247,6 +248,21 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
             if pending is not None and on_session_end is not None:
                 try:
                     on_session_end(pending)
+                except Exception:
+                    pass
+
+            now_tick = time.time()
+            if status["isActive"] and now_tick - last_goal_check >= 5:
+                last_goal_check = now_tick
+                try:
+                    import goal_notify
+                    reached = goal_notify.check(status)
+                    if reached:
+                        import calendar_toast
+                        minutes = int(round(reached["required"]))
+                        calendar_toast.show_toast(
+                            "Daily target reached",
+                            f"{reached['name']}: {minutes} minute{'s' if minutes != 1 else ''} done for today.")
                 except Exception:
                     pass
 
