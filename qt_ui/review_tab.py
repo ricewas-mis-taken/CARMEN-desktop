@@ -2090,15 +2090,16 @@ class _ReviewBanner(QWidget):
 def _file_untimed_review(problem, seconds, now=None):
     """A review that ran without a session of its own (another kind of session was running,
     so none could start) is still time on its task. Session History and the task's
-    count both read finished sessions, so this files the review as one. Skipped when a
-    session of the same task is running, because that session already counts it."""
+    count both read finished sessions, so this files the review as one. When a session of the
+    same task is running (a pomodoro, say) that session already counts the time, so the review is
+    filed flagged "beside": the history shows it, and nothing adds its minutes up a second time."""
     topic = review_store.get_topic((problem or {}).get("topicId")) if (problem or {}).get("topicId") else None
     task = tasks_store.get_task(topic["linkedTaskId"]) if topic and topic.get("linkedTaskId") else None
     if task is None or seconds < 1:
         return None
     status = session_manager.get_status()
-    if status.get("isActive") and status.get("source") in ("task", "review") and status.get("eventId") == task["id"]:
-        return None
+    beside = bool(status.get("isActive") and status.get("source") in ("task", "review")
+                  and status.get("eventId") == task["id"])
     now = now or datetime.now()
     first_attempt = problem.get("id") is None
     subject = None if first_attempt else problem.get("subjectName")
@@ -2112,8 +2113,10 @@ def _file_untimed_review(problem, seconds, now=None):
         "eventTitle": f"{task['name']} - " + ("first attempt" if first_attempt else f"{subject} review"),
         "reviewProblemName": session_manager.FIRST_ATTEMPT_NAME if first_attempt else problem["name"],
         "reviewSubjectName": subject,
-        "pomodoro": None, "sessionId": "untimed-" + uuid.uuid4().hex,
+        "pomodoro": None, "sessionId": ("beside-" if beside else "untimed-") + uuid.uuid4().hex,
     }
+    if beside:
+        entry["beside"] = True
     session_history.append_entry(entry)
     return entry
 
@@ -2136,8 +2139,13 @@ def finish_review_from_card(token, name, seconds):
         except RuntimeError:
             _live_banners.discard(banner)
 
+    active = review_store.get_active_review()
+    problem = review_store.get_problem(active["problemId"]) if active and active["token"] == token else None
+
     def submit(self_solved, shakiness):
         review_store.finish_review(token, self_solved=self_solved, shakiness=shakiness, duration_seconds=seconds)
+        if problem:
+            _file_untimed_review(problem, seconds)
         for banner in list(_live_banners):
             try:
                 banner.hide()

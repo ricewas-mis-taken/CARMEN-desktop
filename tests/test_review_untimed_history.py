@@ -41,11 +41,16 @@ def test_a_first_attempt_is_filed_as_one(setup):
     assert sm.is_first_attempt(entry | {"reviewProblemId": None})
 
 
-def test_not_filed_when_the_same_tasks_session_already_counts_it(setup):
+def test_beside_the_same_tasks_session_it_is_filed_but_adds_no_time(setup):
     task, topic, problem = setup
     sm.start_session(30, "soft", [], [], source="task", event_id=task["id"], event_title="usaco")
-    assert review_tab._file_untimed_review(problem, 600) is None
-    assert session_history.load_all() == []
+    entry = review_tab._file_untimed_review(problem, 600)
+    assert entry and entry["beside"] and entry["sessionId"].startswith("beside-")
+    assert session_history.load_all() == []                                  # nothing adds it up
+    assert session_history.load_all(include_beside=True) == [entry]          # the history page and sync see it
+    assert entry in session_history.entries_ended_after(None)
+    import tasks_store
+    assert tasks_store.logged_seconds_for_date(task, date.today(), session_history.load_all()) == 0
 
 
 def test_filed_when_some_other_session_was_running(setup):
