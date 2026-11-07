@@ -481,6 +481,7 @@ def test_a_review_row_on_the_card_can_be_finished(qtbot, world, isolate_review_d
     assert len(box.finish_buttons) == 1 and len(box.pause_buttons) == 1
     box.finish_buttons[0].click()
     assert finished == [row]
+    review_tab._popup_refs.clear()                                  # leftovers from other tests
     review_tab.finish_review_from_card(token, "Solve", 61)
     dialog = next(p for p in review_tab._popup_refs if isinstance(p, review_tab._PostReviewDialog) and not p._submitted)
     dialog._solved_btn.setChecked(True)
