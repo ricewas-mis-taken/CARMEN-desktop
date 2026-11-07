@@ -164,3 +164,48 @@ def test_the_popup_sends_the_minutes_of_a_long_break(qtbot, isolate_state):
     popup._choose("long_break")
     marker = session_manager._state["violationLog"][-1]
     assert marker["pauseReason"] == "long_break" and marker["pauseMinutes"] == 45
+
+
+def test_a_decide_later_pause_is_free_while_open_and_counts_if_never_answered():
+    log = [{"kind": "pause", "timestamp": T0.isoformat(), "pauseReason": "later"}]
+    now = T0 + timedelta(minutes=30)
+    status = {"isActive": True, "startTime": T0.isoformat(), "secondsRemaining": 1800, "violationLog": log}
+    assert pause_budget.live(status, now)["used_seconds"] == 0
+    summary = pause_budget.summarize({"violationLog": log, "startTime": T0.isoformat(), "endTime": now.isoformat()})
+    assert summary["escape_seconds"] == 30 * 60
+
+
+def test_a_short_later_pause_becomes_a_break_and_a_long_one_asks(isolate_state):
+    session_manager.start_session(60, "soft", [], [])
+    session_manager.pause_session("later")
+    session_manager.resume_session()
+    assert session_manager._state["violationLog"][0]["pauseReason"] == "break"
+    assert session_manager.pop_pending_label() is None
+
+    session_manager.pause_session("later")
+    marker = session_manager._state["violationLog"][-1]
+    marker["timestamp"] = (datetime.now() - timedelta(minutes=40)).isoformat()
+    session_manager.resume_session()
+    asked = session_manager.pop_pending_label()
+    assert asked["timestamp"] == marker["timestamp"] and asked["seconds"] >= 40 * 60
+    assert session_manager.pop_pending_label() is None
+    assert marker["pauseReason"] == "later"
+    assert session_manager.label_pause(asked["timestamp"], "interrupted")
+    assert marker["pauseReason"] == "interrupted"
+    assert not session_manager.label_pause(asked["timestamp"], "later")
+    assert not session_manager.label_pause("nope", "break")
+
+
+def test_the_label_popup_writes_the_answer_onto_the_pause(qtbot, isolate_state):
+    from qt_ui import pause_label
+    session_manager.start_session(60, "soft", [], [])
+    session_manager.pause_session("later")
+    marker = session_manager._state["violationLog"][-1]
+    marker["timestamp"] = (datetime.now() - timedelta(minutes=30)).isoformat()
+    session_manager.resume_session()
+    asked = session_manager.pop_pending_label()
+    popup = pause_label.ask(asked["timestamp"], asked["seconds"])
+    qtbot.addWidget(popup)
+    popup._buttons["checking"].click()
+    assert marker["pauseReason"] == "checking"
+    assert pause_label.length_text(1800) == "30 minutes" and pause_label.length_text(5400) == "1 h 30 min"

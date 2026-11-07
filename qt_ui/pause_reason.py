@@ -19,6 +19,7 @@ _CHOICES = (
     ("interrupted", "Interrupted", "Free"),
     ("stuck", "Stuck", "Free, and I'll ask what is blocking you"),
     ("checking", "Checking something else", "Comes out of your pause budget"),
+    ("later", "Not sure yet", "I'll ask what it was when you resume"),
 )
 _AMBER = "#B7791F"
 _GREEN = "#2F9E44"
