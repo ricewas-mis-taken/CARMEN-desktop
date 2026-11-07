@@ -203,6 +203,28 @@ class _VacationLine(QWidget):
         super().mousePressEvent(event)
 
 
+class _StateMark(QWidget):
+    """The little mark in front of a review in a list: a green dot while it runs, two bars while it waits.
+    Drawn rather than typed, so both sit in the same 14px box, centred the same way."""
+
+    def __init__(self, running):
+        super().__init__()
+        self._running = running
+        self.setFixedSize(14, 14)
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        if self._running:
+            painter.setBrush(QColor("#16A34A"))
+            painter.drawEllipse(QRectF(3.5, 3.5, 7, 7))
+        else:
+            painter.setBrush(QColor(FAINT))
+            painter.drawRoundedRect(QRectF(3.5, 3.5, 2.5, 7), 1, 1)
+            painter.drawRoundedRect(QRectF(8, 3.5, 2.5, 7), 1, 1)
+
+
 class _ReviewBox(QFrame):
     """Reviews of this task's topic that are timed beside its session: one review reads as
     a line with its own pause button; several read as a short list, the running one first."""
@@ -254,10 +276,7 @@ class _ReviewBox(QFrame):
             line.setSpacing(8)
             running = row["state"] == "running"
             if len(rows) > 1:
-                mark = QLabel("●" if running else "❚❚")
-                mark.setFixedWidth(14)
-                mark.setStyleSheet(f"color:{'#16A34A' if running else FAINT};font-size:{9 if running else 8}px;")
-                line.addWidget(mark)
+                line.addWidget(_StateMark(running), 0, Qt.AlignVCenter)
             column = QVBoxLayout()
             column.setSpacing(0)
             title = _ElidedLabel(row["name"] if len(rows) > 1 else f"Reviewing {row['name']}")
@@ -271,13 +290,15 @@ class _ReviewBox(QFrame):
             line.addLayout(column, 1)
             clock = QLabel(_format_clock(row["seconds"]))
             clock.setStyleSheet(f"font-family:'{NUM_FONTS[0]}';font-size:15px;color:{INK if running else MUTED};")
-            line.addWidget(clock)
+            clock.setMinimumWidth(58)
+            clock.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            line.addWidget(clock, 0, Qt.AlignVCenter)
             self._time_labels.append(clock)
             # Only the review that is timed right now (or the only one) can be paused or
             # resumed from here; the set-aside ones are picked up in the Review tab.
             if running or len(rows) == 1:
                 toggle = QPushButton("Pause" if running else "Resume")
-                toggle.setFixedHeight(26)
+                toggle.setFixedSize(76, 26)
                 toggle.setCursor(Qt.PointingHandCursor)
                 toggle.setToolTip("Pause this review" if running else "Resume this review")
                 toggle.setStyleSheet(
@@ -285,8 +306,12 @@ class _ReviewBox(QFrame):
                     f"font-size:12px;font-weight:600;color:{INK};}}"
                     "QPushButton:hover{background:#F2F4F7;}")
                 toggle.clicked.connect(lambda _checked=False, r=row: on_toggle(r))
-                line.addWidget(toggle)
+                line.addWidget(toggle, 0, Qt.AlignVCenter)
                 self.pause_buttons.append(toggle)
+            elif len(rows) > 1:
+                gap = QWidget()
+                gap.setFixedSize(76, 26)           # keeps this row's clock in line with the running row's
+                line.addWidget(gap)
             self._layout.addLayout(line)
 
     @staticmethod
