@@ -768,6 +768,25 @@ def test_parked_first_attempt_banner_follows_its_own_session(
     assert dialog.isVisible()
 
 
+def test_a_rebuilt_page_shows_the_review_being_timed_not_the_one_set_aside(
+        qtbot, isolate_review_db, isolate_state, monkeypatch, tmp_path):
+    """The review being timed (here paused, beside a running session) must fill the banner after a rebuild;
+    the first attempt waiting behind the session sits in the strip instead of hiding it."""
+    view, _banner, _dialog = _parked_first_attempt(qtbot, isolate_review_db, isolate_state, monkeypatch, tmp_path)
+    subject = review_store.create_subject(view._topic_id, "Genomics", "#fb8c00")
+    problem = review_store.create_problem(view._topic_id, subject["id"], "Bovine Genomics", stars=3,
+                                          description_type="text", description_text="x")
+    review_store.start_review(problem["id"])
+    fresh = review_tab._TopicView(view._topic_id)
+    qtbot.addWidget(fresh)
+    fresh._follow = None
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    tab._follow_active_review()
+    shown = [v for v in tab._topic_views.values() if v._review_banner.is_running()]
+    assert shown and "Bovine Genomics" in shown[0]._review_banner._problem_label.text()
+
+
 def test_rebuilt_view_gives_a_resumed_first_attempt_its_add_problem_dialog(
         qtbot, isolate_review_db, isolate_state, monkeypatch, tmp_path):
     """The banner can be rebuilt around a still-running first attempt (app
