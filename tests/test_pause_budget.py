@@ -126,3 +126,41 @@ def test_break_pauses_are_not_in_the_live_budget():
     live = pause_budget.live({"isActive": True, "startTime": T0.isoformat(), "secondsRemaining": 1800,
                               "violationLog": log}, T0 + timedelta(minutes=20))
     assert live["used_seconds"] == 0
+
+
+def test_a_long_break_is_free_for_the_time_set_then_counts():
+    log = [{"kind": "pause", "timestamp": T0.isoformat(), "pauseReason": "long_break", "pauseMinutes": 30},
+           {"kind": "resume", "timestamp": (T0 + timedelta(minutes=50)).isoformat()}]
+    items = pause_budget.pauses(log, T0.isoformat(), (T0 + timedelta(minutes=60)).isoformat())
+    assert items == [{"reason": "long_break", "seconds": 30 * 60 + 60}, {"reason": "overrun", "seconds": 20 * 60 - 60}]
+    result = pause_budget.summarize({"violationLog": log, "startTime": T0.isoformat(),
+                                     "endTime": (T0 + timedelta(minutes=60)).isoformat()})
+    assert result["free_seconds"] == 31 * 60 and result["escape_seconds"] == 19 * 60
+
+
+def test_a_long_break_within_its_time_costs_nothing():
+    log = [{"kind": "pause", "timestamp": T0.isoformat(), "pauseReason": "long_break", "pauseMinutes": 60},
+           {"kind": "resume", "timestamp": (T0 + timedelta(minutes=58)).isoformat()}]
+    result = pause_budget.summarize({"violationLog": log, "startTime": T0.isoformat(),
+                                     "endTime": (T0 + timedelta(minutes=120)).isoformat()})
+    assert result["escape_seconds"] == 0 and result["cost"] == 0
+
+
+def test_the_break_over_notice_comes_once(isolate_state):
+    session_manager.start_session(60, "soft", [], [])
+    session_manager.pause_session("long_break", None, 15)
+    assert session_manager.pop_break_over() is None
+    later = datetime.now() + timedelta(minutes=16)
+    assert session_manager.pop_break_over(later) == 15
+    assert session_manager.pop_break_over(later) is None
+
+
+def test_the_popup_sends_the_minutes_of_a_long_break(qtbot, isolate_state):
+    from qt_ui import pause_reason
+    session_manager.start_session(60, "soft", [], [])
+    popup = pause_reason.ask(None)
+    qtbot.addWidget(popup)
+    popup._minutes.setValue(45)
+    popup._choose("long_break")
+    marker = session_manager._state["violationLog"][-1]
+    assert marker["pauseReason"] == "long_break" and marker["pauseMinutes"] == 45

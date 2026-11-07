@@ -4,7 +4,7 @@ that budget as it stands, lets the reason be explained in a line, and pauses on 
 from PySide6.QtCore import QRectF, QTimer, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
-    QButtonGroup, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget,
+    QButtonGroup, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 
 import pause_budget
@@ -15,6 +15,7 @@ _OPEN = []
 
 _CHOICES = (
     ("break", "Break", "Free"),
+    ("long_break", "Long break", "Free for the time you set"),
     ("interrupted", "Interrupted", "Free"),
     ("stuck", "Stuck", "Free, and I'll ask what is blocking you"),
     ("checking", "Checking something else", "Comes out of your pause budget"),
@@ -100,6 +101,30 @@ class _Popup(QWidget):
             row.addWidget(hint)
             layout.addLayout(row)
 
+        self._minutes_row = QWidget()
+        minutes_layout = QHBoxLayout(self._minutes_row)
+        minutes_layout.setContentsMargins(0, 0, 0, 0)
+        minutes_layout.setSpacing(6)
+        self._minutes = QSpinBox()
+        self._minutes.setRange(1, pause_budget.LONG_BREAK_MAX_MINUTES)
+        self._minutes.setValue(30)
+        self._minutes.setSuffix(" min")
+        self._minutes.setStyleSheet(
+            f"QSpinBox{{background:#FFFFFF;color:{INK};border:1px solid #E6E9EF;border-radius:10px;"
+            "padding:7px 10px;font-size:14px;}")
+        for quick in (15, 30, 60, 90):
+            chip = QPushButton(str(quick))
+            chip.setCursor(Qt.PointingHandCursor)
+            chip.setStyleSheet(
+                f"QPushButton{{background:#F4F5F8;color:{INK};border:none;border-radius:10px;padding:7px 12px;"
+                "font-size:13px;font-weight:600;}QPushButton:hover{background:#E7E3FB;}")
+            chip.clicked.connect(lambda _=False, m=quick: self._minutes.setValue(m))
+            minutes_layout.addWidget(chip)
+        minutes_layout.addWidget(self._minutes)
+        minutes_layout.addStretch(1)
+        self._minutes_row.hide()
+        layout.addWidget(self._minutes_row)
+
         self._note = QLineEdit()
         self._note.setPlaceholderText("Say why, in a few words")
         self._note.setMaxLength(200)
@@ -152,6 +177,7 @@ class _Popup(QWidget):
         self._go()
 
     def _sync(self, *_):
+        self._minutes_row.setVisible(self._key == "long_break")
         needs_note = self._key == "checking"
         self._note.setPlaceholderText("What are you checking?" if needs_note else "Say why, in a few words (optional)")
         missing = self._key is None or (needs_note and not self._note.text().strip())
@@ -164,9 +190,10 @@ class _Popup(QWidget):
             return
         key = self._key
         note = self._note.text().strip() or None
+        minutes = self._minutes.value() if key == "long_break" else None
         try:
-            session_manager.pause_session(key, note)
-        except TypeError:                     # a session_manager from before notes existed (not restarted yet)
+            session_manager.pause_session(key, note, minutes)
+        except TypeError:                     # a session_manager from before notes/long breaks (not restarted yet)
             session_manager.pause_session(key)
         self.close()
         if key == "stuck" and self._on_stuck:
