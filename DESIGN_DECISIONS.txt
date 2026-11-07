@@ -1028,3 +1028,11 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   that is still open and plans the length as time gone plus time left.
   Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-11-05] (the popup's own panel, which works the budget
   out itself from the status log).
+
+2026-11-06  Long break: a pause with a length, free for that long
+  Pauses past the budget cost points, but a long rest is sometimes wanted. Chose a "long_break" reason with a length
+  set up front over a per-pause cap or a daily allowance (see the options weighed in the chat that day): declared
+  time can be free, and what runs past it plus a minute's grace is "overrun", counted like checking something else
+  (pause_budget._pieces). pauseMinutes is stored on the pause marker, accepted as {"minutes"} (1 to 480) on
+  POST /session/pause, and session_manager.pop_break_over() lets the tracker toast "your break is up" once.
+  Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-11-06] (same rule in its pause panel).
