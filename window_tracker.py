@@ -184,7 +184,7 @@ def release_hidden_windows_unless_hard_locked(status):
         enforcer.restore_all_taskbar_previews()
 
 
-def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_change=None):
+def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_change=None, on_pause_label=None):
     """Runs until stop_event is set. Intended to be launched in its own thread.
 
     on_session_end(summary), if given, is called once whenever a session's
@@ -247,6 +247,13 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
             if pending is not None and on_session_end is not None:
                 try:
                     on_session_end(pending)
+                except Exception:
+                    pass
+
+            to_label = session_manager.pop_pending_label()
+            if to_label is not None and on_pause_label is not None:
+                try:
+                    on_pause_label(to_label)
                 except Exception:
                     pass
 

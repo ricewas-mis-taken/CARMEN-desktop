@@ -279,10 +279,17 @@ def main():
                 "Back to focus", f"Starting cycle {info['cycle']} of {info['totalCycles']}."
             )
 
+    def on_pause_label(info):
+        # A "decide later" pause just ended: ask what it was, on the GUI thread.
+        def ask():
+            from qt_ui import pause_label
+            pause_label.ask(info["timestamp"], info["seconds"])
+        qt_gui_thread.run_on_gui_thread(ask)
+
     polling_thread = threading.Thread(
         target=window_tracker.run_polling_loop,
         args=(stop_event, on_session_end),
-        kwargs={"tray_icon": icon, "on_phase_change": on_phase_change},
+        kwargs={"tray_icon": icon, "on_phase_change": on_phase_change, "on_pause_label": on_pause_label},
         daemon=True,
     )
     polling_thread.start()
