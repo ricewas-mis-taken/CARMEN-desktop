@@ -462,3 +462,27 @@ def test_a_count_up_ring_draws_a_plate_not_a_circle(qtbot):
     mid = full.height() // 2
     assert plain.pixelColor(8, mid).alpha() <= full.pixelColor(8, mid).alpha()
     assert plain != full
+
+
+def test_a_review_row_on_the_card_can_be_finished(qtbot, world, isolate_review_db):
+    import review_store
+    from qt_ui import review_tab
+    topic = review_store.create_topic("Math")
+    subject = review_store.create_subject(topic["id"], "Algebra", "#5B8DEF")
+    problem = review_store.create_problem(topic["id"], subject["id"], "Solve", stars=3,
+                                          description_type="text", description_text="x")
+    token = review_store.start_review(problem["id"])
+    box = tasks_tab._ReviewBox()
+    qtbot.addWidget(box)
+    finished = []
+    row = {"name": "Solve", "seconds": 61, "state": "running", "token": token, "active": True}
+    box.set_rows([row], lambda r: None, False, finished.append)
+    box.show()
+    assert len(box.finish_buttons) == 1 and len(box.pause_buttons) == 1
+    box.finish_buttons[0].click()
+    assert finished == [row]
+    review_tab.finish_review_from_card(token, "Solve", 61)
+    dialog = next(p for p in review_tab._popup_refs if isinstance(p, review_tab._PostReviewDialog) and not p._submitted)
+    dialog._solved_btn.setChecked(True)
+    dialog._submit()
+    assert review_store.get_problem(problem["id"])["reviewCount"] == 1

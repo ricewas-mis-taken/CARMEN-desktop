@@ -130,6 +130,7 @@ def _reviews_by_task():
                 rows.setdefault(task_id, []).append({
                     "name": active["problemName"], "seconds": active["elapsedSeconds"],
                     "state": "paused" if active.get("isPaused") else "running", "token": active["token"],
+                    "active": True,
                 })
         for parked in review_store.list_parked_reviews():
             task_id = task_of(parked["problemId"])
@@ -241,7 +242,7 @@ class _ReviewBox(QFrame):
         self.pause_buttons = []
         self.hide()
 
-    def set_rows(self, rows, on_toggle, on_break):
+    def set_rows(self, rows, on_toggle, on_break, on_finish=None):
         """rows: [{"name", "seconds", "state", "token"}]. Rebuilds only when the list of
         reviews or their states changes; otherwise just moves the clocks."""
         if not rows:
@@ -251,12 +252,12 @@ class _ReviewBox(QFrame):
         signature = tuple((r["token"], r["name"], r["state"]) for r in rows) + (on_break,)
         if signature != self._signature:
             self._signature = signature
-            self._rebuild(rows, on_toggle, on_break)
+            self._rebuild(rows, on_toggle, on_break, on_finish)
         for label, row in zip(self._time_labels, rows):
             label.setText(_format_clock(row["seconds"]))
         self.show()
 
-    def _rebuild(self, rows, on_toggle, on_break):
+    def _rebuild(self, rows, on_toggle, on_break, on_finish=None):
         while self._layout.count():
             item = self._layout.takeAt(0)
             widget = item.widget()
@@ -267,11 +268,14 @@ class _ReviewBox(QFrame):
                 self._drop_layout(item.layout())
         self._time_labels = []
         self.pause_buttons = []
+        self.finish_buttons = []
         if len(rows) > 1:
             head = QLabel(f"Reviews: {len(rows)}")
             head.setStyleSheet(f"font-size:12px;font-weight:700;color:{MUTED};")
             self._layout.addWidget(head)
         for row in rows:
+            block = QVBoxLayout()
+            block.setSpacing(6)
             line = QHBoxLayout()
             line.setSpacing(8)
             running = row["state"] == "running"
@@ -290,29 +294,42 @@ class _ReviewBox(QFrame):
             line.addLayout(column, 1)
             clock = QLabel(_format_clock(row["seconds"]))
             clock.setStyleSheet(f"font-family:'{NUM_FONTS[0]}';font-size:15px;color:{INK if running else MUTED};")
-            clock.setMinimumWidth(58)
             clock.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             line.addWidget(clock, 0, Qt.AlignVCenter)
             self._time_labels.append(clock)
-            # Only the review that is timed right now (or the only one) can be paused or
-            # resumed from here; the set-aside ones are picked up in the Review tab.
+            block.addLayout(line)
+            # Only the review that is timed right now (or the only one) can be paused, resumed or finished
+            # from here; the set-aside ones are picked up in the Review tab. The buttons sit on their own
+            # line, so a narrow card never squeezes the name or cuts a button off.
             if running or len(rows) == 1:
+                buttons = QHBoxLayout()
+                buttons.setSpacing(8)
+                buttons.addStretch(1)
                 toggle = QPushButton("Pause" if running else "Resume")
-                toggle.setFixedSize(76, 26)
+                toggle.setMinimumHeight(28)
                 toggle.setCursor(Qt.PointingHandCursor)
                 toggle.setToolTip("Pause this review" if running else "Resume this review")
                 toggle.setStyleSheet(
-                    "QPushButton{background:#FFFFFF;border:1px solid #DDE1E8;border-radius:13px;padding:0 12px;"
-                    f"font-size:12px;font-weight:600;color:{INK};}}"
+                    "QPushButton{background:#FFFFFF;border:1px solid #DDE1E8;border-radius:14px;padding:0 16px;"
+                    f"font-size:12.5px;font-weight:600;color:{INK};}}"
                     "QPushButton:hover{background:#F2F4F7;}")
                 toggle.clicked.connect(lambda _checked=False, r=row: on_toggle(r))
-                line.addWidget(toggle, 0, Qt.AlignVCenter)
+                buttons.addWidget(toggle)
                 self.pause_buttons.append(toggle)
-            elif len(rows) > 1:
-                gap = QWidget()
-                gap.setFixedSize(76, 26)           # keeps this row's clock in line with the running row's
-                line.addWidget(gap)
-            self._layout.addLayout(line)
+                if on_finish is not None and row.get("active"):
+                    finish = QPushButton("Finish")
+                    finish.setMinimumHeight(28)
+                    finish.setCursor(Qt.PointingHandCursor)
+                    finish.setToolTip("Stop timing and record how it went")
+                    finish.setStyleSheet(
+                        f"QPushButton{{background:{INK};border:none;border-radius:14px;padding:0 18px;"
+                        "font-size:12.5px;font-weight:600;color:#FFFFFF;}}"
+                        "QPushButton:hover{background:#2F353D;}")
+                    finish.clicked.connect(lambda _checked=False, r=row: on_finish(r))
+                    buttons.addWidget(finish)
+                    self.finish_buttons.append(finish)
+                block.addLayout(buttons)
+            self._layout.addLayout(block)
 
     @staticmethod
     def _drop_layout(layout):
@@ -1154,6 +1171,11 @@ class _TaskCard(QFrame):
             return
         session_manager.end_session(end_type="manual")
 
+    def _finish_review(self, row):
+        """Finish the review being timed: the same "How did it go?" step as the Review tab's own Finish."""
+        from qt_ui import review_tab
+        review_tab.finish_review_from_card(row["token"], row["name"], row["seconds"])
+
     def _toggle_review(self, row):
         if row["state"] == "running":
             review_store.pause_active_review()
@@ -1363,7 +1385,7 @@ class _TaskCard(QFrame):
             self._armed = False
             self._custom = False
         self._show_panel()
-        self._review_box.set_rows(reviews or [], self._toggle_review, bool(status.get("isBreak")))
+        self._review_box.set_rows(reviews or [], self._toggle_review, bool(status.get("isBreak")), self._finish_review)
 
     def _update_session_view(self, view, is_waiting, fraction, logged, required, reviews):
         self._dot.setStyleSheet(f"background:{self._color};border-radius:6px;")
@@ -1447,4 +1469,4 @@ class _TaskCard(QFrame):
         self._idle_actions.hide()
         self._armed_panel.hide()
         self._running_panel.show()
-        self._review_box.set_rows(reviews or [], self._toggle_review, on_break)
+        self._review_box.set_rows(reviews or [], self._toggle_review, on_break, self._finish_review)
