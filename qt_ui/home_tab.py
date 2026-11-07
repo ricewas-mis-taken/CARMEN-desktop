@@ -1085,6 +1085,10 @@ class HomeTab(QWidget):
         grade = QLabel(score_store.grade(value))
         grade.setStyleSheet(f"color:{INK};font-size:30px;font-weight:800;background:transparent;")
         row.addWidget(grade, 0, Qt.AlignBottom)
+        from qt_ui import explainer
+        info = explainer.InfoButton("score", "How the score and vacation minutes work")
+        info.setProperty("tourId", "score-info")
+        row.addWidget(info, 0, Qt.AlignTop)
         layout.addLayout(row)
         layout.addWidget(_ScoreTrack(value))
         moved = QLabel(f"{'+' if change > 0 else ''}{change} this week" if change else "No change this week")
