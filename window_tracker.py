@@ -250,6 +250,16 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
                 except Exception:
                     pass
 
+            break_over = session_manager.pop_break_over()
+            if break_over is not None:
+                try:
+                    import calendar_toast
+                    calendar_toast.show_toast(
+                        "Your break is up",
+                        f"The {break_over} minutes you set are over. Still on break? Time past now uses your pause budget.")
+                except Exception:
+                    pass
+
             pending_phase = session_manager.pop_pending_phase_change()
             if pending_phase is not None:
                 if pending_phase["phase"] == "break":
