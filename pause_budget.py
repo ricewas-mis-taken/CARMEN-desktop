@@ -28,6 +28,12 @@ LONG_BREAK_MAX_MINUTES = 480
 LONG_BREAK_GRACE_SECONDS = 60       # a minute of slack past the time set before it counts
 
 
+def exempt(session):
+    """Sessions with no length to measure a budget against: Burnout (it runs until you stop) and anything timed
+    as a review or first attempt (a stopwatch). A session or history entry; they have no pause budget at all."""
+    return bool(session) and bool(session.get("isBurnout") or session.get("source") == "review")
+
+
 def reason_of(marker):
     return marker.get("pauseReason") or "unspecified"
 
@@ -65,6 +71,9 @@ def summarize(entry, pending_free=False):
     """What the history shows for one session: free pause seconds, escape pause seconds, the budget, and
     the points the escape time cost."""
     items = pauses(entry.get("violationLog"), entry.get("startTime"), entry.get("endTime"), pending_free)
+    if exempt(entry):
+        return {"free_seconds": sum(p["seconds"] for p in items), "escape_seconds": 0, "budget_seconds": 0,
+                "over_seconds": 0, "cost": 0, "pauses": items, "exempt": True}
     start, end = _parse(entry.get("startTime")), _parse(entry.get("endTime"))
     length = max(0, int((end - start).total_seconds())) if start and end else 0
     free = sum(p["seconds"] for p in items if p["reason"] in FREE)
@@ -81,7 +90,7 @@ def live(status, now=None):
     None with no session. The length is the time already gone plus what is left, so the budget is the one
     the finished session will be judged by."""
     start = _parse((status or {}).get("startTime"))
-    if not status or not status.get("isActive") or not start:
+    if not status or not status.get("isActive") or not start or exempt(status):
         return None
     now = now or datetime.now()
     length = max(0, int((now - start).total_seconds())) + int(status.get("secondsRemaining") or 0)
