@@ -13,7 +13,7 @@ import math
 import threading
 import time
 
-from PySide6.QtCore import QBuffer, QByteArray, QPointF, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QBuffer, QByteArray, QLineF, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -61,6 +61,7 @@ from qt_ui.ui_kit import with_check_icon
 
 GRID = 20.0  # world units between grid lines at 100% zoom
 SAVE_DELAY_MS = 600
+_FULL_DETAIL_PX = 40      # a stroke smaller than this on screen is drawn with far fewer points (see _paint_far_stroke)
 _ADDED = object()         # marks an undo step that only adds one shape (see ScribeCanvas._push_added)
 MAX_UNDO = 100
 RULER = 20
@@ -752,9 +753,23 @@ class ScribeCanvas(QWidget):
             if not layer["visible"]:
                 continue
             p.setOpacity(layer["opacity"] / 100)
+            specks = {}            # strokes under a pixel across, batched by pen: one draw call per colour and width
             for item in layer["items"]:
                 if self._in_view(item, view, zoom, bbox_cache):
-                    self._paint_item(p, item, zoom)
+                    known = bbox_cache.get(id(item))
+                    box = known[2] if known is not None and known[0] is item else None
+                    if (box is not None and item["type"] == "stroke" and len(item["pts"]) > 1
+                            and max(box[2] - box[0], box[3] - box[1]) * zoom < 1.0):
+                        width = item["width"] if item.get("scale", True) else item["width"] / zoom
+                        key = (item["stroke"], max(width, 1.2 / zoom), item.get("round", True))
+                        a, b = item["pts"][0], item["pts"][-1]
+                        specks.setdefault(key, []).append(QLineF(a[0], a[1], b[0], b[1]))
+                        continue
+                    self._paint_item(p, item, zoom, box)
+            for (stroke, width, rounded), lines in specks.items():
+                p.setPen(QPen(QColor(self._ink(stroke)), width, Qt.SolidLine,
+                              Qt.RoundCap if rounded else Qt.FlatCap, Qt.RoundJoin))
+                p.drawLines(lines)
         self._bbox_cache = bbox_cache   # only the items that exist now
         p.setOpacity(1)
         if ui:
@@ -811,7 +826,7 @@ class ScribeCanvas(QWidget):
             return self._draft_path(item["pts"])
         path = self._smooth_path(item["pts"], closed)
         if item is not self._draft:               # the stroke being drawn changes on every move
-            if len(cache) > 4000:
+            if len(cache) > 8000:
                 cache.clear()
             cache[id(item)] = (item, stamp, path)
         return path
@@ -869,7 +884,7 @@ class ScribeCanvas(QWidget):
             path.closeSubpath()
         return path
 
-    def _paint_item(self, p, item, zoom):
+    def _paint_item(self, p, item, zoom, box=None):
         kind = item["type"]
         if kind == "image":
             x, y = item["a"]
@@ -906,6 +921,8 @@ class ScribeCanvas(QWidget):
                 p.setPen(Qt.NoPen)
                 p.setBrush(color)
                 p.drawEllipse(QPointF(*pts[0]), pen_width / 2, pen_width / 2)
+            elif box is not None and max(box[2] - box[0], box[3] - box[1]) * zoom < _FULL_DETAIL_PX:
+                self._paint_far_stroke(p, item, box, zoom, pen_width)
             else:
                 p.drawPath(self._stroke_path(item, bool(fill)))
         elif kind in geo.LINE_TYPES:
@@ -927,6 +944,39 @@ class ScribeCanvas(QWidget):
             x0, y0, x1, y1 = geo.rect_of(item)
             rect = QRectF(x0, y0, x1 - x0, y1 - y0)
             p.drawRect(rect) if kind == "rect" else p.drawEllipse(rect)
+
+    def _paint_far_stroke(self, p, item, box, zoom, pen_width):
+        """A stroke that is only a few pixels across at this zoom. Its smooth curve would cost far more than it can
+        show, so it is drawn as a dot (under a pixel) or a few straight pieces through every k-th point (cached
+        for the zoom band): zoomed far out, thousands of strokes can sit on screen and each one used to be
+        rebuilt as a full spline on every repaint."""
+        screen = max(box[2] - box[0], box[3] - box[1]) * zoom
+        pts = item["pts"]
+        if screen < 1.0:
+            a, b = pts[0], pts[-1]
+            pen = p.pen()
+            pen.setWidthF(max(pen_width, 1.2 / zoom))
+            p.setPen(pen)
+            p.drawLine(QPointF(a[0], a[1]), QPointF(b[0], b[1]))
+            return
+        band = int(math.floor(math.log2(zoom) * 2))
+        cache = self.__dict__.setdefault("_far_cache", {})
+        known = cache.get(id(item))
+        stamp = (self._stroke_stamp(item), band)
+        if known is None or known[0] is not item or known[1] != stamp:
+            wanted = max(2, int(screen / 1.5))
+            step = max(1, len(pts) // wanted)
+            kept = pts[::step]
+            if kept[-1] is not pts[-1]:
+                kept = kept + [pts[-1]]
+            path = QPainterPath(QPointF(kept[0][0], kept[0][1]))
+            for x, y in kept[1:]:
+                path.lineTo(QPointF(x, y))
+            if len(cache) > 30000:
+                cache.clear()
+            known = (item, stamp, path)
+            cache[id(item)] = known
+        p.drawPath(known[2])
 
     def _paint_guides(self, p):
         w, h = self.width(), self.height()
