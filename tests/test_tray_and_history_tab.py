@@ -24,7 +24,7 @@ def test_api_token_only_when_signed_in(monkeypatch):
 
 
 def test_history_tab_lists_sessions(qtbot, monkeypatch):
-    monkeypatch.setattr(history_viewer.session_history, "load_all", lambda: [{"startTime": "2026-01-01T10:00:00", "endTime": "2026-01-01T10:30:00"}])
+    monkeypatch.setattr(history_viewer.session_history, "load_all", lambda include_beside=False: [{"startTime": "2026-01-01T10:00:00", "endTime": "2026-01-01T10:30:00"}])
     tab = history_viewer.HistoryTab()
     qtbot.addWidget(tab)
     tab._set_window(None)
