@@ -209,3 +209,39 @@ def test_the_label_popup_writes_the_answer_onto_the_pause(qtbot, isolate_state):
     popup._buttons["checking"].click()
     assert marker["pauseReason"] == "checking"
     assert pause_label.length_text(1800) == "30 minutes" and pause_label.length_text(5400) == "1 h 30 min"
+
+
+def test_burnout_and_review_sessions_have_no_pause_budget(isolate_state):
+    log = _log((10, "pause", "checking"), (50, "resume", None))
+    base = {"violationLog": log, "startTime": T0.isoformat(), "endTime": (T0 + timedelta(minutes=60)).isoformat()}
+    assert pause_budget.summarize(base)["cost"] > 0
+    for extra in ({"isBurnout": True}, {"source": "review"}):
+        result = pause_budget.summarize({**base, **extra})
+        assert result["cost"] == 0 and result["escape_seconds"] == 0 and result["exempt"]
+    live = {"isActive": True, "startTime": T0.isoformat(), "secondsRemaining": 480 * 60, "violationLog": log}
+    assert pause_budget.live(live, T0 + timedelta(minutes=60))["budget_seconds"] > 0
+    assert pause_budget.live({**live, "isBurnout": True}, T0 + timedelta(minutes=60)) is None
+    assert pause_budget.live({**live, "source": "review"}, T0 + timedelta(minutes=60)) is None
+
+
+def test_ending_a_burnout_session_after_a_long_pause_costs_no_points(isolate_state):
+    import score_store
+    from datetime import date
+
+    def pause_events():
+        return [e for e in score_store.events_between(date.today() - timedelta(days=1), date.today() + timedelta(days=1))
+                if e.get("kind") == "pauses"]
+
+    session_manager.start_session(480, "soft", [], [], source="task", event_id="t", event_title="T", is_burnout=True)
+    session_manager.pause_session("checking")
+    session_manager._state["violationLog"][-1]["timestamp"] = (datetime.now() - timedelta(hours=3)).isoformat()
+    session_manager.resume_session()
+    session_manager.end_session()
+    assert pause_events() == []
+
+    session_manager.start_session(60, "soft", [], [], source="task", event_id="t", event_title="T")
+    session_manager.pause_session("checking")
+    session_manager._state["violationLog"][-1]["timestamp"] = (datetime.now() - timedelta(hours=3)).isoformat()
+    session_manager.resume_session()
+    session_manager.end_session()
+    assert pause_events()                          # an ordinary session still pays for it

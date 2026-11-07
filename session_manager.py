@@ -714,9 +714,11 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None, restore_pa
                 "reviewSubjectName": review_subject_name,
                 "pomodoro": pomodoro,
                 "sessionId": session_id,
+                "isBurnout": bool(_state.get("isBurnout")),
             }
         )
-        _score_pauses(session_id, start_time, now.isoformat(), summary_log)
+        _score_pauses(session_id, start_time, now.isoformat(), summary_log,
+                      burnout=bool(_state.get("isBurnout")), source=source)
 
     _state["isActive"] = False
     _state["startTime"] = None
@@ -1253,12 +1255,13 @@ def resume_session():
         return _get_status_locked()
 
 
-def _score_pauses(session_id, start_iso, end_iso, log):
+def _score_pauses(session_id, start_iso, end_iso, log, burnout=False, source=None):
     """Escape pauses past the budget cost points, once per session (the event key is the session id)."""
     try:
         import pause_budget
         import score_store
-        result = pause_budget.summarize({"violationLog": log, "startTime": start_iso, "endTime": end_iso})
+        result = pause_budget.summarize({"violationLog": log, "startTime": start_iso, "endTime": end_iso,
+                                         "isBurnout": burnout, "source": source})
         if result["cost"] and session_id:
             minutes = round(result["escape_seconds"] / 60)
             score_store.add_event(f"pause:{session_id}", datetime.fromisoformat(end_iso).date(), "pauses",
