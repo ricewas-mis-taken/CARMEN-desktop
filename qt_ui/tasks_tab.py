@@ -1268,7 +1268,7 @@ class _TaskCard(QFrame):
         balance = tasks_store.vacation_balance_minutes(self._task, sessions)
         # Round, not truncate: 0.97m reads as "1m" and the amount you can spend must match.
         self._cash_in_balance_int = int(round(balance))
-        today_surplus = max(0.0, logged_minutes - required) if required > 0 else 0.0
+        today_surplus = tasks_store.vacation_earned_today(self._task, today, sessions, live_status=status)
         display_balance = balance + today_surplus
 
         is_running = bool(status.get("isActive") and self._belongs_to_this_task(status))
