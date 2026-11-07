@@ -1,10 +1,10 @@
-"""Pausing asks what the pause is for. Break, interrupted and stuck are free; checking something else comes
-out of a small budget (see pause_budget), so a pause can't quietly turn into an escape. The popup shows
-that budget as it stands, lets the reason be explained in a line, and pauses on one button."""
+"""Pausing: one big Pause button (what it was is asked when you resume), or one tap on a reason. Break,
+interrupted and stuck are free; checking something else comes out of a small budget (see pause_budget), so a
+pause can't quietly turn into an escape. The budget itself shows on the task card and the mini timer."""
 from PySide6.QtCore import QRectF, QTimer, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
-    QButtonGroup, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 
 import pause_budget
@@ -13,14 +13,6 @@ from qt_ui.ui_kit import INK, MUTED
 
 _OPEN = []
 
-_CHOICES = (
-    ("break", "Break", "Free"),
-    ("long_break", "Long break", "Free for the time you set"),
-    ("interrupted", "Interrupted", "Free"),
-    ("stuck", "Stuck", "Free, and I'll ask what is blocking you"),
-    ("checking", "Checking something else", "Comes out of your pause budget"),
-    ("later", "Not sure yet", "I'll ask what it was when you resume"),
-)
 _AMBER = "#B7791F"
 _GREEN = "#2F9E44"
 _RED = "#D92D20"
@@ -61,139 +53,150 @@ def ask(anchor, done=None, on_stuck=None):
     return popup
 
 
+_CHIP = ("QPushButton{background:#F4F5F8;color:%s;border:none;border-radius:14px;padding:9px 14px;"
+         "font-size:13.5px;font-weight:600;}QPushButton:hover{background:#E7E3FB;}"
+         "QPushButton:checked{background:#E7E3FB;border:1.5px solid #8B7BE8;}")
+_MINUTE_CHIPS = (15, 30, 60, 90)
+_TIPS = {
+    "break": "A real rest. Free.",
+    "long_break": "A rest you set a length for. Free for that long, then it counts as checking.",
+    "interrupted": "Something outside your control. Free.",
+    "stuck": "You are blocked on the work. Free, and Carmen asks what is blocking you.",
+    "checking": "Looking at something else. Comes out of your pause budget.",
+}
+
+
 class _Popup(QWidget):
+    """One big Pause button (what it was is asked when you resume), and small reason chips for saying it
+    now: a chip pauses with one tap. Only a long break (how long) and checking (what) need one more bit."""
+
     def __init__(self, done, on_stuck, status):
         super().__init__(None, Qt.Tool | Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle("Pause")
-        self.setMinimumWidth(460)
+        self.setFixedWidth(380)
         self._done, self._on_stuck = done, on_stuck
         self._key = None
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 22, 24, 20)
-        layout.setSpacing(12)
+        layout.setContentsMargins(24, 22, 24, 18)
+        layout.setSpacing(10)
 
         title = QLabel("Pause the timer")
         title.setStyleSheet(f"color:{INK};font-size:20px;font-weight:700;background:transparent;")
         layout.addWidget(title)
 
-        self._group = QButtonGroup(self)
-        self._group.setExclusive(True)
-        self._choices = {}
-        for key, label, note in _CHOICES:
-            button = QPushButton(label)
-            button.setCheckable(True)
-            button.setCursor(Qt.PointingHandCursor)
-            button.setStyleSheet(
-                f"QPushButton{{background:#FFFFFF;color:{INK};border:1px solid #E6E9EF;border-radius:12px;"
-                "padding:10px 14px;font-size:14px;font-weight:600;text-align:left;}"
-                "QPushButton:hover{background:#F6F4FF;border-color:#B9AEF2;}"
-                "QPushButton:checked{background:#F1EEFF;border:2px solid #8B7BE8;}")
-            button.clicked.connect(lambda _=False, k=key: self._pick(k))
-            self._group.addButton(button)
-            self._choices[key] = button
-            row = QHBoxLayout()
-            row.setSpacing(10)
-            row.addWidget(button, 1)
-            hint = QLabel(note)
-            hint.setWordWrap(True)
-            hint.setStyleSheet(f"color:{MUTED};font-size:12px;background:transparent;")
-            hint.setFixedWidth(170)
-            row.addWidget(hint)
-            layout.addLayout(row)
+        self._go_button = QPushButton("Pause")
+        self._go_button.setCursor(Qt.PointingHandCursor)
+        self._go_button.setMinimumHeight(46)
+        self._go_button.setToolTip("Pause now. Carmen asks what it was when you resume.")
+        self._go_button.setStyleSheet(
+            "QPushButton{background:#1F2328;color:#FFFFFF;border:none;border-radius:14px;"
+            "font-size:15px;font-weight:700;}QPushButton:hover{background:#2F353D;}")
+        self._go_button.clicked.connect(lambda: self._choose("later"))
+        layout.addWidget(self._go_button)
 
+        hint = QLabel("Or say why now")
+        hint.setStyleSheet(f"color:{MUTED};font-size:12.5px;background:transparent;margin-top:4px;")
+        layout.addWidget(hint)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
+        self._choices = {}
+        for index, (key, label) in enumerate((("break", "Break"), ("long_break", "Long break"),
+                                              ("interrupted", "Interrupted"), ("stuck", "Stuck"),
+                                              ("checking", "Checking something"))):
+            chip = QPushButton(label)
+            chip.setCheckable(key in ("long_break", "checking"))
+            chip.setCursor(Qt.PointingHandCursor)
+            chip.setToolTip(_TIPS[key])
+            chip.setStyleSheet(_CHIP % INK)
+            chip.clicked.connect(lambda _=False, k=key: self._tap(k))
+            self._choices[key] = chip
+            grid.addWidget(chip, index // 2, index % 2)
+        layout.addLayout(grid)
+
+        # Long break: how long, one tap. A custom number is there too.
         self._minutes_row = QWidget()
-        minutes_layout = QHBoxLayout(self._minutes_row)
-        minutes_layout.setContentsMargins(0, 0, 0, 0)
-        minutes_layout.setSpacing(6)
+        mrow = QHBoxLayout(self._minutes_row)
+        mrow.setContentsMargins(0, 0, 0, 0)
+        mrow.setSpacing(6)
+        for quick in _MINUTE_CHIPS:
+            chip = QPushButton(f"{quick} min")
+            chip.setCursor(Qt.PointingHandCursor)
+            chip.setStyleSheet(_CHIP % INK)
+            chip.clicked.connect(lambda _=False, m=quick: self._choose("long_break", minutes=m))
+            mrow.addWidget(chip)
         self._minutes = QSpinBox()
         self._minutes.setRange(1, pause_budget.LONG_BREAK_MAX_MINUTES)
         self._minutes.setValue(30)
         self._minutes.setSuffix(" min")
         self._minutes.setStyleSheet(
             f"QSpinBox{{background:#FFFFFF;color:{INK};border:1px solid #E6E9EF;border-radius:10px;"
-            "padding:7px 10px;font-size:14px;}")
-        for quick in (15, 30, 60, 90):
-            chip = QPushButton(str(quick))
-            chip.setCursor(Qt.PointingHandCursor)
-            chip.setStyleSheet(
-                f"QPushButton{{background:#F4F5F8;color:{INK};border:none;border-radius:10px;padding:7px 12px;"
-                "font-size:13px;font-weight:600;}QPushButton:hover{background:#E7E3FB;}")
-            chip.clicked.connect(lambda _=False, m=quick: self._minutes.setValue(m))
-            minutes_layout.addWidget(chip)
-        minutes_layout.addWidget(self._minutes)
-        minutes_layout.addStretch(1)
+            "padding:6px 8px;font-size:13px;}")
+        self._minutes.setToolTip("Another length, then press Enter")
+        self._minutes.lineEdit().returnPressed.connect(lambda: self._choose("long_break"))
+        mrow.addWidget(self._minutes)
         self._minutes_row.hide()
         layout.addWidget(self._minutes_row)
 
+        # Checking: what, then Pause.
+        self._note_row = QWidget()
+        nrow = QHBoxLayout(self._note_row)
+        nrow.setContentsMargins(0, 0, 0, 0)
+        nrow.setSpacing(8)
         self._note = QLineEdit()
-        self._note.setPlaceholderText("Say why, in a few words")
         self._note.setMaxLength(200)
+        self._note.setPlaceholderText("What are you checking?")
         self._note.setStyleSheet(
             f"QLineEdit{{background:#FFFFFF;color:{INK};border:1px solid #E6E9EF;border-radius:10px;"
-            "padding:9px 12px;font-size:14px;}QLineEdit:focus{border-color:#8B7BE8;}")
-        self._note.textChanged.connect(self._sync)
-        self._note.returnPressed.connect(self._go)
-        layout.addWidget(self._note)
+            "padding:9px 12px;font-size:13.5px;}QLineEdit:focus{border-color:#8B7BE8;}")
+        self._note.returnPressed.connect(lambda: self._choose("checking", self._note.text()))
+        nrow.addWidget(self._note, 1)
+        confirm = QPushButton("Pause")
+        confirm.setCursor(Qt.PointingHandCursor)
+        confirm.setStyleSheet(
+            "QPushButton{background:#1F2328;color:#FFFFFF;border:none;border-radius:10px;padding:9px 16px;"
+            "font-size:13.5px;font-weight:700;}QPushButton:hover{background:#2F353D;}")
+        confirm.clicked.connect(lambda: self._choose("checking", self._note.text()))
+        nrow.addWidget(confirm)
+        self._note_row.hide()
+        layout.addWidget(self._note_row)
 
-        self._hint = QLabel("")
-        self._hint.setStyleSheet(f"color:{MUTED};font-size:12px;background:transparent;")
-        layout.addWidget(self._hint)
-
-        divider = QFrame()
-        divider.setFixedHeight(1)
-        divider.setStyleSheet("background:#E6E9EF;")
-        layout.addWidget(divider)
-
-        buttons = QHBoxLayout()
-        buttons.addStretch(1)
         cancel = QPushButton("Keep working")
         cancel.setCursor(Qt.PointingHandCursor)
         cancel.setStyleSheet(
-            f"QPushButton{{background:transparent;color:{MUTED};border:none;padding:9px 14px;font-size:14px;}}"
+            f"QPushButton{{background:transparent;color:{MUTED};border:none;padding:6px;font-size:13px;}}"
             f"QPushButton:hover{{color:{INK};}}")
         cancel.clicked.connect(self.close)
-        buttons.addWidget(cancel)
-        self._go_button = QPushButton("Pause")
-        self._go_button.setCursor(Qt.PointingHandCursor)
-        self._go_button.setStyleSheet(
-            "QPushButton{background:#1F2328;color:#FFFFFF;border:none;border-radius:10px;padding:9px 22px;"
-            "font-size:14px;font-weight:700;}QPushButton:hover{background:#2F353D;}"
-            "QPushButton:disabled{background:#D5D9E0;color:#8A919C;}")
-        self._go_button.clicked.connect(self._go)
-        buttons.addWidget(self._go_button)
-        layout.addLayout(buttons)
-        self._sync()
+        layout.addWidget(cancel, 0, Qt.AlignHCenter)
 
-    def _pick(self, key):
+    def _tap(self, key):
+        """A chip was pressed: most pause right away; the two that need a detail show it first."""
+        if key in ("long_break", "checking"):
+            self._reveal(key)
+        else:
+            self._choose(key)
+
+    def _reveal(self, key):
         self._key = key
-        self._sync()
-        self._note.setFocus()
+        self._minutes_row.setVisible(key == "long_break")
+        self._note_row.setVisible(key == "checking")
+        for k in ("long_break", "checking"):
+            self._choices[k].setChecked(k == key)
+        if key == "checking":
+            self._note.setFocus()
+        self.adjustSize()
 
-    def _choose(self, key, note=""):
-        """Picks a reason, writes the note and presses Pause (what a click, a line of text and Enter do)."""
-        self._choices[key].setChecked(True)
-        self._pick(key)
-        self._note.setText(note)
-        self._go()
-
-    def _sync(self, *_):
-        self._minutes_row.setVisible(self._key == "long_break")
-        needs_note = self._key == "checking"
-        self._note.setPlaceholderText("What are you checking?" if needs_note else "Say why, in a few words (optional)")
-        missing = self._key is None or (needs_note and not self._note.text().strip())
-        self._go_button.setEnabled(not missing)
-        self._hint.setText("Pick a reason." if self._key is None else
-                           "Say what you are checking." if missing else "")
-
-    def _go(self):
-        if not self._go_button.isEnabled():
+    def _choose(self, key, note="", minutes=None):
+        """Pauses with this reason. Checking needs a word on what; without one it shows the box and waits."""
+        note = (note or "").strip()
+        if key == "checking" and not note:
+            self._reveal("checking")
             return
-        key = self._key
-        note = self._note.text().strip() or None
-        minutes = self._minutes.value() if key == "long_break" else None
+        minutes = (minutes or self._minutes.value()) if key == "long_break" else None
         try:
-            session_manager.pause_session(key, note, minutes)
+            session_manager.pause_session(key, note or None, minutes)
         except TypeError:                     # a session_manager from before notes/long breaks (not restarted yet)
             session_manager.pause_session(key)
         self.close()

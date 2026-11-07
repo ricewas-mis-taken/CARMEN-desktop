@@ -245,3 +245,31 @@ def test_ending_a_burnout_session_after_a_long_pause_costs_no_points(isolate_sta
     session_manager.resume_session()
     session_manager.end_session()
     assert pause_events()                          # an ordinary session still pays for it
+
+
+def test_the_pause_button_pauses_in_one_click_and_a_reason_chip_in_one_tap(qtbot, isolate_state):
+    from qt_ui import pause_reason
+    session_manager.start_session(60, "soft", [], [])
+    popup = pause_reason.ask(None)
+    qtbot.addWidget(popup)
+    popup._go_button.click()
+    assert session_manager.get_status()["isPaused"]
+    assert session_manager._state["violationLog"][-1]["pauseReason"] == "later"
+    session_manager.resume_session()
+    popup = pause_reason.ask(None)
+    qtbot.addWidget(popup)
+    popup._choices["interrupted"].click()
+    assert session_manager._state["violationLog"][-1]["pauseReason"] == "interrupted"
+
+
+def test_checking_and_long_break_open_their_detail_instead_of_pausing(qtbot, isolate_state):
+    from qt_ui import pause_reason
+    session_manager.start_session(60, "soft", [], [])
+    popup = pause_reason.ask(None)
+    qtbot.addWidget(popup)
+    popup.show()
+    popup._choices["checking"].click()
+    assert popup._note_row.isVisible() and not session_manager.get_status()["isPaused"]
+    popup._choices["long_break"].click()
+    assert popup._minutes_row.isVisible() and not popup._note_row.isVisible()
+    assert not session_manager.get_status()["isPaused"]
