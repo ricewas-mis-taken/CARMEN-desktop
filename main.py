@@ -268,6 +268,8 @@ def main():
         # one (that goes through on_session_end instead, same toast as any
         # other session end) -- see window_tracker.run_polling_loop's
         # on_phase_change docstring.
+        logger.info("pomodoro phase change -> %s (cycle %s of %s); showing its toast",
+                    info["phase"], info["cycle"], info["totalCycles"])
         if info["phase"] == "break":
             calendar_toast.show_toast(
                 "Break time", f"Cycle {info['cycle']} of {info['totalCycles']} done — take a break."
