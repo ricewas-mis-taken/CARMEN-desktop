@@ -68,3 +68,13 @@ def test_a_topic_with_no_linked_task_has_nothing_to_count_toward(isolate_state):
 
 def test_zero_seconds_is_not_filed(setup):
     assert review_tab._file_untimed_review(setup[2], 0) is None
+
+
+def test_a_session_filed_early_as_superseded_is_replaced_when_it_really_ends(isolate_state):
+    stub = {"sessionId": "s1", "startTime": "2026-11-07T15:00:00", "endTime": "2026-11-07T15:17:00", "endType": "superseded"}
+    real = {"sessionId": "s1", "startTime": "2026-11-07T15:00:00", "endTime": "2026-11-07T19:00:00", "endType": "manual"}
+    session_history.append_entry(stub)
+    session_history.append_entry(real)
+    assert [e["endTime"] for e in session_history.load_all()] == ["2026-11-07T19:00:00"]
+    session_history.append_entry(stub)                       # an ordinary duplicate is still ignored
+    assert len(session_history.load_all()) == 1

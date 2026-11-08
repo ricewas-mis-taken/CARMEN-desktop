@@ -88,6 +88,13 @@ def _append_entries(new_entries):
         added = 0
         for entry in new_entries:
             if entry_id(entry) in known:
+                # A session filed early as "superseded" is only a stub if the same session later finishes for
+                # real: the longer, later entry replaces it instead of being dropped as a duplicate.
+                same = next((i for i, e in enumerate(history) if entry_id(e) == entry_id(entry)), None)
+                if (same is not None and history[same].get("endType") == "superseded"
+                        and (entry.get("endTime") or "") > (history[same].get("endTime") or "")):
+                    history[same] = entry
+                    added += 1
                 continue
             known.add(entry_id(entry))
             history.append(entry)
