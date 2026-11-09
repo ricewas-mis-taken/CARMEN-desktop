@@ -1019,3 +1019,15 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   carries its key (devices_store), keeps one row per computer, and syncs the rows like tasks, so any computer can
   list "computers, browsers, account, connected now". A link is per computer by design (the key is local).
   Browser profile / which person in the browser is not knowable without the identity permission; not added.
+
+2026-11-07  Score and theme now sync between computers
+  The Carmen Score ledger (score.json) was local-only, so each computer settled its own days from its own
+  copy of the data and the two numbers drifted. It now goes through the fast lane as a "score" row, and the
+  two ledgers are UNITED by event key rather than replaced by the newer one: every event has a deterministic
+  key (goal:<date>, review:<id>, ...), so a union can never double count, and pause/unblock events made on
+  one computer are kept. When both hold the same key with different points the larger (points, note) wins on
+  both sides, so they converge. Last-writer-wins was rejected because it would drop one side's events.
+  The theme is just one more key in config's SHARED_SETTINGS (same stamp and wake-up as the block list); the
+  stylesheet is re-applied live when it arrives. Hard-coded widget colours still update on next start.
+  Lock popups also send the main window to the back: hiding the blocked app made the OS surface Carmen's
+  whole window as the "next" window.

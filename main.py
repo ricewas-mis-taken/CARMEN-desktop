@@ -181,6 +181,12 @@ def main():
     import sync_client
     sync_client.add_pulled_listener(_refresh_open_window)
 
+    def _theme_changed_elsewhere():
+        from qt_ui.options_dialog import reapply_stylesheet
+        qt_gui_thread.run_on_gui_thread(reapply_stylesheet)
+
+    theme.add_remote_listener(_theme_changed_elsewhere)
+
     def on_quit():
         stop_event.set()
         # The periodic debounce inside screentime_store.add_app_seconds()

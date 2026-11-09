@@ -120,6 +120,22 @@ def load_setting():
     return config.load_config().get("theme") or {"name": DEFAULT_THEME}
 
 
+_remote_listeners = []
+
+
+def add_remote_listener(listener):
+    """Called (on a worker thread) when the other computer's theme choice has just been saved here."""
+    _remote_listeners.append(listener)
+
+
+def notify_remote():
+    for listener in list(_remote_listeners):
+        try:
+            listener()
+        except Exception:
+            pass
+
+
 def save_setting(setting):
     import config
 

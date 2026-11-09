@@ -45,6 +45,7 @@ DEFAULT_CONFIG = {
     "focusRulesUpdatedAt": None,
     # When the shared settings below last changed on any computer (cloud time).
     "settingsUpdatedAt": None,
+    "theme": None,              # {"name": ..., "custom": {...}}: shared, so both computers look the same
 }
 
 # The saved defaults every computer should agree on: what a new session blocks
@@ -52,7 +53,7 @@ DEFAULT_CONFIG = {
 # is about one computer (window geometry, browser profile ids, the API token).
 SHARED_SETTINGS = (
     "processBlocklist", "domainWhitelist", "last_duration_minutes", "last_lock_mode",
-    "last_hide_taskbar_badges", "last_stop_taskbar_flashing",
+    "last_hide_taskbar_badges", "last_stop_taskbar_flashing", "theme",
 )
 _change_listeners = []
 
@@ -225,6 +226,14 @@ def _clean_shared_settings(data):
     for key in ("last_hide_taskbar_badges", "last_stop_taskbar_flashing"):
         if isinstance(data.get(key), bool):
             clean[key] = data[key]
+    theme = data.get("theme")
+    if isinstance(theme, dict) and isinstance(theme.get("name"), str) and len(theme["name"]) <= 40:
+        picked = {"name": theme["name"]}
+        custom = theme.get("custom")
+        if isinstance(custom, dict):
+            picked["custom"] = {k: v for k, v in custom.items()
+                                if isinstance(k, str) and isinstance(v, str) and len(v) <= 9}
+        clean["theme"] = picked
     return clean
 
 

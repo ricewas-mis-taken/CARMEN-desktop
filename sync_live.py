@@ -30,6 +30,7 @@ import config
 import device_id
 import multi_device
 import quicknote_store
+import score_store
 import scribe_store
 import sync_photos
 import review_store
@@ -58,6 +59,8 @@ REVIEW_PUSHED_PATH = os.path.join(_PRIVATE, "live_review_pushed.txt")
 SETTINGS_TABLE = "settings"       # the saved block/allow lists and Start-dialog defaults
 QUICKNOTE_TABLE = "quicknote"     # the one shared bullet-point note
 QUICKNOTE_PUSHED_PATH = os.path.join(_PRIVATE, "live_quicknote_pushed.txt")
+SCORE_TABLE = "score"             # the Carmen Score ledger (events are united across computers)
+SCORE_PUSHED_PATH = os.path.join(_PRIVATE, "live_score_pushed.txt")
 SCRIBE_TABLE = "scribe"           # the Scribe board's layers (its images go as photos)
 SCRIBE_PUSHED_PATH = os.path.join(_PRIVATE, "live_scribe_pushed.txt")
 SETTINGS_PUSHED_PATH = os.path.join(_PRIVATE, "live_settings_pushed.txt")
@@ -337,6 +340,32 @@ def _apply_quicknote(records):
             logger.exception("sync_live: could not apply the shared QuickNote")
 
 
+# --- gather / apply: the Carmen Score ledger ---
+
+def _gather_score():
+    exported = score_store.export()
+    stamp = exported["stamp"]
+    if not stamp or not server_clock.is_newer(stamp, _read(SCORE_PUSHED_PATH)):
+        return [], None
+    return [{
+        "table_name": SCORE_TABLE, "sync_id": "ledger",
+        "data": {"events": exported["events"], "settledThrough": exported["settledThrough"]},
+        "device_id": device_id.get_device_id(), "updated_at": stamp, "is_deleted": False,
+    }], stamp
+
+
+def _apply_score(records):
+    for record in records:
+        data = record.get("data")
+        if record.get("sync_id") != "ledger" or not isinstance(data, dict):
+            continue
+        try:
+            if score_store.apply_remote(data.get("events"), data.get("settledThrough"), record.get("updated_at")):
+                _write(SCORE_PUSHED_PATH, record["updated_at"])
+        except Exception:
+            logger.exception("sync_live: could not apply the shared score")
+
+
 # --- gather / apply: the Scribe board ---
 
 _scribe_images_wanted = False     # set when new layers arrived: their images still have to be fetched
@@ -400,8 +429,12 @@ def _apply_settings(records):
         if record.get("sync_id") != "defaults" or not isinstance(data, dict):
             continue
         try:
+            before = config.load_config().get("theme")
             if config.apply_remote_settings(data.get("settings"), record.get("updated_at")):
                 _write(SETTINGS_PUSHED_PATH, record["updated_at"])
+                if config.load_config().get("theme") != before:
+                    import theme
+                    theme.notify_remote()
         except Exception:
             logger.exception("sync_live: could not apply the shared defaults")
 
@@ -480,6 +513,7 @@ def _apply(records):
     _apply_settings(by_table.get(SETTINGS_TABLE, []))
     _apply_quicknote(by_table.get(QUICKNOTE_TABLE, []))
     _apply_scribe(by_table.get(SCRIBE_TABLE, []))
+    _apply_score(by_table.get(SCORE_TABLE, []))
 
 
 def tick():
@@ -502,6 +536,8 @@ def tick():
     push_records += note_records
     scribe_records, scribe_stamp = _gather_scribe()
     push_records += scribe_records
+    score_records, score_stamp = _gather_score()
+    push_records += score_records
     screentime_records, screentime_fingerprints = _gather_screentime()
     push_records += screentime_records
     refreshed = False
@@ -537,6 +573,8 @@ def tick():
         _write(QUICKNOTE_PUSHED_PATH, note_stamp)
     if scribe_stamp:
         _write(SCRIBE_PUSHED_PATH, scribe_stamp)
+    if score_stamp:
+        _write(SCORE_PUSHED_PATH, score_stamp)
     _remember_screentime_sent(screentime_fingerprints)
     _apply(records)
     try:
@@ -557,6 +595,7 @@ review_store.add_change_listener(lambda: _wake.set())
 config.add_change_listener(lambda: _wake.set())
 quicknote_store.add_change_listener(lambda: _wake.set())
 scribe_store.add_change_listener(lambda: _wake.set())
+score_store.add_change_listener(lambda: _wake.set())
 
 
 def enable():

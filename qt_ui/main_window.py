@@ -128,6 +128,19 @@ def open_main_window():
     _win.show()
 
 
+def send_to_back():
+    """Puts the main window behind everything else without hiding or activating it. Called when a lock
+    popup appears: hiding or minimizing the blocked app makes the OS surface the next window in line,
+    which was Carmen's whole window rather than just the popup."""
+    if _win is None:
+        return
+    try:
+        if _win.isVisible() and not _win.isMinimized():
+            _win.lower()
+    except RuntimeError:
+        pass
+
+
 _PAGE_FOR_TABLE = {
     "tasks": "tasks", "board": "board",
     "review_topics": "review", "review_subjects": "review",
