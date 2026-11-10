@@ -106,3 +106,16 @@ def test_dragging_shows_each_days_cost_and_the_slider_shows_more_weeks(isolate_r
     tab._span.setValue(3)
     assert len([r for r in (tab._rows.itemAt(i).widget() for i in range(tab._rows.count())) if isinstance(r, _DayRow)]) == 21
     assert cost_text(-6) == "costs 6 points" and cost_text(0) == "free"
+
+
+def test_reviews_only_land_on_the_allowed_days(monkeypatch):
+    import review_scheduler
+    monday = date(2026, 11, 9)
+    monkeypatch.setattr(review_scheduler, "today", lambda: monday)
+    monkeypatch.setattr(review_scheduler, "allowed_weekdays", lambda: [1, 3])       # Tuesday and Thursday
+    assert review_scheduler.snap(date(2026, 11, 9)) == date(2026, 11, 10)
+    assert review_scheduler.snap(date(2026, 11, 11)) == date(2026, 11, 12)
+    assert review_scheduler.snap(date(2026, 11, 13)) == date(2026, 11, 17)
+    assert review_scheduler.schedule_new_problem(1)["next_review_date"] == date(2026, 11, 10)
+    monkeypatch.setattr(review_scheduler, "allowed_weekdays", lambda: None)
+    assert review_scheduler.snap(date(2026, 11, 9)) == date(2026, 11, 9)
