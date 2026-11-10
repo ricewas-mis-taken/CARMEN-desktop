@@ -57,7 +57,7 @@ def _weekday(day, today):
 class _Tag(QFrame):
     """One review, as a small tag with its subject's colour. Press and drag to move it."""
 
-    def __init__(self, problem):
+    def __init__(self, problem, day=None):
         super().__init__()
         self.problem = problem
         self._press = None
@@ -75,6 +75,13 @@ class _Tag(QFrame):
         name = QLabel(problem["name"])
         name.setStyleSheet(f"color:{INK};font-size:13px;font-weight:600;background:transparent;")
         row.addWidget(name)
+        if day is not None:
+            lost = -cost_for_day(problem, day)[0]
+            chip = QLabel(f"-{lost} pts" if lost else "free")
+            chip.setStyleSheet(
+                f"color:{'#D9480F' if lost else '#2F9E44'};background:transparent;font-size:11.5px;font-weight:700;")
+            chip.setToolTip("Points this review loses on this day" if lost else "No points lost: on or before its due day")
+            row.addWidget(chip)
         self.setToolTip(f"{problem['name']}, {problem.get('subjectName') or ''}. Drag to another day.")
 
     def mousePressEvent(self, event):
@@ -160,7 +167,7 @@ class _DayRow(QFrame):
 
         tags = FlowLayout(spacing=6)
         for problem in entry["reviews"]:
-            tags.addWidget(_Tag(problem))
+            tags.addWidget(_Tag(problem, self.day))
         middle = QWidget()
         middle.setLayout(tags)
         middle.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)

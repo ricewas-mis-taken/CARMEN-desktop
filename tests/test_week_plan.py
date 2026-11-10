@@ -122,3 +122,15 @@ def test_a_reviews_time_comes_from_your_own_attempts():
     solid = week_plan.expected_minutes(1, {1: [(600, 1)]}, typical=10)
     assert shaky > solid
     assert week_plan.expected_minutes(9, {}) == week_plan.REVIEW_WEIGHT
+
+
+def test_each_review_bubble_says_what_it_loses_on_its_day(isolate_review_db, qtbot):
+    from qt_ui.week_dialog import WeekDialog, _Tag
+    p = _problem("a", date.today())
+    review_store.move_review(p["id"], date.today() + timedelta(days=2))
+    tab = WeekDialog()
+    qtbot.addWidget(tab)
+    tags = tab.findChildren(_Tag)
+    assert len(tags) == 1
+    from PySide6.QtWidgets import QLabel
+    assert "-6 pts" in [label.text() for label in tags[0].findChildren(QLabel)]
