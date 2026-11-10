@@ -27,20 +27,11 @@ import state_events
 import sync_trigger
 from calendar_log import logger
 import paths
-import config
 
 
 def _configured_review_days():
     """The weekdays reviews may fall on (Settings: Review days), or None when every day is allowed."""
-    try:
-        days = config.load_config().get("reviewDays")
-    except Exception:
-        return None
-    days = sorted({int(d) for d in days or [] if str(d).isdigit() and 0 <= int(d) <= 6})
-    return days if 0 < len(days) < 7 else None
-
-
-review_scheduler.allowed_weekdays = _configured_review_days
+    return review_scheduler.allowed_weekdays()
 
 PHOTOS_DIR = paths.private_path("data", "review_photos")
 ACTIVE_SESSION_PATH = paths.private_path("data", "active_review.json")

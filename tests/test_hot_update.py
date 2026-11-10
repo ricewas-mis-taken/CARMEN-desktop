@@ -31,9 +31,58 @@ def test_reloading_points_other_modules_at_the_new_function(tmp_path, monkeypatc
         sys.modules.pop("hot_a", None)
 
 
-def test_code_that_holds_live_state_is_left_for_the_next_start():
-    result = hot_update.swap(["session_manager.py", "main.py", "tests/test_x.py", "styles.qss"])
-    assert result["live"] == [] and set(result["later"]) == {"session_manager.py", "main.py", "styles.qss"}
+def test_code_that_runs_the_app_is_left_for_the_next_start():
+    result = hot_update.swap(["main.py", "api_server.py", "tray.py", "tests/test_x.py", "styles.qss"])
+    assert result["live"] == [] and set(result["later"]) == {"main.py", "api_server.py", "tray.py", "styles.qss"}
+
+
+_V1 = """
+import threading
+_lock = threading.RLock()
+_state = {'running': False}
+LIMIT = 1
+def run():
+    _state['running'] = True
+"""
+_V2 = """
+import threading
+_lock = threading.RLock()
+_state = {'running': False, 'paused': False}
+LIMIT = 2
+def run():
+    _state['running'] = 'new code'
+"""
+
+
+def test_a_module_with_live_data_is_swapped_and_keeps_its_data(tmp_path, monkeypatch):
+    (tmp_path / "hot_s.py").write_text(_V1)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    mod = importlib.import_module("hot_s")
+    monkeypatch.setattr(hot_update, "STATEFUL", hot_update.STATEFUL + ["hot_s"])
+    try:
+        mod.run()
+        lock, state = mod._lock, mod._state
+        (tmp_path / "hot_s.py").write_text(_V2)
+        importlib.invalidate_caches()
+        hot_update.reload_module("hot_s")
+        assert mod._state is state and mod._lock is lock                # the very same objects
+        assert mod._state == {"running": True, "paused": False}          # data kept, the new key given its default
+        assert mod.LIMIT == 2                                            # constants come from the new code
+        mod.run()
+        assert mod._state["running"] == "new code"                       # and the new function runs
+    finally:
+        sys.modules.pop("hot_s", None)
+
+
+def test_swapping_the_session_engine_leaves_a_running_session_running(isolate_state):
+    import session_manager as sm
+    sm.start_session(30, "soft", [], [], source="task", event_id="a", event_title="Alpha")
+    result = hot_update.swap(["session_manager.py", "session_history.py"])
+    assert "session_manager" in result["live"] and not result["later"]
+    status = sm.get_status()
+    assert status["isActive"] and status["eventTitle"] == "Alpha"
+    sm.pause_session("break")
+    assert sm.get_status()["isPaused"]
 
 
 def test_safe_pure_modules_are_swapped_live():

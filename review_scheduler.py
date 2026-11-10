@@ -21,8 +21,14 @@ def today():
 
 
 def allowed_weekdays():
-    """Weekdays (Monday = 0) a review may fall on, or None for any day. review_store points this at the setting."""
-    return None
+    """Weekdays (Monday = 0) a review may fall on (Settings: Review days), or None for any day."""
+    try:
+        import config
+        days = config.load_config().get("reviewDays")
+    except Exception:
+        return None
+    days = sorted({int(d) for d in days or [] if str(d).isdigit() and 0 <= int(d) <= 6})
+    return days if 0 < len(days) < 7 else None
 
 
 def snap(day):
