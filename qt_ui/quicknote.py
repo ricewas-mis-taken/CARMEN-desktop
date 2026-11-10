@@ -313,6 +313,7 @@ class QuickNoteWindow(QWidget):
         items, stamp = quicknote_store.load()
         self._list.set_items(items)
         self._saved_stamp = stamp
+        self._signature = quicknote_store.file_signature()
         self._dirty = False
 
     def _on_changed(self):
@@ -326,6 +327,7 @@ class QuickNoteWindow(QWidget):
         quicknote_store.save(self._list.items())
         self._dirty = False
         self._saved_stamp = quicknote_store.export()["updatedAt"]
+        self._signature = quicknote_store.file_signature()
 
     def _pick_up_remote_change(self):
         """The note was changed from outside (another computer): show it, unless
@@ -333,6 +335,10 @@ class QuickNoteWindow(QWidget):
         self._apply_theme()
         if self._dirty:
             return
+        signature = quicknote_store.file_signature()
+        if signature == getattr(self, "_signature", None):
+            return                              # the file has not been touched: nothing to read, nothing to parse
+        self._signature = signature
         stamp = quicknote_store.export()["updatedAt"]
         if stamp != self._saved_stamp:
             had_focus = self._list.has_focus()
