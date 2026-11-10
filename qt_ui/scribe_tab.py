@@ -61,6 +61,19 @@ from qt_ui.ui_kit import with_check_icon
 
 GRID = 20.0  # world units between grid lines at 100% zoom
 SAVE_DELAY_MS = 600
+def _far_width(width, zoom):
+    """Pen width (board units) for a stroke too small to see properly: never thinner than one screen pixel,
+    which is as thin as a line can be drawn."""
+    return max(width, 1.0 / zoom)
+
+
+def _far_alpha(drawn, zoom, true_width=None):
+    """How solid such a stroke is drawn. A line really thinner than a pixel looks fainter, not bolder, from far
+    away: drawing it a full pixel wide at full strength is what made far-off writing look bright and heavy."""
+    true_width = drawn if true_width is None else true_width
+    return max(0.25, min(1.0, true_width * zoom))
+
+
 _FULL_DETAIL_PX = 40      # a stroke smaller than this on screen is drawn with far fewer points (see _paint_far_stroke)
 _ADDED = object()         # marks an undo step that only adds one shape (see ScribeCanvas._push_added)
 MAX_UNDO = 100
@@ -451,7 +464,12 @@ class ScribeCanvas(QWidget):
         corners = QPainterPath()
         corners.addRoundedRect(QRectF(self.rect()), 15, 15)
         p.setClipPath(corners)
-        if self._draft is not None and self._draft.get("type") == "stroke":
+        if self._ghost is not None:
+            # Panning or zooming a big board: the strokes were drawn once into a picture, and each move only
+            # slides and scales that picture (drawing thousands of strokes again per mouse move is what lagged).
+            self._paint_background(p)
+            self._draw_ghost(p)
+        elif self._draft is not None and self._draft.get("type") == "stroke":
             # Drawing by hand: everything already on the board is a picture made once, and only the
             # line being drawn is painted on top of it on each move (repainting a whole board on
             # every mouse event is what made freehand lag).
@@ -475,6 +493,48 @@ class ScribeCanvas(QWidget):
             self._paint_rulers(p)
         self._paint_minimap(p)
         p.end()
+
+    _ghost = None            # {"pix", "zoom", "x", "y", "margin"} while panning or zooming a big board
+    SNAPSHOT_MIN_ITEMS = 250    # smaller boards redraw fast enough; a picture would only blur them
+    SNAPSHOT_MARGIN = 0.25      # extra picture around the view, as a share of its size, so a pan shows no blank edge
+
+    def _big_board(self):
+        return sum(len(layer["items"]) for layer in self.doc["layers"] if layer["visible"]) >= self.SNAPSHOT_MIN_ITEMS
+
+    def _begin_ghost(self):
+        """Draws the strokes (not the paper, not the tools) once, a little wider than the view."""
+        if self._ghost is not None or not self._big_board():
+            return
+        w, h = self.width(), self.height()
+        mx, my = int(w * self.SNAPSHOT_MARGIN), int(h * self.SNAPSHOT_MARGIN)
+        ratio = self.devicePixelRatioF()
+        pix = QPixmap(int((w + 2 * mx) * ratio), int((h + 2 * my) * ratio))
+        pix.setDevicePixelRatio(ratio)
+        pix.fill(Qt.transparent)
+        painter = QPainter(pix)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        self._paint_scene(painter, w + 2 * mx, h + 2 * my, self.zoom, self.view["x"], self.view["y"], ui=False)
+        painter.end()
+        self._ghost = {"pix": pix, "zoom": self.zoom, "x": self.view["x"], "y": self.view["y"], "mx": mx, "my": my}
+
+    def _end_ghost(self):
+        if self._ghost is not None:
+            self._ghost = None
+            self.update()
+
+    def _draw_ghost(self, p):
+        s = self._ghost
+        scale = self.zoom / s["zoom"]
+        w, h = self.width(), self.height()
+        # where the picture's top-left corner lands on screen: its centre is the view's old centre
+        left = w / 2 + (s["x"] - self.view["x"]) * self.zoom - (s["mx"] + w / 2) * scale
+        top = h / 2 + (s["y"] - self.view["y"]) * self.zoom - (s["my"] + h / 2) * scale
+        p.save()
+        p.setRenderHint(QPainter.SmoothPixmapTransform, scale != 1.0)
+        p.translate(left, top)
+        p.scale(scale, scale)
+        p.drawPixmap(0, 0, s["pix"])
+        p.restore()
 
     def _content_version(self):
         """A cheap number that changes whenever strokes are added or grow (kept for the length of a line being drawn)."""
@@ -504,6 +564,7 @@ class ScribeCanvas(QWidget):
         """Something on the board may have changed: the picture and the board's extent are worked out again."""
         self._picture_fresh = False
         self._bounds_fresh = False
+        self._ghost = None
 
     def _extend_picture(self, item, fresh):
         """A stroke was just added: draw it onto the picture of the board instead of throwing the picture
@@ -564,14 +625,17 @@ class ScribeCanvas(QWidget):
         mw, mh = self.MINIMAP_SIZE
         return QRectF(self.width() - mw - 16, self.height() - mh - 16, mw, mh)
 
-    def _minimap_map(self, rect):
-        """(scale, world x0, world y0) that fit the content and the current view into `rect`."""
+    def _minimap_map(self, rect, content_only=False):
+        """(scale, world x0, world y0) that fit the content and the current view into `rect` (or the content alone)."""
         box = self._all_bounds()
         z, w, h = self.zoom, self.width(), self.height()
         vx0, vy0 = self.view["x"] - w / 2 / z, self.view["y"] - h / 2 / z
         vx1, vy1 = self.view["x"] + w / 2 / z, self.view["y"] + h / 2 / z
-        x0, y0 = min(box[0], vx0), min(box[1], vy0)
-        x1, y1 = max(box[2], vx1), max(box[3], vy1)
+        if content_only:
+            x0, y0, x1, y1 = box
+        else:
+            x0, y0 = min(box[0], vx0), min(box[1], vy0)
+            x1, y1 = max(box[2], vx1), max(box[3], vy1)
         pad = 8
         scale = min((rect.width() - 2 * pad) / max(x1 - x0, 1.0), (rect.height() - 2 * pad) / max(y1 - y0, 1.0))
         ox = rect.left() + pad + ((rect.width() - 2 * pad) - (x1 - x0) * scale) / 2 - x0 * scale
@@ -651,18 +715,25 @@ class ScribeCanvas(QWidget):
                 heat[(c, r)] = heat.get((c, r), 0.0) + 1.5
 
     def _paint_heat(self, p, rect, scale, ox, oy):
-        heat = self._heat(rect, scale, ox, oy)
+        # The cells are worked out against the content alone, so panning (which moves the view, and so the map)
+        # never makes them be worked out again; here they are only moved and scaled onto the current map.
+        base, bx, by = self._minimap_map(rect, content_only=True)
+        heat = self._heat(rect, base, bx, by)
         if not heat:
             return
         peak = max(heat.values())
         cell = self.HEAT_CELL
+        shrink = scale / base if base else 1.0
+        size = cell * shrink
         p.setPen(Qt.NoPen)
         for (c, r), value in heat.items():
             t = min(1.0, (value / peak) ** 0.6)
             # pale yellow where there is a little, through orange to deep red where it is packed
             colour = QColor.fromHsvF(max(0.0, 0.14 * (1 - t)), 0.35 + 0.65 * t, 1.0 - 0.25 * t, 0.35 + 0.6 * t)
             p.setBrush(colour)
-            p.drawRect(QRectF(rect.left() + c * cell, rect.top() + r * cell, cell, cell))
+            x = ox + ((rect.left() + c * cell) - bx) * shrink
+            y = oy + ((rect.top() + r * cell) - by) * shrink
+            p.drawRect(QRectF(x, y, size, size))
 
     def _paint_minimap(self, p):
         rect = self._minimap_rect()
@@ -761,14 +832,15 @@ class ScribeCanvas(QWidget):
                     if (box is not None and item["type"] == "stroke" and len(item["pts"]) > 1
                             and max(box[2] - box[0], box[3] - box[1]) * zoom < 1.0):
                         width = item["width"] if item.get("scale", True) else item["width"] / zoom
-                        key = (item["stroke"], max(width, 1.2 / zoom), item.get("round", True))
+                        key = (item["stroke"], _far_width(width, zoom), item.get("round", True))
                         a, b = item["pts"][0], item["pts"][-1]
                         specks.setdefault(key, []).append(QLineF(a[0], a[1], b[0], b[1]))
                         continue
                     self._paint_item(p, item, zoom, box)
             for (stroke, width, rounded), lines in specks.items():
-                p.setPen(QPen(QColor(self._ink(stroke)), width, Qt.SolidLine,
-                              Qt.RoundCap if rounded else Qt.FlatCap, Qt.RoundJoin))
+                colour = QColor(self._ink(stroke))
+                colour.setAlphaF(colour.alphaF() * _far_alpha(width, zoom))
+                p.setPen(QPen(colour, width, Qt.SolidLine, Qt.RoundCap if rounded else Qt.FlatCap, Qt.RoundJoin))
                 p.drawLines(lines)
         self._bbox_cache = bbox_cache   # only the items that exist now
         p.setOpacity(1)
@@ -955,7 +1027,10 @@ class ScribeCanvas(QWidget):
         if screen < 1.0:
             a, b = pts[0], pts[-1]
             pen = p.pen()
-            pen.setWidthF(max(pen_width, 1.2 / zoom))
+            colour = QColor(pen.color())
+            colour.setAlphaF(colour.alphaF() * _far_alpha(_far_width(pen_width, zoom), zoom, pen_width))
+            pen.setColor(colour)
+            pen.setWidthF(_far_width(pen_width, zoom))
             p.setPen(pen)
             p.drawLine(QPointF(a[0], a[1]), QPointF(b[0], b[1]))
             return
@@ -1253,6 +1328,7 @@ class ScribeCanvas(QWidget):
             return
         if e.button() == Qt.MiddleButton or (e.button() == Qt.LeftButton and (self._space or self.pan_mode)):
             self._pan = (pos, self.view["x"], self.view["y"])
+            self._begin_ghost()
             self.setCursor(Qt.ClosedHandCursor)
             return
         if e.button() != Qt.LeftButton:
@@ -1365,6 +1441,7 @@ class ScribeCanvas(QWidget):
             return
         if self._pan:
             self._pan = None
+            self._end_ghost()
             self._update_cursor()
             return
         if e.button() != Qt.LeftButton:
@@ -1398,6 +1475,15 @@ class ScribeCanvas(QWidget):
         self.update()
 
     def wheelEvent(self, e):
+        self._begin_ghost()             # a quick run of wheel ticks scales one picture; the real drawing follows
+        if self._ghost is not None:
+            timer = self.__dict__.get("_settle")
+            if timer is None:
+                timer = self._settle = QTimer(self)
+                timer.setSingleShot(True)
+                timer.setInterval(140)
+                timer.timeout.connect(self._end_ghost)
+            timer.start()
         self.set_zoom(self.zoom * 1.1 ** (e.angleDelta().y() / 120), e.position())
 
     def keyPressEvent(self, e):
