@@ -119,3 +119,19 @@ def test_reviews_only_land_on_the_allowed_days(monkeypatch):
     assert review_scheduler.schedule_new_problem(1)["next_review_date"] == date(2026, 11, 10)
     monkeypatch.setattr(review_scheduler, "allowed_weekdays", lambda: None)
     assert review_scheduler.snap(date(2026, 11, 9)) == date(2026, 11, 9)
+
+
+def test_a_reviews_time_comes_from_your_own_attempts():
+    import week_plan
+    history = {1: [(600, 3), (1200, 3)], 2: [(300, 3)], 3: []}
+    typical = week_plan.typical_minutes(history)
+    assert 8 < typical < 14                                        # between the two problems' own averages
+    own = week_plan.expected_minutes(1, history)
+    assert own > week_plan.expected_minutes(2, history)            # the slower problem is expected to take longer
+    assert abs(week_plan.expected_minutes(3, history) - typical) < 0.1   # never timed: a typical review
+    newest_longer = week_plan.expected_minutes(1, {1: [(1200, 3), (600, 3)]})
+    assert newest_longer > own                                     # the recent attempt counts most
+    shaky = week_plan.expected_minutes(1, {1: [(600, 5)]}, typical=10)
+    solid = week_plan.expected_minutes(1, {1: [(600, 1)]}, typical=10)
+    assert shaky > solid
+    assert week_plan.expected_minutes(9, {}) == week_plan.REVIEW_WEIGHT

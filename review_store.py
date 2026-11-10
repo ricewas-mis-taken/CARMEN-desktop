@@ -1813,6 +1813,22 @@ def list_sessions(problem_id):
             return []
 
 
+def all_session_history():
+    """{problem id: [(seconds, shakiness), ...]} newest first, for estimating how long a review will take."""
+    with _lock:
+        try:
+            rows = _get_conn().execute(
+                "SELECT problem_id, duration_seconds, shakiness FROM review_sessions "
+                "WHERE duration_seconds > 0 ORDER BY finished_at DESC").fetchall()
+        except Exception:
+            logger.exception("review_store.all_session_history failed")
+            return {}
+    history = {}
+    for row in rows:
+        history.setdefault(row["problem_id"], []).append((row["duration_seconds"], row["shakiness"]))
+    return history
+
+
 def record_first_attempt(problem_id, duration_seconds, self_solved=True, shakiness=3):
     """Records a review that was timed *before* the problem's form was ever
     filled in -- the Add Problem dialog's "Start First Attempt" button opens
