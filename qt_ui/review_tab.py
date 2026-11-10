@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 from qt_ui.wrap_edit import WrapEdit
 
 from calendar_log import logger as calendar_logger
+import config
 import review_store
 import session_history
 import session_manager
