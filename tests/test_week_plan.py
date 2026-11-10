@@ -89,3 +89,20 @@ def test_the_page_says_when_a_move_is_too_far(isolate_review_db, qtbot):
     qtbot.addWidget(tab)
     tab._moved(p, date.today() + timedelta(days=9))
     assert "week" in tab._hint.text()
+
+
+def test_dragging_shows_each_days_cost_and_the_slider_shows_more_weeks(isolate_review_db, qtbot):
+    from qt_ui.week_dialog import WeekDialog, _DayRow, cost_text
+    p = _problem("a", date.today())
+    tab = WeekDialog()
+    qtbot.addWidget(tab)
+    rows = [tab._rows.itemAt(i).widget() for i in range(tab._rows.count())]
+    rows = [r for r in rows if isinstance(r, _DayRow)]
+    assert len(rows) == 7
+    tab.drag_started(review_store.get_problem(p["id"]))
+    assert rows[0]._cost.text() == "" and rows[1]._cost.text() == "-3 points" and rows[7 - 1]._cost.text() == "-18 points"
+    tab.drag_ended()
+    assert rows[1]._cost.text() == ""
+    tab._span.setValue(3)
+    assert len([r for r in (tab._rows.itemAt(i).widget() for i in range(tab._rows.count())) if isinstance(r, _DayRow)]) == 21
+    assert cost_text(-6) == "costs 6 points" and cost_text(0) == "free"

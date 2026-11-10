@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from PySide6.QtCore import QMimeData, QPoint, Qt, QTimer
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy, QSlider, QVBoxLayout, QWidget,
 )
 
 import review_store
@@ -14,6 +14,7 @@ import week_plan
 from qt_ui.ui_kit import FAINT, INK, MUTED, FlowLayout, format_minutes, safe_color, tint
 
 MIME = "application/x-carmen-review"
+MAX_WEEKS = 4
 AMBER = "#D98A00"
 _OPEN = []
 
@@ -39,7 +40,14 @@ def _refresh_review_page():
 
 
 def cost_text(cost):
-    return "free" if cost == 0 else f"{cost} points"
+    """What a move costs, said as a cost (the number itself is negative: 0 or less)."""
+    return "free" if cost == 0 else f"costs {abs(cost)} points"
+
+
+def cost_for_day(problem, day):
+    """(points, can_move) of putting this review on `day`; the points are 0 or less."""
+    due = date.fromisoformat((problem.get("originalDueDate") or problem["nextReviewDate"])[:10])
+    return review_store.move_cost(due, day), (day - due).days <= review_store.MAX_MOVE_DAYS
 
 
 def _weekday(day, today):
@@ -86,7 +94,12 @@ class _Tag(QFrame):
         drag.setMimeData(mime)
         drag.setPixmap(self.grab())
         drag.setHotSpot(QPoint(12, 12))
+        dialog = self.window()
+        if hasattr(dialog, "drag_started"):
+            dialog.drag_started(self.problem)           # every day says what it would cost while this is in the air
         drag.exec(Qt.MoveAction)
+        if hasattr(dialog, "drag_ended"):
+            dialog.drag_ended()
 
     def mouseReleaseEvent(self, event):
         self._press = None
@@ -123,6 +136,7 @@ class _DayRow(QFrame):
         super().__init__()
         self.day, self._today, self._on_drop, self._on_hint = entry["date"], today, on_drop, on_hint
         self.setAcceptDrops(True)
+        self._reviews = entry["reviews"]
         self.setObjectName("WeekRow")
         self._rest()
         row = QHBoxLayout(self)
@@ -157,6 +171,11 @@ class _DayRow(QFrame):
         else:
             row.addWidget(middle, 1)
 
+        self._cost = QLabel("")
+        self._cost.setFixedWidth(104)
+        self._cost.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        row.addWidget(self._cost, 0, Qt.AlignVCenter)
+
         load = QVBoxLayout()
         load.setSpacing(4)
         load.addWidget(_LoadBar(entry["load"] / peak if peak else 0, entry["heavy"]), 0, Qt.AlignRight)
@@ -173,6 +192,18 @@ class _DayRow(QFrame):
         holder.setLayout(load)
         holder.setFixedWidth(110)
         row.addWidget(holder, 0, Qt.AlignTop)
+
+    def show_cost(self, problem):
+        """While a review is being dragged: what it would cost to put it on this day (nothing when it is
+        already here)."""
+        if problem is None or any(p["id"] == problem["id"] for p in self._reviews):
+            self._cost.setText("")
+            return
+        points, can = cost_for_day(problem, self.day)
+        text = "too late" if not can else "free" if points == 0 else f"-{abs(points)} points"
+        colour = FAINT if not can else "#2F9E44" if points == 0 else "#D9480F"
+        self._cost.setText(text)
+        self._cost.setStyleSheet(f"color:{colour};font-size:13px;font-weight:700;background:transparent;")
 
     def _rest(self):
         self.setStyleSheet("QFrame#WeekRow{background:transparent;border:none;border-bottom:1px solid #E6E9EF;}")
@@ -250,6 +281,17 @@ class WeekDialog(QWidget):
         self._rows.setSpacing(0)
         scroll.setWidget(self._holder)
         layout.addWidget(scroll, 1)
+        bar = QHBoxLayout()
+        self._span_label = QLabel("")
+        self._span_label.setStyleSheet(f"color:{MUTED};font-size:13px;font-weight:600;background:transparent;")
+        self._span_label.setFixedWidth(84)
+        self._span = QSlider(Qt.Horizontal)
+        self._span.setRange(1, MAX_WEEKS)
+        self._span.setValue(1)
+        self._span.valueChanged.connect(self.refresh)
+        bar.addWidget(self._span_label)
+        bar.addWidget(self._span, 1)
+        layout.addLayout(bar)
         self.resize(720, 640)
         self.refresh()
 
@@ -260,7 +302,9 @@ class WeekDialog(QWidget):
 
     def refresh(self):
         self._today = date.today()
-        plan = week_plan.build(self._today)
+        weeks = self._span.value()
+        self._span_label.setText("1 week" if weeks == 1 else f"{weeks} weeks")
+        plan = week_plan.build(self._today, days=7 * weeks)
         while self._rows.count():
             item = self._rows.takeAt(0)
             widget = item.widget()
@@ -272,18 +316,28 @@ class WeekDialog(QWidget):
         for entry in plan:
             self._rows.addWidget(_DayRow(entry, self._today, peak, self._moved, self._show_hint))
         self._rows.addStretch(1)
-        self._note.setText(self._summary(plan))
+        self._note.setText(self._summary(plan, weeks))
 
-    def _summary(self, plan):
+    def _summary(self, plan, weeks=1):
         total = sum(len(d["reviews"]) for d in plan)
+        span = "this week" if weeks == 1 else f"in the next {weeks} weeks"
         if not total:
-            return "Nothing to review this week. Reviews show up here as they come due."
-        text = f"{total} review{'s' if total != 1 else ''} this week."
+            return f"Nothing to review {span}. Reviews show up here as they come due."
+        text = f"{total} review{'s' if total != 1 else ''} {span}."
         heavy = [d for d in plan if d["heavy"]]
         if heavy:
             names = ", ".join(_weekday(d["date"], self._today) for d in heavy)
             text += f" Busiest: {names}. {_weekday(week_plan.lightest_day(plan), self._today)} is the lightest."
         return text + " Drag a review to another day: earlier is free, each day later costs 3 points."
+
+    def drag_started(self, problem):
+        for i in range(self._rows.count()):
+            widget = self._rows.itemAt(i).widget()
+            if isinstance(widget, _DayRow):
+                widget.show_cost(problem)
+
+    def drag_ended(self):
+        self.drag_started(None)
 
     def _show_hint(self, day, cost, problem):
         self._hint.setText("" if day is None else f"{problem['name']} to {_weekday(day, self._today)}: {cost_text(cost)}")
