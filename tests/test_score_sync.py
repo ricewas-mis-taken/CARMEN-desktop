@@ -33,3 +33,17 @@ def test_legacy_events_without_a_stamp_get_one_so_they_are_sent(tmp_path, monkey
                        "settledThrough": None})
     score_store.stamp_unsynced()
     assert score_store.load()["events"][0]["updatedAt"]
+
+
+def test_review_days_follow_you_to_another_computer(monkeypatch):
+    import config
+    import sync_client
+    store = {"reviewDays": [1, 3], "reviewDaysUpdatedAt": "2026-11-09T10:00:00"}
+    monkeypatch.setattr(config, "load_config", lambda: dict(store))
+    monkeypatch.setattr(config, "update_config", lambda fn: fn(store))
+    records = sync_client._gather_settings(None)
+    assert records and records[0]["data"] == {"days": [1, 3]}
+    store.clear()
+    store.update({"reviewDays": [], "reviewDaysUpdatedAt": "2026-11-01T10:00:00"})
+    assert sync_client._apply_settings(records)[0] == 1
+    assert store["reviewDays"] == [1, 3]

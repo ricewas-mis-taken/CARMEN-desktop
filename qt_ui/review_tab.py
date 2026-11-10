@@ -34,6 +34,7 @@ from qt_ui.wrap_edit import WrapEdit
 from calendar_log import logger as calendar_logger
 import config
 import review_store
+import sync_trigger
 import session_history
 import session_manager
 from qt_ui import confirm_dialog
@@ -1292,7 +1293,9 @@ class _TopicView(QWidget):
             self.sender().setChecked(True)
             return
         value = picked if len(picked) < 7 else []
-        config.update_config(lambda cfg: cfg.update({"reviewDays": value}))
+        stamp = datetime.now().isoformat()
+        config.update_config(lambda cfg: cfg.update({"reviewDays": value, "reviewDaysUpdatedAt": stamp}))
+        sync_trigger.note_change()
 
     def _set_search(self, text):
         self._search = text.strip().lower()
