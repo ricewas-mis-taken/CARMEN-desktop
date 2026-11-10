@@ -63,6 +63,7 @@ from dotenv import load_dotenv
 import auth_manager
 import board_store
 import devices_store
+import score_store
 import calendar_store
 import device_id
 import multi_device
@@ -516,8 +517,15 @@ def _gather_devices(cutoff_local):
     return _gather_json_store(devices_store.load(include_deleted=True), "devices", "id", cutoff_local)
 
 
+def _gather_score(cutoff_local):
+    """The Carmen Score ledger, one record per event (its key is its identity), so every computer shows one score."""
+    score_store.stamp_unsynced()
+    return _gather_json_store(score_store.events(), "score", "key", cutoff_local)
+
+
 def _gather_all(cutoff_local):
     return (_gather_tasks(cutoff_local) + _gather_board(cutoff_local) + _gather_devices(cutoff_local)
+            + _gather_score(cutoff_local)
             + _gather_calendar_records(cutoff_local))
 
 
@@ -650,6 +658,10 @@ def _apply_tasks(records):
 
 def _apply_devices(records):
     return _apply_json_store(records, devices_store.load, devices_store.save, "id", lock=devices_store._lock)
+
+
+def _apply_score(records):
+    return _apply_json_store(records, score_store.events, score_store.save_events, "key", lock=score_store._lock)
 
 
 def _apply_board(records):
@@ -1031,6 +1043,10 @@ def _apply_all(pulled_records):
     skipped += s
     failed += f
     a, s, f = _apply_devices(by_table.get("devices", []))
+    applied += a
+    skipped += s
+    failed += f
+    a, s, f = _apply_score(by_table.get("score", []))
     applied += a
     skipped += s
     failed += f
