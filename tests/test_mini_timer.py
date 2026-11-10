@@ -203,7 +203,7 @@ def test_end_on_a_waiting_session_ends_only_that_one(qtbot, isolate_state):
     qtbot.addWidget(win)
     win.show()
     win._next.click()
-    win._end.click()
+    win._end.doubled.emit()
     status = sm.get_status()
     assert status["eventTitle"] == "Beta" and not status.get("parkedSessions")
     assert not win._prev.isVisible()                       # one timer left: no arrows
@@ -215,9 +215,12 @@ def test_a_single_timer_shows_a_long_pause_and_a_small_end_and_no_arrows(qtbot, 
     qtbot.addWidget(win)
     win.show()
     assert not win._prev.isVisible() and not win._next.isVisible()
-    assert win._button.width() > 2 * win._end.width() and win._end.text() == "End"
-    assert win._end.geometry().right() <= win.width() and not win._end.geometry().intersects(win._button.geometry())
-    win._end.click()
+    assert win._end.text() == "End" and not win._end.geometry().intersects(win._button.geometry())
+    centre = win._button.geometry().center().x()
+    assert abs(centre - win.width() / 2) <= 1                       # Pause sits in the middle
+    win._end.click()                                                # one click only says how to end
+    assert win._hint and sm.get_status()["isActive"]
+    win._end.doubled.emit()
     assert not sm.get_status()["isActive"]
 
 

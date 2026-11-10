@@ -11,7 +11,7 @@ the small x (top right) closes it. Position and size are remembered.
 import sys
 import traceback
 
-from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer
+from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import QPushButton, QWidget
 
@@ -29,6 +29,7 @@ TEXT = QColor("#F7F8FA")
 RESIZE_MARGIN = 6
 MAX_SIZE = (480, 540)     # a runaway drag can never make it huge
 DEFAULT_SIZE = (250, 270)
+END_SIZE = QSize(34, 18)
 MIN_SIZE = (210, 200)
 SAVE_DELAY_MS = 400
 CLICK_SLOP = 5     # pixels of movement that still count as a click, not a drag
@@ -129,6 +130,14 @@ def describe_timer(item):
     return label, clock, fraction, "Resume" if paused else "Pause", can_pause, can_pause, paused
 
 
+class _EndButton(QPushButton):
+    """End takes a double click, so one stray tap can't end a timer; one click only says so."""
+    doubled = Signal()
+
+    def mouseDoubleClickEvent(self, event):
+        self.doubled.emit()
+
+
 class MiniTimer(QWidget):
     def __init__(self):
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
@@ -159,9 +168,16 @@ class MiniTimer(QWidget):
         self._button.setCursor(Qt.PointingHandCursor)
         self._button.clicked.connect(self._toggle_pause)
 
-        self._end = QPushButton("End", self)
+        self._end = _EndButton("End", self)
         self._end.setCursor(Qt.PointingHandCursor)
-        self._end.clicked.connect(self._end_timer)
+        self._end.setFixedSize(END_SIZE)
+        self._end.clicked.connect(self._hint_end)
+        self._end.doubled.connect(self._end_timer)
+        self._hint = False
+        self._hint_timer = QTimer(self)
+        self._hint_timer.setSingleShot(True)
+        self._hint_timer.setInterval(2200)
+        self._hint_timer.timeout.connect(self._clear_hint)
 
         self._prev = QPushButton("\u2039", self)
         self._next = QPushButton("\u203a", self)
@@ -296,7 +312,17 @@ class MiniTimer(QWidget):
                 review_store.unpark_review(view["token"])
             self.refresh()
 
+    def _hint_end(self):
+        self._hint = True
+        self._hint_timer.start()
+        self.update()
+
+    def _clear_hint(self):
+        self._hint = False
+        self.update()
+
     def _end_timer(self):
+        self._clear_hint()
         item = self._current()
         if item is None:
             return
@@ -351,8 +377,8 @@ class MiniTimer(QWidget):
         else:
             self._button.setStyleSheet(long_style % ("rgba(255,255,255,0.16)", "rgba(255,255,255,0.26)"))
         self._end.setStyleSheet(
-            "QPushButton{background:rgba(255,92,100,0.20);color:#FFB3B8;border:none;border-radius:13px;"
-            "padding:0 14px;font-size:14px;font-weight:600;}QPushButton:hover{background:rgba(255,92,100,0.34);}"
+            "QPushButton{background:rgba(255,92,100,0.20);color:#FFB3B8;border:none;border-radius:9px;"
+            "padding:0;font-size:11px;font-weight:600;}QPushButton:hover{background:rgba(255,92,100,0.34);}"
             "QPushButton:disabled{background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.3);}")
         arrow = ("QPushButton{background:transparent;color:rgba(255,255,255,0.55);border:none;font-size:24px;"
                  "padding-bottom:3px;}QPushButton:hover{color:#FFFFFF;}")
@@ -368,9 +394,10 @@ class MiniTimer(QWidget):
         many = len(self._items) > 1
         left = 10 + (24 + 4 if many else 4)
         right = self.width() - 10 - (24 + 4 if many else 4)
-        end_width, gap = 56, 6
-        self._end.setGeometry(right - end_width, y, end_width, height)
-        self._button.setGeometry(left, y, right - end_width - gap - left, height)
+        middle = self.width() / 2
+        half = min(52, (right - left) / 2)                      # a smaller Pause, in the middle
+        self._button.setGeometry(int(middle - half), y, int(half * 2), height)
+        self._end.move(8, 6)
         self._prev.move(10, y + (height - self._prev.height()) // 2)
         self._next.move(self.width() - 10 - self._next.width(), y + (height - self._next.height()) // 2)
         self._close.move(self.width() - self._close.width() - 8, 6)
@@ -397,9 +424,10 @@ class MiniTimer(QWidget):
         font = QFont(self.font())
         font.setPixelSize(14)
         painter.setFont(font)
-        label_width = self.width() - 2 * (self._close.width() + 12)
+        label_width = self.width() - 2 * (END_SIZE.width() + 14)
+        shown = "Double-click to end" if self._hint else self._label
         painter.drawText(QRectF((self.width() - label_width) / 2, top, label_width, label_height), Qt.AlignCenter,
-                         painter.fontMetrics().elidedText(self._label, Qt.ElideRight, int(label_width)))
+                         painter.fontMetrics().elidedText(shown, Qt.ElideRight, int(label_width)))
 
         if self._fraction is not None:
             width = max(4.0, side * 0.06)

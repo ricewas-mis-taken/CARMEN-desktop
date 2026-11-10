@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QScrollArea, QVBoxLayout, 
 
 import config
 import quicknote_store
+import theme
 from qt_ui.ui_kit import discard_widget
 from qt_ui.wrap_edit import WrapEdit
 
@@ -23,7 +24,7 @@ REMOTE_CHECK_MS = 1000
 DEFAULT_SIZE = (340, 420)
 
 _STYLE = """
-QWidget#QuickNote { background: #111317; }
+QWidget#QuickNote { background: %(bg)s; }
 QScrollArea { background: transparent; border: none; }
 QWidget#QuickNoteRows { background: transparent; }
 QPlainTextEdit#WrapEdit { background: transparent; border: none; color: #F2F4F7; padding: 0px 2px; }
@@ -138,6 +139,7 @@ class NoteList(QWidget):
     """The bullets themselves: a column of one-line editors."""
     changed = Signal()
     row_added = Signal(object)            # the new row's widget, so a scroll area can follow it
+    typed = Signal(object)                # a bullet's text or cursor changed: it may have wrapped onto a new row
 
     def __init__(self):
         super().__init__()
@@ -189,6 +191,7 @@ class NoteList(QWidget):
         edit.backspace_on_empty.connect(self._on_backspace_on_empty)
         edit.move.connect(self._on_move)
         edit.textChanged.connect(self.changed.emit)
+        edit.textChanged.connect(lambda e=edit: self.typed.emit(e))
         holder = QVBoxLayout()
         holder.setContentsMargins(0, (line - side) // 2, 0, 0)       # centred on the first line of text
         holder.addWidget(box, 0, Qt.AlignTop)
@@ -254,7 +257,8 @@ class QuickNoteWindow(QWidget):
         self.setObjectName("QuickNote")
         self.setWindowTitle("QuickNote")
         self.setMinimumSize(220, 160)
-        self.setStyleSheet(_STYLE)
+        self._themed = None
+        self._apply_theme()
 
         self._list = NoteList()
         scroll = QScrollArea()
@@ -262,6 +266,7 @@ class QuickNoteWindow(QWidget):
         scroll.setWidget(self._list)
         self._scroll = scroll
         self._list.row_added.connect(self._follow_row)
+        self._list.typed.connect(self._follow_cursor)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 16)
         layout.addWidget(scroll)
@@ -281,6 +286,22 @@ class QuickNoteWindow(QWidget):
 
         self._restore_geometry()
         self._load()
+
+    def _apply_theme(self):
+        """The window follows the chosen theme, like the mini timer."""
+        colours = theme.current_colours()
+        if colours == self._themed:
+            return
+        self._themed = colours
+        self.setStyleSheet(_STYLE % {"bg": colours["sidebar"]})
+
+    def _follow_cursor(self, edit):
+        """While typing, keeps the line the cursor is on in view (a long bullet wraps onto new rows)."""
+        def move():
+            rect = edit.cursorRect()
+            spot = edit.mapTo(self._list, rect.topLeft())
+            self._scroll.ensureVisible(spot.x(), spot.y() + rect.height() // 2, 0, rect.height() + 12)
+        QTimer.singleShot(0, move)
 
     def _follow_row(self, row):
         """Scrolls so the bullet just started is in view (after the layout has grown to hold it)."""
@@ -309,6 +330,7 @@ class QuickNoteWindow(QWidget):
     def _pick_up_remote_change(self):
         """The note was changed from outside (another computer): show it, unless
         something typed here is still waiting to be saved."""
+        self._apply_theme()
         if self._dirty:
             return
         stamp = quicknote_store.export()["updatedAt"]
