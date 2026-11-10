@@ -16,6 +16,39 @@ _state = {"remote": False, "local": False, "busy": False, "message": ""}
 _lock = threading.Lock()
 _baseline = {}
 watcher_restart = None
+relaunch_hook = None                       # main.py sets this to the app's normal shutdown
+_relaunch = threading.Event()
+_needs_relaunch = threading.Event()
+
+
+def needs_relaunch():
+    """Files that only a fresh start can take in were just updated: the window offers a Relaunch button."""
+    return _needs_relaunch.is_set()
+
+
+def set_needs_relaunch(value=True):
+    (_needs_relaunch.set if value else _needs_relaunch.clear)()
+
+
+def relaunch_was_requested():
+    return _relaunch.is_set()
+
+
+def request_relaunch():
+    """Closes Carmen and starts it again at once, with the window back on the same page. A running session is
+    kept (it is saved as it runs and comes back with the new copy)."""
+    import os
+    try:
+        import config
+        from qt_ui import main_window
+        remembered = main_window.remembered()
+        config.update_config(lambda cfg: cfg.update(restoreWindow=remembered))
+    except Exception:
+        logger.exception("update_center: could not remember the window")
+    os.environ["CARMEN_RESTARTED"] = "1"
+    _relaunch.set()
+    if relaunch_hook is not None:
+        relaunch_hook()
 
 
 def available():

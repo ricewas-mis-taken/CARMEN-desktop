@@ -221,6 +221,7 @@ def main():
     # Updates no longer restart the app: a button in the window applies them to the running copy.
     import update_center
     update_center.start_baseline()
+    update_center.relaunch_hook = lambda: on_quit()
     update_center.watch(stop_event)
 
     def _busy():
@@ -335,7 +336,7 @@ def main():
 
     stop_event.set()
     if (auto_updater.restart_was_requested() or dev_watcher.restart_was_requested()
-            or code_watcher.restart_was_requested()):
+            or code_watcher.restart_was_requested() or update_center.relaunch_was_requested()):
         # Re-exec in place (same PID, fresh interpreter) rather than
         # spawning a new process and exiting this one -- avoids a race
         # where the child tries to rebind api_server's port before this

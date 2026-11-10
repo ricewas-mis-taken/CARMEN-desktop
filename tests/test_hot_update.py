@@ -113,3 +113,20 @@ def test_update_center_reports_what_changed_since_start(monkeypatch):
     update_center.start_baseline()
     monkeypatch.setattr(update_center.code_watcher, "file_stamps", lambda: {"a.py": (1, 1), "b.py": (3, 3), "c.py": (1, 1)})
     assert update_center.changed_files() == ["b.py", "c.py"]
+
+
+def test_relaunch_closes_carmen_through_its_normal_shutdown_and_remembers_the_window(isolate_config, monkeypatch):
+    calls = []
+    monkeypatch.setattr(update_center, "relaunch_hook", lambda: calls.append("quit"))
+    monkeypatch.delenv("CARMEN_RESTARTED", raising=False)
+    update_center._relaunch.clear()
+    update_center.set_needs_relaunch(True)
+    try:
+        update_center.request_relaunch()
+        assert calls == ["quit"] and update_center.relaunch_was_requested()
+        import os
+        assert os.environ.get("CARMEN_RESTARTED") == "1"
+    finally:
+        update_center._relaunch.clear()
+        update_center.set_needs_relaunch(False)
+        os.environ.pop("CARMEN_RESTARTED", None)

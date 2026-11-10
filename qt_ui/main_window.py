@@ -411,6 +411,12 @@ class _MainWindow(QWidget):
             self._update_button.show()
             return
         self._update_button.setEnabled(True)
+        if update_center.needs_relaunch():
+            self._update_button.setText("Relaunch")
+            self._update_button.setToolTip("Some of the update only takes effect on a fresh start. This closes Carmen "
+                                           "and opens it again right away, on this page.")
+            self._update_button.show()
+            return
         if state["message"]:
             self._update_button.setText(state["message"])
             self._update_button.show()
@@ -423,15 +429,15 @@ class _MainWindow(QWidget):
         """Pull what is waiting and put it into this running window; nothing closes."""
         import qt_gui_thread
         import update_center
+        if update_center.needs_relaunch():
+            update_center.request_relaunch()
+            return
 
         def done(result):
             if "error" in result:
                 update_center.set_message("Update failed")
             elif result["later"]:
-                update_center.set_message("Restart to finish")      # short: the button is narrow
-                names = ", ".join(sorted({f.replace("\\", "/").split("/")[-1] for f in result["later"]}))
-                self._update_button.setToolTip(
-                    "Updated, but these files only take effect the next time Carmen starts: " + names)
+                update_center.set_needs_relaunch(True)               # the button becomes Relaunch and stays
             else:
                 update_center.set_message("Updated")
             self._sync_update_button()
