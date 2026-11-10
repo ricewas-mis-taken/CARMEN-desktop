@@ -49,7 +49,7 @@ def merge_remote(entries):
 
 def entries_ended_after(watermark):
     """Entries whose endTime is later than `watermark` (all of them when None)."""
-    return [e for e in load_all() if watermark is None or (e.get("endTime") or "") > watermark]
+    return [e for e in load_all(include_beside=True) if watermark is None or (e.get("endTime") or "") > watermark]
 
 
 def _append_entries(new_entries):
@@ -88,6 +88,13 @@ def _append_entries(new_entries):
         added = 0
         for entry in new_entries:
             if entry_id(entry) in known:
+                # A session filed early as "superseded" is only a stub if the same session later finishes for
+                # real: the longer, later entry replaces it instead of being dropped as a duplicate.
+                same = next((i for i, e in enumerate(history) if entry_id(e) == entry_id(entry)), None)
+                if (same is not None and history[same].get("endType") == "superseded"
+                        and (entry.get("endTime") or "") > (history[same].get("endTime") or "")):
+                    history[same] = entry
+                    added += 1
                 continue
             known.add(entry_id(entry))
             history.append(entry)
@@ -98,10 +105,13 @@ def _append_entries(new_entries):
         return added
 
 
-def load_all():
-    """Returns all recorded sessions, oldest first."""
+def load_all(include_beside=False):
+    """Returns all recorded sessions, oldest first. A review that was timed beside a session of the same task
+    ("beside": True) is on file so the history can show it, but its time is already inside that session, so
+    everything that adds time up leaves it out; the history page and the sync ask for it with include_beside."""
     with _lock:
-        return _load_all_locked()
+        everything = _load_all_locked()
+    return everything if include_beside else [e for e in everything if not e.get("beside")]
 
 
 # The parsed file, with the (path, mtime, size) it was read at. The Tasks tab

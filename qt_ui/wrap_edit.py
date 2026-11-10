@@ -94,7 +94,9 @@ class WrapEdit(QPlainTextEdit):
         rows = max(1, min(self._max_rows, round(self.document().size().height())))
         margin = int(self.document().documentMargin() * 2) + 2 * self.frameWidth()
         pad = 10 if self.styleSheet() else 0
-        self.setFixedHeight(rows * metrics.lineSpacing() + margin + pad)
-        self.setVerticalScrollBarPolicy(
-            Qt.ScrollBarAsNeeded if self.document().size().height() > self._max_rows else Qt.ScrollBarAlwaysOff
-        )
+        height = rows * metrics.lineSpacing() + margin + pad
+        if height != self.height() or height != self.minimumHeight():       # setting these always relays out the parent
+            self.setFixedHeight(height)
+        policy = Qt.ScrollBarAsNeeded if self.document().size().height() > self._max_rows else Qt.ScrollBarAlwaysOff
+        if policy != self.verticalScrollBarPolicy():
+            self.setVerticalScrollBarPolicy(policy)

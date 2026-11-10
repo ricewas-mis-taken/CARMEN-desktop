@@ -411,6 +411,12 @@ class _MainWindow(QWidget):
             self._update_button.show()
             return
         self._update_button.setEnabled(True)
+        if update_center.needs_relaunch():
+            self._update_button.setText("Relaunch")
+            self._update_button.setToolTip("Some of the update only takes effect on a fresh start. This closes Carmen "
+                                           "and opens it again right away, on this page.")
+            self._update_button.show()
+            return
         if state["message"]:
             self._update_button.setText(state["message"])
             self._update_button.show()
@@ -423,15 +429,15 @@ class _MainWindow(QWidget):
         """Pull what is waiting and put it into this running window; nothing closes."""
         import qt_gui_thread
         import update_center
+        if update_center.needs_relaunch():
+            update_center.request_relaunch()
+            return
 
         def done(result):
             if "error" in result:
                 update_center.set_message("Update failed")
             elif result["later"]:
-                update_center.set_message("Restart to finish")      # short: the button is narrow
-                names = ", ".join(sorted({f.replace("\\", "/").split("/")[-1] for f in result["later"]}))
-                self._update_button.setToolTip(
-                    "Updated, but these files only take effect the next time Carmen starts: " + names)
+                update_center.set_needs_relaunch(True)               # the button becomes Relaunch and stays
             else:
                 update_center.set_message("Updated")
             self._sync_update_button()
@@ -461,7 +467,7 @@ class _MainWindow(QWidget):
         _remembered["open"] = False
         super().hideEvent(event)
 
-    def _show_tab(self, key):
+    def _show_tab(self, key, task_id=None):
         _remembered["page"] = key
         changed = getattr(self, "_current_key", None) != key
         self._stack.setCurrentWidget(self._pages[key])
@@ -473,6 +479,11 @@ class _MainWindow(QWidget):
         self._move_marker(animated=changed)
         if changed and key not in _NO_ENTRANCE:
             motion.reveal(self._pages[key])
+        if task_id is not None:
+            page = self._pages[key]
+            page = page.widget() if hasattr(page, "widget") else page
+            if hasattr(page, "show_task"):
+                QTimer.singleShot(0, lambda: page.show_task(task_id))
 
     def _move_marker(self, animated=True):
         marker = getattr(self, "_marker", None)

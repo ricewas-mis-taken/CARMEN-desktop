@@ -110,7 +110,7 @@ def test_until_burnout_button_starts_a_burnout_session(qtbot, world):
 def test_pomodoro_bar_opens_the_window_then_starts(qtbot, world, monkeypatch):
     card = _card(qtbot, _task())
     card._start_button.click()
-    monkeypatch.setattr(tasks_tab._PomodoroDialog, "get_settings", staticmethod(lambda parent=None: (25, 5, 4)))
+    monkeypatch.setattr(tasks_tab._PomodoroDialog, "get_settings", staticmethod(lambda parent=None, task_id=None: (25, 5, 4)))
     card._pomodoro_button.click()
     assert sm.get_status()["pomodoro"]["totalCycles"] == 4
 
@@ -434,7 +434,7 @@ def test_weekly_goal_card_shows_the_week_not_today(qtbot, world):
 def test_weekly_goal_is_reached_by_work_on_any_day_of_the_week(qtbot, world, monkeypatch):
     task = _weekly_task(minutes=60)
     day = date.today()
-    monkeypatch.setattr(session_history, "load_all", lambda: [{
+    monkeypatch.setattr(session_history, "load_all", lambda include_beside=False: [{
         "source": "task", "eventId": task["id"], "violationLog": [],
         "startTime": f"{day.isoformat()}T09:00:00", "endTime": f"{day.isoformat()}T10:05:00",
     }])

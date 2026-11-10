@@ -9,6 +9,7 @@ import math
 import os
 import sys
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta
 
@@ -419,6 +420,7 @@ def start_session(
             )
         end_time = now + timedelta(minutes=duration_minutes)
         _state["isActive"] = True
+        begin_enforcement_grace()
         _state["startTime"] = now.isoformat()
         _state["endTime"] = end_time.isoformat()
         _state["lockMode"] = lock_mode
@@ -569,6 +571,7 @@ def _advance_pomodoro_locked(now):
     review_store.auto_resume_from_break()
     _state["endTime"] = (now + timedelta(minutes=pomo["focusMinutes"])).isoformat()
     _state["violationLog"].append({"kind": "resume", "timestamp": now.isoformat()})
+    begin_enforcement_grace()
     _pending_phase_change["value"] = {
         "phase": "focus",
         "cycle": pomo["currentCycle"],
@@ -576,6 +579,20 @@ def _advance_pomodoro_locked(now):
     }
     _save()
     state_events.bump()
+
+
+# Right after a session starts, resumes or a pomodoro goes back to focus, apps that were already open get minimized
+# over the next moments. Those are not violations: nothing is counted or announced while this lasts.
+ENFORCEMENT_GRACE_SECONDS = 3.0
+_grace_until = {"t": 0.0}
+
+
+def begin_enforcement_grace():
+    _grace_until["t"] = time.time() + ENFORCEMENT_GRACE_SECONDS if ENFORCEMENT_GRACE_SECONDS > 0 else 0.0
+
+
+def in_enforcement_grace():
+    return time.time() < _grace_until["t"]
 
 
 def pop_pending_phase_change():
@@ -1246,6 +1263,7 @@ def resume_session():
         _state["pausedAt"] = None
         _state["frozenSecondsRemaining"] = None
         if not _state["isBreak"]:
+            begin_enforcement_grace()
             _settle_undecided_pause_locked(now)
             _state["violationLog"].append({"kind": "resume", "timestamp": now.isoformat()})
             import review_store

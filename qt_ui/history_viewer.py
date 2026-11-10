@@ -105,8 +105,14 @@ def worked_seconds(session):
     return tasks_store.worked_seconds(session["startTime"], session["endTime"], session.get("violationLog"))
 
 
+def _counted(sessions):
+    """The sessions whose time adds up: a review timed beside a session of its task is already inside it."""
+    return [s for s in sessions if not s.get("beside")]
+
+
 def summarize(sessions):
     """Totals for the strip at the top: focused seconds, session count, violations, clean sessions."""
+    sessions = _counted(sessions)
     total = sum(worked_seconds(s) for s in sessions)
     violations = sum(violation_count(s) for s in sessions)
     clean = sum(1 for s in sessions if violation_count(s) == 0)
@@ -117,7 +123,7 @@ def minutes_by_day(sessions, days=STRIP_DAYS, today=None):
     """[(date, minutes)] for the last `days` days ending today, oldest first."""
     today = today or date.today()
     totals = {today - timedelta(days=i): 0.0 for i in range(days)}
-    for s in sessions:
+    for s in _counted(sessions):
         start = _parse(s.get("startTime"))
         if start and start.date() in totals:
             totals[start.date()] += worked_seconds(s) / 60
@@ -291,6 +297,8 @@ class _SessionCard(QFrame):
             chips.addWidget(chip(f"Pomodoro {pomodoro.get('currentCycle')}/{pomodoro.get('totalCycles')}",
                                  "#6C3FA8"))
         chips.addWidget(chip("Hard lock" if session.get("lockMode") == "hard" else "Soft lock"))
+        if session.get("beside"):
+            chips.addWidget(chip("Beside session"))
         if end_type == "nuclear":
             chips.addWidget(chip("Ended early", tone=RED))
         count = violation_count(session)
@@ -533,7 +541,7 @@ class HistoryTab(QWidget):
         return sessions
 
     def refresh(self):
-        everything = session_history.load_all()
+        everything = session_history.load_all(include_beside=True)
         # The tab re-reads the log every time it is shown; laying the page out again is the
         # costly part, so only do it when a session was added or the view itself changed.
         last = everything[-1] if everything else {}
@@ -583,8 +591,9 @@ class HistoryTab(QWidget):
             name = QLabel(day_label(day))
             name.setStyleSheet(f"font-size:13px;font-weight:700;color:{INK};background:transparent;")
             hrow.addWidget(name)
-            total = QLabel(f"{_duration_text(sum(worked_seconds(s) for s in items))}, "
-                           f"{len(items)} session{'s' if len(items) != 1 else ''}")
+            counted = _counted(items)
+            total = QLabel(f"{_duration_text(sum(worked_seconds(s) for s in counted))}, "
+                           f"{len(counted)} session{'s' if len(counted) != 1 else ''}")
             total.setStyleSheet(f"font-size:12.5px;color:{MUTED};background:transparent;")
             hrow.addWidget(total)
             hrow.addStretch(1)

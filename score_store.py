@@ -98,10 +98,38 @@ def add_event(key, day, kind, points, note="", _data=None):
         if any(e["key"] == key for e in data["events"]):
             return False
         data["events"].append({"key": key, "date": day.isoformat() if hasattr(day, "isoformat") else str(day),
-                               "kind": kind, "points": points, "note": note})
+                               "kind": kind, "points": points, "note": note,
+                               "updatedAt": datetime.now().isoformat()})
         if own:
             _save(data)
         return True
+
+
+def events(include_deleted=True):
+    """The ledger's events, for sync (it treats them like any other keyed record)."""
+    with _lock:
+        return load()["events"]
+
+
+def save_events(items):
+    """Writes events merged in from another computer, keeping this one's own settled-through day."""
+    with _lock:
+        data = load()
+        data["events"] = items
+        _save(data)
+
+
+def stamp_unsynced():
+    """Events from before the ledger synced have no stamp; give them one (once) so the next sync sends them."""
+    with _lock:
+        data = load()
+        changed = False
+        for event in data["events"]:
+            if not event.get("updatedAt"):
+                event["updatedAt"] = datetime.now().isoformat()
+                changed = True
+        if changed:
+            _save(data)
 
 
 def events_between(first, last, data=None):

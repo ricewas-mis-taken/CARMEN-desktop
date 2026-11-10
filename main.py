@@ -17,6 +17,8 @@ try:                                    # a hard crash of the interpreter or Qt 
     import faulthandler
     import paths as _paths
     _crash_file = open(_paths.private_path("crash.log"), "a", buffering=1)
+    import datetime as _dt
+    _crash_file.write(_dt.datetime.now().strftime("--- Carmen started %Y-%m-%d %H:%M:%S ---") + chr(10))
     faulthandler.enable(_crash_file, all_threads=True)
 except Exception:
     pass
@@ -117,6 +119,8 @@ def main():
     # thread below is the one that matters most — it can trigger
     # enforcer.py's lock overlays at any time once it starts).
     app = QApplication(sys.argv)
+    import gc_guard
+    gc_guard.install(app)            # cycle collection only ever runs on this thread (see gc_guard)
     # Background threads (sync, saving, the API) share the interpreter lock with the interface. The default
     # lets one of them hold it for 5 ms at a time, which is felt under a pen; 0.5 ms hands it back sooner.
     sys.setswitchinterval(0.0005)
@@ -221,6 +225,7 @@ def main():
     # Updates no longer restart the app: a button in the window applies them to the running copy.
     import update_center
     update_center.start_baseline()
+    update_center.relaunch_hook = lambda: on_quit()
     update_center.watch(stop_event)
 
     def _busy():
@@ -335,7 +340,7 @@ def main():
 
     stop_event.set()
     if (auto_updater.restart_was_requested() or dev_watcher.restart_was_requested()
-            or code_watcher.restart_was_requested()):
+            or code_watcher.restart_was_requested() or update_center.relaunch_was_requested()):
         # Re-exec in place (same PID, fresh interpreter) rather than
         # spawning a new process and exiting this one -- avoids a race
         # where the child tries to rebind api_server's port before this

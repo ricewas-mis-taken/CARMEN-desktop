@@ -42,3 +42,25 @@ def test_a_mid_zoom_stroke_is_drawn_with_fewer_points_and_a_close_one_in_full(qt
     canvas.view.update({"zoom": 1.0, "x": x0 + 500, "y": y0})       # close: the full curve
     canvas.grab()
     assert id(item) not in canvas.__dict__.get("_far_cache", {})
+
+
+def test_panning_a_big_board_reuses_one_picture_and_the_minimap_is_not_rebuilt(qtbot, isolate_real_data_paths):
+    canvas = scribe_tab.ScribeCanvas(_board(count=400))
+    qtbot.addWidget(canvas)
+    canvas.resize(900, 500)
+    canvas.view.update({"zoom": 0.01, "x": 200000, "y": 50000})
+    canvas.grab()
+    canvas._begin_ghost()
+    assert canvas._ghost is not None
+    picture = canvas._ghost["pix"]
+    canvas.view["x"] += 5000
+    canvas.grab()
+    assert canvas._ghost["pix"] is picture                # the same picture, slid
+    canvas._end_ghost()
+    assert canvas._ghost is None
+
+
+def test_far_off_strokes_are_fainter_not_bolder():
+    assert scribe_tab._far_alpha(1.0 / 0.01, 0.01, 3) < 0.5      # 3 units wide at 1% zoom: a 0.03 px line
+    assert scribe_tab._far_alpha(5, 1.0, 5) == 1.0               # a normal stroke is untouched
+    assert scribe_tab._far_width(3, 0.01) == 100                 # drawn no thinner than one pixel

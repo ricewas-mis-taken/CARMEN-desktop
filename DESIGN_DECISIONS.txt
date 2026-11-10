@@ -1045,3 +1045,13 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   marker (label_pause). Never answered, it counts like checking. Only the current session's markers can be labelled.
   Left for later: auto-ending a pause left open for days, idle time not counting.
   Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-11-06] "Not sure yet".
+
+2026-11-07  Quiet moments when a session starts: apps already open are not violations
+  Apps that were open when a session started were counted as violations and announced while Carmen was minimizing
+  them. Chose a 3 second grace after a start, a resume, or a pomodoro back to focus (session_manager.
+  begin_enforcement_grace / in_enforcement_grace) over ignoring everything open before the start: an app still open
+  once the grace ends is judged normally. In the grace the tracker only minimizes (hard lock); enforcer.
+  record_violation_deduped, _show_violation_notice and soft_lock_warning do nothing. Tests turn it off in conftest.
+  Also: a review timed beside a session of its own task is now filed in history with "beside": true (shown with a
+  tag, left out of every total; session_history.load_all hides it unless include_beside), instead of not at all.
+  Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-11-07] "Quiet moments when a session starts".

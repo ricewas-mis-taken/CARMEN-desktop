@@ -12,7 +12,7 @@ def _entry(n):
 
 def test_page_is_only_rebuilt_when_history_changes(qtbot, monkeypatch):
     sessions = [_entry(1)]
-    monkeypatch.setattr(history_viewer.session_history, "load_all", lambda: list(sessions))
+    monkeypatch.setattr(history_viewer.session_history, "load_all", lambda include_beside=False: list(sessions))
     tab = history_viewer.HistoryTab()
     qtbot.addWidget(tab)
 

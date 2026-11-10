@@ -319,6 +319,15 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
                     # flyouts) and our own tray/popup windows are never
                     # violations — don't touch dedupe state either way.
                     pass
+                elif (process_name and session_manager.in_enforcement_grace()
+                      and enforcer.is_blocked_window(process_name, hwnd)):
+                    # The first moments after a start or resume: whatever was already open is tidied away
+                    # quietly. Nothing is counted or announced, and once the moments pass an app that is
+                    # still there is judged fresh.
+                    if session_manager.get_lock_mode() == "hard":
+                        enforcer.sweep_minimize_blocked_windows()
+                    last_flagged_process = None
+                    last_soft_warning.pop(process_name, None)
                 elif process_name and enforcer.is_blocked_window(process_name, hwnd):
                     is_new_flag = process_name != last_flagged_process
                     if is_new_flag:
@@ -402,6 +411,8 @@ def run_polling_loop(stop_event, on_session_end=None, tray_icon=None, on_phase_c
                 if session_manager.get_lock_mode() == "hard":
                     swept = enforcer.sweep_minimize_blocked_windows()
                     for swept_process, _swept_hwnd in swept:
+                        if session_manager.in_enforcement_grace():
+                            continue           # already open as the session began: minimized, not a violation
                         enforcer.record_violation_deduped(swept_process)
                         # No cooldown needed here anymore -- enforcer.py's
                         # show_blocked_notice routes through the same

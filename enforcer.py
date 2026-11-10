@@ -378,6 +378,8 @@ else:
 
 
     def soft_lock_warning(offending_process_name=None, hwnd=None):
+        if session_manager.in_enforcement_grace():
+            return
         status = session_manager.get_status()
         if status.get("source") == "review":
             message = f"Finish {status.get('reviewProblemName') or 'this review'} first"
@@ -440,6 +442,8 @@ else:
         remaining time. Always 3 seconds with the progress bar draining over
         that span, and deduped per process so multiple windows/call sites for
         the same violation never stack more than one popup."""
+        if session_manager.in_enforcement_grace():
+            return                 # being tidied away as the session began: no notice
         now = time.time()
         key = process_name or "__unknown__"
         if now - _last_violation_notice.get(key, 0) < _VIOLATION_NOTICE_COOLDOWN_SECONDS:
@@ -909,6 +913,8 @@ def record_violation_deduped(process_name):
     instead; nothing about the enforcement actions themselves (minimize,
     redirect, overlay) is gated by this -- only whether the violation gets
     logged/counted."""
+    if session_manager.in_enforcement_grace():
+        return                     # apps that were already open as the session began are minimized, not counted
     key = (process_name or "").lower()
     now = time.time()
     with _violation_dedup_lock:
