@@ -230,3 +230,12 @@ def test_the_pause_budget_is_not_on_the_mini_timer(qtbot, isolate_state):
     qtbot.addWidget(win)
     win.show()
     assert not hasattr(win, "_budget") and win.toolTip() == ""
+
+
+def test_the_size_keeps_its_share_of_the_screen_on_another_monitor():
+    from PySide6.QtCore import QRect
+    small, big = QRect(0, 0, 1280, 720), QRect(0, 0, 2560, 1440)
+    ratio = mini_timer.size_ratio((250, 270), small)
+    assert mini_timer.scaled_size(ratio, big, (0, 0), (9999, 9999)) == (500, 540)
+    assert mini_timer.scaled_size(ratio, big)[0] == 480 and mini_timer.scaled_size(ratio, big)[1] == 540
+    assert mini_timer.scaled_size([0.01, 0.01], small) == mini_timer.MIN_SIZE
