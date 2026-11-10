@@ -13,7 +13,7 @@ import math
 import threading
 import time
 
-from PySide6.QtCore import QBuffer, QByteArray, QLineF, QPointF, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QBuffer, QByteArray, QEvent, QLineF, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -1992,14 +1992,40 @@ class ScribeTab(QWidget):
     def _show_options_popup(self):
         side = self._side
         if side.isVisible():
-            side.hide()
+            self._close_options_popup()
             return
+        if time.monotonic() - getattr(self, "_options_closed_at", 0.0) < 0.35:
+            return                      # the same click that just closed it (on the Options button) must not reopen it
         side.setParent(self, Qt.Popup)
         height = min(side.widget().sizeHint().height() + 4, max(200, self.height() - 90))
         side.setFixedHeight(height)
         anchor = self._options_button.mapToGlobal(self._options_button.rect().bottomRight())
         side.move(anchor.x() - side.width(), anchor.y() + 6)
         side.show()
+        QApplication.instance().installEventFilter(self)
+
+    def _close_options_popup(self):
+        QApplication.instance().removeEventFilter(self)
+        self._options_closed_at = time.monotonic()
+        self._side.hide()
+
+    def eventFilter(self, watched, event):
+        """While the options popup is open, a click anywhere outside it (or Esc) closes it."""
+        side = self._side
+        if not side.isVisible() or self._side_narrow is not True:
+            QApplication.instance().removeEventFilter(self)
+            return False
+        kind = event.type()
+        if kind == QEvent.MouseButtonPress and isinstance(watched, QWidget):
+            node = watched
+            while node is not None and node is not side:
+                node = node.parentWidget()
+            if node is None:                              # not inside the popup (its drop-downs count as inside)
+                self._close_options_popup()
+        elif kind == QEvent.KeyPress and event.key() == Qt.Key_Escape:
+            self._close_options_popup()
+            return True
+        return False
 
     def hideEvent(self, event):
         gc.enable()                     # never left off if the page closes mid-stroke
