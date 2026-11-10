@@ -57,18 +57,6 @@ def visible_geometry(saved, screens):
     return list(saved) if any(screen.intersects(rect) for screen in screens) else None
 
 
-def size_ratio(size, screen):
-    """The window's size as a share of its screen's usable area: [width share, height share]."""
-    return [size[0] / max(1, screen.width()), size[1] / max(1, screen.height())]
-
-
-def scaled_size(ratio, screen, minimum=MIN_SIZE, maximum=MAX_SIZE):
-    """That share of another screen, kept within the window's own limits."""
-    width = round(ratio[0] * screen.width())
-    height = round(ratio[1] * screen.height())
-    return max(minimum[0], min(maximum[0], width)), max(minimum[1], min(maximum[1], height))
-
-
 def describe(status):
     """What the window should show for a /status-shaped dict:
     (label, clock_text, ring_fraction_or_None, can_pause)."""
@@ -157,7 +145,6 @@ class MiniTimer(QWidget):
         self.setMouseTracking(True)
         self.setMinimumSize(*MIN_SIZE)
         self.setMaximumSize(*MAX_SIZE)
-        self._screen = None
         self._resize_edges = Qt.Edge(0)
         self._resize_start = None
         self.setWindowTitle("Carmen Focus timer")
@@ -235,29 +222,7 @@ class MiniTimer(QWidget):
 
     def moveEvent(self, event):
         super().moveEvent(event)
-        self._follow_screen()
         self._save_timer.start()
-
-    def _follow_screen(self):
-        """Moved onto a monitor of another size: the window keeps the same share of it, so it looks the same size."""
-        screen = self.screen()
-        if screen is None or screen is self._screen:
-            return
-        first = self._screen is None
-        self._screen = screen
-        ratio = config.load_config().get("miniTimerRatio")
-        if first or not (isinstance(ratio, (list, tuple)) and len(ratio) == 2):
-            return
-        width, height = scaled_size(ratio, screen.availableGeometry())
-        self.resize(width, height)
-
-    def _remember_ratio(self):
-        """After the user resizes it by hand: remember how big that is on this monitor."""
-        screen = self.screen()
-        if screen is None:
-            return
-        value = size_ratio((self.width(), self.height()), screen.availableGeometry())
-        config.update_config(lambda cfg: cfg.update({"miniTimerRatio": value}))
 
     def _close_by_user(self):
         self._closed_by_user = True
@@ -583,7 +548,6 @@ class MiniTimer(QWidget):
         if self._resize_start is not None:
             self._resize_start = None
             self._resize_edges = Qt.Edge(0)
-            self._remember_ratio()
             self._save_timer.start()
             return
         clicked_clock = (
