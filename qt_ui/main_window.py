@@ -467,7 +467,7 @@ class _MainWindow(QWidget):
         _remembered["open"] = False
         super().hideEvent(event)
 
-    def _show_tab(self, key):
+    def _show_tab(self, key, task_id=None):
         _remembered["page"] = key
         changed = getattr(self, "_current_key", None) != key
         self._stack.setCurrentWidget(self._pages[key])
@@ -479,6 +479,11 @@ class _MainWindow(QWidget):
         self._move_marker(animated=changed)
         if changed and key not in _NO_ENTRANCE:
             motion.reveal(self._pages[key])
+        if task_id is not None:
+            page = self._pages[key]
+            page = page.widget() if hasattr(page, "widget") else page
+            if hasattr(page, "show_task"):
+                QTimer.singleShot(0, lambda: page.show_task(task_id))
 
     def _move_marker(self, animated=True):
         marker = getattr(self, "_marker", None)

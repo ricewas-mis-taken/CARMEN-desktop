@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import config
 import review_store
 import session_history
 import session_manager
@@ -353,13 +354,38 @@ _DIALOG_STYLE = (
     "QDialog#PopupBg QLineEdit:focus{border:1.5px solid #1B2230;}")
 
 
+def _plain(number):
+    return int(number) if float(number) == int(number) else number
+
+
+def last_pomodoro(task_id=None):
+    """(focus, break, cycles) this task's last pomodoro used, or the last one used anywhere; None if never."""
+    saved = config.load_config().get("lastPomodoro") or {}
+    value = saved.get(str(task_id)) if task_id is not None else None
+    value = value or saved.get("last")
+    return tuple(value) if isinstance(value, (list, tuple)) and len(value) == 3 else None
+
+
+def remember_pomodoro(task_id, settings):
+    value = list(settings)
+
+    def mutate(cfg):
+        saved = dict(cfg.get("lastPomodoro") or {})
+        saved["last"] = value
+        if task_id is not None:
+            saved[str(task_id)] = value
+        cfg["lastPomodoro"] = saved
+    config.update_config(mutate)
+
+
 class _PomodoroDialog(QDialog):
     """Modal focus/break/cycles picker for a card's Pomodoro bar. Styled inline (not just
     by the app stylesheet): it is parented to its card, and a window parented to a styled
     widget still inherits that widget's stylesheet."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, task_id=None):
         super().__init__(parent)
+        self._task_id = task_id
         self.setObjectName("PopupBg")
         self.setStyleSheet(_DIALOG_STYLE)
         self.setWindowTitle("Start Pomodoro")
@@ -388,9 +414,10 @@ class _PomodoroDialog(QDialog):
             row.addLayout(column, 1)
             return edit
 
-        self._focus_edit = _field("Focus (min)", 25)
-        self._break_edit = _field("Break (min)", 5)
-        self._cycles_edit = _field("Cycles", 4)
+        last = last_pomodoro(task_id) or (25, 5, 4)         # what this task was last done with, else the last used
+        self._focus_edit = _field("Focus (min)", _plain(last[0]))
+        self._break_edit = _field("Break (min)", _plain(last[1]))
+        self._cycles_edit = _field("Cycles", int(last[2]))
         layout.addLayout(row)
 
         self._status_label = QLabel()
@@ -421,12 +448,13 @@ class _PomodoroDialog(QDialog):
             self._status_label.setText("Enter valid positive numbers.")
             return
         self._result = (focus_minutes, break_minutes, cycles)
+        remember_pomodoro(self._task_id, self._result)
         self.accept()
 
     @staticmethod
-    def get_settings(parent=None):
+    def get_settings(parent=None, task_id=None):
         """Returns (focus_minutes, break_minutes, cycles) or None if cancelled."""
-        dialog = _PomodoroDialog(parent)
+        dialog = _PomodoroDialog(parent, task_id)
         dialog.exec()
         return dialog._result
 
@@ -589,6 +617,15 @@ class TasksTab(QWidget):
         self._status_timer = QTimer(self)
         self._status_timer.timeout.connect(self._tick_if_visible)
         self._status_timer.start(STATUS_REFRESH_MS)
+
+    def show_task(self, task_id):
+        """Brings one task's card into view with its Start choices open (what Home's "Start a session" asks for)."""
+        card = self._cards.get(task_id)
+        if card is None:
+            return
+        self._scroll.ensureWidgetVisible(card, 0, 24)
+        if not card._armed:
+            card._arm()
 
     def _build_header(self):
         header = QHBoxLayout()
@@ -1110,7 +1147,7 @@ class _TaskCard(QFrame):
             session_manager.pause_session("aside")     # another task's session waits, free, and comes back after
 
     def _start_pomodoro(self):
-        settings = _PomodoroDialog.get_settings(self)
+        settings = _PomodoroDialog.get_settings(self, self._task.get("id"))
         if settings is None:
             return
         focus_minutes, break_minutes, cycles = settings

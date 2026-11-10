@@ -110,7 +110,7 @@ def test_until_burnout_button_starts_a_burnout_session(qtbot, world):
 def test_pomodoro_bar_opens_the_window_then_starts(qtbot, world, monkeypatch):
     card = _card(qtbot, _task())
     card._start_button.click()
-    monkeypatch.setattr(tasks_tab._PomodoroDialog, "get_settings", staticmethod(lambda parent=None: (25, 5, 4)))
+    monkeypatch.setattr(tasks_tab._PomodoroDialog, "get_settings", staticmethod(lambda parent=None, task_id=None: (25, 5, 4)))
     card._pomodoro_button.click()
     assert sm.get_status()["pomodoro"]["totalCycles"] == 4
 
