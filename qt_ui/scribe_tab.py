@@ -9,6 +9,8 @@ is hidden or the app quits. Shape maths lives in scribe_geometry.py.
 import collections
 import copy
 import gc
+
+import gc_guard
 import math
 import threading
 import time
@@ -1129,7 +1131,7 @@ class ScribeCanvas(QWidget):
         return pt
 
     def _commit(self, item):
-        gc.enable()
+        gc_guard.resume()
         fresh = self._picture_fresh
         extent, extent_fresh = self._bounds_full, self._bounds_fresh and self._bounds_shape == self._board_shape()
         self._push_added(item)
@@ -1146,7 +1148,7 @@ class ScribeCanvas(QWidget):
         self.update()
 
     def _cancel_draft(self):
-        gc.enable()
+        gc_guard.resume()
         self._draft = None
         self._phase = 0
         self._band = None
@@ -2114,7 +2116,7 @@ class ScribeTab(QWidget):
         return False
 
     def hideEvent(self, event):
-        gc.enable()                     # never left off if the page closes mid-stroke
+        gc_guard.resume()                     # never left off if the page closes mid-stroke
         self.flush()                    # quick now: the board's text is remembered between saves
         super().hideEvent(event)
 
