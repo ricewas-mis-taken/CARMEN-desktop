@@ -324,7 +324,7 @@ def _build_description_content(layout, problem):
         layout.addWidget(link_label, 1)
 
 
-SORT_CHOICES = (("due", "Due first"), ("hardest", "Hardest first"), ("newest", "Newest first"), ("name", "A to Z"))
+SORT_CHOICES = (("due", "Due first"), ("hardest", "Most stars first"), ("easiest", "Fewest stars first"), ("newest", "Newest first"), ("name", "A to Z"))
 
 
 class _CategoryRow(QPushButton):
@@ -1309,6 +1309,8 @@ class _TopicView(QWidget):
     def _sorted(self, problems):
         if self._sort == "hardest":
             return sorted(problems, key=lambda p: -p["stars"])
+        if self._sort == "easiest":
+            return sorted(problems, key=lambda p: p["stars"])
         if self._sort == "newest":
             return sorted(problems, key=lambda p: p.get("dateAdded") or "", reverse=True)
         if self._sort == "name":
