@@ -32,9 +32,7 @@ from PySide6.QtWidgets import (
 from qt_ui.wrap_edit import WrapEdit
 
 from calendar_log import logger as calendar_logger
-import config
 import review_store
-import sync_trigger
 import session_history
 import session_manager
 from qt_ui import confirm_dialog
@@ -1263,39 +1261,8 @@ class _TopicView(QWidget):
         self._sort_combo.currentIndexChanged.connect(self._set_sort)
         box.addWidget(self._sort_combo)
 
-        box.addSpacing(6)
-        box.addWidget(heading("Review days"))
-        days = QHBoxLayout()
-        days.setSpacing(4)
-        self._day_chips = []
-        chosen = review_store._configured_review_days() or range(7)
-        for weekday, letter in enumerate("MTWTFSS"):
-            chip = QPushButton(letter)
-            chip.setCheckable(True)
-            chip.setChecked(weekday in chosen)
-            chip.setFixedSize(24, 26)
-            chip.setCursor(Qt.PointingHandCursor)
-            chip.setToolTip(("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")[weekday])
-            chip.setStyleSheet(
-                f"QPushButton{{background:#F2F4F7;color:{MUTED};border:none;border-radius:8px;font-size:12px;font-weight:700;}}"
-                f"QPushButton:checked{{background:{INK};color:#FFFFFF;}}")
-            chip.clicked.connect(self._save_review_days)
-            self._day_chips.append(chip)
-            days.addWidget(chip)
-        box.addLayout(days)
         box.addStretch(1)
         return card
-
-    def _save_review_days(self):
-        """Reviews only fall on the lit days from now on (at least one stays lit); ones already scheduled stay put."""
-        picked = [i for i, chip in enumerate(self._day_chips) if chip.isChecked()]
-        if not picked:
-            self.sender().setChecked(True)
-            return
-        value = picked if len(picked) < 7 else []
-        stamp = datetime.now().isoformat()
-        config.update_config(lambda cfg: cfg.update({"reviewDays": value, "reviewDaysUpdatedAt": stamp}))
-        sync_trigger.note_change()
 
     def _set_search(self, text):
         self._search = text.strip().lower()

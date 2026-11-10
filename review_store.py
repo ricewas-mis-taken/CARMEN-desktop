@@ -28,11 +28,6 @@ import sync_trigger
 from calendar_log import logger
 import paths
 
-
-def _configured_review_days():
-    """The weekdays reviews may fall on (Settings: Review days), or None when every day is allowed."""
-    return review_scheduler.allowed_weekdays()
-
 PHOTOS_DIR = paths.private_path("data", "review_photos")
 ACTIVE_SESSION_PATH = paths.private_path("data", "active_review.json")
 

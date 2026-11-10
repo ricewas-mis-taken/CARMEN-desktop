@@ -62,7 +62,6 @@ from dotenv import load_dotenv
 
 import auth_manager
 import board_store
-import config
 import devices_store
 import score_store
 import calendar_store
@@ -518,31 +517,6 @@ def _gather_devices(cutoff_local):
     return _gather_json_store(devices_store.load(include_deleted=True), "devices", "id", cutoff_local)
 
 
-def _gather_settings(cutoff_local):
-    """Settings that follow you between computers: for now the weekdays reviews may fall on."""
-    cfg = config.load_config()
-    stamp = cfg.get("reviewDaysUpdatedAt")
-    if not stamp or not _is_newer(stamp, cutoff_local):
-        return []
-    return [{"table_name": "settings", "sync_id": "reviewDays", "data": {"days": cfg.get("reviewDays") or []},
-             "device_id": device_id.get_device_id(), "updated_at": _to_wire_ts(stamp), "is_deleted": False}]
-
-
-def _apply_settings(records):
-    applied = skipped = 0
-    for record in records:
-        if record.get("sync_id") != "reviewDays":
-            continue
-        incoming = _from_wire_ts(record["updated_at"])
-        if not _is_newer(incoming, config.load_config().get("reviewDaysUpdatedAt")):
-            skipped += 1
-            continue
-        days = [d for d in record["data"].get("days", []) if isinstance(d, int) and 0 <= d <= 6]
-        config.update_config(lambda cfg: cfg.update({"reviewDays": days, "reviewDaysUpdatedAt": incoming}))
-        applied += 1
-    return applied, skipped, 0
-
-
 def _gather_score(cutoff_local):
     """The Carmen Score ledger, one record per event (its key is its identity), so every computer shows one score."""
     score_store.stamp_unsynced()
@@ -551,7 +525,7 @@ def _gather_score(cutoff_local):
 
 def _gather_all(cutoff_local):
     return (_gather_tasks(cutoff_local) + _gather_board(cutoff_local) + _gather_devices(cutoff_local)
-            + _gather_score(cutoff_local) + _gather_settings(cutoff_local)
+            + _gather_score(cutoff_local)
             + _gather_calendar_records(cutoff_local))
 
 
@@ -1073,10 +1047,6 @@ def _apply_all(pulled_records):
     skipped += s
     failed += f
     a, s, f = _apply_score(by_table.get("score", []))
-    applied += a
-    skipped += s
-    failed += f
-    a, s, f = _apply_settings(by_table.get("settings", []))
     applied += a
     skipped += s
     failed += f

@@ -20,28 +20,6 @@ def today():
     return date.today()
 
 
-def allowed_weekdays():
-    """Weekdays (Monday = 0) a review may fall on (Settings: Review days), or None for any day."""
-    try:
-        import config
-        days = config.load_config().get("reviewDays")
-    except Exception:
-        return None
-    days = sorted({int(d) for d in days or [] if str(d).isdigit() and 0 <= int(d) <= 6})
-    return days if 0 < len(days) < 7 else None
-
-
-def snap(day):
-    """The first allowed day on or after `day` (so a review never lands on a day you keep free)."""
-    allowed = allowed_weekdays()
-    if not allowed:
-        return day
-    for ahead in range(7):
-        if (day + timedelta(days=ahead)).weekday() in allowed:
-            return day + timedelta(days=ahead)
-    return day
-
-
 def compute_next_interval(schedule_stage: int, stars: int) -> int:
     stage = min(schedule_stage, len(BASE_INTERVALS_DAYS) - 1)
     base = BASE_INTERVALS_DAYS[stage]
@@ -50,7 +28,7 @@ def compute_next_interval(schedule_stage: int, stars: int) -> int:
 
 def schedule_new_problem(stars: int) -> dict:
     interval = compute_next_interval(0, stars)
-    return {"schedule_stage": 0, "next_review_date": snap(today() + timedelta(days=interval))}
+    return {"schedule_stage": 0, "next_review_date": today() + timedelta(days=interval)}
 
 
 def schedule_after_review(schedule_stage: int, stars: int, shakiness: int = 3) -> dict:
@@ -59,7 +37,7 @@ def schedule_after_review(schedule_stage: int, stars: int, shakiness: int = 3) -
     base_interval = compute_next_interval(new_stage, stars)
     shak_mult = SHAKINESS_MULTIPLIERS.get(shakiness, 1.0)
     interval = max(1, round(base_interval * shak_mult))
-    return {"schedule_stage": new_stage, "next_review_date": snap(today() + timedelta(days=interval))}
+    return {"schedule_stage": new_stage, "next_review_date": today() + timedelta(days=interval)}
 
 
 def schedule_checked_answer(schedule_stage: int, stars: int) -> dict:
@@ -73,4 +51,4 @@ def schedule_checked_answer(schedule_stage: int, stars: int) -> dict:
     always 1 day, since round(1 * a multiplier <= 1.0) can't exceed 1 --
     rather than a hardcoded "tomorrow" that happened to coincidentally
     match it."""
-    return {"schedule_stage": 0, "next_review_date": snap(today() + timedelta(days=compute_next_interval(0, stars)))}
+    return {"schedule_stage": 0, "next_review_date": today() + timedelta(days=compute_next_interval(0, stars))}
