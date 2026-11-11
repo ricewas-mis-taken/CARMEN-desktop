@@ -11,6 +11,7 @@ struct CarmenFocusApp: App {
                 .environmentObject(model)
                 .environmentObject(model.sessions)
                 .environmentObject(model.blocking)
+                .environmentObject(model.live)
                 .tint(Theme.accent)
                 .onChange(of: phase) { _, now in
                     guard now == .active else { return }

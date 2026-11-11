@@ -8,7 +8,8 @@ final class AppModel: ObservableObject {
     let store = SharedStore()
     let blocking = BlockingController()
     private(set) var sessions: SessionController!
-    private var engine: SyncEngine?
+    private(set) var engine: SyncEngine?
+    let live = LiveBridge()
 
     @Published var tasks: [CarmenTask] = []
     @Published var history: [HistoryEntry] = []
@@ -28,6 +29,10 @@ final class AppModel: ObservableObject {
         sessions = SessionController(store: store, blocking: blocking) { [weak self] in
             Task { await self?.sync() }
         }
+        sessions.onChange = { [weak self] session, ended in
+            Task { await self?.live.push(session, ended: ended) }
+        }
+        live.attach(self)
         let cache = store.cache
         tasks = cache.tasks
         history = cache.history.map(\.history) + store.outbox
@@ -72,6 +77,7 @@ final class AppModel: ObservableObject {
             tasks = result.tasks
             history = result.history + store.outbox
             message = nil
+            await live.poll()
         } catch CloudError.badCredentials {
             email = nil
             message = "Signed out. Sign in again."

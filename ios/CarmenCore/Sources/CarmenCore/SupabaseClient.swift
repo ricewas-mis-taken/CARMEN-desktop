@@ -50,6 +50,7 @@ public final class SupabaseClient {
         do {
             let (data, response) = try await session.data(for: r)
             guard let http = response as? HTTPURLResponse else { throw CloudError.malformed }
+            ServerClock.shared.note(dateHeader: http.value(forHTTPHeaderField: "Date"))
             return (data, http)
         } catch let error as CloudError {
             throw error
@@ -130,6 +131,23 @@ public final class SupabaseClient {
             offset += rows.count
         }
         return Page(records: records, cursor: newest)
+    }
+
+    /// One row by its ids, or nil when there is none. Used for the shared running session.
+    public func fetch(table: String, syncId: String, token: String) async throws -> SyncRecord? {
+        let query = [
+            URLQueryItem(name: "select", value: Self.fields),
+            URLQueryItem(name: "table_name", value: "eq.\(table)"),
+            URLQueryItem(name: "sync_id", value: "eq.\(syncId)"),
+            URLQueryItem(name: "limit", value: "1"),
+        ]
+        let (data, http) = try await send(request("rest/v1/sync_records", query: query, token: token))
+        guard (200..<300).contains(http.statusCode) else { throw CloudError.rejected(http.statusCode) }
+        guard let rows = try? JSONDecoder().decode([Row].self, from: data) else { throw CloudError.malformed }
+        return rows.first.map {
+            SyncRecord(table: $0.table_name, syncId: $0.sync_id, data: $0.data, deviceId: $0.device_id,
+                       updatedAt: $0.updated_at, isDeleted: $0.is_deleted)
+        }
     }
 
     /// Upserts records; the database keeps only the newer write of each (migration 001's trigger).

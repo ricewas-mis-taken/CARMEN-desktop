@@ -93,6 +93,18 @@ public actor SyncEngine {
         return session
     }
 
+    /// Sends the running session's record (or "it ended") so the desktop sees it within seconds.
+    public func pushLive(_ record: SyncRecord) async throws {
+        let session = try await validSession()
+        try await client.push([record], userId: session.userId, token: session.accessToken)
+    }
+
+    /// The running session as the cloud holds it right now.
+    public func fetchLive() async throws -> SyncRecord? {
+        let session = try await validSession()
+        return try await client.fetch(table: LiveWire.table, syncId: LiveWire.syncId, token: session.accessToken)
+    }
+
     public struct Result: Equatable {
         public var tasks: [CarmenTask]
         public var history: [HistoryEntry]
