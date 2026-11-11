@@ -934,7 +934,7 @@ def test_the_empty_list_explains_itself(qtbot, isolate_review_db):
     qtbot.addWidget(view)
     assert view._rows == []
     texts = [l.text() for l in view.findChildren(review_tab.QLabel)]
-    assert any("Nothing to review today" in t for t in texts)
+    assert any("Nothing due today" in t for t in texts)
     view._set_due_only(False)
     texts = [l.text() for l in view.findChildren(review_tab.QLabel)]
     assert any("No problems yet" in t for t in texts)

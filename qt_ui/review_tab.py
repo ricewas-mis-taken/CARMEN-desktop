@@ -340,7 +340,6 @@ class _CategoryRow(QPushButton):
         self.setChecked(checked)
         self.setFixedHeight(34)
         self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip(f"Show {name.lower() if color is None else name}: {count} problem{'s' if count != 1 else ''}")
         self.setAccessibleName(name)
 
     def paintEvent(self, _event):
@@ -910,7 +909,7 @@ class _AddTopicDialog(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(8)
-        layout.addWidget(dialog_title("New topic", "A topic is a tab on the Review page: one subject you study."))
+        layout.addWidget(dialog_title("New topic"))
         layout.addWidget(field_label("Name"))
         self._name_edit = WrapEdit()
         self._name_edit.setPlaceholderText("e.g. Math")
@@ -1258,6 +1257,11 @@ class _TopicView(QWidget):
         box.addSpacing(6)
         box.addWidget(heading("Sort by"))
         self._sort_combo = QComboBox()
+        self._sort_combo.setCursor(Qt.PointingHandCursor)
+        self._sort_combo.setStyleSheet(
+            "QComboBox { background: #F7F8FA; border: 1px solid #E6E9EF; border-radius: 10px; padding: 7px 10px; "
+            f"font-size: 13px; color: {INK}; }} QComboBox:focus {{ border: 1.5px solid {INK}; background: #FFFFFF; }} "
+            "QComboBox::drop-down { border: none; width: 24px; }")
         for key, label in SORT_CHOICES:
             self._sort_combo.addItem(label, key)
         self._sort_combo.currentIndexChanged.connect(self._set_sort)
@@ -1401,7 +1405,7 @@ class _TopicView(QWidget):
             if self._search or self._subject_filter is not None:
                 text = "Nothing matches. Clear the search or pick All categories."
             elif self._due_only:
-                text = "Nothing to review today. Switch to All to see every problem."
+                text = "Nothing due today."
             else:
                 text = "No problems yet. Add one to start building the list."
             empty = QLabel(text)
@@ -2666,7 +2670,7 @@ class _NewCategoryDialog(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(8)
-        layout.addWidget(dialog_title("New category", "A group of problems, like Sorting or Chapter 7."))
+        layout.addWidget(dialog_title("New category"))
         layout.addWidget(field_label("Name"))
         self._name = QLineEdit(name)
         self._name.setPlaceholderText("Sorting")
@@ -2901,7 +2905,7 @@ class _BatchDialog(QWidget):
             return
         self._add.setEnabled(bool(names))
         if not names:
-            self._summary.setText("Nothing to add yet. Press Enter for a new line.")
+            self._summary.setText("Nothing to add yet.")
             self._add.setText("Add")
             return
         shown = ", ".join(names[:4]) + (" ..." if len(names) > 4 else "")
