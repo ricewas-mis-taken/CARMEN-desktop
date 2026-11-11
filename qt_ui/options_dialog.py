@@ -34,13 +34,13 @@ class OptionsDialog(QWidget):
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(24, 22, 24, 20)
         self._layout.setSpacing(10)
-        self._layout.addWidget(dialog_title("Options", "Colours apply to this app and the browser extension. Discord is opt-in per line."))
+        self._layout.addWidget(dialog_title("Options"))
         self._layout.addWidget(field_label("Colours"))
         self._grid = QGridLayout()
         self._grid.setSpacing(10)
         self._layout.addLayout(self._grid)
-        self._note = role_label("", "hint", wrap=True)
-        self._layout.addWidget(self._note)
+        self._note = role_label("", "hint", wrap=True)      # kept for callers; never shown
+        self._note.hide()
         self._layout.addWidget(field_label("Discord"))
         self._discord_on = self._config_box("Show what I'm doing on my Discord profile", "discordPresence", True)
         self._discord_names = self._config_box("Include task and problem names", "discordShowNames", False)
@@ -52,11 +52,7 @@ class OptionsDialog(QWidget):
         self._layout.addWidget(field_label("Start-up"))
         self._config_box("Open Carmen's window when I sign in to Windows", "openOnStartup", True)
         self._layout.addWidget(field_label("Help"))
-        self._layout.addWidget(role_label(
-            "Play the welcome tour again, or just the part you want.", "hint", wrap=True))
         self._add_help()
-        self._layout.addWidget(role_label(
-            "Buttons and numbers pick up a new colour the next time Carmen starts.", "hint", wrap=True))
         self._layout.addStretch(1)
         row = QHBoxLayout()
         row.addStretch(1)
@@ -77,9 +73,8 @@ class OptionsDialog(QWidget):
         flow = FlowLayout(holder, spacing=6)
         for chapter_id, title, summary in tour_runner.chapter_list():
             chip = QPushButton(title)
-            chip.setToolTip(summary)
             chip.setCursor(Qt.PointingHandCursor)
-            chip.setStyleSheet(SECONDARY_STYLE)
+            chip.setStyleSheet(SECONDARY_STYLE + " QPushButton { padding: 6px 14px; border-radius: 12px; font-size: 12.5px; }")
             chip.clicked.connect(lambda _=False, c=chapter_id: self._play([c]))
             flow.addWidget(chip)
         self._layout.addWidget(holder)
@@ -96,7 +91,7 @@ class OptionsDialog(QWidget):
         import devices_store
         rows = [r for r in devices_store.summary() if r["links"]]
         if not rows:
-            return "Not linked yet. Install the extension and paste its key, and it will show up here."
+            return "Not linked yet."
         pcs, links, live = devices_store.totals()
         lines = [f"Linked on {pcs} computer{'s' if pcs != 1 else ''}, {links} browser{'s' if links != 1 else ''}, {live} connected now."]
         for row in rows:
@@ -130,7 +125,6 @@ class OptionsDialog(QWidget):
         for i, (name, t) in enumerate(theme.THEMES.items()):
             tile = QPushButton(name)
             tile.setCursor(Qt.PointingHandCursor)
-            tile.setToolTip(t["why"])
             tile.setFixedHeight(52)
             border = f"2px solid {t['accent']}" if name == current else "1px solid #E7EAF0"
             tile.setStyleSheet(
@@ -144,7 +138,7 @@ class OptionsDialog(QWidget):
         custom.setStyleSheet(SECONDARY_STYLE)
         custom.clicked.connect(self._open_custom)
         self._grid.addWidget(custom, len(theme.THEMES) // 3, len(theme.THEMES) % 3)
-        self._note.setText(theme.THEMES[current]["why"] if current in theme.THEMES else "Your own colours.")
+        self._note.setText("")
 
     def _choose(self, name):
         theme.save_setting({"name": name})
@@ -172,7 +166,7 @@ class _CustomThemeDialog(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(8)
-        layout.addWidget(dialog_title("Your colours", "Cards stay white. The rest is yours."))
+        layout.addWidget(dialog_title("Your colours"))
         self._swatches = {}
         for key in theme.TOKENS:
             row = QHBoxLayout()
