@@ -8,6 +8,9 @@ struct FocusView: View {
     @EnvironmentObject var blocking: BlockingController
 
     @State private var minutes = 25
+    @State private var pomodoro = false
+    @State private var breakMinutes = 5
+    @State private var cycles = 4
     @State private var customMinutes = ""
     @State private var lock = LockMode.soft
     @State private var task: CarmenTask?
@@ -43,6 +46,16 @@ struct FocusView: View {
                                 if let value = Int(text), (1...720).contains(value) { minutes = value }
                             }
                         Text("minutes").foregroundStyle(Theme.muted)
+                    }
+                }
+            }
+
+            Card {
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle("Pomodoro", isOn: $pomodoro).font(.headline).foregroundStyle(Theme.ink)
+                    if pomodoro {
+                        Stepper("Break \(breakMinutes) min", value: $breakMinutes, in: 1...60)
+                        Stepper("\(cycles) cycle\(cycles == 1 ? "" : "s")", value: $cycles, in: 1...12)
                     }
                 }
             }
@@ -166,7 +179,8 @@ struct FocusView: View {
     private func begin() {
         Task {
             if !blocking.isAuthorized { await authorize(thenPick: false) }
-            session.start(minutes: minutes, lock: lock, task: task, allowedSites: sites)
+            session.start(minutes: minutes, lock: lock, task: task, allowedSites: sites,
+                          pomodoro: pomodoro ? PomodoroPlan(focusMinutes: minutes, breakMinutes: breakMinutes, cycles: cycles) : nil)
         }
     }
 }

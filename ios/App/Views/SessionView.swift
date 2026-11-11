@@ -8,7 +8,7 @@ struct SessionView: View {
     @State private var confirmingEnd = false
     @State private var budgetSpent = false
 
-    private let reasons = ["Break", "Phone call", "Water or food", "Something came up"]
+    private let reasons = LiveWire.Reason.all
 
     var body: some View {
         let state = session.state
@@ -20,7 +20,7 @@ struct SessionView: View {
                 ZStack {
                     ProgressRing(fraction: session.fraction, color: .white, lineWidth: 16)
                     VStack(spacing: 6) {
-                        Text(clock(session.remaining))
+                        Text(clock(session.displayedSeconds))
                             .font(.system(size: 64, weight: .semibold, design: .rounded)).monospacedDigit()
                             .contentTransition(.numericText(countsDown: true))
                         Text(statusLine(state)).font(.subheadline).opacity(0.8)
@@ -41,8 +41,8 @@ struct SessionView: View {
             .padding(24)
         }
         .confirmationDialog("Why pause?", isPresented: $choosingReason, titleVisibility: .visible) {
-            ForEach(reasons, id: \.self) { reason in
-                Button(reason) { if session.pause(reason: reason) == .budgetSpent { budgetSpent = true } }
+            ForEach(reasons, id: \.code) { reason in
+                Button(reason.title) { if session.pause(reason: reason.code) == .budgetSpent { budgetSpent = true } }
             }
         }
         .confirmationDialog(state?.lockMode == .hard ? "You chose a hard lock. End it anyway?" : "End this session?",
@@ -50,6 +50,9 @@ struct SessionView: View {
             Button("End session", role: .destructive) { session.end() }
             Button("Keep going", role: .cancel) {}
         }
+        .alert("Screen Time was turned off", isPresented: $session.shieldLost) {
+            Button("OK", role: .cancel) {}
+        } message: { Text("Nothing is blocked now. This was counted as a slip.") }
         .alert("No pause time left", isPresented: $budgetSpent) { Button("OK", role: .cancel) {} }
         .interactiveDismissDisabled()
     }
@@ -59,6 +62,9 @@ struct SessionView: View {
         if state.isPaused() {
             if let left = state.pauseBudgetLeft(at: session.now) { return "Paused, \(clock(left)) of pause left" }
             return "Paused"
+        }
+        if let phase = session.phase, let plan = state.pomodoro {
+            return phase.isBreak ? "Break, cycle \(phase.cycle) of \(plan.cycles)" : "Focus, cycle \(phase.cycle) of \(plan.cycles)"
         }
         return state.lockMode.title
     }

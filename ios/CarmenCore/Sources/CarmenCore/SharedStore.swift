@@ -52,13 +52,15 @@ public final class SharedStore {
     public struct Entry: Codable, Equatable {
         public var id: String, start: Date, end: Date, endType: String, lockMode: LockMode
         public var taskId: String?, title: String?, violations: Int
+        public var pomodoro: PomodoroPlan?
         public init(_ e: HistoryEntry) {
             id = e.id; start = e.start; end = e.end; endType = e.endType; lockMode = e.lockMode
-            taskId = e.eventId; title = e.title; violations = e.violationCount
+            taskId = e.eventId; title = e.title; violations = e.violationCount; pomodoro = e.pomodoro
         }
         public var history: HistoryEntry {
             HistoryEntry(id: id, start: start, end: end, endType: endType, lockMode: lockMode,
-                         source: taskId == nil ? "manual" : "task", eventId: taskId, title: title, violationCount: violations)
+                         source: taskId == nil ? "manual" : "task", eventId: taskId, title: title, violationCount: violations,
+                         pomodoro: pomodoro)
         }
     }
 

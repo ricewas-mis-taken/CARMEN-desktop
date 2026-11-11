@@ -55,21 +55,32 @@ final class BlockingController: ObservableObject {
         store.clearAllSettings()
     }
 
-    /// Asks the system to take the shield down at `end` even if this app is not running. The system wants a
-    /// window of at least 15 minutes, so a shorter session is still lifted by the app itself at its end.
-    func scheduleEnd(from start: Date, to end: Date) {
-        center.stopMonitoring([Self.activityName])
+    /// Asks the system to run the shield without this app: one window for the whole session, whose end lifts the
+    /// shield and files the session, and for a Pomodoro one window per focus block, so breaks open up and the next
+    /// block closes in again with Carmen closed. The system wants windows of at least 15 minutes, so a shorter block
+    /// is handled by the app itself while it is open.
+    func schedule(for session: SessionState, now: Date = Date()) {
+        cancelSchedule()
+        guard !session.isPaused() else { return }
         let calendar = Calendar.current
-        let windowEnd = max(end, start.addingTimeInterval(15 * 60 + 5))
-        let schedule = DeviceActivitySchedule(
-            intervalStart: calendar.dateComponents([.hour, .minute, .second], from: start),
-            intervalEnd: calendar.dateComponents([.hour, .minute, .second], from: windowEnd),
-            repeats: false)
-        try? center.startMonitoring(Self.activityName, during: schedule)
+        func components(_ date: Date) -> DateComponents { calendar.dateComponents([.hour, .minute, .second], from: date) }
+        let minimum: TimeInterval = 15 * 60 + 5
+        let end = session.projectedEnd(at: now)
+        let whole = DeviceActivitySchedule(intervalStart: components(now),
+                                           intervalEnd: components(max(end, now.addingTimeInterval(minimum))), repeats: false)
+        try? center.startMonitoring(Self.activityName, during: whole)
+        guard let plan = session.pomodoro else { return }
+        let running = session.focusedSeconds(at: now)
+        for (index, span) in plan.focusSpans().prefix(8).enumerated() where span.end > running && span.end - max(span.start, running) >= minimum {
+            let from = now.addingTimeInterval(max(span.start, running) - running)
+            let to = now.addingTimeInterval(span.end - running)
+            try? center.startMonitoring(DeviceActivityName("carmen.focus.\(index)"),
+                                        during: DeviceActivitySchedule(intervalStart: components(from), intervalEnd: components(to), repeats: false))
+        }
     }
 
     func cancelSchedule() {
-        center.stopMonitoring([Self.activityName])
+        center.stopMonitoring()
     }
 
     // MARK: remembering the choice

@@ -12,12 +12,13 @@ public struct HistoryEntry: Identifiable, Equatable {
     public var title: String?
     public var violationCount: Int
     public var beside: Bool
+    public var pomodoro: PomodoroPlan?
 
     public init(id: String, start: Date, end: Date, endType: String, lockMode: LockMode, source: String,
-                eventId: String?, title: String?, violationCount: Int = 0, beside: Bool = false) {
+                eventId: String?, title: String?, violationCount: Int = 0, beside: Bool = false, pomodoro: PomodoroPlan? = nil) {
         self.id = id; self.start = start; self.end = end; self.endType = endType; self.lockMode = lockMode
         self.source = source; self.eventId = eventId; self.title = title
-        self.violationCount = violationCount; self.beside = beside
+        self.violationCount = violationCount; self.beside = beside; self.pomodoro = pomodoro
     }
 
     public var seconds: TimeInterval { max(0, end.timeIntervalSince(start)) }
@@ -52,7 +53,11 @@ public struct HistoryEntry: Identifiable, Equatable {
             "source": .string(source),
             "reviewProblemName": .null,
             "reviewSubjectName": .null,
-            "pomodoro": .null,
+            "pomodoro": pomodoro.map { plan -> JSONValue in
+                return .object(["focusMinutes": .number(Double(plan.focusMinutes)), "breakMinutes": .number(Double(plan.breakMinutes)),
+                         "totalCycles": .number(Double(plan.cycles)), "currentCycle": .number(Double(plan.cycles)),
+                         "phase": .string("break")])
+            } ?? JSONValue.null,
             "sessionId": .string(id),
             "isBurnout": .bool(false),
         ]
