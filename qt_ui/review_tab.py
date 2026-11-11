@@ -33,10 +33,12 @@ from qt_ui.wrap_edit import WrapEdit
 
 from calendar_log import logger as calendar_logger
 import review_store
+import review_wheel
 import session_history
 import session_manager
 from qt_ui import confirm_dialog
 import tasks_store
+from qt_ui.review_wheel import WheelDialog
 from qt_ui.safe_link import make_link_label
 from qt_ui.ui_kit import (
     discard_widget,
@@ -1261,8 +1263,40 @@ class _TopicView(QWidget):
         self._sort_combo.currentIndexChanged.connect(self._set_sort)
         box.addWidget(self._sort_combo)
 
+        box.addSpacing(6)
+        self._wheel_button = QPushButton("Spin the wheel")
+        self._wheel_button.setCursor(Qt.PointingHandCursor)
+        self._wheel_button.clicked.connect(self._open_wheel)
+        box.addWidget(accent(self._wheel_button))
+
         box.addStretch(1)
         return card
+
+    def _active_fate(self):
+        """The problem the wheel chose and you have not finished yet, or None."""
+        fated = review_wheel.fate()
+        problem = review_store.get_problem(fated) if fated else None
+        if fated and problem is None:
+            review_wheel.clear()
+        return problem
+
+    def _show_wheel_button(self):
+        fated = self._active_fate()
+        text = "Spin the wheel" if fated is None else f"Fated: {fated['name']}"
+        self._wheel_button.setText(QFontMetrics(self._wheel_button.font()).elidedText(text, Qt.ElideRight, 190))
+        self._wheel_button.setToolTip(fated["name"] if fated else "")
+
+    def _open_wheel(self):
+        fated = self._active_fate()
+        if fated is not None:
+            self._start_problem(fated)
+            return
+        items = review_wheel.entries(self._topic_id)
+        if not items:
+            QMessageBox.information(self, "Carmen Focus", "Nothing is due to spin for.")
+            return
+        _register_popup(WheelDialog(items, on_start=self._start_problem))
+        self._show_wheel_button()
 
     def _set_search(self, text):
         self._search = text.strip().lower()
@@ -1330,6 +1364,7 @@ class _TopicView(QWidget):
     def refresh(self):
         base = review_store.list_problems(self._topic_id, due_only=self._due_only)
         self._rebuild_categories(base)
+        self._show_wheel_button()
         shown = [p for p in base if self._subject_filter in (None, p["subjectId"]) and self._matches_search(p)]
         self._problems = self._sorted(shown)
         self._update_summary(len(base))
@@ -1408,6 +1443,14 @@ class _TopicView(QWidget):
         _register_popup(_AddProblemDialog(self._topic_id, on_added=lambda _p: self.refresh(), problem=problem))
 
     def _start_problem(self, problem):
+        fated = self._active_fate()
+        if fated is not None and fated["id"] != problem["id"]:
+            if not _confirm(self, "Left up to fate",
+                            f"You left this one up to fate: {fated['name']}. Starting something else "
+                            f"loses {review_wheel.BREAK_COST} points. Start it anyway?"):
+                return
+            review_wheel.break_fate()
+            self._show_wheel_button()
         tab = self._review_tab
         if tab is None:
             if not self._review_banner.is_running():
@@ -1492,9 +1535,11 @@ class _TopicView(QWidget):
 
         if self._review_tab:
             self._review_tab.on_review_started()
+        review_wheel.mark_started(problem["id"])
         self._review_banner.start(problem, token, end_session_on_finish=end_session_on_finish)
 
     def _banner_finished(self):
+        review_wheel.review_done()
         if self._review_tab:
             self._review_tab.on_review_finished()
         self.refresh()
