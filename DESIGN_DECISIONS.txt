@@ -1055,3 +1055,11 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   Also: a review timed beside a session of its own task is now filed in history with "beside": true (shown with a
   tag, left out of every total; session_history.load_all hides it unless include_beside), instead of not at all.
   Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-11-07] "Quiet moments when a session starts".
+
+2026-11-11  Review wheel: drawn by weight, then the wheel is turned to match
+  The wheel picks which due review to do. Slice size is review_wheel.weight (late days, pushed back, points already
+  lost), so late reviews really are likelier. Chose to draw the winner by weight first and then turn the wheel so the
+  pointer stops inside that slice, over simulating physics and reading wherever it stops: the odds are exact and the
+  flick only changes how long the spin looks. The pick is "fated": starting any other review asks first and costs
+  BREAK_COST (3) points as a "fate" score event, then frees the wheel; finishing the pick frees it too. Fate is held in
+  memory only, so a restart lets you off. Desktop only: the extension has no Review tab, so there is nothing to mirror.
