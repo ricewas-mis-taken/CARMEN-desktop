@@ -123,8 +123,9 @@ def apply_async(run_on_gui, done):
             run_on_gui(swap)
         except Exception as exc:
             logger.exception("update failed")
-            _finish({"error": str(exc)})
-            run_on_gui(lambda: done({"error": str(exc)}))
+            failed = {"error": str(exc)}          # `exc` is gone once this block ends, so the lambda cannot read it
+            _finish(failed)
+            run_on_gui(lambda: done(failed))
 
     threading.Thread(target=work, daemon=True, name="update-apply").start()
 
