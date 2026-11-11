@@ -1012,12 +1012,6 @@ class _TopicView(QWidget):
 
         self.refresh()
 
-    SIDEBAR_FROM = 760       # narrower than this the list needs the room more than the sidebar does
-
-    def resizeEvent(self, event):
-        self._side_card.setVisible(event.size().width() >= self.SIDEBAR_FROM)
-        super().resizeEvent(event)
-
     def _show_banner_for_linked_session(self):
         if not self._review_banner.is_running():
             self._resume_linked_session(include_waiting=False) or self._resume_independent_review()                 or self._resume_linked_session()
@@ -1293,7 +1287,12 @@ class _TopicView(QWidget):
     def _open_wheel(self):
         fated = self._active_fate()
         if fated is not None:
-            self._start_problem(fated)
+            owner = self._review_tab._topic_views.get(fated["topicId"]) if self._review_tab else None
+            if owner is not None and owner is not self:      # the pick lives in another topic: start it there
+                self._review_tab._select_topic(fated["topicId"])
+                owner._start_problem(fated)
+            else:
+                self._start_problem(fated)
             return
         items = review_wheel.entries(self._topic_id)
         if not items:
