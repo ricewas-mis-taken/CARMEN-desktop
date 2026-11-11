@@ -989,6 +989,16 @@ def test_the_sidebar_lists_every_category_with_its_count(qtbot, isolate_review_d
     assert buttons[None].isChecked()
 
 
+def test_refreshing_keeps_the_same_category_buttons_unless_the_list_changed(qtbot, isolate_review_db):
+    view, integrals, limits = _view_with_problems(qtbot)
+    before = dict(view._category_buttons)
+    view.refresh()
+    assert all(view._category_buttons[k] is before[k] for k in before)
+    view._set_subject_filter(limits["id"])
+    assert all(view._category_buttons[k] is before[k] for k in before)
+    assert view._category_buttons[limits["id"]].isChecked() and not view._category_buttons[None].isChecked()
+
+
 def test_picking_a_category_shows_only_its_problems_and_all_brings_the_rest_back(qtbot, isolate_review_db):
     view, integrals, limits = _view_with_problems(qtbot)
     view._category_buttons[limits["id"]].click()
