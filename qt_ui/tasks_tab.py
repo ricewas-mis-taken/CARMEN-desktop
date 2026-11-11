@@ -397,7 +397,6 @@ class _PomodoroDialog(QDialog):
         title = QLabel("Start a Pomodoro")
         title.setStyleSheet(f"font-size:18px;font-weight:700;color:{INK};")
         layout.addWidget(title)
-        layout.addWidget(_note("Focus blocks are blocked, breaks are free."))
 
         row = QHBoxLayout()
         row.setSpacing(10)
@@ -654,7 +653,7 @@ class TasksTab(QWidget):
 
         tasks = [t for t in tasks_store.load_tasks() if not t.get("archived")]
         if not tasks:
-            self._empty_label = QLabel("No tasks yet. Click “+ Add recurring task” to create one.")
+            self._empty_label = QLabel("No tasks yet.")
             self._empty_label.setStyleSheet(f"color:{FAINT};font-size:14px;")
             self._grid.addWidget(self._empty_label, 0, 0)
         for task in tasks:

@@ -15,7 +15,7 @@ pytestmark = pytest.mark.usefixtures("isolate_review_db")
 def test_no_active_session_shows_inactive_message(qtbot, isolate_state):
     tab = focus_tab.FocusTab()
     qtbot.addWidget(tab)
-    assert "no active" in tab._status_label.text().lower()
+    assert tab._now_name.text() == "Nothing running"
 
 
 def test_active_session_shows_status_details(qtbot, isolate_state):

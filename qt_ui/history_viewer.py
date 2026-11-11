@@ -570,7 +570,7 @@ class HistoryTab(QWidget):
         self._day_label_widgets = []
 
         if not sessions:
-            empty = QLabel("No completed sessions yet. This fills in once a session ends."
+            empty = QLabel("No completed sessions yet."
                            if not everything else "No sessions match these filters.")
             empty.setAlignment(Qt.AlignCenter)
             empty.setWordWrap(True)
