@@ -203,6 +203,12 @@ class MiniTimer(QWidget):
         self._timer.timeout.connect(self.refresh)
         self._timer.timeout.connect(self._keep_in_view)
         self._timer.start(REFRESH_MS)
+        # The screens are only looked at after Qt says they changed (a monitor added, removed or slept), and a
+        # moment later: walking the screen list every second while Windows is tearing one down crashed Qt.
+        self._check_screens = False
+        app = QGuiApplication.instance()
+        for signal in (app.screenAdded, app.screenRemoved, app.primaryScreenChanged):
+            signal.connect(self._screens_changed)
         self.refresh()
 
     # --- remembered position and size ---
@@ -222,11 +228,18 @@ class MiniTimer(QWidget):
 
     def moveEvent(self, event):
         super().moveEvent(event)
+        self._check_screens = True          # it has moved: is it still on a screen?
         self._save_timer.start()
 
     def _close_by_user(self):
         self._closed_by_user = True
         self.close()
+
+    def _screens_changed(self, *_args):
+        QTimer.singleShot(1500, self._flag_screen_check)
+
+    def _flag_screen_check(self):
+        self._check_screens = True
 
     def _on_a_screen(self):
         screens = [screen.availableGeometry() for screen in QGuiApplication.screens()]
@@ -247,7 +260,12 @@ class MiniTimer(QWidget):
             self.showNormal()
         elif not self.isVisible():
             self.show()
-        if not self._on_a_screen():
+        if self._check_screens:
+            self._check_screens = False
+            off_screen = not self._on_a_screen()
+        else:
+            off_screen = False
+        if off_screen:
             # A monitor was unplugged, slept or reconfigured and left it off every screen.
             home = QGuiApplication.primaryScreen().availableGeometry()
             self.move(home.right() - self.width() - 24, home.top() + 24)

@@ -354,6 +354,9 @@ def main():
         # moment to actually free up before the fresh interpreter tries to
         # rebind it.
         time.sleep(0.3)
+        if os.environ.get("CARMEN_SUPERVISED"):
+            singleinstance.release()
+            os._exit(75)            # supervisor.py starts the fresh copy (and keeps watching it)
         if sys.platform == "win32":
             # os.execv on Windows does not replace the process: it starts a child and the
             # parent exits at once, and the child could lose the race for the lock or the
