@@ -17,6 +17,11 @@ final class AppModel: ObservableObject {
     @Published var syncing = false
     @Published var message: String?
     @Published var launchTask: CarmenTask?
+    @Published var launchTitle: String?
+    @Published var topics: [ReviewTopic] = []
+    @Published var subjects: [ReviewSubject] = []
+    @Published var problems: [ReviewProblem] = []
+    @Published var note: [String] = []
 
     var configured: Bool { engine != nil }
 
@@ -35,6 +40,7 @@ final class AppModel: ObservableObject {
         live.attach(self)
         let cache = store.cache
         tasks = cache.tasks
+        topics = cache.topics; subjects = cache.subjects; problems = cache.problems; note = cache.note
         history = cache.history.map(\.history) + store.outbox
         Task { await refreshAccount() }
     }
@@ -64,6 +70,7 @@ final class AppModel: ObservableObject {
     func signOut() async {
         await engine?.signOut()
         tasks = []
+        topics = []; subjects = []; problems = []; note = []
         history = store.outbox
         await refreshAccount()
     }
@@ -76,8 +83,10 @@ final class AppModel: ObservableObject {
             let result = try await engine.sync()
             tasks = result.tasks
             history = result.history + store.outbox
+            topics = result.topics; subjects = result.subjects; problems = result.problems
             message = nil
             await live.poll()
+            await pullNote()
         } catch CloudError.badCredentials {
             email = nil
             message = "Signed out. Sign in again."
@@ -85,6 +94,29 @@ final class AppModel: ObservableObject {
             message = "Offline. Sessions are kept and sent later."
             history = store.cache.history.map(\.history) + store.outbox
         }
+    }
+
+    // MARK: the shared note
+
+    private var noteStamp = Date.distantPast
+
+    func pullNote() async {
+        guard let engine, email != nil, Date().timeIntervalSince(noteStamp) > 2 else { return }
+        if let items = try? await engine.fetchNote() {
+            note = items
+            var cache = store.cache
+            cache.note = items
+            store.cache = cache
+        }
+    }
+
+    func saveNote(_ items: [String]) {
+        note = QuickNote.clean(items)
+        noteStamp = Date()
+        var cache = store.cache
+        cache.note = note
+        store.cache = cache
+        Task { try? await engine?.pushNote(note) }
     }
 
     // MARK: tasks

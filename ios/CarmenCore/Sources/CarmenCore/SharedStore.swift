@@ -87,8 +87,10 @@ public final class SharedStore {
         public var tasks: [CarmenTask] = []
         public var history: [Entry] = []
         public var cursor: String?
-        public var live: JSONValue?
-        public var liveStamp: String?
+        public var topics: [ReviewTopic] = []
+        public var subjects: [ReviewSubject] = []
+        public var problems: [ReviewProblem] = []
+        public var note: [String] = []
     }
 
     /// Task edits made here that the cloud has not seen yet.

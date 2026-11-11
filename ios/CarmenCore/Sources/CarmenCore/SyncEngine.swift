@@ -58,7 +58,7 @@ public final class KeychainVault: TokenVault {
 /// sends the sessions it finished. The running session is not shared yet, so a phone session and a desktop
 /// session do not interrupt each other.
 public actor SyncEngine {
-    public static let pulledTables = ["tasks", "session_history"]
+    public static let pulledTables = ["tasks", "session_history"] + ReviewRecords.tables
 
     private let client: SupabaseClient
     private let store: SharedStore
@@ -105,10 +105,26 @@ public actor SyncEngine {
         return try await client.fetch(table: LiveWire.table, syncId: LiveWire.syncId, token: session.accessToken)
     }
 
+    /// The shared note, as the cloud holds it right now.
+    public func fetchNote() async throws -> [String]? {
+        let session = try await validSession()
+        guard let record = try await client.fetch(table: QuickNote.table, syncId: QuickNote.syncId, token: session.accessToken) else { return nil }
+        return QuickNote.items(from: record)
+    }
+
+    public func pushNote(_ items: [String]) async throws {
+        let session = try await validSession()
+        let record = QuickNote.record(items: items, deviceId: store.deviceId, offset: ServerClock.shared.offset)
+        try await client.push([record], userId: session.userId, token: session.accessToken)
+    }
+
     public struct Result: Equatable {
         public var tasks: [CarmenTask]
         public var history: [HistoryEntry]
         public var sent: Int
+        public var topics: [ReviewTopic] = []
+        public var subjects: [ReviewSubject] = []
+        public var problems: [ReviewProblem] = []
     }
 
     /// Sends what finished here, then reads what changed anywhere. Safe to call as often as you like.
@@ -127,6 +143,9 @@ public actor SyncEngine {
         let page = try await client.pull(tables: Self.pulledTables, cursor: cache.cursor, token: session.accessToken)
         var tasks = Dictionary(uniqueKeysWithValues: cache.tasks.map { ($0.id, $0) })
         var history = Dictionary(uniqueKeysWithValues: cache.history.map { ($0.id, $0) })
+        var topics = Dictionary(uniqueKeysWithValues: cache.topics.map { ($0.id, $0) })
+        var subjects = Dictionary(uniqueKeysWithValues: cache.subjects.map { ($0.id, $0) })
+        var problems = Dictionary(uniqueKeysWithValues: cache.problems.map { ($0.id, $0) })
         for record in page.records {
             switch record.table {
             case "tasks":
@@ -138,13 +157,20 @@ public actor SyncEngine {
             case "session_history":
                 if record.isDeleted { history[record.syncId] = nil }
                 else if let entry = HistoryEntry(record: record) { history[entry.id] = SharedStore.Entry(entry) }
+            case "review_topics": topics[record.syncId] = ReviewRecords.topic(record)
+            case "review_subjects": subjects[record.syncId] = ReviewRecords.subject(record)
+            case "review_problems": problems[record.syncId] = ReviewRecords.problem(record)
             default: break
             }
         }
         cache.tasks = tasks.values.sorted { $0.name.lowercased() < $1.name.lowercased() }
         cache.history = history.values.sorted { $0.end < $1.end }
+        cache.topics = topics.values.sorted { ($0.order, $0.name) < ($1.order, $1.name) }
+        cache.subjects = Array(subjects.values)
+        cache.problems = Array(problems.values)
         cache.cursor = page.cursor
         store.cache = cache
-        return Result(tasks: cache.tasks, history: cache.history.map(\.history), sent: waiting.count)
+        return Result(tasks: cache.tasks, history: cache.history.map(\.history), sent: waiting.count,
+                      topics: cache.topics, subjects: cache.subjects, problems: cache.problems)
     }
 }
