@@ -1,57 +1,5 @@
 import Foundation
 
-public enum LockMode: String, Codable, CaseIterable, Identifiable {
-    case soft, hard
-    public var id: String { rawValue }
-    public var title: String { self == .soft ? "Soft lock" : "Hard lock" }
-}
-
-/// A task as the desktop stores it (tasks_store.DEFAULT_TASK). Only what the phone shows is decoded;
-/// `extra` keeps every other field so editing a task here never drops what the desktop wrote.
-public struct CarmenTask: Identifiable, Equatable {
-    public var id: String
-    public var name: String
-    public var color: String
-    public var targetMinutes: Int
-    public var recurrence: String
-    public var weekdays: [String]
-    public var dayMinutes: [String: Int]
-    public var lockMode: LockMode
-    public var domainWhitelist: [String]
-    public var archived: Bool
-    public var updatedAt: Date?
-    public var deviceId: String
-    public var isDeleted: Bool
-    public var extra: [String: JSONValue]
-
-    static let known: Set<String> = ["name", "color", "targetMinutes", "recurrence", "weekdays", "dayMinutes",
-                                     "lockMode", "domainWhitelist", "archived"]
-
-    public init(record: SyncRecord) {
-        let data = record.data.object ?? [:]
-        id = record.syncId
-        name = data["name"]?.string ?? ""
-        color = data["color"]?.string ?? "#5B8DEF"
-        let minutes = data["targetMinutes"]?.number ?? 30
-        targetMinutes = minutes.isFinite && minutes >= 0 ? Int(minutes) : 30
-        recurrence = data["recurrence"]?.string ?? "daily"
-        weekdays = (data["weekdays"]?.array ?? []).compactMap { $0.string }
-        dayMinutes = (data["dayMinutes"]?.object ?? [:]).compactMapValues { $0.number.map { Int($0) } }
-        lockMode = LockMode(rawValue: data["lockMode"]?.string ?? "soft") ?? .soft
-        domainWhitelist = (data["domainWhitelist"]?.array ?? []).compactMap { $0.string }
-        archived = data["archived"]?.bool ?? false
-        updatedAt = WireTime.parseWire(record.updatedAt)
-        deviceId = record.deviceId
-        isDeleted = record.isDeleted
-        extra = data.filter { !Self.known.contains($0.key) }
-    }
-
-    /// Minutes asked for on `date`, or nil when the task has no daily goal that day.
-    public func targetMinutes(on date: Date, calendar: Calendar = .current) -> Int? {
-        SharedStore.CachedTask(self).goalMinutes(on: date, calendar: calendar)
-    }
-}
-
 /// One finished focus session, in the shape session_history.py files it.
 public struct HistoryEntry: Identifiable, Equatable {
     public var id: String

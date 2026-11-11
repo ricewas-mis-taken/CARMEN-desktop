@@ -29,12 +29,12 @@ final class SessionController: ObservableObject {
         return min(1, state.focusedSeconds(at: now) / TimeInterval(state.plannedSeconds))
     }
 
-    func start(minutes: Int, lock: LockMode, task: SharedStore.CachedTask?, allowedSites: [String]) {
+    func start(minutes: Int, lock: LockMode, task: CarmenTask?, allowedSites: [String]) {
         guard state == nil else { return }
         let begun = Date()
         let session = SessionState(start: begun, plannedSeconds: minutes * 60, lockMode: lock,
                                    taskId: task?.id, title: task?.name,
-                                   allowedSites: allowedSites + (task?.allowedSites ?? []))
+                                   allowedSites: allowedSites + (task?.domainWhitelist ?? []))
         store.session = session
         state = session
         if blocking.isAuthorized {

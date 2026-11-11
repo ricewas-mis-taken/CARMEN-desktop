@@ -82,27 +82,17 @@ public final class SharedStore {
     // MARK: cache of what the cloud last said
 
     public struct Cache: Codable {
-        public var tasks: [CachedTask] = []
+        public var tasks: [CarmenTask] = []
         public var history: [Entry] = []
         public var cursor: String?
+        public var live: JSONValue?
+        public var liveStamp: String?
     }
-    public struct CachedTask: Codable, Equatable, Identifiable {
-        public var id: String, name: String, color: String, targetMinutes: Int, lockMode: LockMode
-        public var recurrence: String, weekdays: [String], dayMinutes: [String: Int], allowedSites: [String]
-        public init(_ t: CarmenTask) {
-            id = t.id; name = t.name; color = t.color; targetMinutes = t.targetMinutes; lockMode = t.lockMode
-            recurrence = t.recurrence; weekdays = t.weekdays; dayMinutes = t.dayMinutes; allowedSites = t.domainWhitelist
-        }
 
-        /// Minutes asked for on `date`, or nil when there is no daily goal that day (period goals count as a total).
-        public func goalMinutes(on date: Date, calendar: Calendar = .current) -> Int? {
-            guard recurrence == "daily" || recurrence == "weekly_days" else { return nil }
-            if recurrence == "daily" { return targetMinutes }
-            let codes = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"]
-            let code = codes[calendar.component(.weekday, from: date) - 1]
-            guard weekdays.contains(code) else { return nil }
-            return dayMinutes[code] ?? targetMinutes
-        }
+    /// Task edits made here that the cloud has not seen yet.
+    public var taskOutbox: [CarmenTask] {
+        get { read("task-outbox.json", as: [CarmenTask].self) ?? [] }
+        set { write(newValue.isEmpty ? nil : newValue, "task-outbox.json") }
     }
 
     public var cache: Cache {

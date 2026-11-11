@@ -29,9 +29,14 @@ struct RootView: View {
 }
 
 /// The page behind every tab: the soft violet the desktop uses.
-struct Page<Content: View>: View {
+struct Page<Trailing: View, Content: View>: View {
     var title: String
-    @ViewBuilder var content: Content
+    var trailing: Trailing
+    var content: Content
+
+    init(title: String, @ViewBuilder trailing: () -> Trailing, @ViewBuilder content: () -> Content) {
+        self.title = title; self.trailing = trailing(); self.content = content()
+    }
 
     var body: some View {
         NavigationStack {
@@ -42,7 +47,14 @@ struct Page<Content: View>: View {
             }
             .background(Theme.page.ignoresSafeArea())
             .navigationTitle(title)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { trailing } }
             .scrollIndicators(.hidden)
         }
+    }
+}
+
+extension Page where Trailing == EmptyView {
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.init(title: title, trailing: { EmptyView() }, content: content)
     }
 }

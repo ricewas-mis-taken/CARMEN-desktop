@@ -66,7 +66,7 @@ struct HomeView: View {
 
 struct TaskProgressRow: View {
     @EnvironmentObject var model: AppModel
-    var task: SharedStore.CachedTask
+    var task: CarmenTask
     var start: () -> Void
 
     private var goal: Int? { task.goalMinutes(on: Date()) }

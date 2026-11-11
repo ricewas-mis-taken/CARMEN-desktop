@@ -94,7 +94,7 @@ public actor SyncEngine {
     }
 
     public struct Result: Equatable {
-        public var tasks: [SharedStore.CachedTask]
+        public var tasks: [CarmenTask]
         public var history: [HistoryEntry]
         public var sent: Int
     }
@@ -104,8 +104,12 @@ public actor SyncEngine {
     public func sync() async throws -> Result {
         let session = try await validSession()
         let waiting = store.outbox
-        try await client.push(waiting.map { $0.record(deviceId: store.deviceId) }, userId: session.userId, token: session.accessToken)
+        let pendingTasks = Dictionary(uniqueKeysWithValues: store.taskOutbox.map { ($0.id, $0) })
+        let outgoing = waiting.map { $0.record(deviceId: store.deviceId) }
+            + pendingTasks.values.map { $0.record(deviceId: store.deviceId, now: $0.updatedAt ?? Date()) }
+        try await client.push(outgoing, userId: session.userId, token: session.accessToken)
         store.clearOutbox(sent: Set(waiting.map(\.id)))
+        store.taskOutbox = []
 
         var cache = store.cache
         let page = try await client.pull(tables: Self.pulledTables, cursor: cache.cursor, token: session.accessToken)
@@ -115,8 +119,10 @@ public actor SyncEngine {
             switch record.table {
             case "tasks":
                 let task = CarmenTask(record: record)
-                if task.isDeleted || task.archived || task.name.isEmpty { tasks[task.id] = nil }
-                else { tasks[task.id] = SharedStore.CachedTask(task) }
+                if let held = pendingTasks[task.id], (held.updatedAt ?? .distantPast) > (task.updatedAt ?? .distantPast) {
+                    continue                                    // an edit made here that has not gone up yet is newer
+                }
+                if task.isShown { tasks[task.id] = task } else { tasks[task.id] = nil }
             case "session_history":
                 if record.isDeleted { history[record.syncId] = nil }
                 else if let entry = HistoryEntry(record: record) { history[entry.id] = SharedStore.Entry(entry) }

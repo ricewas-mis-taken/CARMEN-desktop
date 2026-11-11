@@ -88,7 +88,7 @@ final class RecordTests: XCTestCase {
         XCTAssertEqual(task.name, "Essay")
         XCTAssertEqual(task.lockMode, .hard)
         XCTAssertEqual(task.dayMinutes["WE"], 90)
-        XCTAssertEqual(task.extra["hideTaskbarBadges"], .bool(true))
+        XCTAssertEqual(task.data["hideTaskbarBadges"], .bool(true))
     }
 
     func testMalformedTaskFallsBackToDefaults() throws {
@@ -103,8 +103,8 @@ final class RecordTests: XCTestCase {
         let task = CarmenTask(record: try record(#"{"name":"A","targetMinutes":30,"recurrence":"weekly_days","weekdays":["MO"],"dayMinutes":{"MO":50}}"#))
         var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(identifier: "UTC")!
         let monday = calendar.date(from: DateComponents(year: 2026, month: 11, day: 9))!
-        XCTAssertEqual(task.targetMinutes(on: monday, calendar: calendar), 50)
-        XCTAssertNil(task.targetMinutes(on: monday.addingTimeInterval(86400), calendar: calendar))
+        XCTAssertEqual(task.goalMinutes(on: monday, calendar: calendar), 50)
+        XCTAssertNil(task.goalMinutes(on: monday.addingTimeInterval(86400), calendar: calendar))
     }
 
     func testHistoryRoundTripsThroughTheDesktopShape() throws {
@@ -131,6 +131,37 @@ final class RecordTests: XCTestCase {
         XCTAssertEqual(Progress.streak(history: [day(1), day(2), day(3)], today: today, calendar: calendar), 3)
         XCTAssertEqual(Progress.streak(history: [day(0), day(1), day(3)], today: today, calendar: calendar), 2)
         XCTAssertEqual(Progress.streak(history: [], today: today, calendar: calendar), 0)
+    }
+}
+
+final class TaskEditTests: XCTestCase {
+    func testNewTaskCarriesEveryFieldTheDesktopExpects() {
+        let task = CarmenTask(name: "Essay", color: "#E53935", targetMinutes: 45, lockMode: .hard, deviceId: "ios-1")
+        for key in ["name", "color", "targetMinutes", "recurrence", "weekdays", "dayMinutes", "lockMode", "processBlocklist",
+                    "domainWhitelist", "cashedInDates", "targetMinutesHistory", "archived"] {
+            XCTAssertNotNil(task.data[key], key)
+        }
+        XCTAssertEqual(task.id.count, 32)
+        XCTAssertFalse(task.id.contains("-"))
+        let record = task.record(deviceId: "ios-1")
+        XCTAssertEqual(record.table, "tasks")
+        XCTAssertNil(record.data.object?["id"])
+    }
+
+    func testEditingKeepsFieldsThePhoneDoesNotKnow() throws {
+        let raw = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"name":"A","targetMinutes":30,"stopTaskbarFlashing":true,"targetMinutesHistory":[]}"#.utf8))
+        var task = CarmenTask(record: SyncRecord(table: "tasks", syncId: "t", data: raw, deviceId: "pc",
+                                                  updatedAt: "2026-11-11T21:00:00+00:00", isDeleted: false))
+        task.name = "B"
+        task.setTarget(50)
+        XCTAssertEqual(task.data["stopTaskbarFlashing"], .bool(true))
+        XCTAssertEqual(task.targetMinutes, 50)
+        XCTAssertEqual(task.data["targetMinutesHistory"]?.array?.count, 1)
+    }
+
+    func testTombstoneIsMarkedDeleted() {
+        let task = CarmenTask(name: "X", color: "#5B8DEF", targetMinutes: 30, lockMode: .soft, deviceId: "ios-1")
+        XCTAssertTrue(task.record(deviceId: "ios-1", deleted: true).isDeleted)
     }
 }
 

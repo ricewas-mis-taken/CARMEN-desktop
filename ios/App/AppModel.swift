@@ -10,12 +10,12 @@ final class AppModel: ObservableObject {
     private(set) var sessions: SessionController!
     private var engine: SyncEngine?
 
-    @Published var tasks: [SharedStore.CachedTask] = []
+    @Published var tasks: [CarmenTask] = []
     @Published var history: [HistoryEntry] = []
     @Published var email: String?
     @Published var syncing = false
     @Published var message: String?
-    @Published var launchTask: SharedStore.CachedTask?
+    @Published var launchTask: CarmenTask?
 
     var configured: Bool { engine != nil }
 
@@ -81,7 +81,44 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func minutesToday(for task: SharedStore.CachedTask? = nil) -> Int {
+    // MARK: tasks
+
+    /// Saves an edit or a new task here at once and sends it with the next sync.
+    func save(_ task: CarmenTask) {
+        var edited = task
+        edited.updatedAt = Date()
+        edited.deviceId = store.deviceId
+        if let index = tasks.firstIndex(where: { $0.id == edited.id }) { tasks[index] = edited } else { tasks.append(edited) }
+        tasks.sort { $0.name.lowercased() < $1.name.lowercased() }
+        var outbox = store.taskOutbox.filter { $0.id != edited.id }
+        outbox.append(edited)
+        store.taskOutbox = outbox
+        var cache = store.cache
+        cache.tasks = tasks
+        store.cache = cache
+        Task { await sync() }
+    }
+
+    func delete(_ task: CarmenTask) {
+        var gone = task
+        gone.isDeleted = true
+        tasks.removeAll { $0.id == task.id }
+        var outbox = store.taskOutbox.filter { $0.id != task.id }
+        gone.updatedAt = Date()
+        gone.deviceId = store.deviceId
+        outbox.append(gone)
+        store.taskOutbox = outbox
+        var cache = store.cache
+        cache.tasks = tasks
+        store.cache = cache
+        Task { await sync() }
+    }
+
+    func newTask(name: String, color: String, minutes: Int, lock: LockMode) -> CarmenTask {
+        CarmenTask(name: name, color: color, targetMinutes: minutes, lockMode: lock, deviceId: store.deviceId)
+    }
+
+    func minutesToday(for task: CarmenTask? = nil) -> Int {
         Int(Progress.seconds(on: Date(), taskId: task?.id, in: history) / 60)
     }
 

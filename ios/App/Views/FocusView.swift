@@ -10,7 +10,7 @@ struct FocusView: View {
     @State private var minutes = 25
     @State private var customMinutes = ""
     @State private var lock = LockMode.soft
-    @State private var task: SharedStore.CachedTask?
+    @State private var task: CarmenTask?
     @State private var sites: [String] = []
     @State private var newSite = ""
     @State private var picking = false
@@ -132,7 +132,7 @@ struct FocusView: View {
                 webs > 0 ? "\(webs) site\(webs == 1 ? "" : "s")" : nil].compactMap { $0 }.joined(separator: ", ")
     }
 
-    private func choose(_ item: SharedStore.CachedTask) {
+    private func choose(_ item: CarmenTask) {
         task = item
         lock = item.lockMode
         if let goal = item.goalMinutes(on: Date()), goal > 0 { minutes = min(goal, 720); customMinutes = "" }
