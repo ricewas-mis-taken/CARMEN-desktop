@@ -41,12 +41,31 @@ def _empty():
     return {"version": 1, "events": [], "settledThrough": None}
 
 
+def clean_events(items):
+    """Only well-formed events. Another computer may send its whole ledger as one record (an item holding an
+    "events" list): its events are unpacked into this one's list instead of being kept as a broken event."""
+    flat = []
+    for item in items or []:
+        if isinstance(item, dict) and isinstance(item.get("events"), list):
+            flat.extend(item["events"])
+        else:
+            flat.append(item)
+    seen, good = set(), []
+    for event in flat:
+        if (isinstance(event, dict) and isinstance(event.get("key"), str) and isinstance(event.get("date"), str)
+                and isinstance(event.get("points"), (int, float)) and event["key"] not in seen):
+            seen.add(event["key"])
+            good.append(event)
+    return good
+
+
 def load():
     try:
         with open(PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict) and isinstance(data.get("events"), list):
             data.setdefault("settledThrough", None)
+            data["events"] = clean_events(data["events"])
             return data
     except (OSError, ValueError):
         pass
@@ -115,7 +134,7 @@ def save_events(items):
     """Writes events merged in from another computer, keeping this one's own settled-through day."""
     with _lock:
         data = load()
-        data["events"] = items
+        data["events"] = clean_events(items)
         _save(data)
 
 
