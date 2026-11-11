@@ -31,6 +31,8 @@ targets:
         embed: true
       - target: ShieldAction
         embed: true
+      - target: ScreenTimeReport
+        embed: true
     entitlements:
       path: Entitlements/App.entitlements
       properties:
@@ -117,6 +119,24 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.carmenfocus.ios.shieldaction
+  ScreenTimeReport:
+    type: app-extension
+    platform: iOS
+    sources: [Extensions/ScreenTimeReport]
+    entitlements:
+      path: Entitlements/ScreenTimeReport.entitlements
+      properties:
+        com.apple.developer.family-controls: true
+        com.apple.security.application-groups: [group.app.carmenfocus]
+    info:
+      path: Extensions/ScreenTimeReport/Info.plist
+      properties:
+        CFBundleDisplayName: Carmen Screen Time
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.deviceactivityui.report-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.carmenfocus.ios.report
 schemes:
   CarmenFocus:
     build:
