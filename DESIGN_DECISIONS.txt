@@ -1063,3 +1063,14 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   flick only changes how long the spin looks. The pick is "fated": starting any other review asks first and costs
   BREAK_COST (3) points as a "fate" score event, then frees the wheel; finishing the pick frees it too. Fate is held in
   memory only, so a restart lets you off. Desktop only: the extension has no Review tab, so there is nothing to mirror.
+
+2026-11-11  iPhone and iPad app: native Swift, cloud-only sync, finished sessions first
+  Chose a native SwiftUI app (ios/) over a web or cross-platform wrapper, because blocking other apps needs Apple's
+  Family Controls, Managed Settings and Device Activity APIs and their extensions, which only native code can use.
+  The phone talks straight to Supabase like the desktop (sync_records, same newest-wins rule) instead of to the desktop's
+  local API, so it works with the computer off. First version reads tasks and finished sessions and sends the
+  sessions it finished (table session_history, same keys as session_manager files). The running session (live_session)
+  is not shared yet: that record is the desktop's whole session state and a wrong write would corrupt the desktop's;
+  it needs its own careful pass. Hard lock on iOS means no "Continue anyway" on the shield and a 10 minute pause
+  budget; it cannot stop the person turning Screen Time access off, which is an iOS limit. Written on Windows, never
+  compiled: see ios/README.md. Desktop-only change in this repo; the browser extension is untouched.
