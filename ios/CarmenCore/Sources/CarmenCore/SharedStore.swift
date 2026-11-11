@@ -1,0 +1,120 @@
+import Foundation
+
+/// Small files in the App Group container, shared by the app and its Screen Time extensions.
+/// The extensions only ever need the running session and the list of finished ones waiting to be sent.
+public final class SharedStore {
+    public static let groupId = "group.app.carmenfocus"
+
+    private let directory: URL
+    private let queue = DispatchQueue(label: "carmen.sharedstore")
+
+    public init(directory: URL? = nil) {
+        if let directory {
+            self.directory = directory
+        } else if let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.groupId) {
+            self.directory = group
+        } else {
+            self.directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        }
+        try? FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
+    }
+
+    private func url(_ name: String) -> URL { directory.appendingPathComponent(name) }
+
+    private func read<T: Decodable>(_ name: String, as type: T.Type) -> T? {
+        queue.sync { () -> T? in
+            guard let data = try? Data(contentsOf: url(name)) else { return nil }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try? decoder.decode(T.self, from: data)
+        }
+    }
+
+    private func write<T: Encodable>(_ value: T?, _ name: String) {
+        queue.sync {
+            guard let value else { try? FileManager.default.removeItem(at: url(name)); return }
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            if let data = try? encoder.encode(value) { try? data.write(to: url(name), options: .atomic) }
+        }
+    }
+
+    // MARK: running session
+
+    public var session: SessionState? {
+        get { read("session.json", as: SessionState.self) }
+        set { write(newValue, "session.json") }
+    }
+
+    // MARK: finished sessions not yet sent to the cloud
+
+    public struct Outbox: Codable { public var entries: [Entry] }
+    public struct Entry: Codable, Equatable {
+        public var id: String, start: Date, end: Date, endType: String, lockMode: LockMode
+        public var taskId: String?, title: String?, violations: Int
+        public init(_ e: HistoryEntry) {
+            id = e.id; start = e.start; end = e.end; endType = e.endType; lockMode = e.lockMode
+            taskId = e.eventId; title = e.title; violations = e.violationCount
+        }
+        public var history: HistoryEntry {
+            HistoryEntry(id: id, start: start, end: end, endType: endType, lockMode: lockMode,
+                         source: taskId == nil ? "manual" : "task", eventId: taskId, title: title, violationCount: violations)
+        }
+    }
+
+    public var outbox: [HistoryEntry] {
+        (read("outbox.json", as: Outbox.self)?.entries ?? []).map(\.history)
+    }
+
+    /// Adds a finished session once; the same id is never filed twice (an extension and the app can both end it).
+    public func file(_ entry: HistoryEntry) {
+        var entries = read("outbox.json", as: Outbox.self)?.entries ?? []
+        guard !entries.contains(where: { $0.id == entry.id }) else { return }
+        entries.append(Entry(entry))
+        write(Outbox(entries: entries), "outbox.json")
+    }
+
+    public func clearOutbox(sent ids: Set<String>) {
+        let kept = (read("outbox.json", as: Outbox.self)?.entries ?? []).filter { !ids.contains($0.id) }
+        write(Outbox(entries: kept), "outbox.json")
+    }
+
+    // MARK: cache of what the cloud last said
+
+    public struct Cache: Codable {
+        public var tasks: [CachedTask] = []
+        public var history: [Entry] = []
+        public var cursor: String?
+    }
+    public struct CachedTask: Codable, Equatable, Identifiable {
+        public var id: String, name: String, color: String, targetMinutes: Int, lockMode: LockMode
+        public var recurrence: String, weekdays: [String], dayMinutes: [String: Int], allowedSites: [String]
+        public init(_ t: CarmenTask) {
+            id = t.id; name = t.name; color = t.color; targetMinutes = t.targetMinutes; lockMode = t.lockMode
+            recurrence = t.recurrence; weekdays = t.weekdays; dayMinutes = t.dayMinutes; allowedSites = t.domainWhitelist
+        }
+
+        /// Minutes asked for on `date`, or nil when there is no daily goal that day (period goals count as a total).
+        public func goalMinutes(on date: Date, calendar: Calendar = .current) -> Int? {
+            guard recurrence == "daily" || recurrence == "weekly_days" else { return nil }
+            if recurrence == "daily" { return targetMinutes }
+            let codes = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"]
+            let code = codes[calendar.component(.weekday, from: date) - 1]
+            guard weekdays.contains(code) else { return nil }
+            return dayMinutes[code] ?? targetMinutes
+        }
+    }
+
+    public var cache: Cache {
+        get { read("cache.json", as: Cache.self) ?? Cache() }
+        set { write(newValue, "cache.json") }
+    }
+
+    /// Where this phone's pulls resume from, and the id that marks records as coming from this phone.
+    public var deviceId: String {
+        if let existing = read("device.json", as: [String: String].self)?["id"] { return existing }
+        let id = "ios-" + UUID().uuidString.lowercased()
+        write(["id": id], "device.json")
+        return id
+    }
+}
