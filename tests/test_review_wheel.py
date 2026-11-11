@@ -140,3 +140,18 @@ def test_a_fate_whose_problem_was_deleted_is_dropped(qtbot, isolate_review_db, i
     view, one, two = _topic_with_two(qtbot)
     review_wheel.set_fate("gone")
     assert view._active_fate() is None and review_wheel.fate() is None
+
+
+def test_a_pick_from_another_topic_is_started_in_its_own_topic(qtbot, isolate_review_db, isolate_state, monkeypatch):
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    a = review_store.create_topic("A")
+    b = review_store.create_topic("B")
+    sub = review_store.create_subject(a["id"], "S", "#4A90D9")
+    problem = review_store.create_problem(a["id"], sub["id"], "Mine", stars=3, description_type="text", description_text="x")
+    tab._reload() if hasattr(tab, "_reload") else tab.refresh()
+    started = []
+    monkeypatch.setattr(review_tab, "_ReviewStartDialog", lambda p, on_start: started.append((p["name"], on_start.__self__._topic_id)))
+    review_wheel.set_fate(problem["id"])
+    tab._topic_views[b["id"]]._open_wheel()
+    assert started == [("Mine", a["id"])]
