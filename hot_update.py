@@ -21,10 +21,10 @@ PURE = ["vacation", "pause_budget", "unblock_gate", "week_plan", "goal_raise", "
 # the data half-reset. A loop already running keeps its old body until the next start, but everything it calls is new.
 STATEFUL = ["review_scheduler", "session_history", "score_store", "tasks_store", "goal_notify", "board_store",
             "devices_store", "quicknote_store", "scribe_store", "session_manager", "review_store", "enforcer",
-            "window_tracker", "sync_client"]
+            "window_tracker", "sync_client", "review_wheel"]
 # Small always-open windows: closed and opened again on the new code if they were showing.
 WINDOWS = {"qt_ui.quicknote": ("open_quicknote", "_win"), "qt_ui.mini_timer": ("open_mini_timer", "_win")}
-DIALOGS = ["qt_ui.explainer", "qt_ui.pause_reason", "qt_ui.pause_label", "qt_ui.week_dialog", "qt_ui.report_card_dialog", "qt_ui.options_dialog",
+DIALOGS = ["qt_ui.explainer", "qt_ui.pause_reason", "qt_ui.pause_label", "qt_ui.week_dialog", "qt_ui.review_wheel", "qt_ui.report_card_dialog", "qt_ui.options_dialog",
            "qt_ui.tour_content", "qt_ui.tour"]
 PAGES = {                      # page key -> (module, class)
     "home": ("qt_ui.home_tab", "HomeTab"),
