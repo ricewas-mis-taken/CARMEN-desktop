@@ -12,6 +12,7 @@ import os
 import re
 import sys
 
+from qt_ui import filter_guard
 from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QPointF, QRect, Qt, QVariantAnimation
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtCore import QRectF
@@ -374,6 +375,12 @@ class CardHover(QObject):
     """Cards lift when the pointer is on them: the shadow deepens and drops a little (180 ms)."""
 
     def eventFilter(self, obj, event):
+        if filter_guard.busy():
+            return False
+        with filter_guard.quiet():
+            return self._filter(obj, event)
+
+    def _filter(self, obj, event):
         kind = event.type()
         if kind in (QEvent.Enter, QEvent.Leave) and isinstance(obj, QFrame) and enabled():
             effect = obj.graphicsEffect()
@@ -405,6 +412,12 @@ class ButtonMotion(QObject):
     CLASSES = {"AccentButton", "SecondaryButton", "DangerButton"}
 
     def eventFilter(self, obj, event):
+        if filter_guard.busy():
+            return False
+        with filter_guard.quiet():
+            return self._filter(obj, event)
+
+    def _filter(self, obj, event):
         kind = event.type()
         if kind in (QEvent.Enter, QEvent.Leave, QEvent.MouseButtonPress, QEvent.MouseButtonRelease) \
                 and isinstance(obj, QPushButton) and obj.property("class") in self.CLASSES and enabled():
