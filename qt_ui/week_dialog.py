@@ -80,9 +80,9 @@ class _Tag(QFrame):
             chip = QLabel(f"-{lost} pts" if lost else "free")
             chip.setStyleSheet(
                 f"color:{'#D9480F' if lost else '#2F9E44'};background:transparent;font-size:11.5px;font-weight:700;")
-            chip.setToolTip("Points this review loses on this day" if lost else "No points lost: on or before its due day")
+            pass
             row.addWidget(chip)
-        self.setToolTip(f"{problem['name']}, {problem.get('subjectName') or ''}. Drag to another day.")
+        self.setToolTip(f"{problem['name']}, {problem.get('subjectName') or ''}")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -297,6 +297,11 @@ class WeekDialog(QWidget):
         self._span_label.setStyleSheet(f"color:{MUTED};font-size:13px;font-weight:600;background:transparent;")
         self._span_label.setFixedWidth(84)
         self._span = QSlider(Qt.Horizontal)
+        self._span.setStyleSheet(
+            "QSlider::groove:horizontal { height: 6px; border-radius: 3px; background: #E6E9EF; } "
+            f"QSlider::sub-page:horizontal {{ height: 6px; border-radius: 3px; background: {INK}; }} "
+            f"QSlider::handle:horizontal {{ width: 18px; height: 18px; margin: -6px 0; border-radius: 9px; "
+            f"background: #FFFFFF; border: 2px solid {INK}; }}")
         self._span.setRange(1, MAX_WEEKS)
         self._span.setValue(1)
         self._span.valueChanged.connect(self.refresh)
@@ -333,13 +338,13 @@ class WeekDialog(QWidget):
         total = sum(len(d["reviews"]) for d in plan)
         span = "this week" if weeks == 1 else f"in the next {weeks} weeks"
         if not total:
-            return f"Nothing to review {span}. Reviews show up here as they come due."
+            return f"Nothing to review {span}."
         text = f"{total} review{'s' if total != 1 else ''} {span}."
         heavy = [d for d in plan if d["heavy"]]
         if heavy:
             names = ", ".join(_weekday(d["date"], self._today) for d in heavy)
             text += f" Busiest: {names}. {_weekday(week_plan.lightest_day(plan), self._today)} is the lightest."
-        return text + " Drag a review to another day: earlier is free, each day later costs 3 points."
+        return text
 
     EDGE = 60            # px from the top or bottom of the list where a held review starts scrolling it
     EDGE_SPEED = 22      # px per tick at the very edge
