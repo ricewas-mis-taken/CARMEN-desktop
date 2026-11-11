@@ -300,3 +300,53 @@ final class LiveWireTests: XCTestCase {
         _ = now
     }
 }
+
+
+final class ReviewAndNoteTests: XCTestCase {
+    private func problem(due: String, original: String? = nil, stars: Int = 3) -> ReviewProblem {
+        ReviewProblem(id: "p", name: "P", stars: stars, nextReviewDate: due, originalDueDate: original,
+                      outOfRotation: false, topicId: "t", subjectId: "s", notes: nil)
+    }
+    var today: Date { ReviewProblem.day("2026-11-11")! }
+
+    func testDueAndLate() {
+        XCTAssertTrue(problem(due: "2026-11-11").isDue(on: today))
+        XCTAssertTrue(problem(due: "2026-11-08").isDue(on: today))
+        XCTAssertFalse(problem(due: "2026-11-12").isDue(on: today))
+        XCTAssertEqual(problem(due: "2026-11-08").daysLate(on: today), 3)
+        var away = problem(due: "2026-11-01"); away.outOfRotation = true
+        XCTAssertFalse(away.isDue(on: today))
+    }
+
+    func testWheelWeightsMatchTheDesktop() {
+        XCTAssertEqual(ReviewWheel.weight(problem(due: "2026-11-11"), today: today), 1.0)
+        XCTAssertGreaterThan(ReviewWheel.weight(problem(due: "2026-11-07"), today: today), ReviewWheel.weight(problem(due: "2026-11-10"), today: today))
+        XCTAssertEqual(ReviewWheel.pointsLost(problem(due: "2026-11-09"), today: today), 6)
+        XCTAssertGreaterThan(ReviewWheel.weight(problem(due: "2026-11-11", original: "2026-11-09"), today: today), 1.0)
+    }
+
+    func testBiggerSliceWinsMoreOften() {
+        var rng = SystemRandomNumberGenerator()
+        var wins = [0, 0]
+        for _ in 0..<2000 { wins[ReviewWheel.spin(weights: [1, 5], using: &rng).index] += 1 }
+        XCTAssertGreaterThan(wins[1], wins[0] * 3)
+    }
+
+    func testReviewRecordsDecode() throws {
+        let data = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"name":"Parts","stars":4,"topicSyncId":"t","subjectSyncId":"s","nextReviewDate":"2026-11-11","outOfRotation":0}"#.utf8))
+        let record = SyncRecord(table: "review_problems", syncId: "p1", data: data, deviceId: "pc", updatedAt: "2026-11-11T21:00:00+00:00", isDeleted: false)
+        let p = ReviewRecords.problem(record)!
+        XCTAssertEqual(p.stars, 4); XCTAssertFalse(p.outOfRotation)
+        XCTAssertNil(ReviewRecords.problem(SyncRecord(table: "review_problems", syncId: "x", data: .object([:]), deviceId: "pc", updatedAt: "", isDeleted: false)))
+    }
+
+    func testQuickNoteRoundTripAndLimits() {
+        let record = QuickNote.record(items: ["a", "b"], deviceId: "ios-1")
+        XCTAssertEqual(QuickNote.items(from: record), ["a", "b"])
+        XCTAssertEqual(QuickNote.clean(Array(repeating: "x", count: 600)).count, QuickNote.maxItems)
+        XCTAssertEqual(QuickNote.clean([String(repeating: "y", count: 5000)])[0].count, QuickNote.maxItemChars)
+        let bad = SyncRecord(table: "quicknote", syncId: "note", data: .object(["items": .array([.number(1)])]),
+                             deviceId: "pc", updatedAt: "", isDeleted: false)
+        XCTAssertNil(QuickNote.items(from: bad))
+    }
+}
