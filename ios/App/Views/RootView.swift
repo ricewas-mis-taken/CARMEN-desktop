@@ -5,7 +5,7 @@ struct RootView: View {
     @EnvironmentObject var session: SessionController
     @State private var tab = Tab.home
 
-    enum Tab: Hashable { case home, focus, tasks, history, settings }
+    enum Tab: Hashable { case home, focus, tasks, review, note, screenTime, history, settings }
 
     var body: some View {
         TabView(selection: $tab) {
@@ -15,6 +15,12 @@ struct RootView: View {
                 .tabItem { Label("Focus", systemImage: "scope") }.tag(Tab.focus)
             TasksView(openFocus: { tab = .focus })
                 .tabItem { Label("Tasks", systemImage: "checkmark.circle") }.tag(Tab.tasks)
+            ReviewView(openFocus: { tab = .focus })
+                .tabItem { Label("Review", systemImage: "arrow.triangle.2.circlepath") }.tag(Tab.review)
+            NoteView()
+                .tabItem { Label("QuickNote", systemImage: "note.text") }.tag(Tab.note)
+            ScreenTimeView()
+                .tabItem { Label("Screen Time", systemImage: "clock") }.tag(Tab.screenTime)
             HistoryView()
                 .tabItem { Label("History", systemImage: "list.bullet") }.tag(Tab.history)
             SettingsView()

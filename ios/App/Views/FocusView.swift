@@ -19,6 +19,7 @@ struct FocusView: View {
     @State private var picking = false
     @State private var asking = false
     @State private var problem: String?
+    @State private var reviewTitle: String?
 
     private let presets = [15, 25, 45, 60, 90]
 
@@ -74,13 +75,13 @@ struct FocusView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Task").font(.headline).foregroundStyle(Theme.ink)
                     Menu {
-                        Button("No task") { task = nil }
+                        Button("No task") { task = nil; reviewTitle = nil }
                         ForEach(model.tasks) { item in
                             Button(item.name) { choose(item) }
                         }
                     } label: {
                         HStack {
-                            Text(task?.name ?? "No task").foregroundStyle(Theme.ink)
+                            Text(reviewTitle ?? task?.name ?? "No task").foregroundStyle(Theme.ink)
                             Spacer()
                             Image(systemName: "chevron.up.chevron.down").font(.footnote).foregroundStyle(Theme.faint)
                         }
@@ -134,6 +135,7 @@ struct FocusView: View {
         .familyActivityPicker(isPresented: $picking, selection: $blocking.selection)
         .onAppear(perform: pickUpLaunchTask)
         .onChange(of: model.launchTask) { _, _ in pickUpLaunchTask() }
+        .onChange(of: model.launchTitle) { _, _ in pickUpLaunchTask() }
     }
 
     private var summary: String {
@@ -147,14 +149,22 @@ struct FocusView: View {
 
     private func choose(_ item: CarmenTask) {
         task = item
+        reviewTitle = nil
         lock = item.lockMode
         if let goal = item.goalMinutes(on: Date()), goal > 0 { minutes = min(goal, 720); customMinutes = "" }
     }
 
     private func pickUpLaunchTask() {
-        guard let launched = model.launchTask else { return }
-        choose(launched)
-        model.launchTask = nil
+        if let launched = model.launchTask {
+            choose(launched)
+            model.launchTask = nil
+            reviewTitle = nil
+        }
+        if let title = model.launchTitle {
+            task = nil
+            reviewTitle = title
+            model.launchTitle = nil
+        }
     }
 
     private func addSite() {
@@ -180,7 +190,8 @@ struct FocusView: View {
         Task {
             if !blocking.isAuthorized { await authorize(thenPick: false) }
             session.start(minutes: minutes, lock: lock, task: task, allowedSites: sites,
-                          pomodoro: pomodoro ? PomodoroPlan(focusMinutes: minutes, breakMinutes: breakMinutes, cycles: cycles) : nil)
+                          pomodoro: pomodoro ? PomodoroPlan(focusMinutes: minutes, breakMinutes: breakMinutes, cycles: cycles) : nil,
+                          title: reviewTitle)
         }
     }
 }

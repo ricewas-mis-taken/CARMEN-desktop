@@ -3,6 +3,8 @@ import CarmenCore
 
 struct HomeView: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var live: LiveBridge
+    @EnvironmentObject var session: SessionController
     var openFocus: () -> Void
 
     private var greeting: String {
@@ -35,6 +37,24 @@ struct HomeView: View {
                             .font(.system(size: 34, weight: .bold, design: .rounded))
                             .foregroundStyle(model.streak > 0 ? Color.orange : Theme.faint)
                         Text("day streak").font(.subheadline).foregroundStyle(Theme.muted)
+                    }
+                }
+            }
+
+            if let remote = live.remote, !session.isRunning {
+                Card {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(remote.title ?? "Focus session").font(.headline).foregroundStyle(Theme.ink)
+                            Text(remote.isPaused ? "Paused on your computer" : remote.isBreak ? "Break on your computer" : "Running on your computer")
+                                .font(.footnote).foregroundStyle(Theme.muted)
+                        }
+                        Spacer()
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            Text(clock(remote.remaining(at: context.date)))
+                                .font(.system(.title2, design: .rounded).weight(.semibold)).monospacedDigit()
+                                .foregroundStyle(Theme.ink)
+                        }
                     }
                 }
             }

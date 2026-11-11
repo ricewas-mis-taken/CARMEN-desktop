@@ -40,11 +40,11 @@ final class SessionController: ObservableObject {
 
     var displayedSeconds: TimeInterval { phase?.remaining ?? remaining }
 
-    func start(minutes: Int, lock: LockMode, task: CarmenTask?, allowedSites: [String], pomodoro: PomodoroPlan? = nil) {
+    func start(minutes: Int, lock: LockMode, task: CarmenTask?, allowedSites: [String], pomodoro: PomodoroPlan? = nil, title: String? = nil) {
         guard state == nil else { return }
         let begun = Date()
         let session = SessionState(start: begun, plannedSeconds: minutes * 60, lockMode: lock,
-                                   taskId: task?.id, title: task?.name,
+                                   taskId: task?.id, title: title ?? task?.name,
                                    allowedSites: allowedSites + (task?.domainWhitelist ?? []), pomodoro: pomodoro)
         store.session = session
         state = session

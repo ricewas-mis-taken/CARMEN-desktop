@@ -4,6 +4,7 @@ import CarmenCore
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var blocking: BlockingController
+    @EnvironmentObject var live: LiveBridge
     @State private var email = ""
     @State private var password = ""
 
@@ -31,6 +32,11 @@ struct SettingsView: View {
                     }
                     if let message = model.message { Text(message).font(.footnote).foregroundStyle(Theme.muted) }
                 }
+            }
+
+            Card {
+                Toggle("Lock this phone when a session runs on my computer", isOn: $live.mirrorDesktop)
+                    .foregroundStyle(Theme.ink)
             }
 
             Card {
