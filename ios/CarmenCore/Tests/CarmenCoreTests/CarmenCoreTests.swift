@@ -183,3 +183,120 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(store.deviceId.hasPrefix("ios-"))
     }
 }
+
+
+final class PomodoroTests: XCTestCase {
+    let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+    let plan = PomodoroPlan(focusMinutes: 25, breakMinutes: 5, cycles: 3)
+
+    func testPhasesFollowTheRunningTime() {
+        XCTAssertEqual(plan.totalSeconds, 3 * 30 * 60)
+        var p = plan.phase(afterRunning: 10 * 60)
+        XCTAssertEqual(p.cycle, 1); XCTAssertFalse(p.isBreak); XCTAssertEqual(p.remaining, 15 * 60, accuracy: 0.01)
+        p = plan.phase(afterRunning: 26 * 60)
+        XCTAssertTrue(p.isBreak); XCTAssertEqual(p.remaining, 4 * 60, accuracy: 0.01)
+        p = plan.phase(afterRunning: 31 * 60)
+        XCTAssertEqual(p.cycle, 2); XCTAssertFalse(p.isBreak)
+        p = plan.phase(afterRunning: 89 * 60)
+        XCTAssertEqual(p.cycle, 3); XCTAssertTrue(p.isBreak)
+    }
+
+    func testEndsAfterTheLastBreak() {
+        let s = SessionState(start: t0, plannedSeconds: 0, lockMode: .soft, pomodoro: plan)
+        XCTAssertFalse(s.isFinished(at: t0.addingTimeInterval(89 * 60)))
+        XCTAssertTrue(s.isFinished(at: t0.addingTimeInterval(90 * 60)))
+    }
+
+    func testShieldIsOffDuringABreakAndWhilePaused() {
+        var s = SessionState(start: t0, plannedSeconds: 0, lockMode: .soft, pomodoro: plan)
+        XCTAssertTrue(s.isEnforcing(at: t0.addingTimeInterval(60)))
+        XCTAssertFalse(s.isEnforcing(at: t0.addingTimeInterval(26 * 60)))
+        s.pause(reason: "break", at: t0.addingTimeInterval(120))
+        XCTAssertFalse(s.isEnforcing(at: t0.addingTimeInterval(200)))
+    }
+
+    func testPausedTimeDoesNotAdvanceThePhase() {
+        var s = SessionState(start: t0, plannedSeconds: 0, lockMode: .soft, pomodoro: plan)
+        s.pause(reason: "break", at: t0.addingTimeInterval(20 * 60))
+        s.resume(at: t0.addingTimeInterval(50 * 60))
+        XCTAssertFalse(s.phase(at: t0.addingTimeInterval(54 * 60))!.isBreak)      // 24 minutes of running time
+        XCTAssertTrue(s.phase(at: t0.addingTimeInterval(56 * 60))!.isBreak)
+    }
+
+    func testFocusSpansForScheduling() {
+        let spans = plan.focusSpans()
+        XCTAssertEqual(spans.count, 3)
+        XCTAssertEqual(spans[1].start, 30 * 60); XCTAssertEqual(spans[1].end, 55 * 60)
+    }
+}
+
+final class LiveWireTests: XCTestCase {
+    let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func testARunningSessionIsWrittenInTheDesktopsShape() {
+        var s = SessionState(id: "abc", start: t0, plannedSeconds: 1500, lockMode: .hard, taskId: "t1", title: "Essay",
+                             allowedSites: ["docs.google.com"])
+        s.pause(reason: "break", at: t0.addingTimeInterval(300))
+        let record = LiveWire.record(session: s, endedSessionId: nil, deviceId: "ios-1", now: t0.addingTimeInterval(400))
+        XCTAssertEqual(record.table, "live_session"); XCTAssertEqual(record.syncId, "current")
+        let d = record.data.object!
+        XCTAssertEqual(d["isActive"], .bool(true))
+        XCTAssertEqual(d["sessionId"], .string("abc"))
+        XCTAssertEqual(d["isPaused"], .bool(true))
+        XCTAssertEqual(d["frozenSecondsRemaining"], .number(1200))
+        XCTAssertEqual(d["eventId"], .string("t1"))
+        XCTAssertEqual(d["domainWhitelist"], .array([.string("docs.google.com")]))
+        XCTAssertEqual(d["violationLog"]?.array?.count, 1)
+        XCTAssertEqual(d["violationLog"]?.array?.first?.object?["pauseReason"], .string("break"))
+    }
+
+    func testEndedIsMarkedWithTheIdThatEnded() {
+        let record = LiveWire.record(session: nil, endedSessionId: "abc", deviceId: "ios-1", now: t0)
+        XCTAssertEqual(record.data.object?["isActive"], .bool(false))
+        XCTAssertEqual(record.data.object?["endedSessionId"], .string("abc"))
+    }
+
+    func testTimesAreWrittenInCloudTimeAndReadBack() {
+        let s = SessionState(id: "abc", start: t0, plannedSeconds: 1500, lockMode: .soft)
+        let record = LiveWire.record(session: s, endedSessionId: nil, deviceId: "ios-1", now: t0, offset: 90)
+        guard case .running(let remote)? = LiveWire.parse(record, offset: 90) else { return XCTFail("not running") }
+        XCTAssertEqual(remote.start.timeIntervalSince1970, t0.timeIntervalSince1970, accuracy: 0.01)
+        XCTAssertEqual(remote.blockEnd.timeIntervalSince1970, t0.addingTimeInterval(1500).timeIntervalSince1970, accuracy: 0.01)
+        XCTAssertEqual(remote.remaining(at: t0.addingTimeInterval(500)), 1000, accuracy: 0.01)
+        XCTAssertTrue(remote.isEnforcing(at: t0.addingTimeInterval(500)))
+    }
+
+    func testAPomodoroSessionCarriesItsBlockAndBreakFlag() {
+        let s = SessionState(id: "p", start: t0, plannedSeconds: 0, lockMode: .soft,
+                             pomodoro: PomodoroPlan(focusMinutes: 25, breakMinutes: 5, cycles: 2))
+        let during = t0.addingTimeInterval(26 * 60)
+        let record = LiveWire.record(session: s, endedSessionId: nil, deviceId: "ios-1", now: during)
+        guard case .running(let remote)? = LiveWire.parse(record) else { return XCTFail("not running") }
+        XCTAssertTrue(remote.isBreak)
+        XCTAssertFalse(remote.isEnforcing(at: during))
+        XCTAssertEqual(record.data.object?["pomodoro"]?.object?["currentCycle"], .number(1))
+    }
+
+    func testReadsADesktopSessionAndAnIdleRecord() throws {
+        let running = try JSONDecoder().decode(JSONValue.self, from: Data("""
+        {"isActive":true,"sessionId":"d1","startTime":"2026-11-11T21:00:00.000000+00:00",
+         "endTime":"2026-11-11T21:25:00.000000+00:00","lockMode":"hard","isPaused":false,"eventTitle":"Lab","domainWhitelist":["a.com"]}
+        """.utf8))
+        let record = SyncRecord(table: "live_session", syncId: "current", data: running, deviceId: "pc",
+                                updatedAt: "2026-11-11T21:00:01+00:00", isDeleted: false)
+        guard case .running(let r)? = LiveWire.parse(record) else { return XCTFail("not running") }
+        XCTAssertEqual(r.title, "Lab"); XCTAssertEqual(r.lockMode, .hard); XCTAssertEqual(r.domainWhitelist, ["a.com"])
+        let idle = SyncRecord(table: "live_session", syncId: "current",
+                              data: .object(["isActive": .bool(false), "endedSessionId": .string("d1")]),
+                              deviceId: "pc", updatedAt: "2026-11-11T21:26:00+00:00", isDeleted: false)
+        XCTAssertEqual(LiveWire.parse(idle), .idle(endedSessionId: "d1", stamp: "2026-11-11T21:26:00+00:00"))
+    }
+
+    func testServerClockLearnsTheGap() {
+        let clock = ServerClock()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        clock.note(dateHeader: "Fri, 15 Jan 2027 08:00:00 GMT", now: Date(timeIntervalSince1970: 1_799_999_990))
+        XCTAssertTrue(abs(clock.offset) < 7 * 24 * 3600)
+        _ = now
+    }
+}
