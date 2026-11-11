@@ -1074,3 +1074,15 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   it needs its own careful pass. Hard lock on iOS means no "Continue anyway" on the shield and a 10 minute pause
   budget; it cannot stop the person turning Screen Time access off, which is an iOS limit. Written on Windows, never
   compiled: see ios/README.md. Desktop-only change in this repo; the browser extension is untouched.
+
+2026-11-11  iPhone app, second pass: shared running session, editable tasks, Pomodoro
+  The phone now writes and reads live_session. It writes only the keys a phone session means (isActive, times, lock
+  mode, sessionId, pause log, pomodoro, isBreak); session_manager fills the rest from its defaults, so the desktop is
+  never handed a half state. Times go out in cloud time using the Date header offset (same as server_clock.py). Ending
+  sends endedSessionId so the desktop only ends a session it knew. A newer session on either side replaces the other's,
+  matching the rule between two computers; the phone ends its own as "superseded" without writing that back over the
+  desktop's. Tasks keep the whole desktop record in a dict and edit only known keys, over a typed model, so a field the
+  desktop adds later is never dropped. Pomodoro blocks of 15 minutes or more get their own system-run windows so the
+  shield follows breaks with the app closed. Left out on purpose: finishing a review on the phone (it would need an
+  exact copy of review_scheduler and the score rules; a mistake shifts every later date) and Scribe (a separate
+  canvas build). Still uncompiled; see ios/README.md.
