@@ -1277,13 +1277,10 @@ class _TopicView(QWidget):
         self.refresh()
 
     def _rebuild_categories(self, base):
-        """One row per subject (plus "All"), each with how many problems it holds in this view."""
-        while self._category_box.count():
-            widget = self._category_box.takeAt(0).widget()
-            if widget is not None:
-                discard_widget(widget)
-                widget.deleteLater()
-        self._category_buttons = {}
+        """One row per subject (plus "All"), each with how many problems it holds in this view.
+
+        The rows are only rebuilt when the list itself changed. Tearing down and recreating the
+        same buttons on every refresh (it runs on each show) is what Qt crashed on."""
         counts = {}
         for problem in base:
             counts[problem["subjectId"]] = counts.get(problem["subjectId"], 0) + 1
@@ -1292,6 +1289,16 @@ class _TopicView(QWidget):
             self._subject_filter = None
         entries = [(None, "All categories", None, len(base))] + [
             (sub["id"], sub["name"], sub["color"], counts.get(sub["id"], 0)) for sub in subjects]
+        if entries == getattr(self, "_category_entries", None) and self._category_buttons:
+            for subject_id, row in self._category_buttons.items():
+                row.setChecked(subject_id == self._subject_filter)
+            return
+        self._category_entries = entries
+        while self._category_box.count():
+            widget = self._category_box.takeAt(0).widget()
+            if widget is not None:
+                discard_widget(widget)
+        self._category_buttons = {}
         for subject_id, name, color, count in entries:
             row = _CategoryRow(
                 name, color, count, checked=subject_id == self._subject_filter,
