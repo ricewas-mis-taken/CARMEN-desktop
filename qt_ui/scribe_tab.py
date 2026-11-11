@@ -95,7 +95,10 @@ BACKGROUND_LABELS = {
     "white": "White", "black": "Black", "grid": "Grid", "darkgrid": "Dark grid",
     "dots": "Dots", "lined": "Lined", "paper": "Paper",
 }
-_TOOL_KEYS = {"1": "line", "2": "curve", "3": "fill", "4": "text", "5": "rect",
+# Letters that say what they are (the digits still work too).
+_TOOL_KEYS = {"v": "select", "p": "freehand", "l": "line", "c": "curve", "a": "arrow", "r": "rect", "o": "circle",
+              "t": "text", "f": "fill",
+              "1": "line", "2": "curve", "3": "fill", "4": "text", "5": "rect",
               "6": "circle", "7": "select", "8": "arrow", "0": "freehand"}
 _ITEM_FLAGS = {"shouldScale": "scale", "roundCorners": "round", "dashed": "dashed"}
 
@@ -1522,8 +1525,8 @@ class ScribeCanvas(QWidget):
         elif key == Qt.Key_Escape:
             self._sel = []
             self._cancel_draft()
-        elif text in _TOOL_KEYS and not ctrl:
-            self.set_tool(_TOOL_KEYS[text])
+        elif text.lower() in _TOOL_KEYS and not ctrl:
+            self.set_tool(_TOOL_KEYS[text.lower()])
         else:
             super().keyPressEvent(e)
 
@@ -1537,17 +1540,18 @@ class ScribeCanvas(QWidget):
 
 # (key, name, hotkey) -- in the order the tool rail shows them, grouped by what they do.
 _TOOLS = [
-    ("select", "Select", "7"), ("freehand", "Freehand", "0"), ("line", "Line", "1"),
-    ("curve", "Curve", "2"), ("arrow", "Arrow", "8"),
+    ("select", "Select", "V"), ("freehand", "Freehand", "P"), ("line", "Line", "L"),
+    ("curve", "Curve", "C"), ("arrow", "Arrow", "A"),
     None,
-    ("rect", "Rectangle", "5"), ("circle", "Circle", "6"),
+    ("rect", "Rectangle", "R"), ("circle", "Circle", "O"),
     None,
-    ("text", "Text", "4"), ("fill", "Fill", "3"), ("insert", "Insert image", ""),
+    ("text", "Text", "T"), ("fill", "Fill", "F"), ("insert", "Insert image", "Ctrl+V"),
 ]
 
 # What each control does: shown when the pointer rests on it.
+# Hover text is a name and its key, never help text.
 TOOL_HELP = collections.defaultdict(str)
-HELP = collections.defaultdict(str)
+HELP = collections.defaultdict(str, {"undo": "Undo  (Ctrl+Z)", "redo": "Redo  (Ctrl+Y)"})
 
 SCRIBE_INK = "#1F2328"
 _QUICK_COLORS = ["#000000", "#E03131", "#F08C00", "#FAB005", "#2F9E44", "#1971C2", "#7048E8", "#FFFFFF"]
@@ -2201,8 +2205,8 @@ class ScribeTab(QWidget):
             button.setFixedSize(32, 32)
         minus.clicked.connect(lambda: self.canvas.zoom_by(1 / 1.25))
         plus.clicked.connect(lambda: self.canvas.zoom_by(1.25))
-        minus.setToolTip("Zoom out")
-        plus.setToolTip("Zoom in")
+        minus.setToolTip("Zoom out  (scroll down)")
+        plus.setToolTip("Zoom in  (scroll up)")
         self._zoom_label = QLabel("100%")
         self._zoom_label.setMinimumWidth(52)
         self._zoom_label.setAlignment(Qt.AlignCenter)
@@ -2211,13 +2215,13 @@ class ScribeTab(QWidget):
             "font-size: 13px; font-weight: 700; color: #1F2328; background: transparent;")
         self._pan_button = QPushButton("Pan")
         self._pan_button.setCheckable(True)
-        self._pan_button.setToolTip("Pan")
+        self._pan_button.setToolTip("Pan  (hold Space and drag)")
         self._pan_button.toggled.connect(self.canvas.set_pan_mode)
         fit = QPushButton("Fit")
         fit.setToolTip("Fit all")
         fit.clicked.connect(self.canvas.fit_all)
         reset = QPushButton("Reset")
-        reset.setToolTip("100%")
+        reset.setToolTip("Back to 100%")
         reset.clicked.connect(self.canvas.reset_view)
         for widget in (minus, self._zoom_label, plus, self._pan_button, fit, reset):
             bar.addWidget(widget)

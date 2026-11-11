@@ -296,7 +296,8 @@ def test_every_tool_has_an_icon_and_a_tooltip_with_its_key(qtbot):
     for key, button in tab._tool_buttons.items():
         assert not button.icon().isNull(), key
         assert button.toolTip()
-    assert "(1)" in tab._tool_buttons["line"].toolTip() and "(7)" in tab._tool_buttons["select"].toolTip()
+    assert "(L)" in tab._tool_buttons["line"].toolTip() and "(V)" in tab._tool_buttons["select"].toolTip()
+    assert "(P)" in tab._tool_buttons["freehand"].toolTip() and "(O)" in tab._tool_buttons["circle"].toolTip()
 
 
 def test_clicking_a_tool_on_the_rail_selects_it(qtbot):
@@ -807,3 +808,12 @@ def test_the_extent_is_worked_out_again_after_a_shape_moves_or_a_layer_hides(qtb
     canvas.doc["layers"][0]["visible"] = False
     canvas.layer_edited()
     assert canvas._all_bounds() is None
+
+
+def test_tool_letters_match_the_hover_text(qtbot):
+    from qt_ui import scribe_tab
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    for key, name, hotkey in (e for e in scribe_tab._TOOLS if e and e[2] and len(e[2]) == 1):
+        assert scribe_tab._TOOL_KEYS[hotkey.lower()] == key, (key, hotkey)
+        assert hotkey in tab._tool_buttons[key].toolTip()
