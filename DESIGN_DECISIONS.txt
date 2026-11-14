@@ -1086,3 +1086,13 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   shield follows breaks with the app closed. Left out on purpose: finishing a review on the phone (it would need an
   exact copy of review_scheduler and the score rules; a mistake shifts every later date) and Scribe (a separate
   canvas build). Still uncompiled; see ios/README.md.
+
+2026-11-13  Stale sessions from another computer, and when the wheel's pick counts as done
+  A running session another computer kept sending, after this one had ended it, replaced the live session (the newer
+  stamp won) and a review was filed under the wrong problem. apply_remote_state now ignores a remote session this
+  computer already filed in its history, and one that began over a minute before the local one; the local session is
+  re-stamped so it becomes the shared truth. Start times are only compared past a minute because two computers' clocks
+  disagree by less than that and the compare must never flip a real newer session. Chose this over "the newest start
+  always wins": the stamp rule exists so pauses and edits propagate. The wheel's pick is dropped by looking at the
+  problem itself (reviewed since the pick was made, deleted, or set aside) rather than by hooking every finish path
+  (banner, task card, mini timer, another computer), because a missed hook leaves the pick stuck.
