@@ -287,7 +287,8 @@ def test_a_newer_session_from_the_other_computer_replaces_ours_and_ours_is_filed
     assert [e["eventTitle"] for e in filed] == ["old on a"] and filed[0]["endType"] == "superseded"
 
 
-def test_a_session_already_ended_here_does_not_replace_the_one_running_now(device, fake_logged_in, server):
+def test_a_session_already_ended_here_does_not_replace_the_one_running_now(device, fake_logged_in, server, monkeypatch):
+    monkeypatch.setattr(server_clock, "_last_stamp", None)
     device("b")
     _start(event_title="stale")
     stale = copy.deepcopy(sm._state)             # what the other computer keeps sending
@@ -300,7 +301,8 @@ def test_a_session_already_ended_here_does_not_replace_the_one_running_now(devic
     assert all(e["endType"] != "superseded" for e in session_history.load_all())
 
 
-def test_an_older_running_session_cannot_replace_a_newer_local_one(device, fake_logged_in, server):
+def test_an_older_running_session_cannot_replace_a_newer_local_one(device, fake_logged_in, server, monkeypatch):
+    monkeypatch.setattr(server_clock, "_last_stamp", None)
     device("a")
     _start(event_title="older on a")
     older = copy.deepcopy(sm._state)
