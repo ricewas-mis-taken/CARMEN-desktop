@@ -950,6 +950,26 @@ def _clean_remote_state(data):
     return clean
 
 
+def _ended_here_locked(session_id):
+    """True when this computer's history already holds a finished session with this id."""
+    if not session_id:
+        return False
+    try:
+        return any(session_history.entry_id(e) == session_id
+                   for e in session_history.load_all(include_beside=True))
+    except Exception:
+        return False
+
+
+def _started_before(remote_start, local_start, margin_seconds=60):
+    """True when the remote session began clearly (over a minute) before ours. Two computers' clocks
+    differ by a little, so starts close together are not ordered by this."""
+    try:
+        return (datetime.fromisoformat(local_start) - datetime.fromisoformat(remote_start)).total_seconds() > margin_seconds
+    except (TypeError, ValueError):
+        return False
+
+
 def apply_remote_state(remote, remote_stamp):
     """Takes the state another computer shared, if it is newer than ours.
     Returns "applied", "ignored" (not newer, or unusable) or "kept-local".
@@ -972,6 +992,16 @@ def apply_remote_state(remote, remote_stamp):
             not remote_active and clean.get("endedSessionId") == local_id
         )
         different_session = not same_session
+        if remote_active and different_session and (
+                _ended_here_locked(clean.get("sessionId"))
+                or (local_active and _started_before(clean.get("startTime"), _state.get("startTime")))):
+            # A session this computer already ended, or one that began before ours, is a stale
+            # copy (the other computer kept running it and its newer stamp won). It must not
+            # replace the session in front of the person.
+            if local_active:
+                _save(at_least=remote_stamp)
+                return "kept-local"
+            return "ignored"
         if local_active and different_session and not remote_active:
             _save(at_least=remote_stamp)
             return "kept-local"
