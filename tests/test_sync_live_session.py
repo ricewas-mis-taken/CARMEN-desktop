@@ -287,6 +287,33 @@ def test_a_newer_session_from_the_other_computer_replaces_ours_and_ours_is_filed
     assert [e["eventTitle"] for e in filed] == ["old on a"] and filed[0]["endType"] == "superseded"
 
 
+def test_a_session_already_ended_here_does_not_replace_the_one_running_now(device, fake_logged_in, server):
+    device("b")
+    _start(event_title="stale")
+    stale = copy.deepcopy(sm._state)             # what the other computer keeps sending
+    sm.end_session()                             # finished here, then the real one starts
+    _start(event_title="real")
+    sm._state["syncUpdatedAt"] = None
+    stamp = (datetime.now().astimezone() + timedelta(hours=1)).isoformat()
+    assert sm.apply_remote_state(stale, stamp) == "kept-local"
+    assert sm.get_status()["eventTitle"] == "real"
+    assert all(e["endType"] != "superseded" for e in session_history.load_all())
+
+
+def test_an_older_running_session_cannot_replace_a_newer_local_one(device, fake_logged_in, server):
+    device("a")
+    _start(event_title="older on a")
+    older = copy.deepcopy(sm._state)
+    device("b")
+    _start(event_title="newer on b")
+    sm._state["syncUpdatedAt"] = None
+    stamp = (datetime.now().astimezone() + timedelta(hours=1)).isoformat()
+    older["startTime"] = (datetime.fromisoformat(sm._state["startTime"]) - timedelta(minutes=6)).isoformat()
+    older["sessionId"] = "someone-else"
+    assert sm.apply_remote_state(older, stamp) == "kept-local"
+    assert sm.get_status()["eventTitle"] == "newer on b"
+
+
 def test_each_computers_own_window_facts_are_never_overwritten(device, fake_logged_in, server):
     state_a = device("a")
     _start()
