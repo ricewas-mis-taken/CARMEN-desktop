@@ -18,6 +18,7 @@ from PySide6.QtWidgets import QPushButton, QWidget
 import config
 from calendar_log import logger
 import review_store
+import screen_guard
 import session_manager
 import tasks_store
 import theme
@@ -271,7 +272,7 @@ class MiniTimer(QWidget):
         """A notification (or another topmost window) can push this window out of view:
         Windows drops it from the top or hides/minimises it. Unless the x was clicked,
         bring it back and re-assert always-on-top, without taking focus."""
-        if self._closed_by_user:
+        if self._closed_by_user or screen_guard.settling():     # monitors are changing: leave the window alone
             return
         if self.isMinimized():
             self.showNormal()
@@ -291,13 +292,18 @@ class MiniTimer(QWidget):
                 import ctypes
                 user32 = ctypes.windll.user32
                 hwnd = int(self.winId())
-                if not user32.IsWindowVisible(hwnd) or user32.IsIconic(hwnd):
+                hidden = not user32.IsWindowVisible(hwnd) or user32.IsIconic(hwnd)
+                if hidden:
                     # Windows hid it behind Qt's back (a toast or another app); Qt still thinks it is shown.
                     logger.warning("mini timer was hidden by the system (visible=%s, minimised=%s); showing it again",
                                    bool(user32.IsWindowVisible(hwnd)), bool(user32.IsIconic(hwnd)))
                     user32.ShowWindow(hwnd, 4)                                # SW_SHOWNOACTIVATE
-                HWND_TOPMOST, FLAGS = -1, 0x0001 | 0x0002 | 0x0010 | 0x0040   # nosize nomove noactivate showwindow
-                user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, FLAGS)
+                # Only when it has actually lost the top spot: calling this twice a second on a window Qt owns
+                # makes Qt redo its screen and geometry bookkeeping every time.
+                on_top = bool(user32.GetWindowLongW(hwnd, -20) & 0x8)         # GWL_EXSTYLE, WS_EX_TOPMOST
+                if hidden or not on_top:
+                    HWND_TOPMOST, FLAGS = -1, 0x0001 | 0x0002 | 0x0010 | 0x0040   # nosize nomove noactivate showwindow
+                    user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, FLAGS)
             except Exception:
                 pass
 
@@ -629,6 +635,11 @@ class MiniTimer(QWidget):
 
 
 _win = None
+
+
+def is_open():
+    """True when the mini timer is on screen and was not closed with its x (remembered across a crash)."""
+    return _win is not None and not _win._closed_by_user and _win.isVisible()
 
 
 def open_mini_timer():
