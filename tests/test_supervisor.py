@@ -19,7 +19,10 @@ def test_a_crash_and_a_relaunch_start_carmen_again_and_a_quit_ends_it(monkeypatc
     assert supervisor.run() == 0
     assert len(launches) == 3
     assert all(l["CARMEN_SUPERVISED"] == "1" for l in launches)
-    assert "CARMEN_RESTARTED" not in launches[1] and launches[2].get("CARMEN_RESTARTED") == "1"
+    assert "CARMEN_RESTARTED" not in launches[0]
+    # after a crash the windows that were open come back too, from the saved state (CARMEN_CRASHED)
+    assert launches[1].get("CARMEN_RESTARTED") == "1" and launches[1].get("CARMEN_CRASHED") == "1"
+    assert launches[2].get("CARMEN_RESTARTED") == "1" and "CARMEN_CRASHED" not in launches[2]
 
 
 def test_a_crash_loop_gives_up(monkeypatch):
