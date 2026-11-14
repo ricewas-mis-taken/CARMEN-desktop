@@ -123,6 +123,14 @@ def test_finishing_the_fated_review_frees_the_wheel(qtbot, isolate_review_db, is
     assert review_wheel.fate() is None
 
 
+def test_a_review_finished_any_other_way_frees_the_wheel_too(qtbot, isolate_review_db, isolate_state):
+    view, one, two = _topic_with_two(qtbot)
+    review_wheel.set_fate(one["id"])
+    assert review_wheel.current()["id"] == one["id"]
+    review_store.finish_review_for_problem(one["id"], 120)       # a task card or the mini timer, not the banner
+    assert review_wheel.current() is None and review_wheel.fate() is None
+
+
 def test_the_button_names_the_fated_review_and_reopens_it_instead_of_the_wheel(
         qtbot, isolate_review_db, isolate_state, monkeypatch):
     view, one, two = _topic_with_two(qtbot)
