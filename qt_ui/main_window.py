@@ -116,6 +116,18 @@ def reopen_after_restart():
         _win._show_tab(state["page"])
 
 
+def reopen_after_crash(state):
+    """After a crash restart: the windows that were open come back (`state` is what window_memory saved)."""
+    main = state.get("main") or {}
+    if main.get("open"):
+        open_main_window()
+        if _win is not None and main.get("page") in _win._pages:
+            _win._show_tab(main["page"])
+    if state.get("mini"):
+        from qt_ui import mini_timer
+        mini_timer.open_mini_timer()
+
+
 def open_main_window():
     global _win
     _remembered["open"] = True

@@ -1,7 +1,8 @@
 """Keeps Carmen running. Windows starts this at sign-in instead of main.py; it runs main.py and starts it again if it
 dies (a crash in Qt, the C library under the window). A normal quit (exit code 0) ends it too, and the code main.py
-uses to ask for a fresh start (75: an update, the Relaunch button) starts it again straight away. If Carmen keeps
-dying (more than 5 times in 10 minutes) it stops trying instead of looping."""
+uses to ask for a fresh start (75: an update, the Relaunch button) starts it again straight away. After a crash
+Carmen starts again with the windows that were open put back (CARMEN_CRASHED tells it to use the saved state).
+If Carmen keeps dying (more than 5 times in 10 minutes) it stops trying instead of looping."""
 import os
 import subprocess
 import sys
@@ -27,9 +28,10 @@ def run():
                 return code                           # a crash loop: give up rather than spin
             _note(code)
             time.sleep(2)
-        env.pop("CARMEN_RESTARTED", None)
-        if code == RESTART:
-            env["CARMEN_RESTARTED"] = "1"             # the window comes back where it was
+        env.pop("CARMEN_CRASHED", None)
+        env["CARMEN_RESTARTED"] = "1"                 # the window comes back where it was, after a crash too
+        if code != RESTART:
+            env["CARMEN_CRASHED"] = "1"               # from the last saved state (see window_memory.py)
 
 
 def _note(code):
