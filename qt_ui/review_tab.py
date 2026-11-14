@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
     QGridLayout,
+    QSizePolicy,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -949,6 +950,46 @@ class _AddTopicDialog(QWidget):
         self._on_added(topic)
 
 
+class _FateStrip(QFrame):
+    """The review the wheel chose, across the whole width above the list, with a button to start it."""
+
+    def __init__(self, on_start):
+        super().__init__()
+        self.setObjectName("FateStrip")
+        self.setStyleSheet(
+            "QFrame#FateStrip { background: #FFF4D6; border: 1px solid #F2D58A; border-radius: 12px; }")
+        row = QHBoxLayout(self)
+        row.setContentsMargins(14, 8, 8, 8)
+        row.setSpacing(10)
+        self._label = QLabel()
+        self._label.setMinimumWidth(0)
+        self._label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._label.setStyleSheet("font-size: 14px; font-weight: 700; color: #7A5A00; background: transparent; border: none;")
+        row.addWidget(self._label, 1)
+        self._button = accent(QPushButton("Start it"))
+        self._button.setCursor(Qt.PointingHandCursor)
+        self._button.setFixedHeight(30)
+        self._button.clicked.connect(on_start)
+        row.addWidget(self._button)
+        self._name = ""
+        self.hide()
+
+    def show_for(self, problem):
+        self._name = problem["name"] if problem else ""
+        self.setVisible(problem is not None)
+        self._elide()
+
+    def _elide(self):
+        text = f"Fated: {self._name}"
+        room = max(40, self._label.width())
+        self._label.setText(QFontMetrics(self._label.font()).elidedText(text, Qt.ElideRight, room))
+        self._label.setToolTip(self._name)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._elide()
+
+
 class _TopicView(QWidget):
     def __init__(self, topic_id, review_tab=None):
         super().__init__()
@@ -971,7 +1012,20 @@ class _TopicView(QWidget):
         layout.addLayout(self._build_header())
         self._summary_label = QLabel()
         self._summary_label.setStyleSheet(f"font-size: 13px; color: {MUTED}; background: transparent;")
-        layout.addWidget(self._summary_label)
+        self._summary_label.setMinimumWidth(0)
+        self._summary_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        summary_row = QHBoxLayout()
+        summary_row.setSpacing(8)
+        summary_row.addWidget(self._summary_label, 1)
+        self._wheel_button = accent(QPushButton("Spin the wheel"))
+        self._wheel_button.setCursor(Qt.PointingHandCursor)
+        self._wheel_button.setFixedHeight(32)
+        self._wheel_button.clicked.connect(self._open_wheel)
+        summary_row.addWidget(self._wheel_button)
+        layout.addLayout(summary_row)
+        # Where the wheel's pick is shown: its own full-width row, so a narrow window never cuts it off.
+        self._fate_strip = _FateStrip(self._open_wheel)
+        layout.addWidget(self._fate_strip)
         self._rows = []
 
         if review_tab is not None:
@@ -1261,12 +1315,6 @@ class _TopicView(QWidget):
         self._sort_combo.currentIndexChanged.connect(self._set_sort)
         box.addWidget(self._sort_combo)
 
-        box.addSpacing(6)
-        self._wheel_button = QPushButton("Spin the wheel")
-        self._wheel_button.setCursor(Qt.PointingHandCursor)
-        self._wheel_button.clicked.connect(self._open_wheel)
-        box.addWidget(accent(self._wheel_button))
-
         box.addStretch(1)
         return card
 
@@ -1276,9 +1324,8 @@ class _TopicView(QWidget):
 
     def _show_wheel_button(self):
         fated = self._active_fate()
-        text = "Spin the wheel" if fated is None else f"Fated: {fated['name']}"
-        self._wheel_button.setText(QFontMetrics(self._wheel_button.font()).elidedText(text, Qt.ElideRight, 190))
-        self._wheel_button.setToolTip(fated["name"] if fated else "")
+        self._wheel_button.setVisible(fated is None)
+        self._fate_strip.show_for(fated)
 
     def _open_wheel(self):
         fated = self._active_fate()
