@@ -68,6 +68,45 @@ def test_it_shows_only_names_and_every_slice_has_its_own_colour(qtbot):
     assert not wheel.grab().isNull()
 
 
+def test_the_winner_pops_with_confetti_and_the_lights_and_pointer_move(qtbot):
+    landed = []
+    wheel = wheel_ui.WheelWidget(["A", "B", "C", "D"], [1, 2, 3, 1], landed.append)
+    qtbot.addWidget(wheel)
+    wheel.resize(460, 460)
+    wheel.show()
+    qtbot.waitExposed(wheel)
+    phase = wheel._phase
+    wheel.spin(rng=random.Random(2))
+    kicked = []
+    wheel._frame.timeout.connect(lambda: kicked.append(abs(wheel._pointer)))
+    qtbot.waitUntil(lambda: bool(landed), timeout=12000)
+    assert wheel._phase > phase                                   # the lights run on their own clock
+    assert max(kicked) > 1.0                                      # the pointer was flicked by the pegs
+    assert wheel._confetti                                        # a burst at the win
+    qtbot.waitUntil(lambda: wheel._pop >= 1.0, timeout=3000)      # the winning slice comes out
+    assert not wheel.grab().isNull()
+
+
+def test_the_animation_clock_stops_when_the_wheel_is_hidden(qtbot):
+    wheel = wheel_ui.WheelWidget(["A", "B"], [1, 1])
+    qtbot.addWidget(wheel)
+    wheel.show()
+    qtbot.waitExposed(wheel)
+    assert wheel._frame.isActive()
+    wheel.hide()
+    assert not wheel._frame.isActive()
+
+
+@pytest.mark.parametrize("count", [1, 2, 12, 40])
+def test_the_wheel_paints_with_any_number_of_slices(qtbot, count):
+    wheel = wheel_ui.WheelWidget([f"Problem {i}" for i in range(count)], [1 + i % 4 for i in range(count)])
+    qtbot.addWidget(wheel)
+    wheel.resize(420, 420)
+    assert not wheel.grab().isNull()
+    wheel._winner, wheel._pop = count - 1, 1.0
+    assert not wheel.grab().isNull()
+
+
 def _topic_with_two(qtbot):
     topic = review_store.create_topic("Calc")
     subject = review_store.create_subject(topic["id"], "Integrals", "#4A90D9")
