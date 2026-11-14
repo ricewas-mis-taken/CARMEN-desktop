@@ -77,13 +77,20 @@ def set_fate(problem_id):
 def current():
     """The fated problem, or None. A fate is dropped here once its review was finished by any route
     (the review tab, a task card, the mini timer, another computer), deleted, or set aside."""
-    fated = _state["fate"]
+    fated = _state.get("fate")
     if fated is None:
         return None
     problem = review_store.get_problem(fated)
-    since = _state["since"] or ""
-    done = bool(problem and since and (problem.get("lastReviewedAt") or "") > since)
-    if problem is None or problem.get("outOfRotation") or done:
+    if problem is None:
+        clear()
+        return None
+    since = _state.get("since") or ""           # missing in a pick made before this field existed
+    reviewed = bool(since and (problem.get("lastReviewedAt") or "") > since)
+    due = _day(problem.get("nextReviewDate"))
+    # Without a recorded time the pick can't be compared to the last review, so a pick that is no
+    # longer due (only due reviews are on the wheel) counts as done.
+    no_longer_due = not since and due is not None and due > date.today()
+    if problem.get("outOfRotation") or reviewed or no_longer_due:
         clear()
         return None
     return problem
