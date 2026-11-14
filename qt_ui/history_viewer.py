@@ -288,6 +288,8 @@ class _SessionCard(QFrame):
         chips.setSpacing(6)
         if kind == "review":
             chips.addWidget(chip("Review", tone=_TONE_BY_KIND["review"]))
+            if session.get("fated"):
+                chips.addWidget(chip("Fated", tone=("#FFF1CC", "#8A5A00")))
         elif kind == "task":
             chips.addWidget(chip("Task", session_color(session)))
         elif kind == "calendar":
@@ -711,6 +713,8 @@ def _format_source_label(session):
 
     if source == "review":
         label = "First attempt" if session_manager.is_first_attempt(session) else f"Review: {review_problem_name or '?'}"
+        if session.get("fated"):
+            label += "  •  Fated"
         if review_subject_name:
             label += f"  •  Subject: {review_subject_name}"
         if event_title:
