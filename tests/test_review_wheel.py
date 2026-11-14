@@ -206,3 +206,46 @@ def test_a_pick_from_another_topic_is_started_in_its_own_topic(qtbot, isolate_re
     review_wheel.set_fate(problem["id"])
     tab._topic_views[b["id"]]._open_wheel()
     assert started == [("Mine", a["id"])]
+
+
+def test_a_review_started_on_the_wheels_pick_is_filed_as_fated(isolate_state):
+    import session_history
+    import session_manager as sm
+    sm.start_session(480, "soft", [], [], source="review", event_id="t", event_title="Calc review",
+                     review_problem_name="Parts drill", review_problem_id=7, is_burnout=True, fated=True)
+    assert sm.get_status()["fated"] is True
+    sm.end_session()
+    sm.start_session(480, "soft", [], [], source="review", event_id="t", event_title="Calc review",
+                     review_problem_name="Other", review_problem_id=8, is_burnout=True)
+    sm.end_session()
+    filed = {e["reviewProblemName"]: e["fated"] for e in session_history.load_all()}
+    assert filed == {"Parts drill": True, "Other": False}
+    assert sm.get_status()["fated"] is False                    # not carried into the next session
+
+
+def test_the_history_card_and_text_say_fated(qtbot):
+    import qt_ui.history_viewer as history_viewer
+    session = {"source": "review", "reviewProblemName": "Parts drill", "reviewSubjectName": "Integrals",
+               "startTime": "2026-11-13T19:00:00", "endTime": "2026-11-13T19:30:00", "lockMode": "soft",
+               "fated": True, "violationLog": []}
+    card = history_viewer._SessionCard(session)
+    qtbot.addWidget(card)
+    assert "Fated" in [w.text() for w in card.findChildren(history_viewer.QLabel)]
+    plain_card = history_viewer._SessionCard(dict(session, fated=False))
+    qtbot.addWidget(plain_card)
+    assert "Fated" not in [w.text() for w in plain_card.findChildren(history_viewer.QLabel)]
+    assert "Fated" in history_viewer._format_source_label(session)
+    plain = dict(session, fated=False)
+    assert "Fated" not in history_viewer._format_source_label(plain)
+
+
+def test_finishing_through_the_review_tab_banner_frees_the_wheel(qtbot, isolate_review_db, isolate_state):
+    tab = review_tab.ReviewTab()
+    qtbot.addWidget(tab)
+    topic = review_store.create_topic("Calc")
+    sub = review_store.create_subject(topic["id"], "S", "#4A90D9")
+    problem = review_store.create_problem(topic["id"], sub["id"], "Mine", stars=3, description_type="text", description_text="x")
+    review_wheel.set_fate(problem["id"])
+    review_wheel.mark_started(problem["id"])
+    tab._banner_finished()
+    assert review_wheel.fate() is None
