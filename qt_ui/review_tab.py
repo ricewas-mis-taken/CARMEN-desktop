@@ -755,6 +755,7 @@ class ReviewTab(QWidget):
         self._rerender_start_cells()
 
     def _banner_finished(self):
+        review_wheel.review_done()        # the wheel's pick, if that was it, is done and the wheel is free
         self.on_review_finished()
         for view in self._topic_views.values():
             view.refresh()
@@ -1555,6 +1556,7 @@ class _TopicView(QWidget):
                 review_problem_id=problem["id"],
                 hide_taskbar_badges=bool(task.get("hideTaskbarBadges")),
                 stop_taskbar_flashing=bool(task.get("stopTaskbarFlashing")),
+                fated=review_wheel.fate() == problem["id"],
             )
             end_session_on_finish = True
 
@@ -2142,6 +2144,7 @@ class _ReviewBanner(QWidget):
         # state -- only needed for the token=None recovery path below, but
         # harmless to capture unconditionally.
         started_at_iso = self._linked_view()[0].get("startTime")
+        fated = problem.get("id") is not None and review_wheel.fate() == problem["id"]
         first_attempt_callback = self._first_attempt_callback
         self._session_token = None
         self._end_session_on_finish = False
@@ -2153,13 +2156,13 @@ class _ReviewBanner(QWidget):
             problem_name=problem["name"],
             on_submit=lambda self_solved, shakiness: self._complete_finish(
                 token, end_session, self_solved, shakiness, elapsed,
-                first_attempt_callback, problem, started_at_iso,
+                first_attempt_callback, problem, started_at_iso, fated,
             ),
         )
 
     def _complete_finish(
         self, token, end_session, self_solved, shakiness, elapsed,
-        first_attempt_callback, problem, started_at_iso,
+        first_attempt_callback, problem, started_at_iso, fated=False,
     ):
         if first_attempt_callback is not None:
             # No problem exists yet -- hand the timing/outcome back to the
@@ -2183,12 +2186,12 @@ class _ReviewBanner(QWidget):
         if end_session:
             _end_session_for_problem(problem)
         else:
-            _file_untimed_review(problem, elapsed)
+            _file_untimed_review(problem, elapsed, fated=fated)
         self._finishing = False
         self._on_finished()
 
 
-def _file_untimed_review(problem, seconds, now=None):
+def _file_untimed_review(problem, seconds, now=None, fated=False):
     """A review that ran without a session of its own (another kind of session was running,
     so none could start) is still time on its task. Session History and the task's
     count both read finished sessions, so this files the review as one. When a session of the
@@ -2215,6 +2218,7 @@ def _file_untimed_review(problem, seconds, now=None):
         "reviewProblemName": session_manager.FIRST_ATTEMPT_NAME if first_attempt else problem["name"],
         "reviewSubjectName": subject,
         "pomodoro": None, "sessionId": ("beside-" if beside else "untimed-") + uuid.uuid4().hex,
+        "fated": bool(fated),
     }
     if beside:
         entry["beside"] = True
@@ -2256,11 +2260,14 @@ def finish_review_from_card(token, name, seconds):
 
     active = review_store.get_active_review()
     problem = review_store.get_problem(active["problemId"]) if active and active["token"] == token else None
+    fated = bool(problem) and review_wheel.fate() == problem["id"]
 
     def submit(self_solved, shakiness):
         review_store.finish_review(token, self_solved=self_solved, shakiness=shakiness, duration_seconds=seconds)
         if problem:
-            _file_untimed_review(problem, seconds)
+            _file_untimed_review(problem, seconds, fated=fated)
+        if fated:
+            review_wheel.clear()
         for banner in list(_live_banners):
             try:
                 banner.hide()
