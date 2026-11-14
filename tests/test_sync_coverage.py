@@ -60,6 +60,7 @@ LOCAL_ONLY_FILES = {
     "live_review_pushed.txt", "live_screentime_pushed.json", "live_settings_pushed.txt", "live_quicknote_pushed.txt", "hang_trace.txt", "taskbar_quiet_pending.json", "other_device_seen.txt", "screentime_remote.json", "parked_reviews.json",
     "scribe_stamp.txt", "live_scribe_pushed.txt",
     "goal_notified.json",   # which tasks already told this computer their daily target was reached today
+    "window_state.json",    # which of this computer's windows are open, to put them back after a crash
 }
 # Reference data that ships with the app, not something a user creates.
 SHIPPED_REFERENCE_FILES = {"screentime_domains.json", "screentime_domains_curated.json",
