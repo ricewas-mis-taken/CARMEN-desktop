@@ -1096,3 +1096,18 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   always wins": the stamp rule exists so pauses and edits propagate. The wheel's pick is dropped by looking at the
   problem itself (reviewed since the pick was made, deleted, or set aside) rather than by hooking every finish path
   (banner, task card, mini timer, another computer), because a missed hook leaves the pick stuck.
+
+2026-11-14  Qt crash on a monitor change: record it, stay out of its way, and come back by itself
+  Windows crash records for Carmen are all Qt6Gui.dll, at QScreen::geometry (4 of 6) or QScreen::virtualSiblings
+  (resolved by matching the fault offset to the DLL's export table), always an access violation inside Qt's own
+  event loop with no Python frame. The machine has two monitors at 125% and 150% zoom, more that have come and
+  gone, and two GPUs: a monitor dropping out or returning while Qt still holds its screen object is the likely
+  trigger, but no native stack existed to prove it. Chose three small things over a rewrite or a Qt workaround:
+  native_crash.py records the full native stack at the next access violation (a vectored exception handler that
+  only looks; Windows' own dump setting needs a system-wide change), screen_guard.py makes Carmen's timers skip
+  window moves and raw Win32 calls for a few seconds after the screens change (and the mini timer stops calling
+  SetWindowPos twice a second when it is already on top), and a crash restart now puts the open windows back
+  (window_memory.py, saved when the state changes) instead of leaving Carmen invisible in the tray. Not done:
+  turning high-DPI scaling off (it would shrink the whole interface on these zoom levels) and hiding every window
+  on a screen change (hiding during teardown is itself a native call). If native_crash.log names a Qt function,
+  the next step follows from that, not from this guess.
