@@ -1272,11 +1272,7 @@ class _TopicView(QWidget):
 
     def _active_fate(self):
         """The problem the wheel chose and you have not finished yet, or None."""
-        fated = review_wheel.fate()
-        problem = review_store.get_problem(fated) if fated else None
-        if fated and problem is None:
-            review_wheel.clear()
-        return problem
+        return review_wheel.current()
 
     def _show_wheel_button(self):
         fated = self._active_fate()

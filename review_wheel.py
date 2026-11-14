@@ -6,7 +6,7 @@ is "fated": it is the only review you can start until you finish it. Starting an
 BREAK_COST points, then the wheel is yours again."""
 import random
 import uuid
-from datetime import date
+from datetime import date, datetime
 
 import review_store
 import score_store
@@ -15,7 +15,7 @@ BREAK_COST = 3
 MAX_LATE_DAYS = 10
 
 # fate: the problem id the wheel chose; started: whether that review has been begun.
-_state = {"fate": None, "started": False}
+_state = {"fate": None, "started": False, "since": None}
 
 
 def _day(text):
@@ -71,6 +71,22 @@ def fate():
 def set_fate(problem_id):
     _state["fate"] = problem_id
     _state["started"] = False
+    _state["since"] = datetime.now().isoformat()
+
+
+def current():
+    """The fated problem, or None. A fate is dropped here once its review was finished by any route
+    (the review tab, a task card, the mini timer, another computer), deleted, or set aside."""
+    fated = _state["fate"]
+    if fated is None:
+        return None
+    problem = review_store.get_problem(fated)
+    since = _state["since"] or ""
+    done = bool(problem and since and (problem.get("lastReviewedAt") or "") > since)
+    if problem is None or problem.get("outOfRotation") or done:
+        clear()
+        return None
+    return problem
 
 
 def mark_started(problem_id):
@@ -87,6 +103,7 @@ def review_done():
 def clear():
     _state["fate"] = None
     _state["started"] = False
+    _state["since"] = None
 
 
 def break_fate(today=None):
