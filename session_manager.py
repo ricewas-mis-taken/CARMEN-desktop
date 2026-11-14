@@ -70,6 +70,9 @@ _state = {
     # paused-then-PC-shutdown-then-resumed review still get recorded instead
     # of silently vanishing on Finish.
     "reviewProblemId": None,
+    # True when the review wheel picked this review (qt_ui/review_wheel.py): the history entry keeps
+    # the flag so it can say "Fated" next to the review.
+    "fated": False,
     # True for a "Until I burnout" task session (tasks_store.BURNOUT_MINUTES
     # duration, see qt_ui/tasks_tab.py's _start_burnout) -- a first-class,
     # persisted flag rather than something each UI surface has to guess at
@@ -382,6 +385,7 @@ def start_session(
     blocked_browser_profiles=None,
     hide_taskbar_badges=False,
     stop_taskbar_flashing=False,
+    fated=False,
 ):
     # api_server.py's /session/start already validates this for the
     # network-facing path, but start_session() is also called in-process
@@ -443,6 +447,7 @@ def start_session(
         _state["reviewProblemName"] = review_problem_name
         _state["reviewSubjectName"] = review_subject_name
         _state["reviewProblemId"] = review_problem_id
+        _state["fated"] = bool(fated)
         _state["isBurnout"] = is_burnout
         _state["sessionId"] = uuid.uuid4().hex
         _state["endedSessionId"] = None
@@ -704,6 +709,7 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None, restore_pa
     # resumed a few times.
     pomodoro = dict(_state["pomodoro"]) if _state["pomodoro"] is not None else None
     session_id = _state.get("sessionId")
+    fated = bool(_state.get("fated"))
 
     if was_active:
         session_history.append_entry(
@@ -729,6 +735,7 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None, restore_pa
                 # way to tell which task/subject/problem it was.
                 "reviewProblemName": review_problem_name,
                 "reviewSubjectName": review_subject_name,
+                "fated": fated,
                 "pomodoro": pomodoro,
                 "sessionId": session_id,
                 "isBurnout": bool(_state.get("isBurnout")),
@@ -758,6 +765,7 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None, restore_pa
     _state["reviewProblemName"] = None
     _state["reviewSubjectName"] = None
     _state["reviewProblemId"] = None
+    _state["fated"] = False
     _state["isBurnout"] = False
     _state["sessionId"] = None
     if was_active:
@@ -866,6 +874,7 @@ def _get_status_locked():
         "reviewProblemName": _state["reviewProblemName"],
         "reviewSubjectName": _state["reviewSubjectName"],
         "reviewProblemId": _state["reviewProblemId"],
+        "fated": bool(_state.get("fated")),
         "isFirstAttempt": is_first_attempt(_state),
         "isBurnout": _state["isBurnout"],
         "sessionId": _state.get("sessionId"),
