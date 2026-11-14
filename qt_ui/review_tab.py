@@ -2228,6 +2228,20 @@ def _can_drive_over(status):
     return not status.get("isActive") or bool(status.get("isPaused"))
 
 
+def finish_review_for_status(status):
+    """Finishes the review that rides on this running or waiting task session (the mini timer's Finish),
+    through its banner so it is recorded as a review rather than just ending the session."""
+    for banner in list(_live_banners):
+        try:
+            if (banner.is_running() and banner._end_session_on_finish and banner._problem
+                    and _session_belongs_to(banner._problem, status)):
+                banner._finish()
+                return True
+        except RuntimeError:
+            _live_banners.discard(banner)
+    return False
+
+
 def finish_review_from_card(token, name, seconds):
     """Finishes the review with this token from outside the Review tab (a task card's Finish). Through its
     live banner when there is one, so the banner and the card stay in step; otherwise straight to the

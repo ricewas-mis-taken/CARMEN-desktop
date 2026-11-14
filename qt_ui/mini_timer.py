@@ -30,7 +30,7 @@ RESIZE_MARGIN = 6
 MAX_SIZE = (480, 540)     # a runaway drag can never make it huge
 DEFAULT_SIZE = (250, 270)
 END_SIZE = QSize(34, 18)
-MIN_SIZE = (210, 200)
+MIN_SIZE = (230, 200)
 SAVE_DELAY_MS = 400
 CLICK_SLOP = 5     # pixels of movement that still count as a click, not a drag
 
@@ -130,6 +130,16 @@ def describe_timer(item):
     return label, clock, fraction, "Resume" if paused else "Pause", can_pause, can_pause, paused
 
 
+def can_finish(item):
+    """True when this timer is a review that is running now: it gets a Finish button that records it."""
+    kind, view = item["kind"], item["view"]
+    if kind == "review":
+        return bool(view.get("active"))
+    if kind == "session":
+        return bool(view.get("reviewProblemName") or session_manager.is_first_attempt(view))
+    return False
+
+
 class _EndButton(QPushButton):
     """End takes a double click, so one stray tap can't end a timer; one click only says so."""
     doubled = Signal()
@@ -167,6 +177,13 @@ class MiniTimer(QWidget):
         self._button = QPushButton("Pause", self)
         self._button.setCursor(Qt.PointingHandCursor)
         self._button.clicked.connect(self._toggle_pause)
+
+        self._finish = QPushButton("Finish", self)
+        self._finish.setCursor(Qt.PointingHandCursor)
+        self._finish.clicked.connect(self._finish_review)
+        self._finish.hide()
+        self._show_finish = False
+        self._frozen = {}              # timer key -> the clock it stopped on, while its "How did it go?" is open
 
         self._end = _EndButton("End", self)
         self._end.setCursor(Qt.PointingHandCursor)
@@ -330,6 +347,22 @@ class MiniTimer(QWidget):
                 review_store.unpark_review(view["token"])
             self.refresh()
 
+    def _finish_review(self):
+        """Finish the review: its clock stops where it is while the "How did it go?" step is open."""
+        item = self._current()
+        if item is None or not can_finish(item) or item["key"] in self._frozen:
+            return
+        key, kind, view = item["key"], item["kind"], item["view"]
+        self._frozen[key] = self._clock
+        from qt_ui import review_tab
+        if kind == "review":
+            done = review_tab.finish_review_from_card(view["token"], view["problemName"], view["elapsedSeconds"])
+        else:
+            done = review_tab.finish_review_for_status(view)
+        if not done:
+            self._frozen.pop(key, None)
+        self.refresh()
+
     def _hint_end(self):
         self._hint = True
         self._hint_timer.start()
@@ -366,6 +399,15 @@ class MiniTimer(QWidget):
             self._index = self._items.index(item)
             (self._label, self._clock, self._fraction, action, can_act,
              self._can_end, self._paused) = describe_timer(item)
+        live = {entry["key"] for entry in self._items}
+        self._frozen = {key: clock for key, clock in self._frozen.items() if key in live}
+        finishing = item is not None and item["key"] in self._frozen
+        if finishing:
+            self._clock = self._frozen[item["key"]]        # no longer counting up
+            can_act = self._can_end = False
+        self._show_finish = item is not None and can_finish(item)
+        self._finish.setVisible(self._show_finish)
+        self._finish.setEnabled(not finishing)
         self._button.setText(action)
         self._button.setEnabled(can_act)
         self._end.setEnabled(self._can_end)
@@ -387,13 +429,14 @@ class MiniTimer(QWidget):
         self._colours = key
         accent = colours["accent"]
         long_style = (
-            "QPushButton{background:%s;color:#FFFFFF;border:none;border-radius:13px;padding:0 14px;"
-            "font-size:14px;font-weight:600;}QPushButton:hover{background:%s;}"
+            "QPushButton{background:%s;color:#FFFFFF;border:none;border-radius:13px;padding:0 8px;"
+            "font-size:13px;font-weight:600;}QPushButton:hover{background:%s;}"
             "QPushButton:disabled{background:rgba(255,255,255,0.08);color:rgba(255,255,255,0.35);}")
         if primary:
             self._button.setStyleSheet(long_style % (accent, theme.darken(accent, 0.12)))
         else:
             self._button.setStyleSheet(long_style % ("rgba(255,255,255,0.16)", "rgba(255,255,255,0.26)"))
+        self._finish.setStyleSheet(long_style % (accent, theme.darken(accent, 0.12)))
         self._end.setStyleSheet(
             "QPushButton{background:rgba(255,92,100,0.20);color:#FFB3B8;border:none;border-radius:9px;"
             "padding:0;font-size:11px;font-weight:600;}QPushButton:hover{background:rgba(255,92,100,0.34);}"
@@ -413,8 +456,15 @@ class MiniTimer(QWidget):
         left = 10 + (24 + 4 if many else 4)
         right = self.width() - 10 - (24 + 4 if many else 4)
         middle = self.width() / 2
-        half = min(52, (right - left) / 2)                      # a smaller Pause, in the middle
-        self._button.setGeometry(int(middle - half), y, int(half * 2), height)
+        if self._show_finish:                                   # Pause and Finish side by side
+            gap = 6
+            each = int(min(76, (right - left - gap) / 2))
+            x = int(middle - (each * 2 + gap) / 2)
+            self._button.setGeometry(x, y, each, height)
+            self._finish.setGeometry(x + each + gap, y, each, height)
+        else:
+            half = min(52, (right - left) / 2)                  # a smaller Pause, in the middle
+            self._button.setGeometry(int(middle - half), y, int(half * 2), height)
         self._end.move(8, 6)
         self._prev.move(10, y + (height - self._prev.height()) // 2)
         self._next.move(self.width() - 10 - self._next.width(), y + (height - self._next.height()) // 2)
