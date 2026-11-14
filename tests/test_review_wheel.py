@@ -134,10 +134,14 @@ def test_a_review_finished_any_other_way_frees_the_wheel_too(qtbot, isolate_revi
 def test_the_button_names_the_fated_review_and_reopens_it_instead_of_the_wheel(
         qtbot, isolate_review_db, isolate_state, monkeypatch):
     view, one, two = _topic_with_two(qtbot)
-    assert view._wheel_button.text() == "Spin the wheel"
+    view.resize(420, 600)                                   # a narrow window must still show the pick
+    view.show()
+    qtbot.waitExposed(view)
+    assert view._wheel_button.isVisible() and not view._fate_strip.isVisible()
     review_wheel.set_fate(one["id"])
     view._show_wheel_button()
-    assert "One" in view._wheel_button.text()
+    assert view._fate_strip.isVisible() and not view._wheel_button.isVisible()
+    assert "One" in view._fate_strip._label.text()
     started = []
     monkeypatch.setattr(review_tab, "_ReviewStartDialog", lambda problem, on_start: started.append(problem["name"]))
     view._open_wheel()
