@@ -44,3 +44,15 @@ def test_sidebar_collapses_to_icons_when_narrow_and_comes_back(window):
 
     window._set_compact(False)
     assert window._nav_buttons["home"].text() == "Home"
+
+
+def test_the_update_button_sits_under_the_name_and_shows_in_the_shortest_window(window, monkeypatch):
+    import update_center
+    monkeypatch.setattr(update_center, "snapshot", lambda: {"available": True, "busy": False, "message": ""})
+    window.resize(10, 10)                                           # as short as the window can be made
+    window._sync_update_button()
+    QApplication.processEvents()
+    button = window._update_button
+    assert button.isVisible()
+    assert button.geometry().top() < window._nav_buttons["home"].geometry().top()     # above the pages
+    assert window._sidebar.rect().contains(button.geometry())                         # not clipped away

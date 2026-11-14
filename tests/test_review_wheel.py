@@ -249,3 +249,15 @@ def test_finishing_through_the_review_tab_banner_frees_the_wheel(qtbot, isolate_
     review_wheel.mark_started(problem["id"])
     tab._banner_finished()
     assert review_wheel.fate() is None
+
+
+def test_a_pick_made_before_the_since_field_existed_is_dropped_once_no_longer_due(
+        qtbot, isolate_review_db, isolate_state, monkeypatch):
+    view, one, two = _topic_with_two(qtbot)              # new problems are not due yet
+    review_wheel._state.pop("since", None)
+    review_wheel._state["fate"] = one["id"]
+    assert review_wheel.current() is None and review_wheel.fate() is None
+    due = dict(one, nextReviewDate=date.today().isoformat(), outOfRotation=False)
+    monkeypatch.setattr(review_store, "get_problem", lambda pid: due)
+    review_wheel._state["fate"] = one["id"]
+    assert review_wheel.current()["id"] == one["id"]     # still due: still fated
