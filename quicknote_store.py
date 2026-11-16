@@ -82,6 +82,16 @@ def _normalized(items):
     return [] if items == [""] else list(items)
 
 
+def file_signature():
+    """A cheap fingerprint of the saved note (its size and modified time), so a window can tell whether anything
+    changed without reading and parsing the file."""
+    try:
+        info = os.stat(PATH)
+        return (info.st_mtime_ns, info.st_size)
+    except OSError:
+        return None
+
+
 def export():
     with _lock:
         return _read()

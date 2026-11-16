@@ -100,7 +100,7 @@ def test_pomodoro_button_starts_a_pomodoro_session_for_this_task(qtbot, isolate_
     qtbot.addWidget(card)
     card.show()
 
-    monkeypatch.setattr(tasks_tab._PomodoroDialog, "get_settings", staticmethod(lambda parent=None: (25, 5, 4)))
+    monkeypatch.setattr(tasks_tab._PomodoroDialog, "get_settings", staticmethod(lambda parent=None, task_id=None: (25, 5, 4)))
 
     card._start_pomodoro()
 
@@ -125,7 +125,7 @@ def test_pomodoro_button_does_nothing_when_dialog_is_cancelled(qtbot, isolate_ta
     card = tasks_tab._TaskCard(task, on_changed=lambda: None)
     qtbot.addWidget(card)
 
-    monkeypatch.setattr(tasks_tab._PomodoroDialog, "get_settings", staticmethod(lambda parent=None: None))
+    monkeypatch.setattr(tasks_tab._PomodoroDialog, "get_settings", staticmethod(lambda parent=None, task_id=None: None))
 
     card._start_pomodoro()
 
@@ -197,7 +197,7 @@ def test_a_pomodoro_can_start_while_a_review_of_the_task_is_running(qtbot, isola
     card.update_dynamic(session_manager.get_status(), session_history.load_all())
     assert card._review_pomodoro_button.isVisible()
 
-    monkeypatch.setattr(tasks_tab._PomodoroDialog, "get_settings", staticmethod(lambda parent=None: (25, 5, 4)))
+    monkeypatch.setattr(tasks_tab._PomodoroDialog, "get_settings", staticmethod(lambda parent=None, task_id=None: (25, 5, 4)))
     card._review_pomodoro_button.click()
 
     status = session_manager.get_status()
@@ -206,8 +206,8 @@ def test_a_pomodoro_can_start_while_a_review_of_the_task_is_running(qtbot, isola
     assert [p.get("reviewProblemName") for p in waiting] == ["Quadratics 1"]    # the review waits, not ended
     card.update_dynamic(status, session_history.load_all())
     assert not card._review_pomodoro_button.isVisible()
-
-
+
+
 def test_burnout_can_start_over_a_paused_review_session(qtbot, isolate_tasks, isolate_state):
     task = _make_task()
     card = tasks_tab._TaskCard(task, on_changed=lambda: None)
@@ -257,3 +257,17 @@ def test_a_session_over_a_review_leaves_it_counting_beside_it(qtbot, isolate_tas
     assert review_store.get_active_review()["isPaused"] is True
     session_manager.resume_session()
     assert review_store.get_active_review()["isPaused"] is False
+
+
+def test_show_task_opens_that_cards_start_choices_and_a_pomodoro_remembers_its_numbers(qtbot, isolate_state):
+    task = tasks_store.create_task({"name": "Chinese", "targetMinutes": 45, "color": "#e53935"})
+    tab = tasks_tab.TasksTab()
+    qtbot.addWidget(tab)
+    tab.show_task(task["id"])
+    assert tab._cards[task["id"]]._armed
+    assert tasks_tab.last_pomodoro(task["id"]) is None
+    tasks_tab.remember_pomodoro(task["id"], (50, 10, 3))
+    assert tasks_tab.last_pomodoro(task["id"]) == (50, 10, 3)
+    assert tasks_tab.last_pomodoro("other") == (50, 10, 3)          # a task never done falls back to the last used
+    dialog = tasks_tab._PomodoroDialog(None, task["id"])
+    assert (dialog._focus_edit.text(), dialog._break_edit.text(), dialog._cycles_edit.text()) == ("50", "10", "3")

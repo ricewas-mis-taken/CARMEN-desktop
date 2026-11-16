@@ -29,15 +29,15 @@ def test_summary_orders_open_tasks_by_time_left(isolate_state, tmp_path, monkeyp
 def test_home_tab_renders_and_navigates(qtbot, isolate_state, tmp_path, monkeypatch):
     monkeypatch.setattr(tasks_store, "TASKS_PATH", str(tmp_path / "tasks.json"))
     monkeypatch.setattr(theme, "load_setting", lambda: {"name": "Dusk"})
-    tasks_store.create_task({"name": "Chinese", "targetMinutes": 45, "color": "#e53935"})
+    chinese = tasks_store.create_task({"name": "Chinese", "targetMinutes": 45, "color": "#e53935"})
     went = []
-    tab = home.HomeTab(on_navigate=went.append)
+    tab = home.HomeTab(on_navigate=lambda key, task_id=None: went.append((key, task_id)))
     qtbot.addWidget(tab)
     tab.show()
     buttons = [b for b in tab.findChildren(home.QPushButton) if b.text() == "Start a session"]
     assert buttons
     buttons[0].click()
-    assert went == ["focus"]
+    assert went == [("tasks", chinese["id"])]
 
 
 def test_options_dialog_saves_a_theme(qtbot, monkeypatch):

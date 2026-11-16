@@ -65,8 +65,16 @@ def test_window_is_frameless_on_top_and_resizable(qtbot, isolate_state):
     assert (win.width(), win.height()) == (300, 340)
 
 
-def test_background_is_solid_black():
-    assert mini_timer.BACKGROUND.alpha() == 255 and mini_timer.BACKGROUND.name() == "#000000"
+def test_the_window_wears_the_chosen_theme(qtbot, isolate_state, monkeypatch):
+    import theme
+    win = mini_timer.MiniTimer()
+    qtbot.addWidget(win)
+    win.show()
+    for name in ("Dusk", "Ember"):
+        monkeypatch.setattr(theme, "current_colours", lambda n=name: theme.resolve({"name": n}))
+        image = win.grab().toImage()
+        corner = image.pixelColor(win.width() // 2, 3)
+        assert corner.name().upper() == theme.THEMES[name]["sidebar"].upper()
 
 
 def test_has_a_close_x_and_no_resize_grip(qtbot, isolate_state):
@@ -85,9 +93,9 @@ def test_edges_and_corners_are_resize_handles(qtbot, isolate_state):
     from PySide6.QtCore import QPointF, Qt
     win = mini_timer.MiniTimer()
     qtbot.addWidget(win)
-    win.resize(200, 240)
+    win.resize(240, 240)
     assert win._edges_at(QPointF(100, 120)) == Qt.Edge(0)
-    assert win._edges_at(QPointF(199, 239)) == Qt.RightEdge | Qt.BottomEdge
+    assert win._edges_at(QPointF(239, 239)) == Qt.RightEdge | Qt.BottomEdge
     assert win._edges_at(QPointF(2, 120)) == Qt.LeftEdge
     assert win._edges_at(QPointF(100, 1)) == Qt.TopEdge
 
@@ -147,22 +155,87 @@ def test_dragging_the_middle_moves_and_never_resizes(qtbot, isolate_state):
     from PySide6.QtCore import QPointF, Qt
     win = mini_timer.MiniTimer()
     qtbot.addWidget(win)
-    win.resize(200, 240)
+    win.resize(240, 240)
     win.move(100, 100)
     win._drag_offset = QPointF(50, 50)
     assert win._edges_at(QPointF(100, 120)) == Qt.Edge(0)
     assert win._resize_start is None
-    assert (win.width(), win.height()) == (200, 240)
+    assert (win.width(), win.height()) == (240, 240)
 
 
 def test_edge_resize_is_clamped_and_cannot_get_huge(qtbot, isolate_state):
     from PySide6.QtCore import QPointF, QRect, Qt
     win = mini_timer.MiniTimer()
     qtbot.addWidget(win)
-    win.setGeometry(100, 100, 200, 240)
+    win.setGeometry(100, 100, 240, 240)
     win._resize_edges = Qt.RightEdge | Qt.BottomEdge
-    win._resize_start = (QPointF(300, 340), QRect(win.geometry()))
+    win._resize_start = (QPointF(340, 340), QRect(win.geometry()))
     win._resize_to(QPointF(5000, 5000))
     assert (win.width(), win.height()) == mini_timer.MAX_SIZE
     win._resize_to(QPointF(-5000, -5000))
-    assert (win.width(), win.height()) == (150, 170)
+    assert (win.width(), win.height()) == mini_timer.MIN_SIZE
+
+
+def _two_sessions():
+    sm.start_session(30, "soft", [], [], source="task", event_id="a", event_title="Alpha")
+    sm.pause_session("break")
+    sm.start_session(30, "soft", [], [], source="task", event_id="b", event_title="Beta")
+
+
+def test_arrows_switch_between_the_running_session_and_the_ones_waiting(qtbot, isolate_state):
+    _two_sessions()
+    win = mini_timer.MiniTimer()
+    qtbot.addWidget(win)
+    win.show()
+    assert win._prev.isVisible() and win._next.isVisible()
+    assert "Beta" in win._label and win._button.text() == "Pause"
+    win._next.click()
+    assert "Alpha" in win._label and win._button.text() == "Switch to this"
+    win._button.click()                                    # the waiting one takes over
+    assert sm.get_status()["eventTitle"] == "Alpha"
+    win._prev.click() if len(win._items) > 1 else None
+    assert "Beta" in win._label or "Alpha" in win._label
+
+
+def test_end_on_a_waiting_session_ends_only_that_one(qtbot, isolate_state):
+    _two_sessions()
+    win = mini_timer.MiniTimer()
+    qtbot.addWidget(win)
+    win.show()
+    win._next.click()
+    win._end.doubled.emit()
+    status = sm.get_status()
+    assert status["eventTitle"] == "Beta" and not status.get("parkedSessions")
+    assert not win._prev.isVisible()                       # one timer left: no arrows
+
+
+def test_a_single_timer_shows_a_long_pause_and_a_small_end_and_no_arrows(qtbot, isolate_state):
+    sm.start_session(30, "soft", [], [], source="task", event_id="a", event_title="Alpha")
+    win = mini_timer.MiniTimer()
+    qtbot.addWidget(win)
+    win.show()
+    assert not win._prev.isVisible() and not win._next.isVisible()
+    assert win._end.text() == "End" and not win._end.geometry().intersects(win._button.geometry())
+    centre = win._button.geometry().center().x()
+    assert abs(centre - win.width() / 2) <= 1                       # Pause sits in the middle
+    win._end.click()                                                # one click only says how to end
+    assert win._hint and sm.get_status()["isActive"]
+    win._end.doubled.emit()
+    assert not sm.get_status()["isActive"]
+
+
+def test_the_pause_budget_is_not_on_the_mini_timer(qtbot, isolate_state):
+    sm.start_session(30, "soft", [], [], source="task", event_id="a", event_title="Alpha")
+    win = mini_timer.MiniTimer()
+    qtbot.addWidget(win)
+    win.show()
+    assert not hasattr(win, "_budget") and win.toolTip() == ""
+
+
+def test_the_size_keeps_its_share_of_the_screen_on_another_monitor():
+    from PySide6.QtCore import QRect
+    small, big = QRect(0, 0, 1280, 720), QRect(0, 0, 2560, 1440)
+    ratio = mini_timer.size_ratio((250, 270), small)
+    assert mini_timer.scaled_size(ratio, big, (0, 0), (9999, 9999)) == (500, 540)
+    assert mini_timer.scaled_size(ratio, big)[0] == 480 and mini_timer.scaled_size(ratio, big)[1] == 540
+    assert mini_timer.scaled_size([0.01, 0.01], small) == mini_timer.MIN_SIZE

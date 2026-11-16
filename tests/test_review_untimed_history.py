@@ -41,11 +41,16 @@ def test_a_first_attempt_is_filed_as_one(setup):
     assert sm.is_first_attempt(entry | {"reviewProblemId": None})
 
 
-def test_not_filed_when_the_same_tasks_session_already_counts_it(setup):
+def test_beside_the_same_tasks_session_it_is_filed_but_adds_no_time(setup):
     task, topic, problem = setup
     sm.start_session(30, "soft", [], [], source="task", event_id=task["id"], event_title="usaco")
-    assert review_tab._file_untimed_review(problem, 600) is None
-    assert session_history.load_all() == []
+    entry = review_tab._file_untimed_review(problem, 600)
+    assert entry and entry["beside"] and entry["sessionId"].startswith("beside-")
+    assert session_history.load_all() == []                                  # nothing adds it up
+    assert session_history.load_all(include_beside=True) == [entry]          # the history page and sync see it
+    assert entry in session_history.entries_ended_after(None)
+    import tasks_store
+    assert tasks_store.logged_seconds_for_date(task, date.today(), session_history.load_all()) == 0
 
 
 def test_filed_when_some_other_session_was_running(setup):
@@ -63,3 +68,13 @@ def test_a_topic_with_no_linked_task_has_nothing_to_count_toward(isolate_state):
 
 def test_zero_seconds_is_not_filed(setup):
     assert review_tab._file_untimed_review(setup[2], 0) is None
+
+
+def test_a_session_filed_early_as_superseded_is_replaced_when_it_really_ends(isolate_state):
+    stub = {"sessionId": "s1", "startTime": "2026-11-07T15:00:00", "endTime": "2026-11-07T15:17:00", "endType": "superseded"}
+    real = {"sessionId": "s1", "startTime": "2026-11-07T15:00:00", "endTime": "2026-11-07T19:00:00", "endType": "manual"}
+    session_history.append_entry(stub)
+    session_history.append_entry(real)
+    assert [e["endTime"] for e in session_history.load_all()] == ["2026-11-07T19:00:00"]
+    session_history.append_entry(stub)                       # an ordinary duplicate is still ignored
+    assert len(session_history.load_all()) == 1

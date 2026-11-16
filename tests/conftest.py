@@ -274,3 +274,11 @@ def _someone_is_at_the_computer(monkeypatch):
     """Screen time only counts while there is input; tests must not depend on how long the machine sat idle."""
     import activity
     monkeypatch.setattr(activity, "idle_seconds", lambda: 0.0)
+
+
+@pytest.fixture(autouse=True)
+def no_enforcement_grace(monkeypatch):
+    """Real sessions ignore apps for a few seconds as they begin (see session_manager.begin_enforcement_grace);
+    tests that start a session and enforce at once must not wait for it. test_enforcement_grace turns it on."""
+    import session_manager
+    monkeypatch.setattr(session_manager, "ENFORCEMENT_GRACE_SECONDS", 0.0)

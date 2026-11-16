@@ -89,3 +89,48 @@ def test_the_page_says_when_a_move_is_too_far(isolate_review_db, qtbot):
     qtbot.addWidget(tab)
     tab._moved(p, date.today() + timedelta(days=9))
     assert "week" in tab._hint.text()
+
+
+def test_dragging_shows_each_days_cost_and_the_slider_shows_more_weeks(isolate_review_db, qtbot):
+    from qt_ui.week_dialog import WeekDialog, _DayRow, cost_text
+    p = _problem("a", date.today())
+    tab = WeekDialog()
+    qtbot.addWidget(tab)
+    rows = [tab._rows.itemAt(i).widget() for i in range(tab._rows.count())]
+    rows = [r for r in rows if isinstance(r, _DayRow)]
+    assert len(rows) == 7
+    tab.drag_started(review_store.get_problem(p["id"]))
+    assert rows[0]._cost.text() == "" and rows[1]._cost.text() == "-3 points" and rows[7 - 1]._cost.text() == "-18 points"
+    tab.drag_ended()
+    assert rows[1]._cost.text() == ""
+    tab._span.setValue(3)
+    assert len([r for r in (tab._rows.itemAt(i).widget() for i in range(tab._rows.count())) if isinstance(r, _DayRow)]) == 21
+    assert cost_text(-6) == "costs 6 points" and cost_text(0) == "free"
+
+
+def test_a_reviews_time_comes_from_your_own_attempts():
+    import week_plan
+    history = {1: [(600, 3), (1200, 3)], 2: [(300, 3)], 3: []}
+    typical = week_plan.typical_minutes(history)
+    assert 8 < typical < 14                                        # between the two problems' own averages
+    own = week_plan.expected_minutes(1, history)
+    assert own > week_plan.expected_minutes(2, history)            # the slower problem is expected to take longer
+    assert abs(week_plan.expected_minutes(3, history) - typical) < 0.1   # never timed: a typical review
+    newest_longer = week_plan.expected_minutes(1, {1: [(1200, 3), (600, 3)]})
+    assert newest_longer > own                                     # the recent attempt counts most
+    shaky = week_plan.expected_minutes(1, {1: [(600, 5)]}, typical=10)
+    solid = week_plan.expected_minutes(1, {1: [(600, 1)]}, typical=10)
+    assert shaky > solid
+    assert week_plan.expected_minutes(9, {}) == week_plan.REVIEW_WEIGHT
+
+
+def test_each_review_bubble_says_what_it_loses_on_its_day(isolate_review_db, qtbot):
+    from qt_ui.week_dialog import WeekDialog, _Tag
+    p = _problem("a", date.today())
+    review_store.move_review(p["id"], date.today() + timedelta(days=2))
+    tab = WeekDialog()
+    qtbot.addWidget(tab)
+    tags = tab.findChildren(_Tag)
+    assert len(tags) == 1
+    from PySide6.QtWidgets import QLabel
+    assert "-6 pts" in [label.text() for label in tags[0].findChildren(QLabel)]

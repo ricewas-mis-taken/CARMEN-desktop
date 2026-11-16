@@ -91,6 +91,185 @@ def test_the_reason_popup_pauses_with_the_chosen_reason(qtbot, isolate_state):
     popup = pause_reason.ask(None, lambda: done.append(1))
     qtbot.addWidget(popup)
     assert not session_manager.get_status()["isPaused"]
-    popup._choose("checking")
+    popup._choose("checking")                       # checking something needs a word on what
+    assert not session_manager.get_status()["isPaused"] and done == []
+    popup._choose("checking", "looking up the formula")
     assert session_manager.get_status()["isPaused"] and done == [1]
-    assert session_manager._state["violationLog"][-1]["pauseReason"] == "checking"
+    marker = session_manager._state["violationLog"][-1]
+    assert marker["pauseReason"] == "checking" and marker["pauseNote"] == "looking up the formula"
+
+
+def test_the_budget_note_for_the_task_and_mini_timer(qtbot, isolate_state):
+    from qt_ui import pause_reason
+    session_manager.start_session(50, "soft", [], [])
+    popup = pause_reason.ask(None)
+    qtbot.addWidget(popup)
+    popup.close()
+    text, _colour = pause_reason.budget_note(session_manager.get_status())
+    assert text.startswith("Pause budget:") and "left" in text
+
+
+def test_live_budget_counts_an_open_checking_pause():
+    from datetime import timedelta
+    log = _log((10, "pause", "checking"))
+    now = T0 + timedelta(minutes=13)
+    live = pause_budget.live({"isActive": True, "startTime": T0.isoformat(), "secondsRemaining": 47 * 60,
+                              "violationLog": log}, now)
+    assert live["budget_seconds"] == 12 * 60 - 12 * 60 + 360 or live["budget_seconds"] == 360
+    assert live["used_seconds"] == 180 and live["left_seconds"] == 180 and live["over_seconds"] == 0
+    assert pause_budget.live({"isActive": False}) is None
+
+
+def test_break_pauses_are_not_in_the_live_budget():
+    from datetime import timedelta
+    log = _log((10, "pause", "break"))
+    live = pause_budget.live({"isActive": True, "startTime": T0.isoformat(), "secondsRemaining": 1800,
+                              "violationLog": log}, T0 + timedelta(minutes=20))
+    assert live["used_seconds"] == 0
+
+
+def test_a_long_break_is_free_for_the_time_set_then_counts():
+    log = [{"kind": "pause", "timestamp": T0.isoformat(), "pauseReason": "long_break", "pauseMinutes": 30},
+           {"kind": "resume", "timestamp": (T0 + timedelta(minutes=50)).isoformat()}]
+    items = pause_budget.pauses(log, T0.isoformat(), (T0 + timedelta(minutes=60)).isoformat())
+    assert items == [{"reason": "long_break", "seconds": 30 * 60 + 60}, {"reason": "overrun", "seconds": 20 * 60 - 60}]
+    result = pause_budget.summarize({"violationLog": log, "startTime": T0.isoformat(),
+                                     "endTime": (T0 + timedelta(minutes=60)).isoformat()})
+    assert result["free_seconds"] == 31 * 60 and result["escape_seconds"] == 19 * 60
+
+
+def test_a_long_break_within_its_time_costs_nothing():
+    log = [{"kind": "pause", "timestamp": T0.isoformat(), "pauseReason": "long_break", "pauseMinutes": 60},
+           {"kind": "resume", "timestamp": (T0 + timedelta(minutes=58)).isoformat()}]
+    result = pause_budget.summarize({"violationLog": log, "startTime": T0.isoformat(),
+                                     "endTime": (T0 + timedelta(minutes=120)).isoformat()})
+    assert result["escape_seconds"] == 0 and result["cost"] == 0
+
+
+def test_the_break_over_notice_comes_once(isolate_state):
+    session_manager.start_session(60, "soft", [], [])
+    session_manager.pause_session("long_break", None, 15)
+    assert session_manager.pop_break_over() is None
+    later = datetime.now() + timedelta(minutes=16)
+    assert session_manager.pop_break_over(later) == 15
+    assert session_manager.pop_break_over(later) is None
+
+
+def test_the_popup_sends_the_minutes_of_a_long_break(qtbot, isolate_state):
+    from qt_ui import pause_reason
+    session_manager.start_session(60, "soft", [], [])
+    popup = pause_reason.ask(None)
+    qtbot.addWidget(popup)
+    popup._minutes.setValue(45)
+    popup._choose("long_break")
+    marker = session_manager._state["violationLog"][-1]
+    assert marker["pauseReason"] == "long_break" and marker["pauseMinutes"] == 45
+
+
+def test_a_decide_later_pause_is_free_while_open_and_counts_if_never_answered():
+    log = [{"kind": "pause", "timestamp": T0.isoformat(), "pauseReason": "later"}]
+    now = T0 + timedelta(minutes=30)
+    status = {"isActive": True, "startTime": T0.isoformat(), "secondsRemaining": 1800, "violationLog": log}
+    assert pause_budget.live(status, now)["used_seconds"] == 0
+    summary = pause_budget.summarize({"violationLog": log, "startTime": T0.isoformat(), "endTime": now.isoformat()})
+    assert summary["escape_seconds"] == 30 * 60
+
+
+def test_a_short_later_pause_becomes_a_break_and_a_long_one_asks(isolate_state):
+    session_manager.start_session(60, "soft", [], [])
+    session_manager.pause_session("later")
+    session_manager.resume_session()
+    assert session_manager._state["violationLog"][0]["pauseReason"] == "break"
+    assert session_manager.pop_pending_label() is None
+
+    session_manager.pause_session("later")
+    marker = session_manager._state["violationLog"][-1]
+    marker["timestamp"] = (datetime.now() - timedelta(minutes=40)).isoformat()
+    session_manager.resume_session()
+    asked = session_manager.pop_pending_label()
+    assert asked["timestamp"] == marker["timestamp"] and asked["seconds"] >= 40 * 60
+    assert session_manager.pop_pending_label() is None
+    assert marker["pauseReason"] == "later"
+    assert session_manager.label_pause(asked["timestamp"], "interrupted")
+    assert marker["pauseReason"] == "interrupted"
+    assert not session_manager.label_pause(asked["timestamp"], "later")
+    assert not session_manager.label_pause("nope", "break")
+
+
+def test_the_label_popup_writes_the_answer_onto_the_pause(qtbot, isolate_state):
+    from qt_ui import pause_label
+    session_manager.start_session(60, "soft", [], [])
+    session_manager.pause_session("later")
+    marker = session_manager._state["violationLog"][-1]
+    marker["timestamp"] = (datetime.now() - timedelta(minutes=30)).isoformat()
+    session_manager.resume_session()
+    asked = session_manager.pop_pending_label()
+    popup = pause_label.ask(asked["timestamp"], asked["seconds"])
+    qtbot.addWidget(popup)
+    popup._buttons["checking"].click()
+    assert marker["pauseReason"] == "checking"
+    assert pause_label.length_text(1800) == "30 minutes" and pause_label.length_text(5400) == "1 h 30 min"
+
+
+def test_burnout_and_review_sessions_have_no_pause_budget(isolate_state):
+    log = _log((10, "pause", "checking"), (50, "resume", None))
+    base = {"violationLog": log, "startTime": T0.isoformat(), "endTime": (T0 + timedelta(minutes=60)).isoformat()}
+    assert pause_budget.summarize(base)["cost"] > 0
+    for extra in ({"isBurnout": True}, {"source": "review"}):
+        result = pause_budget.summarize({**base, **extra})
+        assert result["cost"] == 0 and result["escape_seconds"] == 0 and result["exempt"]
+    live = {"isActive": True, "startTime": T0.isoformat(), "secondsRemaining": 480 * 60, "violationLog": log}
+    assert pause_budget.live(live, T0 + timedelta(minutes=60))["budget_seconds"] > 0
+    assert pause_budget.live({**live, "isBurnout": True}, T0 + timedelta(minutes=60)) is None
+    assert pause_budget.live({**live, "source": "review"}, T0 + timedelta(minutes=60)) is None
+
+
+def test_ending_a_burnout_session_after_a_long_pause_costs_no_points(isolate_state):
+    import score_store
+    from datetime import date
+
+    def pause_events():
+        return [e for e in score_store.events_between(date.today() - timedelta(days=1), date.today() + timedelta(days=1))
+                if e.get("kind") == "pauses"]
+
+    session_manager.start_session(480, "soft", [], [], source="task", event_id="t", event_title="T", is_burnout=True)
+    session_manager.pause_session("checking")
+    session_manager._state["violationLog"][-1]["timestamp"] = (datetime.now() - timedelta(hours=3)).isoformat()
+    session_manager.resume_session()
+    session_manager.end_session()
+    assert pause_events() == []
+
+    session_manager.start_session(60, "soft", [], [], source="task", event_id="t", event_title="T")
+    session_manager.pause_session("checking")
+    session_manager._state["violationLog"][-1]["timestamp"] = (datetime.now() - timedelta(hours=3)).isoformat()
+    session_manager.resume_session()
+    session_manager.end_session()
+    assert pause_events()                          # an ordinary session still pays for it
+
+
+def test_the_pause_button_pauses_in_one_click_and_a_reason_chip_in_one_tap(qtbot, isolate_state):
+    from qt_ui import pause_reason
+    session_manager.start_session(60, "soft", [], [])
+    popup = pause_reason.ask(None)
+    qtbot.addWidget(popup)
+    popup._go_button.click()
+    assert session_manager.get_status()["isPaused"]
+    assert session_manager._state["violationLog"][-1]["pauseReason"] == "later"
+    session_manager.resume_session()
+    popup = pause_reason.ask(None)
+    qtbot.addWidget(popup)
+    popup._choices["interrupted"].click()
+    assert session_manager._state["violationLog"][-1]["pauseReason"] == "interrupted"
+
+
+def test_checking_and_long_break_open_their_detail_instead_of_pausing(qtbot, isolate_state):
+    from qt_ui import pause_reason
+    session_manager.start_session(60, "soft", [], [])
+    popup = pause_reason.ask(None)
+    qtbot.addWidget(popup)
+    popup.show()
+    popup._choices["checking"].click()
+    assert popup._note_row.isVisible() and not session_manager.get_status()["isPaused"]
+    popup._choices["long_break"].click()
+    assert popup._minutes_row.isVisible() and not popup._note_row.isVisible()
+    assert not session_manager.get_status()["isPaused"]

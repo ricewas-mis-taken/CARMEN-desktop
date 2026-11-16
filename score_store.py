@@ -21,7 +21,6 @@ import threading
 from datetime import date, datetime, timedelta
 
 import paths
-import server_clock
 
 PATH = paths.private_path("score.json")
 
@@ -54,80 +53,11 @@ def load():
     return _empty()
 
 
-_change_listeners = []
-
-
-def add_change_listener(listener):
-    _change_listeners.append(listener)
-
-
-def _save(data, touch=True):
-    if touch:
-        data["updatedAt"] = server_clock.next_stamp()
+def _save(data):
     tmp = PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f)
     os.replace(tmp, PATH)
-    if touch:
-        for listener in list(_change_listeners):
-            try:
-                listener()
-            except Exception:
-                pass
-
-
-def export():
-    """{"stamp", "events", "settledThrough"} to share with the other computer."""
-    with _lock:
-        data = load()
-        if data.get("updatedAt") is None and data["events"]:
-            _save(data)
-        return {"stamp": data.get("updatedAt"), "events": data["events"],
-                "settledThrough": data.get("settledThrough")}
-
-
-def _clean_events(events):
-    if not isinstance(events, list) or len(events) > 20000:
-        return None
-    clean = []
-    for e in events:
-        if (isinstance(e, dict) and isinstance(e.get("key"), str) and isinstance(e.get("date"), str)
-                and isinstance(e.get("points"), (int, float)) and not isinstance(e.get("points"), bool)):
-            clean.append({"key": e["key"][:200], "date": e["date"][:10], "kind": str(e.get("kind", ""))[:30],
-                          "points": int(e["points"]), "note": str(e.get("note", ""))[:200]})
-    return clean
-
-
-def apply_remote(events, settled_through, stamp):
-    """Merges the other computer's ledger into ours. Every event has its own key, so the two ledgers are
-    united (an event on both computers is kept once, and if the two disagree about its points the same one
-    wins on both sides). The score is then identical on both. Returns True if ours changed."""
-    remote = _clean_events(events)
-    if remote is None:
-        return False
-    with _lock:
-        data = load()
-        mine = {e["key"]: e for e in data["events"]}
-        theirs = {e["key"]: e for e in remote}
-        merged = dict(mine)
-        for key, e in theirs.items():
-            old = merged.get(key)
-            if old is None or (e["points"], e["note"]) > (old["points"], old["note"]):
-                merged[key] = e
-        settled = max([d for d in (data.get("settledThrough"), settled_through) if isinstance(d, str)] or [None],
-                      default=None)
-        changed = merged != mine or settled != data.get("settledThrough")
-        if not changed:
-            return False
-        data["events"] = sorted(merged.values(), key=lambda e: (e["date"], e["key"]))
-        data["settledThrough"] = settled
-        # When the other side lacks something we have, our merged ledger still has to go back to it.
-        if merged != theirs:
-            _save(data)
-        else:
-            data["updatedAt"] = stamp
-            _save(data, touch=False)
-        return True
 
 
 def clamp(value):
@@ -168,10 +98,38 @@ def add_event(key, day, kind, points, note="", _data=None):
         if any(e["key"] == key for e in data["events"]):
             return False
         data["events"].append({"key": key, "date": day.isoformat() if hasattr(day, "isoformat") else str(day),
-                               "kind": kind, "points": points, "note": note})
+                               "kind": kind, "points": points, "note": note,
+                               "updatedAt": datetime.now().isoformat()})
         if own:
             _save(data)
         return True
+
+
+def events(include_deleted=True):
+    """The ledger's events, for sync (it treats them like any other keyed record)."""
+    with _lock:
+        return load()["events"]
+
+
+def save_events(items):
+    """Writes events merged in from another computer, keeping this one's own settled-through day."""
+    with _lock:
+        data = load()
+        data["events"] = items
+        _save(data)
+
+
+def stamp_unsynced():
+    """Events from before the ledger synced have no stamp; give them one (once) so the next sync sends them."""
+    with _lock:
+        data = load()
+        changed = False
+        for event in data["events"]:
+            if not event.get("updatedAt"):
+                event["updatedAt"] = datetime.now().isoformat()
+                changed = True
+        if changed:
+            _save(data)
 
 
 def events_between(first, last, data=None):

@@ -17,6 +17,8 @@ try:                                    # a hard crash of the interpreter or Qt 
     import faulthandler
     import paths as _paths
     _crash_file = open(_paths.private_path("crash.log"), "a", buffering=1)
+    import datetime as _dt
+    _crash_file.write(_dt.datetime.now().strftime("--- Carmen started %Y-%m-%d %H:%M:%S ---") + chr(10))
     faulthandler.enable(_crash_file, all_threads=True)
 except Exception:
     pass
@@ -117,6 +119,8 @@ def main():
     # thread below is the one that matters most — it can trigger
     # enforcer.py's lock overlays at any time once it starts).
     app = QApplication(sys.argv)
+    import gc_guard
+    gc_guard.install(app)            # cycle collection only ever runs on this thread (see gc_guard)
     # Background threads (sync, saving, the API) share the interpreter lock with the interface. The default
     # lets one of them hold it for 5 ms at a time, which is felt under a pen; 0.5 ms hands it back sooner.
     sys.setswitchinterval(0.0005)
@@ -227,6 +231,7 @@ def main():
     # Updates no longer restart the app: a button in the window applies them to the running copy.
     import update_center
     update_center.start_baseline()
+    update_center.relaunch_hook = lambda: on_quit()
     update_center.watch(stop_event)
 
     def _busy():
@@ -274,6 +279,8 @@ def main():
         # one (that goes through on_session_end instead, same toast as any
         # other session end) -- see window_tracker.run_polling_loop's
         # on_phase_change docstring.
+        logger.info("pomodoro phase change -> %s (cycle %s of %s); showing its toast",
+                    info["phase"], info["cycle"], info["totalCycles"])
         if info["phase"] == "break":
             calendar_toast.show_toast(
                 "Break time", f"Cycle {info['cycle']} of {info['totalCycles']} done — take a break."
@@ -283,10 +290,17 @@ def main():
                 "Back to focus", f"Starting cycle {info['cycle']} of {info['totalCycles']}."
             )
 
+    def on_pause_label(info):
+        # A "decide later" pause just ended: ask what it was, on the GUI thread.
+        def ask():
+            from qt_ui import pause_label
+            pause_label.ask(info["timestamp"], info["seconds"])
+        qt_gui_thread.run_on_gui_thread(ask)
+
     polling_thread = threading.Thread(
         target=window_tracker.run_polling_loop,
         args=(stop_event, on_session_end),
-        kwargs={"tray_icon": icon, "on_phase_change": on_phase_change},
+        kwargs={"tray_icon": icon, "on_phase_change": on_phase_change, "on_pause_label": on_pause_label},
         daemon=True,
     )
     polling_thread.start()
@@ -332,7 +346,7 @@ def main():
 
     stop_event.set()
     if (auto_updater.restart_was_requested() or dev_watcher.restart_was_requested()
-            or code_watcher.restart_was_requested()):
+            or code_watcher.restart_was_requested() or update_center.relaunch_was_requested()):
         # Re-exec in place (same PID, fresh interpreter) rather than
         # spawning a new process and exiting this one -- avoids a race
         # where the child tries to rebind api_server's port before this

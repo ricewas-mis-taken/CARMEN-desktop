@@ -749,7 +749,7 @@ class _Flame(QWidget):
 class HomeTab(QWidget):
     def __init__(self, on_navigate=None):
         super().__init__()
-        self._on_navigate = on_navigate or (lambda key: None)
+        self._on_navigate = on_navigate or (lambda key, task_id=None: None)
         self._wide = None
         self._compact = None
         self._signature = None
@@ -986,7 +986,8 @@ class HomeTab(QWidget):
                     f"{format_minutes(top['period_left'])} left {top['period_phrase']}, over {days} day{'s' if days != 1 else ''}",
                     13, FAINT))
             action = button("Start a session", _PRIMARY, height=44)
-            action.clicked.connect(lambda: self._go("focus"))
+            task_id = top["task"].get("id")
+            action.clicked.connect(lambda: self._on_navigate("tasks", task_id))     # that task's card, Start open
             actions.addWidget(action)
         elif data["due_reviews"]:
             text.addWidget(self._big(f"{data['due_reviews']} reviews are due"))
@@ -1101,6 +1102,10 @@ class HomeTab(QWidget):
         grade = QLabel(score_store.grade(value))
         grade.setStyleSheet(f"color:{INK};font-size:30px;font-weight:800;background:transparent;")
         row.addWidget(grade, 0, Qt.AlignBottom)
+        from qt_ui import explainer
+        info = explainer.InfoButton("score", "How the score and vacation minutes work")
+        info.setProperty("tourId", "score-info")
+        row.addWidget(info, 0, Qt.AlignTop)
         layout.addLayout(row)
         layout.addWidget(_ScoreTrack(value))
         moved = QLabel(f"{'+' if change > 0 else ''}{change} this week" if change else "No change this week")

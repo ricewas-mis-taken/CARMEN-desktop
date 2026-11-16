@@ -84,14 +84,17 @@ def test_ending_one_waiting_session_leaves_the_others(qtbot, isolate_state):
 
 # --- Tasks tab ---
 
-def test_other_task_cards_unlock_while_the_running_session_is_paused(qtbot, isolate_tasks, isolate_state):
+def test_starting_another_task_while_one_runs_sets_it_aside_without_a_pause_first(qtbot, isolate_tasks, isolate_state):
     a, b = _task("Alpha"), _task("Beta")
     _start_for(a)
     card_b = tasks_tab._TaskCard(b, on_changed=lambda: None)
     qtbot.addWidget(card_b)
-    assert card_b._is_locked_by_other_session()
-    sm.pause_session()
     assert not card_b._is_locked_by_other_session()
+    card_b._duration_edit.setText("25")
+    card_b._start_task()
+    status = sm.get_status()
+    assert status["eventId"] == b["id"] and not status["isPaused"]
+    assert [p["eventId"] for p in status["parkedSessions"]] == [a["id"]]
 
 
 def test_the_waiting_tasks_card_shows_it_is_waiting_and_can_switch_back(qtbot, isolate_tasks, isolate_state):

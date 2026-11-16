@@ -21,7 +21,7 @@ def _session(days_ago=0, hour=9, minutes=30, **over):
 @pytest.fixture
 def history(monkeypatch):
     data = []
-    monkeypatch.setattr(session_history, "load_all", lambda: list(data))
+    monkeypatch.setattr(session_history, "load_all", lambda include_beside=False: list(data))
     return data
 
 

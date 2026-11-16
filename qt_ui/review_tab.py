@@ -324,7 +324,7 @@ def _build_description_content(layout, problem):
         layout.addWidget(link_label, 1)
 
 
-SORT_CHOICES = (("due", "Due first"), ("hardest", "Hardest first"), ("newest", "Newest first"), ("name", "A to Z"))
+SORT_CHOICES = (("due", "Due first"), ("hardest", "Most stars first"), ("easiest", "Fewest stars first"), ("newest", "Newest first"), ("name", "A to Z"))
 
 
 class _CategoryRow(QPushButton):
@@ -592,6 +592,10 @@ class ReviewTab(QWidget):
 
     def showEvent(self, event):
         self._refresh_strip()
+        # Reviews can change behind this page's back (a sync, a change made elsewhere), so opening the page
+        # reads them again rather than showing what was loaded last time.
+        for view in self._topic_views.values():
+            view.refresh()
         super().showEvent(event)
 
     def _follow_active_review(self):
@@ -601,7 +605,11 @@ class ReviewTab(QWidget):
         if self.banner.is_running():
             return
         for view in self._topic_views.values():
-            if view._resume_linked_session() or view._resume_independent_review():
+            # The review being timed now comes first: the live session if it is one, then an independent
+            # review (running or paused). Reviews set aside behind it only fill the banner when nothing
+            # else is live, and otherwise wait in the strip.
+            if (view._resume_linked_session(include_waiting=False) or view._resume_independent_review()
+                    or view._resume_linked_session()):
                 self._refresh_strip()
                 return
 
@@ -648,6 +656,15 @@ class ReviewTab(QWidget):
                 "problemId": session.get("reviewProblemId"),
                 "seconds": tasks_store.worked_seconds(session["startTime"], None, session.get("violationLog"))
                 if session.get("startTime") else 0,
+            })
+        # The review being timed beside the session is not "set aside", but when the banner is showing
+        # something else it has to be listed too, or it is nowhere on this page.
+        active = review_store.get_active_review()
+        if active and (not self.banner.is_running() or self.banner._session_token != active["token"]):
+            rows.append({
+                "kind": "independent", "key": active["token"], "parked": active, "active": True,
+                "name": active["problemName"], "problemId": active["problemId"],
+                "seconds": active["elapsedSeconds"],
             })
         for parked in review_store.list_parked_reviews():
             rows.append({
@@ -722,7 +739,10 @@ class ReviewTab(QWidget):
             snapshot = self.take_first_attempt_stash(event_id=session.get("eventId"))
             cancelled = snapshot["first_attempt_cancelled_callback"] if snapshot else None
         elif kind == "independent":
-            review_store.abandon_parked_review(row["key"])
+            if row.get("active"):
+                review_store.abandon_review(row["key"])
+            else:
+                review_store.abandon_parked_review(row["key"])
         else:
             snapshot = row["snapshot"]
             self._stash.remove(snapshot)
@@ -999,16 +1019,17 @@ class _TopicView(QWidget):
 
     def _show_banner_for_linked_session(self):
         if not self._review_banner.is_running():
-            self._resume_linked_session() or self._resume_independent_review()
+            self._resume_linked_session(include_waiting=False) or self._resume_independent_review()                 or self._resume_linked_session()
 
-    def _resume_linked_session(self):
+    def _resume_linked_session(self, include_waiting=True):
         """Starts the banner for this topic's task session if one exists,
-        running or waiting behind another task. Returns True if it did."""
+        running or (with include_waiting) waiting behind another task. Returns True if it did."""
         status = session_manager.get_status()
         candidates = []
         if status.get("isActive"):
             candidates.append(status)
-        candidates.extend(status.get("parkedSessions") or [])
+        if include_waiting:
+            candidates.extend(status.get("parkedSessions") or [])
         topic = review_store.get_topic(self._topic_id)
         if not topic or not topic.get("linkedTaskId"):
             return False
@@ -1239,6 +1260,7 @@ class _TopicView(QWidget):
             self._sort_combo.addItem(label, key)
         self._sort_combo.currentIndexChanged.connect(self._set_sort)
         box.addWidget(self._sort_combo)
+
         box.addStretch(1)
         return card
 
@@ -1288,6 +1310,8 @@ class _TopicView(QWidget):
     def _sorted(self, problems):
         if self._sort == "hardest":
             return sorted(problems, key=lambda p: -p["stars"])
+        if self._sort == "easiest":
+            return sorted(problems, key=lambda p: p["stars"])
         if self._sort == "newest":
             return sorted(problems, key=lambda p: p.get("dateAdded") or "", reverse=True)
         if self._sort == "name":
@@ -2069,15 +2093,16 @@ class _ReviewBanner(QWidget):
 def _file_untimed_review(problem, seconds, now=None):
     """A review that ran without a session of its own (another kind of session was running,
     so none could start) is still time on its task. Session History and the task's
-    count both read finished sessions, so this files the review as one. Skipped when a
-    session of the same task is running, because that session already counts it."""
+    count both read finished sessions, so this files the review as one. When a session of the
+    same task is running (a pomodoro, say) that session already counts the time, so the review is
+    filed flagged "beside": the history shows it, and nothing adds its minutes up a second time."""
     topic = review_store.get_topic((problem or {}).get("topicId")) if (problem or {}).get("topicId") else None
     task = tasks_store.get_task(topic["linkedTaskId"]) if topic and topic.get("linkedTaskId") else None
     if task is None or seconds < 1:
         return None
     status = session_manager.get_status()
-    if status.get("isActive") and status.get("source") in ("task", "review") and status.get("eventId") == task["id"]:
-        return None
+    beside = bool(status.get("isActive") and status.get("source") in ("task", "review")
+                  and status.get("eventId") == task["id"])
     now = now or datetime.now()
     first_attempt = problem.get("id") is None
     subject = None if first_attempt else problem.get("subjectName")
@@ -2091,8 +2116,10 @@ def _file_untimed_review(problem, seconds, now=None):
         "eventTitle": f"{task['name']} - " + ("first attempt" if first_attempt else f"{subject} review"),
         "reviewProblemName": session_manager.FIRST_ATTEMPT_NAME if first_attempt else problem["name"],
         "reviewSubjectName": subject,
-        "pomodoro": None, "sessionId": "untimed-" + uuid.uuid4().hex,
+        "pomodoro": None, "sessionId": ("beside-" if beside else "untimed-") + uuid.uuid4().hex,
     }
+    if beside:
+        entry["beside"] = True
     session_history.append_entry(entry)
     return entry
 
@@ -2101,6 +2128,35 @@ def _can_drive_over(status):
     """True when a review may start its own blocking session: nothing is running, or
     what is running is paused (it is set aside and comes back when the review ends)."""
     return not status.get("isActive") or bool(status.get("isPaused"))
+
+
+def finish_review_from_card(token, name, seconds):
+    """Finishes the review with this token from outside the Review tab (a task card's Finish). Through its
+    live banner when there is one, so the banner and the card stay in step; otherwise straight to the
+    "How did it go?" step and the store."""
+    for banner in list(_live_banners):
+        try:
+            if banner.is_running() and banner._session_token == token:
+                banner._finish()
+                return True
+        except RuntimeError:
+            _live_banners.discard(banner)
+
+    active = review_store.get_active_review()
+    problem = review_store.get_problem(active["problemId"]) if active and active["token"] == token else None
+
+    def submit(self_solved, shakiness):
+        review_store.finish_review(token, self_solved=self_solved, shakiness=shakiness, duration_seconds=seconds)
+        if problem:
+            _file_untimed_review(problem, seconds)
+        for banner in list(_live_banners):
+            try:
+                banner.hide()
+            except RuntimeError:
+                _live_banners.discard(banner)
+
+    _register_popup(_PostReviewDialog(problem_name=name, on_submit=submit))
+    return True
 
 
 def make_live_review_independent():

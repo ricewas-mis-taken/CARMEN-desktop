@@ -1020,14 +1020,45 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   list "computers, browsers, account, connected now". A link is per computer by design (the key is local).
   Browser profile / which person in the browser is not knowable without the identity permission; not added.
 
-2026-11-07  Score and theme now sync between computers
-  The Carmen Score ledger (score.json) was local-only, so each computer settled its own days from its own
-  copy of the data and the two numbers drifted. It now goes through the fast lane as a "score" row, and the
-  two ledgers are UNITED by event key rather than replaced by the newer one: every event has a deterministic
-  key (goal:<date>, review:<id>, ...), so a union can never double count, and pause/unblock events made on
-  one computer are kept. When both hold the same key with different points the larger (points, note) wins on
-  both sides, so they converge. Last-writer-wins was rejected because it would drop one side's events.
-  The theme is just one more key in config's SHARED_SETTINGS (same stamp and wake-up as the block list); the
-  stylesheet is re-applied live when it arrives. Hard-coded widget colours still update on next start.
-  Lock popups also send the main window to the back: hiding the blocked app made the OS surface Carmen's
-  whole window as the "next" window.
+2026-11-05  Pause popup shows the budget and takes a note
+  The pause popup (qt_ui/pause_reason.py) now picks a reason, then Pause: a reason is highlighted, a one-line note
+  is typed (required for "Checking something else"), and the budget left is shown on top (pause_budget.live). The
+  note is stored on the pause marker as pauseNote and accepted as {"note"} on POST /session/pause.
+  Chose a live budget function over reading the finished-session summary: the same rules, but it counts the pause
+  that is still open and plans the length as time gone plus time left.
+  Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-11-05] (the popup's own panel, which works the budget
+  out itself from the status log).
+
+2026-11-06  Long break: a pause with a length, free for that long
+  Pauses past the budget cost points, but a long rest is sometimes wanted. Chose a "long_break" reason with a length
+  set up front over a per-pause cap or a daily allowance (see the options weighed in the chat that day): declared
+  time can be free, and what runs past it plus a minute's grace is "overrun", counted like checking something else
+  (pause_budget._pieces). pauseMinutes is stored on the pause marker, accepted as {"minutes"} (1 to 480) on
+  POST /session/pause, and session_manager.pop_break_over() lets the tracker toast "your break is up" once.
+  Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-11-06] (same rule in its pause panel).
+
+2026-11-06  "Not sure yet": say what a pause was when it ends
+  A pause's reason is often unknown when it starts. Chose a "later" reason over capping cost or idle-aware counting
+  (see the options weighed that day): the pause is free while open (pause_budget.live passes pending_free), and
+  session_manager.resume_session settles it: under 2 minutes it becomes a break, longer is queued
+  (pop_pending_label) and window_tracker hands it to qt_ui/pause_label.py, whose answer is written onto the pause
+  marker (label_pause). Never answered, it counts like checking. Only the current session's markers can be labelled.
+  Left for later: auto-ending a pause left open for days, idle time not counting.
+  Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-11-06] "Not sure yet".
+
+2026-11-07  Quiet moments when a session starts: apps already open are not violations
+  Apps that were open when a session started were counted as violations and announced while Carmen was minimizing
+  them. Chose a 3 second grace after a start, a resume, or a pomodoro back to focus (session_manager.
+  begin_enforcement_grace / in_enforcement_grace) over ignoring everything open before the start: an app still open
+  once the grace ends is judged normally. In the grace the tracker only minimizes (hard lock); enforcer.
+  record_violation_deduped, _show_violation_notice and soft_lock_warning do nothing. Tests turn it off in conftest.
+  Also: a review timed beside a session of its own task is now filed in history with "beside": true (shown with a
+  tag, left out of every total; session_history.load_all hides it unless include_beside), instead of not at all.
+  Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-11-07] "Quiet moments when a session starts".
+
+2026-11-07  Theme is a shared setting; lock popups send the main window back
+  The theme is one more key in config's SHARED_SETTINGS (same stamp and wake-up as the block list), so the
+  two computers look the same; the stylesheet is re-applied live when it arrives (hard-coded widget colours
+  still update on next start). Lock popups also send the main window to the back: hiding the blocked app made
+  the OS surface Carmen's whole window as the "next" window. (The Carmen Score sync that was written alongside
+  this was dropped in favour of the per-event sync that landed on main in #241.)

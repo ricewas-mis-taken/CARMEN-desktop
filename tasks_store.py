@@ -21,6 +21,7 @@ import device_id
 import server_clock
 import sync_trigger
 import paths
+import vacation
 
 TASKS_PATH = paths.private_path("tasks.json")
 
@@ -639,7 +640,8 @@ def _period_surplus(task, sessions, today):
                 continue
             seen.add(start)
             logged = logged_seconds_for_period(task, when, sessions) / 60
-            earned += max(0, logged - required_minutes_for_period(task, when, today))
+            required = required_minutes_for_period(task, when, today)
+            earned += vacation.ladder(max(0, logged - required), required)
     return earned
 
 
@@ -669,38 +671,92 @@ def goal_snapshot(task, day, sessions, live_status=None):
     }
 
 
+def _quality_by_day(entries, days):
+    """{day: (worked, clean, hard)} seconds for `days`: all minutes worked, those in sessions with no violations,
+    and those under a hard lock. One pass over the history, like _logged_seconds_by_day."""
+    totals = {}
+    for entry in entries:
+        start = datetime.fromisoformat(entry["startTime"]).date()
+        end_iso = entry.get("endTime")
+        end = datetime.fromisoformat(end_iso).date() if end_iso else date.today()
+        clean = not (entry.get("violationCount") or 0)
+        hard = entry.get("lockMode") == "hard"
+        day = start
+        while day <= end:
+            if day in days:
+                seconds = _worked_seconds_on_day(entry["startTime"], end_iso, entry.get("violationLog"), day)
+                worked, c, h = totals.get(day, (0, 0, 0))
+                totals[day] = (worked + seconds, c + (seconds if clean else 0), h + (seconds if hard else 0))
+            day += timedelta(days=1)
+    return totals
+
+
+def vacation_by_day(task, sessions, until, live_status=None):
+    """{day: vacation minutes earned} for a per-day goal, for every day up to and including `until` (see
+    vacation.py for the rules: the ladder past the target, how clean and how hard the day was, the streak of
+    days that met their target, and the weekly shape)."""
+    entries = list(_task_history_entries(task["id"], sessions))
+    if (live_status and live_status.get("isActive") and live_status.get("source") in ("task", "review")
+            and live_status.get("eventId") == task["id"] and live_status.get("startTime")):
+        entries.append({"startTime": live_status["startTime"], "endTime": None,
+                        "violationLog": live_status.get("violationLog"),
+                        "violationCount": live_status.get("violationCount"), "lockMode": live_status.get("lockMode")})
+    if not entries:
+        return {}
+    first = min(datetime.fromisoformat(e["startTime"]).date() for e in entries)
+    days = set()
+    cursor = first
+    while cursor <= until:
+        days.add(cursor)
+        cursor += timedelta(days=1)
+    quality = _quality_by_day(entries, days)
+    earned_by_day, streak, banked_this_week, week_key = {}, 0, 0.0, None
+    for day in sorted(days):
+        if not is_scheduled_on(task, day):
+            continue
+        key = day.isocalendar()[:2]
+        if key != week_key:
+            week_key, banked_this_week = key, 0.0
+        worked, clean, hard = quality.get(day, (0, 0, 0))
+        logged = worked / 60
+        required = required_minutes_for_date(task, day)
+        target = _target_minutes_for_date(task, day)
+        earned = 0.0
+        if worked and required >= 0:
+            earned = vacation.ladder(max(0.0, logged - required), target)
+            earned *= vacation.quality_factor(clean / worked) * vacation.hard_factor(hard / worked)
+            earned *= vacation.streak_factor(streak)
+            earned = vacation.week_shaped(banked_this_week, earned, target)
+        if earned:
+            earned_by_day[day] = earned
+            banked_this_week += earned
+        streak = streak + 1 if (target > 0 and logged >= required) else 0
+    return earned_by_day
+
+
+def vacation_earned_today(task, today, sessions, live_status=None):
+    """What today's work is worth in vacation so far (shown on the card; it is banked once the day is over)."""
+    if is_period_task(task):
+        required = required_minutes_for_period(task, today)
+        logged = logged_seconds_for_period(task, today, sessions, live_status=live_status) / 60
+        return vacation.ladder(max(0.0, logged - required), required)
+    return vacation_by_day(task, sessions, today, live_status).get(today, 0.0)
+
+
 def vacation_balance_minutes(task, sessions, today=None):
-    """Minutes of "vacation" this task has banked: the sum of every past
-    scheduled day's surplus (minutes logged beyond that day's requirement,
-    which already accounts for anything cashed in against it) minus every
-    minute ever cashed in, regardless of which date it was spent against.
-    Today itself never contributes surplus -- a day isn't "banked" until
-    it's over, so same-day overwork can't be cashed in against itself."""
+    """Minutes of "vacation" this task has banked: what every past scheduled day earned (see vacation.py: time
+    past a day's goal, on a ladder, adjusted for how clean and hard the day was) minus every minute ever cashed
+    in, regardless of which date it was spent against. Today itself never contributes -- a day isn't "banked"
+    until it's over, so same-day overwork can't be cashed in against itself."""
     today = today or date.today()
     cashed_in_dates = task.get("cashedInDates") or {}
+    total_spent = sum(cashed_in_dates.values())
 
     if is_period_task(task):
-        return max(0.0, _period_surplus(task, sessions, today) - sum(cashed_in_dates.values()))
+        return max(0.0, _period_surplus(task, sessions, today) - total_spent)
 
-    entries = _task_history_entries(task["id"], sessions)
-    start_days = set()
-    for entry in entries:
-        day = datetime.fromisoformat(entry["startTime"]).date()
-        if day < today and is_scheduled_on(task, day):
-            start_days.add(day)
-    # One pass over the history. Asking logged_seconds_for_date() once per day
-    # re-walked every session each time (quadratic): this runs for every task card
-    # every second on the window thread, and a year of sessions made it freeze.
-    logged_by_day = _logged_seconds_by_day(entries, start_days)
-
-    total_earned = 0.0
-    for day in start_days:
-        logged_minutes = logged_by_day.get(day, 0) / 60
-        required = required_minutes_for_date(task, day)
-        total_earned += max(0, logged_minutes - required)
-
-    total_spent = sum(cashed_in_dates.values())
-    return max(0.0, total_earned - total_spent)
+    earned = vacation_by_day(task, sessions, today - timedelta(days=1))
+    return max(0.0, sum(earned.values()) - total_spent)
 
 
 def cash_in(task_id, target_date, minutes, sessions):
