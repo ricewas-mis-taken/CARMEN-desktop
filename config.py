@@ -30,6 +30,7 @@ DEFAULT_CONFIG = {
     "discordShowNames": False,
     "restoreWindow": {},        # set just before the app restarts itself into new code: {"open", "page"}
     "openOnStartup": True,      # sign-in launches Carmen with its window open, not only in the tray
+    "scribeOptionsHidden": False,   # Scribe's options card is tucked away (the Hide options button)
     "tourDone": False,          # the welcome tour has been shown (or skipped) once
     "reportCardWeek": "",       # the Monday of the week whose report card was last shown
     "quickNoteGeometry": None,
