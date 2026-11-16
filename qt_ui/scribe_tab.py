@@ -10,6 +10,7 @@ import collections
 import copy
 import gc
 
+import config
 import gc_guard
 import math
 import threading
@@ -1930,6 +1931,10 @@ class ScribeTab(QWidget):
         center.addWidget(self._build_canvas_card(), 1)
         layout.addLayout(center, 1)
         self._root_layout = layout
+        try:
+            self._options_hidden = bool(config.load_config().get("scribeOptionsHidden", False))
+        except Exception:
+            self._options_hidden = False
         self._side = QScrollArea()                   # the options card: scrolls when the window is short
         self._side.setWidgetResizable(True)
         self._side.setFrameShape(QFrame.NoFrame)
@@ -2078,8 +2083,31 @@ class ScribeTab(QWidget):
             side.setWindowFlags(Qt.Widget)
             self._root_layout.addWidget(side)
             side.setMaximumHeight(16777215)
-            side.show()
-        self._options_button.setVisible(narrow)
+            side.setVisible(not self._options_hidden)
+        self._label_options_button()
+
+    def _label_options_button(self):
+        narrow = bool(getattr(self, "_side_narrow", False))
+        if narrow:
+            text, tip = "Options", "Show the options"
+        elif self._options_hidden:
+            text, tip = "Show options", "Bring the options card back"
+        else:
+            text, tip = "Hide options", "Hide the options card to give the board the room"
+        self._options_button.setText(text)
+        self._options_button.setToolTip(tip)
+
+    def _toggle_options(self):
+        """The Options button: a popup when the card has no room beside the board, otherwise it hides or
+        shows the card (and remembers which)."""
+        if getattr(self, "_side_narrow", False):
+            self._show_options_popup()
+            return
+        self._options_hidden = not self._options_hidden
+        self._side.setVisible(not self._options_hidden)
+        self._label_options_button()
+        hidden = self._options_hidden
+        config.update_config(lambda cfg: cfg.update(scribeOptionsHidden=hidden))
 
     def _show_options_popup(self):
         side = self._side
@@ -2236,9 +2264,8 @@ class ScribeTab(QWidget):
             button.clicked.connect(fn)
             bar.addWidget(button)
         bar.addWidget(self._build_snap_menu())
-        self._options_button = QPushButton("Options")      # only when the options card has no room beside the board
-        self._options_button.clicked.connect(self._show_options_popup)
-        self._options_button.hide()
+        self._options_button = QPushButton("Hide options")   # hides the card, or opens it as a popup when narrow
+        self._options_button.clicked.connect(self._toggle_options)
         bar.addWidget(self._options_button)
         self._topbar_title, self._reset_button = title, reset
         return card
