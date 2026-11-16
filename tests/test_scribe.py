@@ -630,7 +630,7 @@ def test_the_timed_save_runs_off_the_ui_thread(qtbot, monkeypatch):
     assert seen and seen[0] is not threading.main_thread()
 
 
-def test_scribe_folds_its_options_into_a_popup_and_trims_the_top_bar_when_narrow(qtbot):
+def test_scribe_folds_its_options_into_a_popup_and_trims_the_top_bar_when_narrow(qtbot, isolate_config):
     from qt_ui.main_window import _scrolling
     tab = ScribeTab()
     holder = _scrolling(tab)                      # as in the app: the page sits in a scroll area
@@ -638,15 +638,53 @@ def test_scribe_folds_its_options_into_a_popup_and_trims_the_top_bar_when_narrow
     holder.resize(1300, 700)
     holder.show()
     qtbot.waitExposed(holder)
-    assert tab._side.isVisible() and not tab._options_button.isVisible()
+    assert tab._side.isVisible() and tab._options_button.isVisible()
+    assert tab._options_button.text() == "Hide options"
     holder.resize(700, 560)
     qtbot.wait(50)
     assert not tab._side.isVisible() and tab._options_button.isVisible()
+    assert tab._options_button.text() == "Options"
     assert not tab._pan_button.isVisible() and not tab._reset_button.isVisible()    # compact top bar
     assert tab.minimumSizeHint().width() <= 600                                     # no forced sideways scroll
     holder.resize(1300, 700)
     qtbot.wait(50)
     assert tab._side.isVisible() and tab._pan_button.isVisible()
+
+
+def test_the_options_card_can_be_hidden_and_brought_back_and_stays_that_way(qtbot, isolate_config):
+    import config
+    from qt_ui.main_window import _scrolling
+    tab = ScribeTab()
+    holder = _scrolling(tab)
+    qtbot.addWidget(holder)
+    holder.resize(1300, 700)
+    holder.show()
+    qtbot.waitExposed(holder)
+    assert tab._side.isVisible()
+    tab._options_button.click()                                   # wide window: hides the card for more board
+    assert not tab._side.isVisible() and tab._options_button.text() == "Show options"
+    assert config.load_config()["scribeOptionsHidden"] is True
+    holder.resize(700, 560)                                       # narrow, then wide again: still hidden
+    qtbot.wait(50)
+    holder.resize(1300, 700)
+    qtbot.wait(50)
+    assert not tab._side.isVisible()
+    tab._options_button.click()
+    assert tab._side.isVisible() and tab._options_button.text() == "Hide options"
+    assert config.load_config()["scribeOptionsHidden"] is False
+
+
+def test_the_hidden_options_card_is_remembered_next_time(qtbot, isolate_config):
+    import config
+    from qt_ui.main_window import _scrolling
+    config.update_config(lambda cfg: cfg.update(scribeOptionsHidden=True))
+    tab = ScribeTab()
+    holder = _scrolling(tab)
+    qtbot.addWidget(holder)
+    holder.resize(1300, 700)
+    holder.show()
+    qtbot.waitExposed(holder)
+    assert not tab._side.isVisible() and tab._options_button.text() == "Show options"
 
 
 def test_adding_a_stroke_updates_the_minimap_heat_without_a_full_walk(qtbot, tmp_path, monkeypatch):
