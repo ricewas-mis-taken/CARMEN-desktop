@@ -45,6 +45,7 @@ DEFAULT_CONFIG = {
     "focusRulesUpdatedAt": None,
     # When the shared settings below last changed on any computer (cloud time).
     "settingsUpdatedAt": None,
+    "themeShared": False,       # the saved theme has been sent to the other computer at least once
     "theme": None,              # {"name": ..., "custom": {...}}: shared, so both computers look the same
 }
 
@@ -201,7 +202,12 @@ def export_shared_settings():
         cfg = _load_for_update()
         settings = shared_settings(cfg)
         stamp = cfg.get("settingsUpdatedAt")
-        if stamp is None and settings != shared_settings({}):
+        needs_stamp = stamp is None and settings != shared_settings({})
+        # A theme chosen before the theme was shared has no stamp of its own: send it once.
+        if cfg.get("theme") and not cfg.get("themeShared"):
+            cfg["themeShared"] = True
+            needs_stamp = True
+        if needs_stamp:
             stamp = cfg["settingsUpdatedAt"] = server_clock.next_stamp()
             save_config(cfg)
     return {"stamp": stamp, "settings": settings}
