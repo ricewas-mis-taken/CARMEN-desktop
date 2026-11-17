@@ -36,3 +36,27 @@ def test_summary_and_pill():
     assert m.state_pill(_status(isPaused=True))[0] == "Paused"
     assert m.state_pill(_status(isBreak=True))[0] == "Break"
     assert m.state_pill(_status(isActive=False)) is None
+
+
+def test_panel_buttons_call_the_tray_item_directly():
+    calls = []
+
+    class Item:
+        def __init__(self, text):
+            self.text, self.enabled = text, True
+
+        def __call__(self, icon):
+            calls.append(self.text)
+
+    class Menu:
+        items = [Item("Open Carmen Focus"), Item("Quit")]
+
+    class Icon:
+        menu = Menu()
+
+    timer = m.MenubarTimer.__new__(m.MenubarTimer)
+    timer._icon = Icon()
+    timer._menu = None
+    timer._menu_action("Open")
+    timer._menu_action("quit")
+    assert calls == ["Open Carmen Focus", "Quit"]
