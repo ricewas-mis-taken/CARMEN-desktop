@@ -1055,3 +1055,10 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   Also: a review timed beside a session of its own task is now filed in history with "beside": true (shown with a
   tag, left out of every total; session_history.load_all hides it unless include_beside), instead of not at all.
   Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-11-07] "Quiet moments when a session starts".
+
+2026-11-07  Theme is a shared setting; lock popups send the main window back
+  The theme is one more key in config's SHARED_SETTINGS (same stamp and wake-up as the block list), so the
+  two computers look the same; the stylesheet is re-applied live when it arrives (hard-coded widget colours
+  still update on next start). Lock popups also send the main window to the back: hiding the blocked app made
+  the OS surface Carmen's whole window as the "next" window. (The Carmen Score sync that was written alongside
+  this was dropped in favour of the per-event sync that landed on main in #241.)

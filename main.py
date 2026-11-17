@@ -185,6 +185,12 @@ def main():
     import sync_client
     sync_client.add_pulled_listener(_refresh_open_window)
 
+    def _theme_changed_elsewhere():
+        from qt_ui.options_dialog import reapply_stylesheet
+        qt_gui_thread.run_on_gui_thread(reapply_stylesheet)
+
+    theme.add_remote_listener(_theme_changed_elsewhere)
+
     def on_quit():
         stop_event.set()
         # The periodic debounce inside screentime_store.add_app_seconds()
@@ -333,6 +339,11 @@ def main():
                 sys.path.insert(0, _mac_os_dir)
             from mac_os import menubar_timer_mac
             _menubar_timer = menubar_timer_mac.install(icon)
+
+            from mac_os import dock_reopen_mac
+            import qt_ui.main_window as _main_window
+            if not dock_reopen_mac.install(_main_window.open_main_window):
+                logger.warning("Dock-click reopen could not be hooked")
         except Exception:
             logger.exception("menubar timer unavailable")
 

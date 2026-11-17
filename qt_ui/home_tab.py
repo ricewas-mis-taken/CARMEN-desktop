@@ -20,7 +20,7 @@ from datetime import date, datetime, timedelta
 from PySide6.QtCore import QElapsedTimer, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient
 from PySide6.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
+    QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 import board_store
@@ -776,8 +776,11 @@ class HomeTab(QWidget):
         self._timer.setInterval(TIMER_MS)
         self._timer.timeout.connect(self._tick)
         self._motion = QTimer(self)
-        self._motion.setInterval(50)
+        self._motion.setInterval(100)       # 10 fps: the drift is slow, and every frame repaints the sky
         self._motion.timeout.connect(self._body.update)
+        app = QApplication.instance()
+        if app is not None:
+            app.applicationStateChanged.connect(self._on_app_state)
         self.refresh()
 
     # a page that can shrink with its window
@@ -794,8 +797,21 @@ class HomeTab(QWidget):
             self._boot.show()
         self.refresh()
         self._timer.start()
-        self._motion.start()
+        self._wake_motion()
         super().showEvent(event)
+
+    def _wake_motion(self):
+        app = QApplication.instance()
+        if app is None or app.applicationState() == Qt.ApplicationActive:
+            self._motion.start()
+
+    def _on_app_state(self, state):
+        # Nobody sees the sky while another app is in front, so stop spending battery on it.
+        if state == Qt.ApplicationActive:
+            if self.isVisible():
+                self._motion.start()
+        else:
+            self._motion.stop()
 
     def _set_reveal(self, value):
         self._reveal = value
