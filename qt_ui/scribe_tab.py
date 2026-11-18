@@ -33,11 +33,13 @@ from PySide6.QtGui import (
     QShortcut,
 )
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QApplication,
     QButtonGroup,
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFrame,
     QScrollArea,
@@ -1410,6 +1412,100 @@ class ScribeCanvas(QWidget):
     def _is_selected(self, item):
         return any(item is s for s in self._sel)
 
+    # ---- what can be done with the selection ----
+    def delete_selection(self):
+        if not self._sel:
+            return False
+        self._push_undo(touching=[])
+        for layer in self.doc["layers"]:
+            layer["items"] = [i for i in layer["items"] if not self._is_selected(i)]
+        self._sel = []
+        self.changed.emit()
+        self.update()
+        return True
+
+    def duplicate_selection(self):
+        return bool(self._sel) and self.copy_selection() and self.paste_selection()
+
+    @staticmethod
+    def _reordered(items, chosen, how):
+        """`items` with the chosen ones moved: "front"/"back" to the end/start, "forward"/"backward" past
+        their neighbour. The chosen keep their order among themselves."""
+        picked = [i for i in items if any(i is c for c in chosen)]
+        if not picked:
+            return items
+        rest = [i for i in items if not any(i is c for c in chosen)]
+        if how == "front":
+            return rest + picked
+        if how == "back":
+            return picked + rest
+        out = list(items)
+        marks = [any(i is c for c in chosen) for i in out]
+        order = range(len(out) - 2, -1, -1) if how == "forward" else range(1, len(out))
+        for k in order:
+            a, b = (k, k + 1) if how == "forward" else (k - 1, k)
+            if marks[a] != marks[b] and marks[k]:
+                out[a], out[b] = out[b], out[a]
+                marks[a], marks[b] = marks[b], marks[a]
+        return out
+
+    def arrange(self, how):
+        """Moves the selection in front of or behind the other shapes (how: front, back, forward, backward)."""
+        if not self._sel:
+            return False
+        changed = False
+        for layer in self.doc["layers"]:
+            moved = self._reordered(layer["items"], self._sel, how)
+            if any(a is not b for a, b in zip(moved, layer["items"])):
+                changed = True
+        if not changed:
+            return False
+        self._push_undo(touching=[])
+        for layer in self.doc["layers"]:
+            layer["items"] = self._reordered(layer["items"], self._sel, how)
+        self.changed.emit()
+        self.update()
+        return True
+
+    def nudge(self, dx, dy):
+        """Moves the selection by this many screen pixels (so a tap moves it the same distance at any zoom)."""
+        if not self._sel:
+            return False
+        self._apply_to_selection(lambda item: geo.translate(item, dx / self.zoom, dy / self.zoom), "nudge")
+        self.changed.emit()
+        self.selectionMoved.emit()
+        return True
+
+    def original_size(self):
+        """Puts each selected picture back to its own size, around its middle."""
+        pictures = [i for i in self._sel if i["type"] == "image"]
+        if not pictures:
+            return False
+
+        def reset(item):
+            image = self._image(item["file"])
+            if image.isNull():
+                return
+            cx, cy = item["a"][0] + item["w"] / 2, item["a"][1] + item["h"] / 2
+            item["w"], item["h"] = float(image.width()), float(image.height())
+            item["a"] = [cx - item["w"] / 2, cy - item["h"] / 2]
+        self._push_undo(touching=pictures)
+        self._board_edited()
+        for item in pictures:
+            reset(item)
+        self.changed.emit()
+        self.selectionMoved.emit()
+        self.update()
+        return True
+
+    def zoom_to_selection(self):
+        box = self.selection_box()
+        if box is None:
+            return self.fit_all()
+        bw, bh = max(box[2] - box[0], 1.0), max(box[3] - box[1], 1.0)
+        self.view["x"], self.view["y"] = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+        self.set_zoom(0.8 * min(self.width() / bw, self.height() / bh))
+
     def _fill_at(self, w):
         target = next((i for i in self._visible_items_top_first() if geo.contains_fill(i, w[0], w[1])), None)
         if target is None:
@@ -1779,12 +1875,7 @@ class ScribeCanvas(QWidget):
             if not self.paste_selection():
                 self.paste_image()
         elif key in (Qt.Key_Delete, Qt.Key_Backspace) and self._sel:
-            self._push_undo(touching=[])
-            for layer in self.doc["layers"]:
-                layer["items"] = [i for i in layer["items"] if not self._is_selected(i)]
-            self._sel = []
-            self.changed.emit()
-            self.update()
+            self.delete_selection()
         elif key == Qt.Key_M and not ctrl:
             self._minimap_on = not self._minimap_on
             self.update()
@@ -1852,7 +1943,7 @@ QToolButton { color: #1F2328; background: #F2F4F7; border: none; border-radius: 
     font-size: 12.5px; font-weight: 600; }
 QToolButton:hover { background: #E7EAF0; }
 QToolButton::menu-indicator { image: none; }
-QComboBox, QSpinBox { background: #F7F8FA; color: #1F2328; border: 1px solid #E6E9EF; border-radius: 9px;
+QComboBox, QSpinBox, QDoubleSpinBox { background: #F7F8FA; color: #1F2328; border: 1px solid #E6E9EF; border-radius: 9px;
     padding: 3px 8px; font-size: 12.5px; }
 QListWidget { background: #F7F8FA; color: #1F2328; border: 1px solid #E6E9EF; border-radius: 10px;
     padding: 3px; font-size: 12.5px; }
@@ -2709,6 +2800,7 @@ class ScribeTab(QWidget):
             self._pref_checks[key] = check
             box.addWidget(check)
         self._refresh_preview()
+        self._build_selection_panel(box)
 
         # --- paper: thumbnails of each background (the combo underneath still holds the value)
         box.addSpacing(4)
@@ -2786,6 +2878,98 @@ class ScribeTab(QWidget):
     def _refresh_preview(self):
         prefs = self.canvas.prefs
         self._stroke_preview.set_style(prefs["stroke"], prefs["width"], prefs["dashed"], prefs["roundCorners"])
+
+    def _build_selection_panel(self, box):
+        """Where the selection is and how big it is: typed here, or dragged with its handles on the board."""
+        box.addSpacing(4)
+        head = QHBoxLayout()
+        head.addWidget(self._heading("Selection"))
+        head.addStretch(1)
+        self._selection_count = QLabel("")
+        self._selection_count.setProperty("scribe", "muted")
+        head.addWidget(self._selection_count)
+        box.addLayout(head)
+        self._box_fields = {}
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(6)
+        for n, (key, label) in enumerate((("x", "X"), ("y", "Y"), ("w", "W"), ("h", "H"))):
+            caption = QLabel(label)
+            caption.setProperty("scribe", "muted")
+            caption.setFixedWidth(12)
+            field = QDoubleSpinBox()
+            field.setRange(-1e9, 1e9)
+            field.setDecimals(1)
+            field.setButtonSymbols(QAbstractSpinBox.NoButtons)
+            field.setGroupSeparatorShown(True)
+            field.setKeyboardTracking(False)
+            field.setToolTip({"x": "Left edge", "y": "Top edge", "w": "Width", "h": "Height"}[key])
+            field.editingFinished.connect(lambda k=key: self._box_field_edited(k))
+            self._box_fields[key] = field
+            grid.addWidget(caption, n // 2, (n % 2) * 2)
+            grid.addWidget(field, n // 2, (n % 2) * 2 + 1)
+        box.addLayout(grid)
+        self._keep_ratio = QCheckBox("Keep proportions")
+        self._keep_ratio.setChecked(True)
+        box.addWidget(self._keep_ratio)
+        actions = QGridLayout()
+        actions.setHorizontalSpacing(6)
+        actions.setVerticalSpacing(6)
+        self._selection_buttons = []
+        for n, (text, tip, fn, kind) in enumerate((
+                ("Front", "Bring to front  (Ctrl+Shift+])", lambda: self.canvas.arrange("front"), None),
+                ("Back", "Send to back  (Ctrl+Shift+[)", lambda: self.canvas.arrange("back"), None),
+                ("Duplicate", "Duplicate  (Ctrl+D)", self.canvas.duplicate_selection, None),
+                ("Delete", "Delete  (Del)", self.canvas.delete_selection, "danger"))):
+            button = QPushButton(text)
+            button.setToolTip(tip)
+            button.setFixedHeight(28)
+            if kind:
+                button.setProperty("scribe", kind)
+            button.clicked.connect(lambda _=False, f=fn: f())
+            self._selection_buttons.append(button)
+            actions.addWidget(button, n // 2, n % 2)
+        box.addLayout(actions)
+        self._original_size_button = QPushButton("Original size")
+        self._original_size_button.setToolTip("Put the picture back to its own size")
+        self._original_size_button.setFixedHeight(28)
+        self._original_size_button.clicked.connect(lambda: self.canvas.original_size())
+        box.addWidget(self._original_size_button)
+        self.canvas.selectionChanged.connect(self._sync_selection_panel)
+        self.canvas.selectionMoved.connect(self._sync_selection_panel)
+        self._sync_selection_panel()
+
+    def _sync_selection_panel(self):
+        canvas = self.canvas
+        selection = canvas._sel
+        box = canvas.selection_box()
+        has = box is not None
+        values = {"x": box[0], "y": box[1], "w": box[2] - box[0], "h": box[3] - box[1]} if has else {}
+        for key, field in self._box_fields.items():
+            field.blockSignals(True)
+            field.setValue(values.get(key, 0.0))
+            field.blockSignals(False)
+            field.setEnabled(has)
+        for button in self._selection_buttons:
+            button.setEnabled(has)
+        self._keep_ratio.setEnabled(has)
+        self._selection_count.setText(f"{len(selection)} selected" if len(selection) > 1 else
+                                      ("1 selected" if selection else "Nothing selected"))
+        self._original_size_button.setVisible(bool(selection) and any(i["type"] == "image" for i in selection))
+
+    def _box_field_edited(self, key):
+        box = self.canvas.selection_box()
+        if box is None:
+            return
+        v = {k: field.value() for k, field in self._box_fields.items()}
+        old_w, old_h = box[2] - box[0], box[3] - box[1]
+        if self._keep_ratio.isChecked() and old_w > 0 and old_h > 0:
+            if key == "w":
+                v["h"] = v["w"] * old_h / old_w
+            elif key == "h":
+                v["w"] = v["h"] * old_w / old_h
+        width, height = max(v["w"], 1.0), max(v["h"], 1.0)
+        self.canvas.set_selection_box(v["x"], v["y"], v["x"] + width, v["y"] + height)
 
     def _background_changed(self):
         self.canvas.set_background(self._background.currentData())
