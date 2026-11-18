@@ -23,7 +23,7 @@ STAMP_PATH = paths.private_path("scribe_stamp.txt")   # when the shared part (th
 MAX_SYNC_BYTES = 6 * 1024 * 1024
 IMAGES_DIR = paths.private_path("scribe_images")
 
-TOOLS = ("line", "curve", "fill", "text", "rect", "circle", "select", "arrow", "freehand")
+TOOLS = ("line", "curve", "fill", "text", "rect", "circle", "select", "arrow", "freehand", "eraser")
 BACKGROUNDS = ("white", "black", "grid", "darkgrid", "dots", "lined", "paper", "blueprint")
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp")
 MIN_ZOOM = 1e-6      # effectively unlimited zoom-out

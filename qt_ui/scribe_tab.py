@@ -102,7 +102,7 @@ BACKGROUND_LABELS = {
 }
 # Letters that say what they are (the digits still work too).
 _TOOL_KEYS = {"v": "select", "p": "freehand", "l": "line", "c": "curve", "a": "arrow", "r": "rect", "o": "circle",
-              "t": "text", "f": "fill",
+              "t": "text", "f": "fill", "e": "eraser",
               "1": "line", "2": "curve", "3": "fill", "4": "text", "5": "rect",
               "6": "circle", "7": "select", "8": "arrow", "0": "freehand"}
 _ITEM_FLAGS = {"shouldScale": "scale", "roundCorners": "round", "dashed": "dashed"}
@@ -123,6 +123,8 @@ class ScribeCanvas(QWidget):
     _sel_items = ()
     _hover_handle = None
     _resizing = None
+    _erasing = None
+    ERASER_PX = 9               # the eraser's reach, in screen pixels
 
     @property
     def _sel(self):
@@ -373,6 +375,8 @@ class ScribeCanvas(QWidget):
             self.setCursor(Qt.ArrowCursor)
         elif self.tool == "text":
             self.setCursor(Qt.IBeamCursor)
+        elif self.tool == "eraser":
+            self.setCursor(Qt.BlankCursor)         # the ring drawn on the board is the cursor
         else:
             self.setCursor(Qt.CrossCursor)
 
@@ -540,6 +544,13 @@ class ScribeCanvas(QWidget):
             self._paint_background(p)
             p.setRenderHint(QPainter.Antialiasing, True)
             self._paint_scene(p, self.width(), self.height(), self.zoom, self.view["x"], self.view["y"], ui=True)
+        if self.prefs["tool"] == "eraser" and self._cursor_world is not None and not self._pan and self.underMouse():
+            sx, sy = self._to_screen(*self._cursor_world)
+            ring = QPen(QColor(31, 35, 40, 210), 1.6)
+            p.setRenderHint(QPainter.Antialiasing, True)
+            p.setPen(ring)
+            p.setBrush(QColor(255, 255, 255, 70))
+            p.drawEllipse(QPointF(sx, sy), self.ERASER_PX, self.ERASER_PX)
         if self.prefs["showGuides"]:
             self._paint_guides(p)
         if self.prefs["showRulers"]:
@@ -1412,6 +1423,32 @@ class ScribeCanvas(QWidget):
     def _is_selected(self, item):
         return any(item is s for s in self._sel)
 
+    # ---- the eraser ----
+    def _erase_at(self, w):
+        """Takes away every visible shape the eraser touches here. Dragging is one undo step, however far it goes."""
+        hits = list(self._items_at(w, self.ERASER_PX / self.zoom))
+        if not hits:
+            return
+        job = self._erasing
+        if not job["pushed"]:
+            self._push_undo(touching=[])
+            job["pushed"] = True
+        gone = {id(item) for item in hits}
+        for layer in self.doc["layers"]:
+            if layer["visible"]:
+                layer["items"] = [item for item in layer["items"] if id(item) not in gone]
+        self._sel = [item for item in self._sel if id(item) not in gone]
+        self._board_edited()
+        self.changed.emit()
+
+    def _erase_along(self, a, b):
+        """The eraser moved from a to b: every spot between is wiped, so a quick sweep leaves no gaps."""
+        reach = self.ERASER_PX / self.zoom
+        steps = max(1, int(math.hypot(b[0] - a[0], b[1] - a[1]) / (reach / 2)))
+        for i in range(1, steps + 1):
+            t = i / steps
+            self._erase_at((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t))
+
     # ---- what can be done with the selection ----
     def delete_selection(self):
         if not self._sel:
@@ -1693,6 +1730,9 @@ class ScribeCanvas(QWidget):
             self._add_text(w)
         elif tool == "fill":
             self._fill_at(w)
+        elif tool == "eraser":
+            self._erasing = {"last": w, "pushed": False}
+            self._erase_at(w)
         elif tool == "select":
             handle = self._handle_at(pos)
             if handle is not None:
@@ -1739,6 +1779,9 @@ class ScribeCanvas(QWidget):
                     self._update_cursor()
         if self._resizing is not None:
             self._resize_to(w, e.modifiers())
+        elif self._erasing is not None:
+            self._erase_along(self._erasing["last"], w)
+            self._erasing["last"] = w
         elif self._pan:
             start, vx, vy = self._pan
             self.view["x"] = vx - (pos.x() - start.x()) / self.zoom
@@ -1774,9 +1817,15 @@ class ScribeCanvas(QWidget):
                 self.selectionMoved.emit()
         elif self._band:
             self._band = (self._band[0], w)
-        elif not self.prefs["showGuides"]:
+        elif not self.prefs["showGuides"] and self.prefs["tool"] != "eraser":
             return
         self.update()
+
+    def leaveEvent(self, event):
+        if self.prefs["tool"] == "eraser":
+            self._cursor_world = None             # the eraser's ring goes with the pointer
+            self.update()
+        super().leaveEvent(event)
 
     def _update_around_stroke(self, d):
         """Repaint only the patch the newest piece of a freehand line can touch (and the minimap),
@@ -1802,6 +1851,10 @@ class ScribeCanvas(QWidget):
             self._update_cursor()
             return
         if e.button() != Qt.LeftButton:
+            return
+        if self._erasing is not None:
+            self._erasing = None
+            self.update()
             return
         if self._resizing is not None:
             moved = self._resizing["pushed"]
@@ -1902,7 +1955,7 @@ _TOOLS = [
     None,
     ("rect", "Rectangle", "R"), ("circle", "Circle", "O"),
     None,
-    ("text", "Text", "T"), ("fill", "Fill", "F"), ("insert", "Insert image", "Ctrl+V"),
+    ("text", "Text", "T"), ("fill", "Fill", "F"), ("eraser", "Eraser", "E"), ("insert", "Insert image", "Ctrl+V"),
 ]
 
 # What each control does: shown when the pointer rests on it.
@@ -2011,6 +2064,18 @@ def _tool_pixmap(key, color):
         drop.cubicTo(18.2, 17.6, 18.2, 19.8, 20, 19.8)
         drop.cubicTo(21.8, 19.8, 21.8, 17.6, 20, 15)
         p.drawPath(drop)
+    elif key == "eraser":
+        block = QPainterPath(QPointF(4.5, 14.5))
+        block.lineTo(13, 6)
+        block.quadTo(14.5, 4.8, 16, 6.2)
+        block.lineTo(19.2, 9.4)
+        block.quadTo(20.4, 10.9, 19.2, 12.3)
+        block.lineTo(12, 19.5)
+        block.lineTo(8, 19.5)
+        block.closeSubpath()
+        p.drawPath(block)
+        p.drawLine(QPointF(9.2, 10.2), QPointF(15.3, 16.3))
+        p.drawLine(QPointF(12.5, 19.5), QPointF(20, 19.5))
     elif key == "insert":
         p.drawRoundedRect(QRectF(4, 5, 16, 14), 2.5, 2.5)
         p.drawEllipse(QPointF(9, 10), 1.5, 1.5)
