@@ -1128,3 +1128,9 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   whole named papers instead of overlapping strips. Clicking and erasing use a remembered list of item boxes, kept
   current by an edit counter, because a distance check against every outline was 29 ms per click.
   Found, not changed: a board over MAX_SYNC_BYTES (6 MB) is silently not shared. This computer's board is 41 MB.
+
+2026-11-17  AI agents may work in their own browser tabs: an Options setting, on by default
+  The extension now leaves the tabs of an AI agent such as Claude in Chrome alone during a session (carmen-extension
+  DESIGN_DECISIONS.txt, same date, has the reasoning). The desktop owns the switch: config allowAiAgents (per computer,
+  not in SHARED_SETTINGS, since it describes this computer's browsers), shown in Options > Browser extension and sent
+  to the extension on /status. Default on, so agents work without setup. Only the extension acts on it.
