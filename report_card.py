@@ -66,7 +66,7 @@ def _raises(end, sessions):
 
 
 def _pauses(start, end, sessions):
-    free = escape = over = 0
+    free = escape = over = left = 0
     for entry in sessions:
         try:
             day = date.fromisoformat(str(entry.get("startTime"))[:10])
@@ -78,7 +78,8 @@ def _pauses(start, end, sessions):
         free += s["free_seconds"]
         escape += s["escape_seconds"]
         over += s["over_seconds"]
-    return {"free_seconds": free, "escape_seconds": escape, "over_seconds": over}
+        left += s["abandoned_seconds"]
+    return {"free_seconds": free, "escape_seconds": escape, "over_seconds": over, "abandoned_seconds": left}
 
 
 def suggestion(kinds, pause, overdue_days, late, raises=()):
