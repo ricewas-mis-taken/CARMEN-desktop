@@ -401,15 +401,13 @@ def test_the_paper_stack_sets_the_background_and_shows_the_current_one(qtbot):
     stack.grab()      # every paper paints
 
 
-def test_clicking_a_paper_strip_picks_that_paper(qtbot):
-    from PySide6.QtCore import QPoint
+def test_clicking_a_paper_picks_that_paper(qtbot):
     tab = ScribeTab()
     qtbot.addWidget(tab)
     tab.show()
     stack = tab._paper_stack
     for index, key in enumerate(stack._keys):
-        y = int(stack._top(index)) + 6                  # inside this card's own strip
-        qtbot.mouseClick(stack, Qt.LeftButton, pos=QPoint(40, y))
+        qtbot.mouseClick(stack, Qt.LeftButton, pos=stack._tile(index).center().toPoint())     # the middle of its page
         assert tab.canvas.prefs["background"] == key, key
 
 
@@ -855,3 +853,57 @@ def test_tool_letters_match_the_hover_text(qtbot):
     for key, name, hotkey in (e for e in scribe_tab._TOOLS if e and e[2] and len(e[2]) == 1):
         assert scribe_tab._TOOL_KEYS[hotkey.lower()] == key, (key, hotkey)
         assert hotkey in tab._tool_buttons[key].toolTip()
+
+
+# ---- the paper picker ------------------------------------------------------
+def test_every_paper_the_store_knows_has_a_page_and_a_name():
+    from qt_ui.scribe_tab import _BACKGROUNDS, BACKGROUND_LABELS
+    assert set(scribe_store.BACKGROUNDS) == set(_BACKGROUNDS) == set(BACKGROUND_LABELS)
+
+
+def test_the_paper_picker_shows_every_page_whole_in_a_grid(qtbot):
+    from PySide6.QtCore import QPoint
+    from qt_ui.scribe_tab import _PaperPicker, BACKGROUND_LABELS
+    picker = _PaperPicker(BACKGROUND_LABELS.keys(), "grid")
+    qtbot.addWidget(picker)
+    picker.resize(192, picker.height())
+    picker.show()
+    tiles = [picker._tile(i) for i in range(len(BACKGROUND_LABELS))]
+    for i, tile in enumerate(tiles):
+        assert tile.left() >= 0 and tile.right() <= picker.width()            # inside the widget: nothing cut off
+        assert tile.top() >= 0 and tile.bottom() + picker.LABEL_H <= picker.height() + picker.GAP
+        for other in tiles[i + 1:]:
+            assert not tile.intersects(other)                                  # and no page covers another
+    assert not picker.grab().isNull()
+
+
+def test_clicking_a_page_or_pressing_arrows_picks_it(qtbot):
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtTest import QTest
+    from qt_ui.scribe_tab import _PaperPicker, BACKGROUND_LABELS
+    picker = _PaperPicker(BACKGROUND_LABELS.keys(), "grid")
+    qtbot.addWidget(picker)
+    picker.resize(192, picker.height())
+    picker.show()
+    picked = []
+    picker.picked.connect(picked.append)
+    keys = list(BACKGROUND_LABELS)
+    QTest.mouseClick(picker, Qt.LeftButton, Qt.NoModifier, picker._tile(keys.index("dots")).center().toPoint())
+    assert picked == ["dots"]
+    picker.set_current("dots", animate=False)
+    assert picker.current() == "dots"
+    picked.clear()
+    QTest.keyClick(picker, Qt.Key_Right)
+    QTest.keyClick(picker, Qt.Key_Up)
+    assert picked == [keys[keys.index("dots") + 1], keys[keys.index("dots") - 2]]
+    QTest.mouseClick(picker, Qt.LeftButton, Qt.NoModifier, QPointF(5, picker.height() - 1).toPoint())
+    assert len(picked) in (2, 3)                                                # the empty gutter picks nothing wrong
+
+
+def test_the_tab_picker_follows_the_chosen_paper(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab._paper_stack.picked.emit("blueprint")
+    assert tab.canvas.prefs["background"] == "blueprint"
+    assert tab._paper_stack.current() == "blueprint"
+    assert not tab.canvas.grab().isNull()
