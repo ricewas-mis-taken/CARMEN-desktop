@@ -112,6 +112,24 @@ class ScribeCanvas(QWidget):
     toolChanged = Signal(str)
     prefsChanged = Signal()     # options changed from inside the canvas
     layersChanged = Signal()
+    selectionChanged = Signal()     # which items are selected changed
+    selectionMoved = Signal()       # the selected items moved or changed size (the size boxes follow)
+
+    HANDLE_PX = 8               # a resize handle, in screen pixels
+    HANDLE_GRAB_PX = 8          # how near the pointer must be to take hold of one
+    HANDLES = ("nw", "n", "ne", "e", "se", "s", "sw", "w")
+    _sel_items = ()
+    _hover_handle = None
+    _resizing = None
+
+    @property
+    def _sel(self):
+        return self._sel_items
+
+    @_sel.setter
+    def _sel(self, value):
+        self._sel_items = value
+        self.selectionChanged.emit()
 
     def __init__(self, doc):
         super().__init__()
@@ -975,6 +993,17 @@ class ScribeCanvas(QWidget):
             for item in self._sel:
                 x0, y0, x1, y1 = geo.bounds(item)
                 p.drawRect(QRectF(x0 - pad, y0 - pad, x1 - x0 + 2 * pad, y1 - y0 + 2 * pad))
+            if self._sel and self.prefs["tool"] == "select" and self._draft is None:
+                box = self.selection_box()
+                size = self.HANDLE_PX / zoom
+                if len(self._sel) > 1:
+                    p.drawRect(QRectF(box[0], box[1], box[2] - box[0], box[3] - box[1]))
+                p.setPen(QPen(QColor("#2563EB"), 1.5 / zoom))
+                p.setBrush(QColor("#FFFFFF"))
+                for hx, hy in self._handle_points(box).values():
+                    p.drawRoundedRect(QRectF(hx - size / 2, hy - size / 2, size, size), 2 / zoom, 2 / zoom)
+                p.setBrush(Qt.NoBrush)
+                p.setPen(pen)
             if self._band:
                 (ax, ay), (bx, by) = self._band
                 p.setBrush(QColor(59, 130, 246, 40))
@@ -1279,9 +1308,104 @@ class ScribeCanvas(QWidget):
             if layer["visible"]:
                 yield from reversed(layer["items"])
 
+    def _items_at(self, w, tol):
+        """Every visible item the point touches, top first. A box check comes first: on a board of thousands of
+        strokes, measuring the distance to each one's whole outline was what made a click or an eraser sweep slow."""
+        for item in self._visible_items_top_first():
+            x0, y0, x1, y1 = self._bounds_of(item)
+            if x0 - tol <= w[0] <= x1 + tol and y0 - tol <= w[1] <= y1 + tol and geo.hit_item(item, w[0], w[1], tol):
+                yield item
+
     def _item_at(self, w):
-        tol = 6 / self.zoom
-        return next((i for i in self._visible_items_top_first() if geo.hit_item(i, w[0], w[1], tol)), None)
+        return next(self._items_at(w, 6 / self.zoom), None)
+
+    def selection_box(self):
+        """(x0, y0, x1, y1) of the selected shapes themselves, or None when nothing is selected."""
+        return geo.union_bounds(self._sel) if self._sel else None
+
+    def _handle_points(self, box):
+        x0, y0, x1, y1 = box
+        mx, my = (x0 + x1) / 2, (y0 + y1) / 2
+        return {"nw": (x0, y0), "n": (mx, y0), "ne": (x1, y0), "e": (x1, my),
+                "se": (x1, y1), "s": (mx, y1), "sw": (x0, y1), "w": (x0, my)}
+
+    def _handle_at(self, pos):
+        """The resize handle under a screen position, or None. Only while the select tool has something selected."""
+        if self.tool != "select" or not self._sel:
+            return None
+        box = self.selection_box()
+        for name, (hx, hy) in self._handle_points(box).items():
+            sx, sy = self._to_screen(hx, hy)
+            if abs(pos.x() - sx) <= self.HANDLE_GRAB_PX and abs(pos.y() - sy) <= self.HANDLE_GRAB_PX:
+                return name
+        return None
+
+    @staticmethod
+    def _handle_cursor(name):
+        if name in ("nw", "se"):
+            return Qt.SizeFDiagCursor
+        if name in ("ne", "sw"):
+            return Qt.SizeBDiagCursor
+        return Qt.SizeVerCursor if name in ("n", "s") else Qt.SizeHorCursor
+
+    def _begin_resize(self, handle):
+        self._resizing = {"handle": handle, "box": self.selection_box(), "pushed": False,
+                          "states": [(item, dict(item)) for item in self._sel]}
+
+    def _resize_to(self, w, mods):
+        """Drags a handle: the edges it owns follow the pointer, the opposite ones stay. A corner keeps the shape's
+        proportions with Shift (for pictures it is the other way round: they keep theirs unless Shift is held)."""
+        job = self._resizing
+        x0, y0, x1, y1 = job["box"]
+        handle, least = job["handle"], max(2.0, 6 / self.zoom)
+        nx0, ny0, nx1, ny1 = x0, y0, x1, y1
+        if "w" in handle:
+            nx0 = min(w[0], x1 - least)
+        if "e" in handle:
+            nx1 = max(w[0], x0 + least)
+        if "n" in handle:
+            ny0 = min(w[1], y1 - least)
+        if "s" in handle:
+            ny1 = max(w[1], y0 + least)
+        pictures = all(item["type"] == "image" for item, _state in job["states"])
+        corner = len(handle) == 2
+        if corner and (bool(mods & Qt.ShiftModifier) != pictures):
+            ow, oh = max(x1 - x0, 1e-6), max(y1 - y0, 1e-6)
+            k = max((nx1 - nx0) / ow, (ny1 - ny0) / oh)
+            if "w" in handle:
+                nx0 = x1 - ow * k
+            else:
+                nx1 = x0 + ow * k
+            if "n" in handle:
+                ny0 = y1 - oh * k
+            else:
+                ny1 = y0 + oh * k
+        if not job["pushed"]:
+            self._push_undo(touching=[item for item, _state in job["states"]])
+            job["pushed"] = True
+        self._board_edited()
+        for item, state in job["states"]:
+            item.clear()
+            item.update(state)
+        geo.resize_to_box([item for item, _state in job["states"]], job["box"], (nx0, ny0, nx1, ny1))
+        if len(job["states"]) <= 20:
+            self.selectionMoved.emit()
+
+    def set_selection_box(self, x0, y0, x1, y1):
+        """Moves and resizes whatever is selected so its box is exactly this (typed in the size boxes)."""
+        if not self._sel:
+            return
+        old = self.selection_box()
+        now = time.monotonic()
+        marker = ("box", tuple(id(i) for i in self._sel))
+        if not (self._last_edit and self._last_edit[0] == marker and now - self._last_edit[1] < 1.5):
+            self._push_undo(touching=list(self._sel))
+        self._last_edit = (marker, now)
+        self._board_edited()
+        geo.resize_to_box(self._sel, old, (x0, y0, x1, y1))
+        self.changed.emit()
+        self.selectionMoved.emit()
+        self.update()
 
     def _is_selected(self, item):
         return any(item is s for s in self._sel)
@@ -1474,7 +1598,11 @@ class ScribeCanvas(QWidget):
         elif tool == "fill":
             self._fill_at(w)
         elif tool == "select":
-            self._select_press(w, e.modifiers())
+            handle = self._handle_at(pos)
+            if handle is not None:
+                self._begin_resize(handle)
+            else:
+                self._select_press(w, e.modifiers())
         self.update()
 
     def _select_press(self, w, mods):
@@ -1505,7 +1633,17 @@ class ScribeCanvas(QWidget):
             self._update_cursor()
         w = self._to_world(pos)
         self._cursor_world = w
-        if self._pan:
+        if not e.buttons() and not self._pan and self._draft is None:
+            handle = self._handle_at(pos)
+            if handle != self._hover_handle:
+                self._hover_handle = handle
+                if handle is not None:
+                    self.setCursor(self._handle_cursor(handle))
+                else:
+                    self._update_cursor()
+        if self._resizing is not None:
+            self._resize_to(w, e.modifiers())
+        elif self._pan:
             start, vx, vy = self._pan
             self.view["x"] = vx - (pos.x() - start.x()) / self.zoom
             self.view["y"] = vy - (pos.y() - start.y()) / self.zoom
@@ -1536,6 +1674,8 @@ class ScribeCanvas(QWidget):
             for item in self._sel:
                 geo.translate(item, dx, dy)
             self._move_last = w
+            if len(self._sel) <= 20:
+                self.selectionMoved.emit()
         elif self._band:
             self._band = (self._band[0], w)
         elif not self.prefs["showGuides"]:
@@ -1567,6 +1707,14 @@ class ScribeCanvas(QWidget):
             return
         if e.button() != Qt.LeftButton:
             return
+        if self._resizing is not None:
+            moved = self._resizing["pushed"]
+            self._resizing = None
+            if moved:
+                self.changed.emit()
+                self.selectionMoved.emit()
+            self.update()
+            return
         d = self._draft
         if d is not None:
             kind = d["type"]
@@ -1585,6 +1733,7 @@ class ScribeCanvas(QWidget):
             self._move_last = None
             if self._moved:
                 self.changed.emit()
+                self.selectionMoved.emit()
         elif self._band:
             (ax, ay), (bx, by) = self._band
             box = QRectF(QPointF(ax, ay), QPointF(bx, by)).normalized()
@@ -1593,6 +1742,7 @@ class ScribeCanvas(QWidget):
                 if box.intersects(QRectF(x0, y0, x1 - x0, y1 - y0)) and not self._is_selected(item):
                     self._sel.append(item)
             self._band = None
+            self.selectionChanged.emit()
         self.update()
 
     def wheelEvent(self, e):
