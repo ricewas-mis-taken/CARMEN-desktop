@@ -92,10 +92,11 @@ _BACKGROUNDS = {
     "dots": ("#FFFFFF", "#7C828C", None, False),
     "lined": ("#FBF8EF", "#A9C4E8", None, False),
     "paper": ("#F6F1E4", None, None, False),
+    "blueprint": ("#1B3A66", "#2F5B96", "#6A94CC", True),
 }
 BACKGROUND_LABELS = {
     "white": "White", "black": "Black", "grid": "Grid", "darkgrid": "Dark grid",
-    "dots": "Dots", "lined": "Lined", "paper": "Paper",
+    "dots": "Dots", "lined": "Lined", "paper": "Paper", "blueprint": "Blueprint",
 }
 # Letters that say what they are (the digits still work too).
 _TOOL_KEYS = {"v": "select", "p": "freehand", "l": "line", "c": "curve", "a": "arrow", "r": "rect", "o": "circle",
@@ -1917,104 +1918,169 @@ class _StrokePreview(QWidget):
         p.drawPath(path)
 
 
-class _PaperStack(QWidget):
-    """The papers as a stack of wide rounded cards, each showing a strip of its top before the next
-    card begins. The chosen one is lifted: more of it shows, and a ring marks it."""
+class _PaperPicker(QWidget):
+    """The papers as a grid of small pages. Each is drawn whole (its pattern starts and ends on a line, so
+    nothing looks cut off) with its name under it. The chosen one wears a ring and a tick, and the ring
+    fades from one page to the next. Arrow keys move through them."""
     picked = Signal(str)
-    PEEK, EXTRA, CARD, RADIUS = 26, 54, 78, 12
+    TILE_H, LABEL_H, GAP, RADIUS, COLUMNS = 54, 20, 10, 10, 2
+    CELL = 8.0                 # the size of one square on a page, give or take what it takes to fit whole
 
     def __init__(self, keys, current):
         super().__init__()
         self._keys = list(keys)
-        self._current = current
-        self._pos = float(self._keys.index(current)) if current in self._keys else 0.0
+        self._current = current if current in self._keys else (self._keys[0] if self._keys else None)
+        self._previous = None
+        self._fade = 1.0                       # 0 to 1: the ring arriving on the chosen page
+        self._hover = None
         self._anim = None
+        self.setMouseTracking(True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedHeight(self._top(len(self._keys) - 1) + self.CARD + 6)
+        self.setFocusPolicy(Qt.TabFocus)
+        rows = -(-len(self._keys) // self.COLUMNS)
+        self.setFixedHeight(rows * (self.TILE_H + self.LABEL_H + self.GAP) - self.GAP + 8)
         self.setMinimumWidth(120)
 
     def current(self):
         return self._current
 
-    def _top(self, index):
-        lift = max(0.0, min(1.0, index - self._pos))
-        return 3 + index * self.PEEK + self.EXTRA * lift
-
     def set_current(self, key, animate=True):
-        if key not in self._keys:
+        if key not in self._keys or key == self._current:
             return
-        self._current = key
-        target = float(self._keys.index(key))
+        self._previous, self._current = self._current, key
         from qt_ui import motion
         motion.stop(self._anim)
-        if not animate:
-            self._pos = target
-            self.update()
-            return
 
         def step(value):
-            self._pos = value
+            self._fade = value
             self.update()
-        self._anim = motion.tween(self, self._pos, target, motion.MEDIUM_MS, step)
+        self._fade = 0.0
+        self._anim = motion.tween(self, 0.0, 1.0, motion.FAST_MS if hasattr(motion, "FAST_MS") else 220, step)
+        if not animate:
+            motion.stop(self._anim)
+            self._fade = 1.0
+            self.update()
+
+    # ---- geometry ----
+    def _tile(self, index):
+        width = (self.width() - self.GAP * (self.COLUMNS - 1)) / self.COLUMNS
+        col, row = index % self.COLUMNS, index // self.COLUMNS
+        return QRectF(col * (width + self.GAP) + 0.5, 4 + row * (self.TILE_H + self.LABEL_H + self.GAP) + 0.5,
+                      width - 1, self.TILE_H)
+
+    def _index_at(self, pos):
+        for index in range(len(self._keys)):
+            if self._tile(index).adjusted(-3, -3, 3, self.LABEL_H).contains(pos):
+                return index
+        return None
+
+    # ---- input ----
+    def mouseMoveEvent(self, event):
+        index = self._index_at(event.position())
+        if index != self._hover:
+            self._hover = index
+            self.update()
+
+    def leaveEvent(self, event):
+        self._hover = None
+        self.update()
 
     def mousePressEvent(self, event):
-        y = event.position().y()
-        for index in range(len(self._keys) - 1, -1, -1):
-            if y >= self._top(index):
-                self.picked.emit(self._keys[index])
-                return
+        index = self._index_at(event.position())
+        if index is not None and event.button() == Qt.LeftButton:
+            self.picked.emit(self._keys[index])
+
+    def keyPressEvent(self, event):
+        step = {Qt.Key_Left: -1, Qt.Key_Right: 1, Qt.Key_Up: -self.COLUMNS, Qt.Key_Down: self.COLUMNS}.get(event.key())
+        if step is None or self._current is None:
+            super().keyPressEvent(event)
+            return
+        target = self._keys.index(self._current) + step
+        if 0 <= target < len(self._keys):
+            self.picked.emit(self._keys[target])
+
+    # ---- painting ----
+    def _paint_page(self, p, key, rect):
+        """One page, drawn whole: the squares are made to fit the tile exactly, so the pattern begins and ends on a line."""
+        paper, minor, major, dark = _BACKGROUNDS[key]
+        path = QPainterPath()
+        path.addRoundedRect(rect, self.RADIUS, self.RADIUS)
+        p.save()
+        p.setClipPath(path)
+        p.fillRect(rect, QColor(paper))
+        if minor is not None:
+            cols = max(4, round(rect.width() / self.CELL))
+            rows = max(3, round(rect.height() / self.CELL))
+            dx, dy = rect.width() / cols, rect.height() / rows
+            if key == "dots":
+                p.setPen(QPen(QColor(minor), 2.2, Qt.SolidLine, Qt.RoundCap))
+                for i in range(1, cols):
+                    for j in range(1, rows):
+                        p.drawPoint(QPointF(rect.left() + i * dx, rect.top() + j * dy))
+            elif key == "lined":
+                p.setPen(QPen(QColor(minor), 1))
+                for j in range(1, rows):
+                    p.drawLine(QPointF(rect.left(), rect.top() + j * dy), QPointF(rect.right(), rect.top() + j * dy))
+                p.setPen(QPen(QColor("#E8A0A0"), 1))                     # the margin line of a notebook
+                p.drawLine(QPointF(rect.left() + 3 * dx, rect.top()), QPointF(rect.left() + 3 * dx, rect.bottom()))
+            else:
+                for i in range(1, cols):
+                    p.setPen(QPen(QColor(major if major and i % 5 == 0 else minor), 1))
+                    p.drawLine(QPointF(rect.left() + i * dx, rect.top()), QPointF(rect.left() + i * dx, rect.bottom()))
+                for j in range(1, rows):
+                    p.setPen(QPen(QColor(major if major and j % 5 == 0 else minor), 1))
+                    p.drawLine(QPointF(rect.left(), rect.top() + j * dy), QPointF(rect.right(), rect.top() + j * dy))
+        p.restore()
 
     def paintEvent(self, _event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        width = self.width()
-        # Farthest from the chosen paper first, the chosen one last: it sits on top of the stack.
-        for index in sorted(range(len(self._keys)), key=lambda i: -abs(i - self._pos)):
-            key = self._keys[index]
-            paper, minor, major, dark = _BACKGROUNDS[key]
-            near = max(0.0, 1.0 - abs(index - self._pos))            # 1 for the chosen paper, easing to 0
-            inset = 3 + 8 * (1 - near)                                 # the others sit narrower, the chosen sticks out
-            card = QRectF(inset, self._top(index), width - 2 * inset, self.CARD)
-            path = QPainterPath()
-            path.addRoundedRect(card, self.RADIUS, self.RADIUS)
-            p.setPen(Qt.NoPen)
-            for grow, alpha in ((12, 14), (8, 22), (5, 32), (2, 46)):  # a shadow cast up onto the paper behind
-                p.setBrush(QColor(20, 16, 40, int(alpha * (1 + near))))
-                p.drawRoundedRect(card.adjusted(-grow * 0.4, -grow, grow * 0.4, grow * 0.4 * near), self.RADIUS, self.RADIUS)
-            if near > 0.01:                                            # the halo round the lifted paper
-                for ring, alpha in ((7, 26), (5, 44), (3, 70)):
-                    p.setBrush(Qt.NoBrush)
-                    p.setPen(QPen(QColor(59, 130, 246, int(alpha * near)), 2))
-                    p.drawRoundedRect(card.adjusted(-ring, -ring, ring, ring), self.RADIUS + ring, self.RADIUS + ring)
-                p.setPen(Qt.NoPen)
-            p.save()
-            p.setClipPath(path)
-            p.fillRect(card, QColor(paper))
-            if minor is not None:
-                p.setPen(QPen(QColor(minor), 1))
-                if key == "dots":
-                    p.setPen(QPen(QColor(minor), 2, Qt.SolidLine, Qt.RoundCap))
-                    for x in range(int(card.left()) + 10, int(card.right()), 12):
-                        for y in range(int(card.top()) + 8, int(card.bottom()), 12):
-                            p.drawPoint(QPointF(x, y))
-                elif key == "lined":
-                    for y in range(int(card.top()) + 12, int(card.bottom()), 12):
-                        p.drawLine(QPointF(card.left(), y), QPointF(card.right(), y))
-                else:
-                    for k, x in enumerate(range(int(card.left()) + 6, int(card.right()), 12)):
-                        p.setPen(QPen(QColor(major if k % 5 == 0 and major else minor), 1))
-                        p.drawLine(QPointF(x, card.top()), QPointF(x, card.bottom()))
-                    for k, y in enumerate(range(int(card.top()) + 6, int(card.bottom()), 12)):
-                        p.setPen(QPen(QColor(major if k % 5 == 0 and major else minor), 1))
-                        p.drawLine(QPointF(card.left(), y), QPointF(card.right(), y))
-            p.restore()
+        label_font = QFont(self.font())
+        label_font.setPixelSize(12)
+        for index, key in enumerate(self._keys):
+            rect = self._tile(index)
+            hover = index == self._hover
+            lift = -1.0 if hover else 0.0
+            rect = rect.translated(0, lift)
+            ring = 1.0 if key == self._current and self._fade >= 1 else (
+                self._fade if key == self._current else (1 - self._fade if key == self._previous else 0.0))
             chosen = key == self._current
+            # a soft shadow under the page
+            p.setPen(Qt.NoPen)
+            for grow, alpha in ((4, 10), (2, 16)):
+                p.setBrush(QColor(20, 24, 40, alpha + (8 if hover else 0)))
+                p.drawRoundedRect(rect.adjusted(-grow * 0.3, grow * 0.3, grow * 0.3, grow), self.RADIUS, self.RADIUS)
+            self._paint_page(p, key, rect)
+            dark = _BACKGROUNDS[key][3]
+            edge = QColor(255, 255, 255, 70) if dark else QColor(31, 35, 40, 60 if not hover else 110)
             p.setBrush(Qt.NoBrush)
-            p.setPen(QPen(QColor(SCRIBE_INK) if chosen else QColor(255, 255, 255, 110) if dark else QColor(0, 0, 0, 105),
-                          2 if chosen else 1.4))                       # a clear edge, so each paper's start and end show
-            p.drawRoundedRect(card, self.RADIUS, self.RADIUS)
-            p.setPen(QPen(QColor(255, 255, 255, 150 if not dark else 40), 1))   # a bright lip on the top edge
-            p.drawLine(QPointF(card.left() + self.RADIUS, card.top() + 1.5), QPointF(card.right() - self.RADIUS, card.top() + 1.5))
+            p.setPen(QPen(edge, 1))
+            p.drawRoundedRect(rect, self.RADIUS, self.RADIUS)
+            if ring > 0.01:                                   # the ring: glow outside, ink edge, tick in the corner
+                halo = QColor(59, 130, 246, int(60 * ring))
+                p.setPen(QPen(halo, 3))
+                p.drawRoundedRect(rect.adjusted(-2.5, -2.5, 2.5, 2.5), self.RADIUS + 2.5, self.RADIUS + 2.5)
+                ink = QColor(SCRIBE_INK)
+                ink.setAlphaF(ring)
+                p.setPen(QPen(ink, 2))
+                p.drawRoundedRect(rect, self.RADIUS, self.RADIUS)
+                badge = QPointF(rect.right() - 11, rect.top() + 11)
+                p.setPen(Qt.NoPen)
+                p.setBrush(QColor(31, 35, 40, int(235 * ring)))
+                p.drawEllipse(badge, 7.5 * (0.6 + 0.4 * ring), 7.5 * (0.6 + 0.4 * ring))
+                p.setPen(QPen(QColor(255, 255, 255, int(255 * ring)), 1.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+                p.drawPolyline([QPointF(badge.x() - 3.2, badge.y() + 0.2), QPointF(badge.x() - 0.8, badge.y() + 2.6),
+                                QPointF(badge.x() + 3.4, badge.y() - 2.4)])
+            font = QFont(label_font)
+            font.setBold(chosen)
+            p.setFont(font)
+            p.setPen(QColor(SCRIBE_INK) if chosen or hover else QColor("#5B6472"))
+            p.drawText(QRectF(rect.left(), rect.bottom() + 3, rect.width(), self.LABEL_H - 3),
+                       Qt.AlignHCenter | Qt.AlignVCenter, BACKGROUND_LABELS.get(key, key.title()))
+        if self.hasFocus():
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(QColor(59, 130, 246, 140), 1.5, Qt.DotLine))
+            p.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 8, 8)
 
 
 class ScribeTab(QWidget):
@@ -2504,7 +2570,8 @@ class ScribeTab(QWidget):
         self._background.setToolTip(HELP["paper"])
         self._background.hide()
         box.addWidget(self._background)
-        self._paper_stack = _PaperStack(BACKGROUND_LABELS.keys(), prefs["background"])
+        box.addWidget(self._heading("Paper"))
+        self._paper_stack = _PaperPicker(BACKGROUND_LABELS.keys(), prefs["background"])
         self._paper_stack.picked.connect(
             lambda k: self._background.setCurrentIndex(self._background.findData(k)))
         box.addWidget(self._paper_stack)
