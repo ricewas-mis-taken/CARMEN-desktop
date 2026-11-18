@@ -1111,3 +1111,20 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   turning high-DPI scaling off (it would shrink the whole interface on these zoom levels) and hiding every window
   on a screen change (hiding during teardown is itself a native call). If native_crash.log names a Qt function,
   the next step follows from that, not from this guess.
+
+2026-11-17  Scribe: undo that keeps item identity, and a whiteboard's missing basics
+  Undo on a real board (23,317 strokes, 939k points) cost 660 ms after a stroke and 333 ms after a move. Profiling
+  split it in two: the minimap heat map was rebuilt from scratch after every undo (walking every point), and a
+  restored snapshot swapped every item for a copy, so every per-item cache (outlines, boxes) missed at once.
+  Chose steps that hold the SAME item objects (a list of items per layer, plus a saved state only for the items an edit
+  changes in place; edits that only add, remove or reorder pass an empty list) over making the copies cheaper,
+  because identity is what keeps the caches valid. The heat map is now patched by the items added or removed, and a
+  rebuild that cannot be avoided (a move) runs in 6 ms slices between paints with the old cells drawn meanwhile.
+  Result: undo plus repaint about 60 ms for both kinds. The default for a step is still "every item", so a forgotten
+  caller is slow, not wrong.
+  New: resize handles and typed X/Y/W/H (shape maths in scribe_geometry, no new item fields, so another computer on
+  older code still reads the board), an eraser that removes whole shapes (a partial-stroke eraser would split strokes
+  and change what sync carries), live coordinates plus Go to, arrow nudge, layer-order keys, text edit, and a grid of
+  whole named papers instead of overlapping strips. Clicking and erasing use a remembered list of item boxes, kept
+  current by an edit counter, because a distance check against every outline was 29 ms per click.
+  Found, not changed: a board over MAX_SYNC_BYTES (6 MB) is silently not shared. This computer's board is 41 MB.
