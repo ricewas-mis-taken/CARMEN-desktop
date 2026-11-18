@@ -31,7 +31,8 @@ DEFAULT_CONFIG = {
     "restoreWindow": {},        # set just before the app restarts itself into new code: {"open", "page"}
     "openOnStartup": True,      # sign-in launches Carmen with its window open, not only in the tray
     "scribeOptionsHidden": False,   # Scribe's options card is tucked away (the Hide options button)
-    "tourDone": False,          # the welcome tour has been shown (or skipped) once
+    "allowAiAgents": True,      # the browser extension leaves an AI agent's own tabs (Claude in Chrome) alone during a session
+    "tourDone": False,         # the welcome tour has been shown (or skipped) once
     "reportCardWeek": "",       # the Monday of the week whose report card was last shown
     "quickNoteGeometry": None,
     "last_hide_taskbar_badges": False,

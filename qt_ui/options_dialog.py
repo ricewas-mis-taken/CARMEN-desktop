@@ -49,6 +49,7 @@ class OptionsDialog(QWidget):
         self._layout.addWidget(field_label("Browser extension"))
         self._extension_note = role_label(self._extension_text(), "hint", wrap=True)
         self._layout.addWidget(self._extension_note)
+        self._config_box("Let AI agents (Claude in Chrome) work in their own tabs during a session", "allowAiAgents", True)
         self._layout.addWidget(field_label("Start-up"))
         self._config_box("Open Carmen's window when I sign in to Windows", "openOnStartup", True)
         self._layout.addWidget(field_label("Help"))
