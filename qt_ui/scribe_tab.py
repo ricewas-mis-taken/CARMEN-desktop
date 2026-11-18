@@ -1526,6 +1526,31 @@ class ScribeCanvas(QWidget):
         self.selectionMoved.emit()
         return True
 
+    def edit_text(self, item):
+        """Changes a text shape's words (its box follows). One undo step."""
+        text, ok = QInputDialog.getMultiLineText(self, "Text", "Text:", item.get("text", ""))
+        if not ok or not text.strip() or text == item.get("text"):
+            return False
+        font = QFont()
+        font.setPixelSize(max(4, int(item.get("size", 16))))
+        box = QFontMetricsF(font).boundingRect(QRectF(0, 0, 10000, 10000), Qt.AlignLeft | Qt.AlignTop, text)
+        self._push_undo(touching=[item])
+        self._board_edited()
+        item["text"], item["w"], item["h"] = text, box.width(), box.height()
+        self.changed.emit()
+        self.selectionMoved.emit()
+        self.update()
+        return True
+
+    def mouseDoubleClickEvent(self, e):
+        if e.button() == Qt.LeftButton and self.tool == "select":
+            hit = self._item_at(self._to_world(e.position()))
+            if hit is not None and hit["type"] == "text":
+                self._sel = [hit]
+                self.edit_text(hit)
+                return
+        super().mouseDoubleClickEvent(e)
+
     def original_size(self):
         """Puts each selected picture back to its own size, around its middle."""
         pictures = [i for i in self._sel if i["type"] == "image"]
@@ -1963,6 +1988,26 @@ class ScribeCanvas(QWidget):
                 self.paste_image()
         elif key in (Qt.Key_Delete, Qt.Key_Backspace) and self._sel:
             self.delete_selection()
+        elif key in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down) and self._sel:
+            step = 10 if e.modifiers() & Qt.ShiftModifier else 1            # screen pixels; Shift for a bigger step
+            self.nudge({Qt.Key_Left: -step, Qt.Key_Right: step}.get(key, 0),
+                       {Qt.Key_Up: -step, Qt.Key_Down: step}.get(key, 0))
+        elif ctrl and key in (Qt.Key_BracketRight, Qt.Key_BraceRight, Qt.Key_BracketLeft, Qt.Key_BraceLeft):
+            toward_front = key in (Qt.Key_BracketRight, Qt.Key_BraceRight)
+            whole = bool(e.modifiers() & Qt.ShiftModifier)                  # Ctrl+Shift+] all the way, Ctrl+] one step
+            self.arrange(("front" if whole else "forward") if toward_front else ("back" if whole else "backward"))
+        elif ctrl and key == Qt.Key_0:
+            self.set_zoom(1.0)
+        elif key in (Qt.Key_Plus, Qt.Key_Equal) or (ctrl and key == Qt.Key_Equal):
+            self.zoom_by(1.25)
+        elif key == Qt.Key_Minus:
+            self.zoom_by(1 / 1.25)
+        elif key == Qt.Key_Exclam or (key == Qt.Key_1 and e.modifiers() & Qt.ShiftModifier):
+            self.fit_all()
+        elif key == Qt.Key_At or (key == Qt.Key_2 and e.modifiers() & Qt.ShiftModifier):
+            self.zoom_to_selection()
+        elif key in (Qt.Key_Return, Qt.Key_Enter) and len(self._sel) == 1 and self._sel[0]["type"] == "text":
+            self.edit_text(self._sel[0])
         elif key == Qt.Key_M and not ctrl:
             self._minimap_on = not self._minimap_on
             self.update()
