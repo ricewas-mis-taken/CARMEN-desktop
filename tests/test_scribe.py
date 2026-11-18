@@ -292,7 +292,8 @@ def test_freehand_stroke_never_moves_after_drawing(qtbot):
 def test_every_tool_has_an_icon_and_a_tooltip_with_its_key(qtbot):
     tab = ScribeTab()
     qtbot.addWidget(tab)
-    assert set(tab._tool_buttons) == {"select", "freehand", "line", "curve", "arrow", "rect", "circle", "text", "fill"}
+    assert set(tab._tool_buttons) == {"select", "freehand", "line", "curve", "arrow", "rect", "circle", "text", "fill",
+                                       "eraser"}
     for key, button in tab._tool_buttons.items():
         assert not button.icon().isNull(), key
         assert button.toolTip()
