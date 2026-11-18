@@ -637,8 +637,11 @@ class ScribeCanvas(QWidget):
     def _board_shape(self):
         return tuple((layer["visible"], len(layer["items"])) for layer in self.doc["layers"])
 
+    _edits = 0
+
     def _board_edited(self):
         """Something on the board may have changed: the picture and the board's extent are worked out again."""
+        self._edits += 1
         self._picture_fresh = False
         self._bounds_fresh = False
         self._ghost = None
@@ -1334,11 +1337,26 @@ class ScribeCanvas(QWidget):
             if layer["visible"]:
                 yield from reversed(layer["items"])
 
-    def _items_at(self, w, tol):
-        """Every visible item the point touches, top first. A box check comes first: on a board of thousands of
-        strokes, measuring the distance to each one's whole outline was what made a click or an eraser sweep slow."""
+    _hit_cache = None
+
+    def _hit_boxes(self):
+        """[(x0, y0, x1, y1, item)] for every visible item, top first, remembered until the board is edited or an
+        item is added or taken away. Testing a point against these four numbers is what lets a click or an eraser
+        sweep over thousands of strokes stay quick: only the few whose box holds the point are measured."""
+        key = (self._edits, self._board_shape())
+        known = self._hit_cache
+        if known is not None and known[0] == key:
+            return known[1]
+        boxes = []
         for item in self._visible_items_top_first():
             x0, y0, x1, y1 = self._bounds_of(item)
+            boxes.append((x0, y0, x1, y1, item))
+        self._hit_cache = (key, boxes)
+        return boxes
+
+    def _items_at(self, w, tol):
+        """Every visible item the point touches, top first."""
+        for x0, y0, x1, y1, item in self._hit_boxes():
             if x0 - tol <= w[0] <= x1 + tol and y0 - tol <= w[1] <= y1 + tol and geo.hit_item(item, w[0], w[1], tol):
                 yield item
 
@@ -1437,30 +1455,43 @@ class ScribeCanvas(QWidget):
         return any(item is s for s in self._sel)
 
     # ---- the eraser ----
-    def _erase_at(self, w):
-        """Takes away every visible shape the eraser touches here. Dragging is one undo step, however far it goes."""
-        hits = list(self._items_at(w, self.ERASER_PX / self.zoom))
-        if not hits:
+    def _erase_along(self, a, b):
+        """The eraser moved from a to b (or was pressed at a == b): every shape it touches on the way goes, so a quick
+        sweep leaves no gaps. One pass over the board's boxes finds the few shapes near the path; only those are
+        measured at each spot along it."""
+        reach = self.ERASER_PX / self.zoom
+        boxes = self._hit_boxes()
+        lo_x, hi_x = min(a[0], b[0]) - reach, max(a[0], b[0]) + reach
+        lo_y, hi_y = min(a[1], b[1]) - reach, max(a[1], b[1]) + reach
+        near = [e for e in boxes if e[0] <= hi_x and e[2] >= lo_x and e[1] <= hi_y and e[3] >= lo_y]
+        if not near:
             return
+        steps = max(1, int(math.hypot(b[0] - a[0], b[1] - a[1]) / (reach / 2)))
+        gone = set()
+        for i in range(1, steps + 1):
+            t = i / steps
+            x, y = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+            for x0, y0, x1, y1, item in near:
+                if (id(item) not in gone and x0 - reach <= x <= x1 + reach and y0 - reach <= y <= y1 + reach
+                        and geo.hit_item(item, x, y, reach)):
+                    gone.add(id(item))
+        if gone:
+            self._take_away(gone, boxes)
+
+    def _take_away(self, gone, boxes):
+        """Removes these shapes (by id). A whole drag is one undo step, however far it goes. The list of boxes is
+        kept up to date here, so the next move does not have to build it again."""
         job = self._erasing
         if not job["pushed"]:
             self._push_undo(touching=[])
             job["pushed"] = True
-        gone = {id(item) for item in hits}
         for layer in self.doc["layers"]:
             if layer["visible"]:
                 layer["items"] = [item for item in layer["items"] if id(item) not in gone]
         self._sel = [item for item in self._sel if id(item) not in gone]
         self._board_edited()
+        self._hit_cache = ((self._edits, self._board_shape()), [e for e in boxes if id(e[4]) not in gone])
         self.changed.emit()
-
-    def _erase_along(self, a, b):
-        """The eraser moved from a to b: every spot between is wiped, so a quick sweep leaves no gaps."""
-        reach = self.ERASER_PX / self.zoom
-        steps = max(1, int(math.hypot(b[0] - a[0], b[1] - a[1]) / (reach / 2)))
-        for i in range(1, steps + 1):
-            t = i / steps
-            self._erase_at((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t))
 
     # ---- what can be done with the selection ----
     def delete_selection(self):
@@ -1789,7 +1820,7 @@ class ScribeCanvas(QWidget):
             self._fill_at(w)
         elif tool == "eraser":
             self._erasing = {"last": w, "pushed": False}
-            self._erase_at(w)
+            self._erase_along(w, w)
         elif tool == "select":
             handle = self._handle_at(pos)
             if handle is not None:
