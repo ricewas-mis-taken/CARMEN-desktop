@@ -55,3 +55,24 @@ def test_the_dialog_builds_and_plan_goes_to_the_week_page(qtbot):
     qtbot.addWidget(dialog)
     dialog._plan()                      # closes itself and goes on to planning
     assert went == [1] and not dialog.isVisible()
+
+
+def test_time_left_paused_is_its_own_line_and_not_looking_elsewhere(qtbot):
+    from qt_ui import report_card_dialog
+    t0 = datetime(2026, 11, 3, 9, 0)
+    log = [{"kind": "pause", "timestamp": (t0 + timedelta(minutes=30)).isoformat(), "pauseReason": "later"},
+           {"kind": "resume", "timestamp": (t0 + timedelta(hours=13)).isoformat()},
+           {"kind": "pause", "timestamp": (t0 + timedelta(hours=13, minutes=5)).isoformat(), "pauseReason": "break"},
+           {"kind": "resume", "timestamp": (t0 + timedelta(hours=13, minutes=15)).isoformat()}]
+    entry = {"startTime": t0.isoformat(), "endTime": (t0 + timedelta(hours=14)).isoformat(), "violationLog": log}
+    card = report_card.build(MON, sessions=[entry])
+    pause = card["pause"]
+    assert pause["escape_seconds"] == 0 and pause["free_seconds"] == 600
+    assert pause["abandoned_seconds"] == 12 * 3600 + 30 * 60
+    score_store.add_event("b", MON, "goals", 12)
+    dialog = report_card_dialog.show(card, on_plan=lambda: None)
+    qtbot.addWidget(dialog)
+    from PySide6.QtWidgets import QLabel
+    texts = [label.text() for label in dialog.findChildren(QLabel)]
+    assert any("left paused" in text and "12h 30m" in text for text in texts)
+    assert any("0m looking elsewhere" in text or "0 min looking elsewhere" in text for text in texts)
