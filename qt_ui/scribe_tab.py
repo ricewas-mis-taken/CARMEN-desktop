@@ -116,6 +116,8 @@ class ScribeCanvas(QWidget):
     layersChanged = Signal()
     selectionChanged = Signal()     # which items are selected changed
     selectionMoved = Signal()       # the selected items moved or changed size (the size boxes follow)
+    cursorMoved = Signal(float, float)    # where the pointer is on the board (world units)
+    cursorLeft = Signal()
 
     HANDLE_PX = 8               # a resize handle, in screen pixels
     HANDLE_GRAB_PX = 8          # how near the pointer must be to take hold of one
@@ -551,6 +553,17 @@ class ScribeCanvas(QWidget):
             p.setPen(ring)
             p.setBrush(QColor(255, 255, 255, 70))
             p.drawEllipse(QPointF(sx, sy), self.ERASER_PX, self.ERASER_PX)
+        if self._arrival is not None:
+            t = self._arrival
+            p.setRenderHint(QPainter.Antialiasing, True)
+            centre = QPointF(self.width() / 2, self.height() / 2)
+            for lag, base in ((0.0, 255), (0.18, 150)):
+                k = max(0.0, min(1.0, (t - lag) / (1 - lag)))
+                if 0 < k < 1:
+                    ring = QColor(37, 99, 235, int(base * (1 - k)))
+                    p.setPen(QPen(ring, 3 * (1 - k) + 1))
+                    p.setBrush(Qt.NoBrush)
+                    p.drawEllipse(centre, 14 + 90 * k, 14 + 90 * k)
         if self.prefs["showGuides"]:
             self._paint_guides(p)
         if self.prefs["showRulers"]:
@@ -1535,6 +1548,25 @@ class ScribeCanvas(QWidget):
         self.update()
         return True
 
+    _arrival = None             # 0 to 1 while the ring that shows where a jump landed is growing
+
+    def go_to(self, x, y, zoom=None):
+        """Puts the board's middle on this point (and sets the zoom if one is given), with a ring that grows
+        from it so the eye finds where it landed."""
+        self._end_ghost()
+        self.view["x"], self.view["y"] = float(x), float(y)
+        if zoom is not None:
+            self.set_zoom(zoom)
+        self.changed.emit()
+        self.update()
+        from qt_ui import motion
+
+        def step(value):
+            self._arrival = value if value < 1.0 else None
+            self.update()
+        motion.stop(self.__dict__.get("_arrival_anim"))
+        self._arrival_anim = motion.tween(self, 0.0, 1.0, 700, step)
+
     def zoom_to_selection(self):
         box = self.selection_box()
         if box is None:
@@ -1769,6 +1801,7 @@ class ScribeCanvas(QWidget):
             self._update_cursor()
         w = self._to_world(pos)
         self._cursor_world = w
+        self.cursorMoved.emit(w[0], w[1])
         if not e.buttons() and not self._pan and self._draft is None:
             handle = self._handle_at(pos)
             if handle != self._hover_handle:
@@ -1822,6 +1855,7 @@ class ScribeCanvas(QWidget):
         self.update()
 
     def leaveEvent(self, event):
+        self.cursorLeft.emit()
         if self.prefs["tool"] == "eraser":
             self._cursor_world = None             # the eraser's ring goes with the pointer
             self.update()
@@ -2389,6 +2423,98 @@ class _PaperPicker(QWidget):
             p.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 8, 8)
 
 
+class _GoToPopup(QWidget):
+    """Type where to go: a point on the board (and a zoom), or jump to the middle of the selection, the
+    origin, or everything. Enter goes; Esc closes."""
+
+    def __init__(self, canvas, anchor):
+        super().__init__(anchor.window(), Qt.Popup)
+        self._canvas = canvas
+        self.setStyleSheet(_STYLE + "QWidget#GoTo { background: #FFFFFF; border: 1px solid #D5DAE3; border-radius: 14px; }")
+        self.setObjectName("GoTo")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        box = QVBoxLayout(self)
+        box.setContentsMargins(14, 12, 14, 14)
+        box.setSpacing(8)
+        title = QLabel("Go to")
+        title.setProperty("scribe", "heading")
+        box.addWidget(title)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+        self.fields = {}
+        for row, (key, label, low, high, value, suffix) in enumerate((
+                ("x", "X", -1e9, 1e9, canvas.view["x"], ""), ("y", "Y", -1e9, 1e9, canvas.view["y"], ""),
+                ("zoom", "Zoom", 0.0001, 6400.0, canvas.zoom * 100, " %"))):
+            caption = QLabel(label)
+            caption.setProperty("scribe", "muted")
+            field = QDoubleSpinBox()
+            field.setRange(low, high)
+            field.setDecimals(1 if key != "zoom" else 2)
+            field.setGroupSeparatorShown(True)
+            field.setButtonSymbols(QAbstractSpinBox.NoButtons)
+            field.setSuffix(suffix)
+            field.setValue(value)
+            field.setMinimumWidth(150)
+            field.setKeyboardTracking(False)
+            self.fields[key] = field
+            grid.addWidget(caption, row, 0)
+            grid.addWidget(field, row, 1)
+        box.addLayout(grid)
+        self.keep_zoom = QCheckBox("Keep my zoom")
+        self.keep_zoom.setChecked(True)
+        box.addWidget(self.keep_zoom)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        shortcuts = (("Origin", "Go to 0, 0", self._origin), ("Selection", "Centre on what is selected", self._selection),
+                     ("Everything", "Fit the whole board", self._everything))
+        self.buttons = {}
+        for text, tip, fn in shortcuts:
+            button = QPushButton(text)
+            button.setToolTip(tip)
+            button.setFixedHeight(28)
+            button.clicked.connect(lambda _=False, f=fn: f())
+            self.buttons[text] = button
+            row.addWidget(button)
+        self.buttons["Selection"].setEnabled(bool(canvas._sel))
+        box.addLayout(row)
+        go = QPushButton("Go")
+        go.setDefault(True)
+        go.setFixedHeight(32)
+        go.setStyleSheet("QPushButton { background: #1F2328; color: #FFFFFF; } QPushButton:hover { background: #343A42; }")
+        go.clicked.connect(self.go)
+        box.addWidget(go)
+        self.go_button = go
+        for field in self.fields.values():
+            field.lineEdit().returnPressed.connect(self.go)
+        self.adjustSize()
+        point = anchor.mapToGlobal(anchor.rect().bottomLeft())
+        self.move(point.x(), point.y() + 6)
+        self.fields["x"].setFocus()
+        self.fields["x"].selectAll()
+
+    def go(self):
+        zoom = None if self.keep_zoom.isChecked() else self.fields["zoom"].value() / 100
+        self._canvas.go_to(self.fields["x"].value(), self.fields["y"].value(), zoom)
+        self.close()
+
+    def _origin(self):
+        self.fields["x"].setValue(0.0)
+        self.fields["y"].setValue(0.0)
+        self.go()
+
+    def _selection(self):
+        box = self._canvas.selection_box()
+        if box is not None:
+            self.fields["x"].setValue((box[0] + box[2]) / 2)
+            self.fields["y"].setValue((box[1] + box[3]) / 2)
+            self.go()
+
+    def _everything(self):
+        self.close()
+        self._canvas.fit_all()
+
+
 class ScribeTab(QWidget):
     _saved_now = Signal()           # a background save finished
     _remote_arrived = Signal()      # emitted from the sync thread; handled on the GUI thread
@@ -2437,13 +2563,14 @@ class ScribeTab(QWidget):
         self.canvas.zoomChanged.connect(self._show_zoom)
         self.canvas.toolChanged.connect(self._show_tool)
         self.canvas.layersChanged.connect(self._refresh_layers)
+        self._show_view_place()
         self._show_zoom(self.canvas.zoom)
         self._show_tool(self.canvas.tool)
         self._refresh_layers()
         self._show_saved(True)
 
         for keys, fn in (("Ctrl+Z", self.canvas.undo), ("Ctrl+Y", self.canvas.redo),
-                         ("Ctrl+Shift+Z", self.canvas.redo)):
+                         ("Ctrl+Shift+Z", self.canvas.redo), ("Ctrl+G", self._open_go_to)):
             shortcut = QShortcut(QKeySequence(keys), self)
             shortcut.setContext(Qt.WidgetWithChildrenShortcut)
             shortcut.activated.connect(fn)
@@ -2552,7 +2679,8 @@ class ScribeTab(QWidget):
         width = event.size().width()
         self._relayout_side(width < self._SIDE_BELOW)
         compact = width < self._COMPACT_BELOW
-        for widget in (self._topbar_title, self._saved_label, self._pan_button, self._reset_button):
+        for widget in (self._topbar_title, self._saved_label, self._pan_button, self._reset_button,
+                       self._coords_button):
             widget.setVisible(not compact)
 
     def _relayout_side(self, narrow):
@@ -2575,11 +2703,11 @@ class ScribeTab(QWidget):
     def _label_options_button(self):
         narrow = bool(getattr(self, "_side_narrow", False))
         if narrow:
-            text, tip = "Options", "Show the options"
+            text, tip = "Options", "Options"
         elif self._options_hidden:
-            text, tip = "Show options", "Bring the options card back"
+            text, tip = "Show options", "Show options"
         else:
-            text, tip = "Hide options", "Hide the options card to give the board the room"
+            text, tip = "Hide options", "Hide options"
         self._options_button.setText(text)
         self._options_button.setToolTip(tip)
 
@@ -2750,10 +2878,20 @@ class ScribeTab(QWidget):
             button.clicked.connect(fn)
             bar.addWidget(button)
         bar.addWidget(self._build_snap_menu())
+        self._coords_button = QPushButton("")
+        self._coords_button.setProperty("scribe", "ghost")
+        self._coords_button.setMinimumWidth(176)
+        self._coords_button.setToolTip("Go to  (Ctrl+G)")
+        self._coords_button.setStyleSheet("font-size: 12px; font-weight: 600;")
+        self._coords_button.clicked.connect(self._open_go_to)
+        bar.addWidget(self._coords_button)
         self._options_button = QPushButton("Hide options")   # hides the card, or opens it as a popup when narrow
         self._options_button.clicked.connect(self._toggle_options)
         bar.addWidget(self._options_button)
         self._topbar_title, self._reset_button = title, reset
+        self.canvas.cursorMoved.connect(self._show_pointer_place)
+        self.canvas.cursorLeft.connect(self._show_view_place)
+        self.canvas.changed.connect(self._refresh_view_place)
         return card
 
     def _build_snap_menu(self):
@@ -3035,6 +3173,31 @@ class ScribeTab(QWidget):
                 v["w"] = v["h"] * old_w / old_h
         width, height = max(v["w"], 1.0), max(v["h"], 1.0)
         self.canvas.set_selection_box(v["x"], v["y"], v["x"] + width, v["y"] + height)
+
+    @staticmethod
+    def format_place(x, y, zoom=1.0):
+        """'x 665,799  y -46,971': whole numbers, with a decimal when zoomed in far enough for it to matter."""
+        digits = 1 if zoom >= 8 else 0
+        return f"x {x:,.{digits}f}   y {y:,.{digits}f}"
+
+    def _show_pointer_place(self, x, y):
+        self._pointer_inside = True
+        self._coords_button.setText(self.format_place(x, y, self.canvas.zoom))
+
+    def _show_view_place(self):
+        self._pointer_inside = False
+        self._coords_button.setText(self.format_place(self.canvas.view["x"], self.canvas.view["y"], self.canvas.zoom))
+
+    def _refresh_view_place(self):
+        if not getattr(self, "_pointer_inside", False):
+            self._show_view_place()
+
+    def _open_go_to(self):
+        if getattr(self, "_go_to", None) is not None and self._go_to.isVisible():
+            self._go_to.close()
+            return
+        self._go_to = _GoToPopup(self.canvas, self._coords_button)
+        self._go_to.show()
 
     def _background_changed(self):
         self.canvas.set_background(self._background.currentData())
