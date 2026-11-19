@@ -58,3 +58,23 @@ def test_update_blocklist_can_change_the_profiles_of_a_live_session(isolate_stat
     assert session_manager.get_status()["blockedBrowserProfiles"] == ["B"]
     session_manager.update_blocklist([], [])
     assert session_manager.get_status()["blockedBrowserProfiles"] == ["B"]
+
+
+def test_apps_found_last_time_are_listed_before_the_new_scan_ends(qtbot, tasks_file, monkeypatch):
+    import installed_apps
+    task_editor._write_disk_cache([{"process_name": "Old.exe", "display_name": "Old"}])
+    task_editor._app_scan_cache.update(apps=None, at=0.0, scanner=None)
+    release = []
+
+    def slow():
+        while not release:
+            time.sleep(0.01)
+        return [{"process_name": "New.exe", "display_name": "New"}]
+    monkeypatch.setattr(installed_apps, "list_installed_apps", slow)
+    win = task_editor._TaskEditor(None, on_saved=None)
+    qtbot.addWidget(win)
+    qtbot.waitUntil(lambda: "old.exe" in win._process_checks, timeout=2000)     # no wait for the slow scan
+    assert "new.exe" not in win._process_checks
+    release.append(True)
+    qtbot.waitUntil(lambda: "new.exe" in win._process_checks, timeout=3000)
+    assert task_editor._read_disk_cache()[0]["process_name"] == "New.exe"
