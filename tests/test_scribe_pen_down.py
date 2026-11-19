@@ -2,8 +2,17 @@
 arrive late (the line came out straight). Neither happens under a stroke now."""
 import time
 
+import pytest
+
 import scribe_store
 from qt_ui import scribe_tab
+
+
+@pytest.fixture(autouse=True)
+def pen_up():
+    scribe_store.set_pen_down(False)       # other tests press the canvas without releasing it
+    yield
+    scribe_store.set_pen_down(False)
 
 
 def test_a_board_is_not_shared_while_the_pen_is_down(monkeypatch):
