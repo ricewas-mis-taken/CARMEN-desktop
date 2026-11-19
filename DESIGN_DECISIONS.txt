@@ -1144,3 +1144,10 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   The editor was slow because it scanned Start Menu shortcuts and Store packages on the screen's thread before
   showing. It now shows with the apps the task already blocks and adds the rest when a background scan finishes
   (scan remembered for 10 minutes). Not changed: the other pickers still scan up front.
+
+2026-11-18  Options sync across computers
+  Fork: keep options per computer (a laptop and a desktop may want different ones) vs. share them. Shared: the
+  Discord switches, AI-agent tabs, open-on-sign-in, Scribe options card, tour-done and report-card week, riding the
+  existing shared-settings path (config.SHARED_SETTINGS, newest stamp wins). Chosen because a per-computer Discord
+  switch left a card up from a computer the user had turned it off on. Still local: window geometry, browser profile
+  ids, restoreWindow, the API token.

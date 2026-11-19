@@ -109,3 +109,11 @@ def test_every_table_the_fast_lane_handles_is_left_out_of_the_slow_lane():
                sync_live.SCREENTIME_TABLE, sync_live.SETTINGS_TABLE, sync_live.QUICKNOTE_TABLE,
                sync_live.SCRIBE_TABLE}
     assert handled == set(sync_live.LANE_TABLES)
+
+
+def test_options_are_shared_too():
+    import config
+    for key in ("discordPresence", "discordShowNames", "allowAiAgents", "openOnStartup", "tourDone", "reportCardWeek"):
+        assert key in config.SHARED_SETTINGS
+    clean = config._clean_shared_settings({"discordPresence": False, "allowAiAgents": "yes", "reportCardWeek": "2026-11-16"})
+    assert clean == {"discordPresence": False, "reportCardWeek": "2026-11-16"}
