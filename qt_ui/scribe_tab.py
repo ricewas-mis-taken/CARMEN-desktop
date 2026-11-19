@@ -1786,6 +1786,7 @@ class ScribeCanvas(QWidget):
     # ---- mouse / keys ----------------------------------------------------
     def mousePressEvent(self, e):
         self.setFocus()
+        scribe_store.set_pen_down(True)
         pos = e.position()
         mm = self._minimap_rect()
         if mm is not None and e.button() == Qt.LeftButton and mm.contains(pos):
@@ -1932,6 +1933,7 @@ class ScribeCanvas(QWidget):
         self.update(region)
 
     def mouseReleaseEvent(self, e):
+        scribe_store.set_pen_down(False)
         if getattr(self, "_on_minimap", False):
             self._on_minimap = False
             return
@@ -2678,8 +2680,8 @@ class ScribeTab(QWidget):
         """Saving a big board takes a few hundred ms; on the UI thread that froze the pen mid-stroke."""
         if not self._dirty:
             return
-        if self._saver is not None and self._saver.is_alive():
-            self._save_timer.start()               # one write at a time; try again shortly
+        if (self._saver is not None and self._saver.is_alive()) or scribe_store.pen_is_down():
+            self._save_timer.start()               # one write at a time, and never under a stroke; try again shortly
             return
         doc = self._copy_for_saving()
         self._dirty = False
@@ -2839,6 +2841,7 @@ class ScribeTab(QWidget):
 
     def hideEvent(self, event):
         gc_guard.resume()                     # never left off if the page closes mid-stroke
+        scribe_store.set_pen_down(False)
         self.flush()                    # quick now: the board's text is remembered between saves
         super().hideEvent(event)
 
