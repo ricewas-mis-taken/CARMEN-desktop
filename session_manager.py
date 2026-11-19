@@ -619,7 +619,7 @@ def update_taskbar_quiet(hide_badges, stop_flashing):
         state_events.bump()
 
 
-def update_blocklist(process_blocklist, domain_whitelist, lock_mode=None):
+def update_blocklist(process_blocklist, domain_whitelist, lock_mode=None, blocked_browser_profiles=None):
     """Replace the active session's block/allow lists (and, optionally, its
     lock mode) in-place, effective immediately -- lets a running session's
     rules be edited without ending and restarting it. lock_mode=None leaves
@@ -632,6 +632,8 @@ def update_blocklist(process_blocklist, domain_whitelist, lock_mode=None):
             return
         _state["processBlocklist"] = _clean_entries(process_blocklist)
         _state["domainWhitelist"] = _clean_entries(domain_whitelist)
+        if blocked_browser_profiles is not None:      # None leaves the session's profiles as they are
+            _state["blockedBrowserProfiles"] = _clean_entries(blocked_browser_profiles)
         if lock_mode is not None:
             _state["lockMode"] = lock_mode
         _save()
