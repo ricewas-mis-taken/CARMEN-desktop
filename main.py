@@ -9,6 +9,7 @@ import threading
 import theme
 import time
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from calendar_log import logger
@@ -119,6 +120,14 @@ def main():
     # thread below is the one that matters most — it can trigger
     # enforcer.py's lock overlays at any time once it starts).
     app = QApplication(sys.argv)
+    if sys.platform == "darwin":
+        # The app is designed on light surfaces. With the Mac in Dark mode, every widget the stylesheet does
+        # not colour itself (menus, tooltips, message boxes, colour pickers) came up with white text on a
+        # pale background.
+        try:
+            app.styleHints().setColorScheme(Qt.ColorScheme.Light)
+        except Exception:
+            pass
     import gc_guard
     gc_guard.install(app)            # cycle collection only ever runs on this thread (see gc_guard)
     # Background threads (sync, saving, the API) share the interpreter lock with the interface. The default

@@ -1062,3 +1062,17 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   still update on next start). Lock popups also send the main window to the back: hiding the blocked app made
   the OS surface Carmen's whole window as the "next" window. (The Carmen Score sync that was written alongside
   this was dropped in favour of the per-event sync that landed on main in #241.)
+
+2026-11-18  Mac audit: forks worth remembering
+  - The app is forced to the Light colour scheme on a Mac (main.py). The interface is designed on light
+    surfaces and styled by styles.qss; with the Mac in Dark mode every widget the stylesheet leaves alone
+    (menus, tooltips, message boxes, colour pickers) came up light-on-light. Following the system theme
+    would mean designing a dark variant of every surface, which is a feature, not a fix.
+  - Unblocking matches by app, not by exact name (session_manager.remove_process_from_blocklist), because
+    blocking already does: a Windows list holds "Discord.exe" and the Mac sees "Discord". Matching one way only
+    logged the unblock but left the app blocked.
+  - The Mac login item no longer runs `launchctl load` when it writes its plist: launchd reads the folder at
+    the next login by itself, and loading it now started a second copy of the running app (RunAtLoad).
+    It also passes --autostart, like the Windows entry, so "open the window on sign-in" is honoured.
+  - If macOS refuses notification permission, reminders fall back to a plain osascript banner (no
+    buttons) instead of vanishing. Snooze buttons need the permission to be granted in System Settings.
