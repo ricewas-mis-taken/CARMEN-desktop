@@ -123,6 +123,7 @@ class Presence(threading.Thread):
         self._candidate = "unset"
         self._seen = 0
         self._sent_at = 0.0
+        self._wiped = False
 
     def _connect(self):
         from pypresence import Presence as Client
@@ -134,7 +135,7 @@ class Presence(threading.Thread):
     def _drop(self, clear=False):
         """Close the connection. Closing alone can leave the card up in Discord, so `clear` removes it first."""
         try:
-            if self._client is not None and clear and self._last not in (None, "unset"):
+            if self._client is not None and clear:
                 self._client.clear()
         except Exception:
             pass
@@ -150,9 +151,13 @@ class Presence(threading.Thread):
             try:
                 cfg = config.load_config()
                 if not cfg.get("discordPresence", True):
+                    if self._client is None and not self._wiped:
+                        self._connect()   # a card left by an earlier run would stay up until it is cleared
                     if self._client is not None:
                         self._drop(clear=True)
+                        self._wiped = True
                 else:
+                    self._wiped = False
                     if self._client is None:
                         self._connect()
                     self._update(cfg)

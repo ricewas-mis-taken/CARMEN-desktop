@@ -102,3 +102,23 @@ def test_turning_it_off_clears_the_card_before_disconnecting():
     p._client, p._last = Client(), {"details": "Focus session", "state": "Locked in"}
     p._drop(clear=True)
     assert calls == ["clear", "close"]
+
+
+def test_off_at_startup_still_wipes_a_leftover_card(monkeypatch):
+    import threading
+    calls = []
+
+    class Client:
+        def clear(self):
+            calls.append("clear")
+
+        def close(self):
+            calls.append("close")
+
+    stop = threading.Event()
+    p = dp.Presence(stop)
+    monkeypatch.setattr(dp.config, "load_config", lambda: {"discordPresence": False})
+    monkeypatch.setattr(p, "_connect", lambda: setattr(p, "_client", Client()))
+    monkeypatch.setattr(stop, "wait", lambda s: stop.set())
+    p.run()
+    assert calls[:2] == ["clear", "close"]
