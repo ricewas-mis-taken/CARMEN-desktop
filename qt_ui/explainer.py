@@ -179,6 +179,7 @@ def _row(left, right, tone=None):
     row.setContentsMargins(0, 0, 0, 0)
     row.setSpacing(10)
     a = QLabel(left)
+    a.setWordWrap(True)          # a longer line wraps instead of being cut off (a Mac's font is wider)
     a.setStyleSheet(f"color:{INK};font-size:13.5px;background:transparent;")
     b = QLabel(right)
     b.setStyleSheet(f"color:{tone or INK};font-size:13.5px;font-weight:700;background:transparent;")

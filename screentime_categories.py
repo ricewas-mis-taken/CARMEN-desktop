@@ -13,6 +13,8 @@ either falls back to "Other".
 import json
 import os
 
+import process_aliases
+
 CATEGORIES = ["Entertainment", "Education", "Games", "Tools", "Other"]
 
 _DOMAINS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "screentime_domains.json")
@@ -130,7 +132,23 @@ def categorize_domain(domain):
     return "Other"
 
 
+# The same kinds of app under their Mac names. Looked up like the table above (by the app's canonical name),
+# so "Google Chrome" finds "chrome.exe" without being listed twice.
+_MAC_APP_CATEGORIES = {
+    "safari": "Tools", "terminal": "Tools", "iterm2": "Tools", "iterm": "Tools", "xcode": "Tools",
+    "textedit": "Tools", "pages": "Tools", "numbers": "Tools", "keynote": "Tools", "claude": "Tools",
+    "cursor": "Tools", "arc": "Tools", "zoom.us": "Tools", "warp": "Tools", "ghostty": "Tools",
+    "music": "Entertainment", "tv": "Entertainment", "quicktime player": "Entertainment", "iina": "Entertainment",
+    "steam_osx": "Games", "minecraft launcher": "Games",
+}
+
+_BY_KEY = {}
+for _table in (_MAC_APP_CATEGORIES, _APP_CATEGORIES):          # the Windows table wins where both name an app
+    for _name, _category in _table.items():
+        _BY_KEY[process_aliases.canonical(_name)] = _category
+
+
 def categorize_app(process_name):
     if not process_name:
         return "Other"
-    return _APP_CATEGORIES.get(process_name.lower(), "Other")
+    return _APP_CATEGORIES.get(process_name.lower()) or _BY_KEY.get(process_aliases.canonical(process_name), "Other")

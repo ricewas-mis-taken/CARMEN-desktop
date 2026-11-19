@@ -5,7 +5,7 @@ import plistlib
 from mac_os import autostart_mac
 
 
-def test_writes_plist_and_loads_it_when_missing(tmp_path, monkeypatch):
+def test_writes_plist_without_starting_a_second_copy_when_missing(tmp_path, monkeypatch):
     plist_path = tmp_path / "com.carmenfocus.app.plist"
     monkeypatch.setattr(autostart_mac, "PLIST_PATH", str(plist_path))
 
@@ -26,10 +26,10 @@ def test_writes_plist_and_loads_it_when_missing(tmp_path, monkeypatch):
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(autostart_mac.__file__)))),
         "main.py",
     )
-    assert written["ProgramArguments"] == [sys.executable, expected_main_py]
+    assert written["ProgramArguments"] == [sys.executable, expected_main_py, "--autostart"]
+    assert written["WorkingDirectory"] == os.path.dirname(expected_main_py)
 
-    assert len(calls) == 1
-    assert calls[0][0][0] == ["launchctl", "load", str(plist_path)]
+    assert calls == [], "loading it now would start a second copy of the running app"
 
 
 def test_second_call_with_no_changes_does_not_rewrite_or_reload(tmp_path, monkeypatch):
@@ -42,12 +42,11 @@ def test_second_call_with_no_changes_does_not_rewrite_or_reload(tmp_path, monkey
     )
 
     autostart_mac.ensure_autostart_registered()
-    assert len(calls) == 1
     mtime_after_first = plist_path.stat().st_mtime_ns
 
     autostart_mac.ensure_autostart_registered()
 
-    assert len(calls) == 1  # no second launchctl call
+    assert calls == []
     assert plist_path.stat().st_mtime_ns == mtime_after_first  # not rewritten
 
 
@@ -66,7 +65,7 @@ def test_rewrites_and_reloads_when_plist_is_stale(tmp_path, monkeypatch):
 
     autostart_mac.ensure_autostart_registered()
 
-    assert len(calls) == 1
+    assert calls == []
     with open(plist_path, "rb") as f:
         written = plistlib.load(f)
     assert written["Label"] == "com.carmenfocus.app"

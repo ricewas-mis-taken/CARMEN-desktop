@@ -47,6 +47,13 @@ def enabled():
                     _os_allows = bool(flag.value)
             except Exception:
                 _os_allows = True
+        elif sys.platform == "darwin":
+            # System Settings -> Accessibility -> Display -> Reduce motion
+            try:
+                from AppKit import NSWorkspace
+                _os_allows = not bool(NSWorkspace.sharedWorkspace().accessibilityDisplayShouldReduceMotion())
+            except Exception:
+                _os_allows = True
     return _os_allows
 
 

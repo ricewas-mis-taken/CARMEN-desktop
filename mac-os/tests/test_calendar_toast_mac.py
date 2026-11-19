@@ -326,3 +326,14 @@ def test_show_toast_exception_does_not_leak_pending_callback(fresh_module):
     fresh_module.show_toast("t", "b", buttons=[("a", "A")], on_action=lambda arg: None)
 
     assert fresh_module._pending_actions == {}
+
+
+def test_a_refused_notification_still_shows_a_plain_banner(fresh_module, monkeypatch):
+    mod, center = fresh_module if isinstance(fresh_module, tuple) else (fresh_module, None)
+    shown = []
+    import subprocess
+    monkeypatch.setattr(subprocess, "Popen", lambda cmd, **k: shown.append(cmd))
+    mod._notifications_blocked = True              # macOS said no to Carmen's notifications
+    mod.show_toast("Reminder", "Chinese at 5", buttons=[("snooze", "Snooze")])
+    assert shown and shown[0][0] == "osascript"
+    assert "Chinese at 5" in shown[0][2] and "Reminder" in shown[0][2]

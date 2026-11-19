@@ -19,6 +19,7 @@ from calendar_log import logger
 
 LABEL = "com.carmenfocus.app"
 PLIST_PATH = os.path.expanduser("~/Library/LaunchAgents/com.carmenfocus.app.plist")
+LOG_PATH = os.path.expanduser("~/Library/Logs/CarmenFocus.log")
 
 # mac-os/mac_os/autostart_mac.py -> repo root is two directories up.
 _MAIN_PY_PATH = os.path.join(
@@ -34,9 +35,14 @@ def _plist_contents():
     # binary instead, the same way autostart.py's _pythonw_executable()
     # comment explains preferring pythonw.exe over a bare python.exe so
     # login doesn't flash a visible console/dock icon.
+    # "--autostart" is what the Windows Run-key entry passes too: it makes a login start honour the
+    # "open the window on sign-in" setting instead of behaving like a plain double-click.
     return {
         "Label": LABEL,
-        "ProgramArguments": [sys.executable, _MAIN_PY_PATH],
+        "ProgramArguments": [sys.executable, _MAIN_PY_PATH, "--autostart"],
+        "WorkingDirectory": os.path.dirname(_MAIN_PY_PATH),     # launchd starts jobs in "/"
+        "StandardOutPath": LOG_PATH,
+        "StandardErrorPath": LOG_PATH,
         "RunAtLoad": True,
         "KeepAlive": False,
     }
@@ -63,7 +69,7 @@ def ensure_autostart_registered():
         os.makedirs(os.path.dirname(PLIST_PATH), exist_ok=True)
         with open(PLIST_PATH, "wb") as f:
             f.write(desired)
-
-        subprocess.run(["launchctl", "load", PLIST_PATH], check=False)
+        # No `launchctl load` here: launchd reads this folder at the next login by itself, and loading it
+        # now would start a second copy of the app we are already running (RunAtLoad).
     except Exception:
         logger.exception("ensure_autostart_registered failed")

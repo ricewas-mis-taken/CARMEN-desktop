@@ -457,8 +457,10 @@ class _LockOverlay(QWidget):
             self._time_label.setText(f"Time remaining: {minutes}m {seconds}s")
 
         try:
-            self.raise_()
             if sys.platform != "darwin":
+                # On a Mac the always-on-top flag keeps it in front; re-raising every 50 ms also kept
+                # pulling Carmen forward and made other apps hard to click.
+                self.raise_()
                 self.activateWindow()
         except Exception:
             pass
