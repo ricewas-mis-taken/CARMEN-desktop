@@ -100,6 +100,14 @@ _TOOL_KEYS = {"1": "line", "2": "curve", "3": "fill", "4": "text", "5": "rect",
 _ITEM_FLAGS = {"shouldScale": "scale", "roundCorners": "round", "dashed": "dashed"}
 
 
+
+class _FitToolButton(QToolButton):
+    """A tool button that never shrinks below its own text. A crowded top bar used to squeeze this one until
+    Qt cut its label to "Snap...ides"."""
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
 class ScribeCanvas(QWidget):
     changed = Signal()          # anything worth saving (shapes, view, options)
     zoomChanged = Signal(float)
@@ -2242,8 +2250,8 @@ class ScribeTab(QWidget):
     def _build_snap_menu(self):
         """Snapping and the guides/rulers overlay, behind one button."""
         self._pref_checks = {}
-        menu_button = QToolButton()
-        menu_button.setText("Snap && guides")  # "&&" is a literal ampersand in Qt
+        menu_button = _FitToolButton()
+        menu_button.setText("Snap")   # the menu lists snapping and the guides; a longer label got cut to "Snap...ides" on a Mac
         menu_button.setPopupMode(QToolButton.InstantPopup)
         menu_button.setToolTip(HELP["snap_menu"])
         menu = QMenu(menu_button)
