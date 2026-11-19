@@ -11,7 +11,7 @@ Non-modal (.show()), same convention as the rest of this app's dialogs.
 import os
 import re
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -105,6 +105,37 @@ def _bold_label(text):
     return field_label(text)
 
 
+_app_scan_cache = {"at": 0.0, "apps": None, "scanner": None}
+_APP_SCAN_FRESH_SECONDS = 600
+
+
+class _AppScan(QObject):
+    """Finds the installed apps off the screen's thread and says so when done (straight away if a scan from the
+    last few minutes is remembered)."""
+    done = Signal(list)
+
+    def start(self):
+        import threading
+        import time
+        cache = _app_scan_cache
+        if cache["apps"] is not None and cache["scanner"] is installed_apps.list_installed_apps and time.monotonic() - cache["at"] < _APP_SCAN_FRESH_SECONDS:
+            QTimer.singleShot(0, lambda: self.done.emit(cache["apps"]))
+            return
+
+        def work():
+            scanner = installed_apps.list_installed_apps
+            try:
+                apps = scanner()
+            except Exception:
+                apps = []
+            cache["apps"], cache["at"], cache["scanner"] = apps, time.monotonic(), scanner
+            try:
+                self.done.emit(apps)
+            except RuntimeError:
+                pass                              # the window was closed meanwhile
+        threading.Thread(target=work, daemon=True).start()
+
+
 class _TaskEditor(QWidget):
     def __init__(self, task, on_saved):
         super().__init__(None, Qt.WindowStaysOnTopHint)
@@ -114,7 +145,7 @@ class _TaskEditor(QWidget):
         self._color = (task or {}).get("color", COLOR_PALETTE[0])
 
         self.setWindowTitle("Carmen Focus — Edit Task" if task else "Carmen Focus — New Task")
-        self.resize(480, 760)
+        self.resize(480, 840)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
@@ -234,18 +265,22 @@ class _TaskEditor(QWidget):
         layout.addLayout(lock_row)
 
         layout.addWidget(_bold_label("Blocklisted apps while this task runs"))
-        apps = installed_apps.list_installed_apps()
         default_processes = (task or {}).get("processBlocklist") if task else config.load_config().get("processBlocklist", [])
         existing_process_set = {p.lower() for p in (default_processes or [])}
+        # The window opens at once with the apps this task already blocks; the rest of the installed apps
+        # (a scan of the Start Menu and Store packages, slow) are added when it finishes.
         process_widget, self._process_checks, process_add_row = checklist.build_checklist(
-            apps, existing_process_set, height=160,
-            key_fn=lambda a: a["process_name"], label_fn=lambda a: f"{a['display_name']} ({a['process_name']})",
-        )
+            [], existing_process_set, height=160)
         layout.addWidget(process_widget)
-        scanned_lower = {a["process_name"].lower() for a in apps}
         for process_name in (default_processes or []):
-            if process_name.lower() not in scanned_lower:
-                process_add_row(process_name, process_name, checked=True)
+            process_add_row(process_name, process_name, checked=True)
+        self._process_add_row = process_add_row
+        self._existing_process_set = existing_process_set
+        self._scan_note = role_label("Looking for installed apps...", "hint")
+        layout.addWidget(self._scan_note)
+        self._scan = _AppScan()
+        self._scan.done.connect(self._apps_found)
+        self._scan.start()
 
         process_manual_row = QHBoxLayout()
         self._process_manual_edit = QLineEdit()
@@ -254,6 +289,26 @@ class _TaskEditor(QWidget):
         process_manual_add.clicked.connect(lambda: self._add_manual_process(process_add_row))
         process_manual_row.addWidget(process_manual_add)
         layout.addLayout(process_manual_row)
+
+        # One Chrome/Edge profile instead of the whole browser (see picker_dialogs' "Browser profiles").
+        self._profile_checks = {}
+        try:
+            import window_tracker
+            known_profiles = window_tracker.list_known_browser_profiles()
+        except Exception:
+            known_profiles = []
+        saved_profiles = (task or {}).get("browserProfileBlocklist") if task else config.load_config().get("browserProfileBlocklist", [])
+        saved_profiles = list(saved_profiles or [])
+        if known_profiles or saved_profiles:
+            layout.addWidget(_bold_label("Browser profiles blocked while this task runs"))
+            profile_widget, self._profile_checks, profile_add_row = checklist.build_checklist(
+                [], saved_profiles, height=80)
+            layout.addWidget(profile_widget)
+            for profile in known_profiles:
+                label = profile["label"] if profile["is_running"] else f"{profile['label']} (not open right now)"
+                profile_add_row(profile["aumi"], label, profile["aumi"] in saved_profiles)
+            for aumi in saved_profiles:           # one Chrome no longer lists still stays until it is unticked
+                profile_add_row(aumi, aumi, True)
 
         layout.addWidget(_bold_label("Allowed domains while this task runs"))
         default_domains = (task or {}).get("domainWhitelist") if task else config.load_config().get("domainWhitelist", [])
@@ -286,6 +341,20 @@ class _TaskEditor(QWidget):
         save_button.clicked.connect(self._save)
         button_row.addWidget(save_button)
         layout.addLayout(button_row)
+
+    _closed = False
+
+    def _apps_found(self, apps):
+        if self._closed:
+            return
+        for app in apps:
+            name = app["process_name"]
+            self._process_add_row(name, f"{app['display_name']} ({name})", name.lower() in self._existing_process_set)
+        self._scan_note.setVisible(False)
+
+    def closeEvent(self, event):
+        self._closed = True                    # a scan that finishes after the window is gone has nobody to tell
+        super().closeEvent(event)
 
     def _repeat_kind(self):
         return self._repeat_combo.currentData()
@@ -420,6 +489,7 @@ class _TaskEditor(QWidget):
             "periodDays": self._length_spin.value() if recurrence_kind == "custom_total" else None,
             "lockMode": "hard" if self._hard_radio.isChecked() else "soft",
             "processBlocklist": checklist.get_checked(self._process_checks),
+            "browserProfileBlocklist": checklist.get_checked(self._profile_checks),
             "domainWhitelist": checklist.get_checked(self._domain_checks),
             "hideTaskbarBadges": False,
             "stopTaskbarFlashing": False,
@@ -448,6 +518,7 @@ class _TaskEditor(QWidget):
             if status["isActive"] and status.get("source") in ("task", "review") and status.get("eventId") == self._task["id"]:
                 session_manager.update_blocklist(
                     data["processBlocklist"], data["domainWhitelist"], lock_mode=data["lockMode"],
+                    blocked_browser_profiles=data["browserProfileBlocklist"],
                 )
                 session_manager.update_taskbar_quiet(data["hideTaskbarBadges"], data["stopTaskbarFlashing"])
 
