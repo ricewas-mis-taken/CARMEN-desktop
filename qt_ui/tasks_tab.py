@@ -1161,6 +1161,7 @@ class _TaskCard(QFrame):
             source="task",
             event_id=self._task["id"],
             event_title=self._task["name"],
+            blocked_browser_profiles=list(self._task.get("browserProfileBlocklist") or []),
             hide_taskbar_badges=bool(self._task.get("hideTaskbarBadges")),
             stop_taskbar_flashing=bool(self._task.get("stopTaskbarFlashing")),
         )
@@ -1175,6 +1176,7 @@ class _TaskCard(QFrame):
             source="task",
             event_id=self._task["id"],
             event_title=self._task.get("name") or "(untitled task)",
+            blocked_browser_profiles=list(self._task.get("browserProfileBlocklist") or []),
             is_burnout=is_burnout,
             hide_taskbar_badges=bool(self._task.get("hideTaskbarBadges")),
             stop_taskbar_flashing=bool(self._task.get("stopTaskbarFlashing")),
