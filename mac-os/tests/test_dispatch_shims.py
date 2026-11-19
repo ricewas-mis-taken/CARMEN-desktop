@@ -202,7 +202,7 @@ def test_autostart_darwin_branch_resolves_and_runs(tmp_path, as_darwin, monkeypa
         autostart.ensure_autostart_registered()
 
         assert (tmp_path / "com.carmenfocus.app.plist").exists()
-        assert recorded, "expected launchctl load to be invoked"
+        assert not recorded, "must not run launchctl: loading would start a second copy of the running app"
     finally:
         _reload("autostart")
 
