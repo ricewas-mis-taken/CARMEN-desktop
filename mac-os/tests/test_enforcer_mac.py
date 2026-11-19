@@ -331,3 +331,45 @@ def test_an_app_that_unhides_itself_is_rehidden_without_a_new_catch(mac_world, m
     app.hidden = False                       # the app un-hides itself
     assert enforcer_mac.sweep_minimize_blocked_windows() == []
     assert app.hidden is True                # ...but is hidden again immediately
+
+
+def test_hard_lock_redirect_leaves_you_alone_if_you_already_moved_on(
+    mac_world, monkeypatch, isolate_state
+):
+    enforcer_mac, overlay_calls = _import_fresh(monkeypatch)
+    session_manager.start_session(25, "hard", ["discord.exe"], [])
+    session_manager.record_acceptable("code.exe")
+
+    mac_world.add_app(111, minimized_windows=[False])
+    code_app = mac_world.add_app(222, minimized_windows=[False])
+    other = mac_world.add_app(333, minimized_windows=[False])
+    mac_world.frontmost_pid = 333          # the blocked app is no longer in front
+    _patch_processes(monkeypatch, {111: "discord.exe", 222: "code.exe", 333: "notes.exe"})
+    monkeypatch.setattr(psutil, "process_iter", lambda attrs=None: [
+        type("P", (), {"info": {"pid": 222, "name": "code.exe"}})()
+    ])
+
+    enforcer_mac.hard_lock_redirect("discord.exe")
+
+    assert code_app.activate_calls == 0, "must not pull you back to the focus app"
+    assert other.hide_calls == 0
+    assert not overlay_calls
+
+
+def test_unblocking_by_mac_name_removes_the_windows_entry(isolate_state):
+    session_manager.start_session(25, "hard", ["Discord.exe", "cmd.exe"], [])
+    assert session_manager.is_blocked("Discord")
+    blocklist, entry = session_manager.remove_process_from_blocklist("Discord", "need it")
+    assert entry is not None
+    assert "Discord.exe" not in blocklist and "cmd.exe" in blocklist
+    assert not session_manager.is_blocked("Discord")
+    assert not session_manager.is_blocked("Discord.exe")
+
+
+def test_unblocks_already_granted_are_honoured_when_the_app_restarts(isolate_state):
+    session_manager.start_session(25, "hard", ["Discord.exe", "cmd.exe"], [])
+    session_manager._state["processBlocklistExceptions"].append(
+        {"process": "Discord", "reason": "x", "timestamp": "2026-11-18T20:42:10"})
+    session_manager._save()
+    session_manager._load()
+    assert session_manager._state["processBlocklist"] == ["cmd.exe"]
