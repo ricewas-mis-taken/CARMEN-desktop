@@ -63,6 +63,10 @@ class _SetupRefused(Exception):
 def _idle_seconds():
     """Seconds since the last keyboard or mouse input on this computer. Where
     that can't be read, 0 (never idle): staying connected is the safe error."""
+    if sys.platform == "darwin":
+        import auto_updater
+        idle = auto_updater.user_idle_seconds()
+        return 0.0 if idle is None else idle
     if sys.platform != "win32":
         return 0.0
 

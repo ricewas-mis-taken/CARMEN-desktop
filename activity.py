@@ -11,7 +11,9 @@ import auto_updater
 IDLE_AFTER_SECONDS = 120
 MEDIA_REPORT_SECONDS = 90          # a "sound is playing" report from the browser stays good this long
 MEDIA_PROCESSES = {"vlc.exe", "mpv.exe", "zoom.exe", "teams.exe", "ms-teams.exe", "wmplayer.exe",
-                   "movies & tv", "video.ui.exe"}
+                   "movies & tv", "video.ui.exe",
+                   # the same kinds of app on a Mac
+                   "vlc", "iina", "zoom.us", "microsoft teams", "quicktime player", "facetime", "tv", "mpv"}
 
 _media_until = 0.0
 

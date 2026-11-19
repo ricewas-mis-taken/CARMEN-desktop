@@ -14,6 +14,7 @@ history that isn't a fast-forward, or any git/network failure -- this must
 never crash the polling/enforcement threads it runs alongside.
 """
 import os
+import sys
 import subprocess
 import threading
 
@@ -125,8 +126,16 @@ IDLE_BEFORE_RESTART_SECONDS = 120
 
 def user_idle_seconds():
     """Seconds since the last key press or mouse move anywhere on this computer, or None when it
-    cannot be told (not Windows). The restart waits on this so an update never closes the app
+    cannot be told (neither Windows nor a Mac). The restart waits on this so an update never closes the app
     while you are using it."""
+    if sys.platform == "darwin":
+        try:
+            from Quartz import (CGEventSourceSecondsSinceLastEventType, kCGEventSourceStateCombinedSessionState,
+                                kCGAnyInputEventType)
+            return float(CGEventSourceSecondsSinceLastEventType(
+                kCGEventSourceStateCombinedSessionState, kCGAnyInputEventType))
+        except Exception:
+            return None
     if os.name != "nt":
         return None
     try:
