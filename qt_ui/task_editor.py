@@ -109,26 +109,57 @@ _app_scan_cache = {"at": 0.0, "apps": None, "scanner": None}
 _APP_SCAN_FRESH_SECONDS = 600
 
 
+def _cache_path():
+    import paths
+    return paths.private_path("installed_apps_cache.json")
+
+
+def _read_disk_cache():
+    """The apps found last time on this computer ([] if none): what the editor lists while it looks again."""
+    import json
+    try:
+        with open(_cache_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return [a for a in data if isinstance(a, dict) and a.get("process_name") and a.get("display_name")]
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def _write_disk_cache(apps):
+    import json
+    try:
+        with open(_cache_path(), "w", encoding="utf-8") as f:
+            json.dump(apps, f)
+    except OSError:
+        pass
+
+
 class _AppScan(QObject):
-    """Finds the installed apps off the screen's thread and says so when done (straight away if a scan from the
-    last few minutes is remembered)."""
+    """Lists the installed apps without making the editor wait: the ones found last time arrive at once, then a
+    fresh scan (run off the screen's thread, and skipped if one finished in the last few minutes) adds any new
+    ones. `done` can fire twice; the editor adds only rows it does not have."""
     done = Signal(list)
 
     def start(self):
         import threading
         import time
         cache = _app_scan_cache
-        if cache["apps"] is not None and cache["scanner"] is installed_apps.list_installed_apps and time.monotonic() - cache["at"] < _APP_SCAN_FRESH_SECONDS:
+        scanner = installed_apps.list_installed_apps
+        if cache["apps"] is not None and cache["scanner"] is scanner and time.monotonic() - cache["at"] < _APP_SCAN_FRESH_SECONDS:
             QTimer.singleShot(0, lambda: self.done.emit(cache["apps"]))
             return
+        remembered = _read_disk_cache() if cache["apps"] is None else cache["apps"]
+        if remembered:
+            QTimer.singleShot(0, lambda: self.done.emit(remembered))
 
         def work():
-            scanner = installed_apps.list_installed_apps
             try:
                 apps = scanner()
             except Exception:
                 apps = []
             cache["apps"], cache["at"], cache["scanner"] = apps, time.monotonic(), scanner
+            if apps:
+                _write_disk_cache(apps)
             try:
                 self.done.emit(apps)
             except RuntimeError:
