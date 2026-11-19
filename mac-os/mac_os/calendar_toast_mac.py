@@ -172,6 +172,27 @@ def _get_delegate():
     return _delegate
 
 
+_notifications_blocked = False      # macOS refused Carmen permission to post notifications
+
+
+def _fallback_notification(title, body):
+    """A plain banner through the system's own scripting hook, for when UNUserNotificationCenter will
+    not post for us (permission not granted: reminders then vanished without a trace). It has no
+    buttons, but the reminder is seen."""
+    try:
+        import subprocess
+
+        def esc(text):
+            return str(text or "").replace("\\", "\\\\").replace('"', '\\"')
+
+        subprocess.Popen(
+            ["osascript", "-e", f'display notification "{esc(body)}" with title "{esc(title)}"'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        logger.exception("calendar_toast_mac fallback notification failed")
+
+
 def set_app_id():
     """Must be called once, early in the process (main.py) -- the macOS
     analogue of the Windows version's AppUserModelID registration. There is
@@ -184,9 +205,12 @@ def set_app_id():
 
         def _on_authorized(granted, error):
             try:
+                global _notifications_blocked
                 if error is not None:
+                    _notifications_blocked = True
                     logger.warning("calendar_toast_mac authorization error: %s", error)
                 elif not granted:
+                    _notifications_blocked = True
                     logger.warning("calendar_toast_mac notification authorization denied")
             except Exception:
                 logger.exception("calendar_toast_mac authorization completion handler failed")
@@ -211,6 +235,9 @@ def show_toast(title, body, buttons=None, on_action=None):
     called from the background scheduler loop, which must never die from a
     notification failure."""
     request_id = None
+    if _notifications_blocked:
+        _fallback_notification(title, body)
+        return
     try:
         content = UNMutableNotificationContent.alloc().init()
         content.setTitle_(title or "")
@@ -251,6 +278,9 @@ def show_toast(title, body, buttons=None, on_action=None):
             try:
                 if error is not None:
                     logger.warning("calendar_toast_mac addNotificationRequest error: %s", error)
+                    global _notifications_blocked
+                    _notifications_blocked = True
+                    _fallback_notification(title, body)
             except Exception:
                 logger.exception("calendar_toast_mac add-request completion handler failed")
 
