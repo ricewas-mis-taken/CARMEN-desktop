@@ -1134,3 +1134,13 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   DESIGN_DECISIONS.txt, same date, has the reasoning). The desktop owns the switch: config allowAiAgents (per computer,
   not in SHARED_SETTINGS, since it describes this computer's browsers), shown in Options > Browser extension and sent
   to the extension on /status. Default on, so agents work without setup. Only the extension acts on it.
+
+2026-11-18  Per-task browser profile blocking, and the task editor no longer waits for the app scan
+  Blocking one Chrome/Edge profile existed only in the default blocklist picker; a started task never passed any
+  profile to its session, so a task could not block one (it looked like the feature had gone). Tasks now carry
+  browserProfileBlocklist (default [] for old tasks, which is what they always did; a new task starts from the saved
+  default list like its app list does), the editor lists the profiles, a started task passes them on, and saving a
+  task that is running updates the live session. Synced with the task like its other lists (no new sync path).
+  The editor was slow because it scanned Start Menu shortcuts and Store packages on the screen's thread before
+  showing. It now shows with the apps the task already blocks and adds the rest when a background scan finishes
+  (scan remembered for 10 minutes). Not changed: the other pickers still scan up front.
