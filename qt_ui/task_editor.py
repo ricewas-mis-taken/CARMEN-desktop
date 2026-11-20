@@ -12,6 +12,7 @@ import os
 import re
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtGui import QCursor, QGuiApplication
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QRadioButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -176,10 +178,22 @@ class _TaskEditor(QWidget):
         self._color = (task or {}).get("color", COLOR_PALETTE[0])
 
         self.setWindowTitle("Carmen Focus — Edit Task" if task else "Carmen Focus — New Task")
-        self.resize(480, 840)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 22, 24, 20)
+        # The form scrolls and the Save/Cancel row stays put, so a screen shorter than the form
+        # (a laptop, or the smaller monitor) never pushes the buttons out of reach.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QScrollArea.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget {background: transparent; border: none;}")
+        body = QWidget()
+        outer.addWidget(self._scroll, 1)
+        self._scroll.setWidget(body)
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(24, 22, 24, 8)
         layout.setSpacing(8)
         layout.addWidget(dialog_title(
             "Edit task" if task else "New task",
@@ -360,6 +374,7 @@ class _TaskEditor(QWidget):
         layout.addWidget(self._status_label)
 
         button_row = QHBoxLayout()
+        button_row.setContentsMargins(24, 8, 24, 20)
         if task:
             delete_button = danger(QPushButton("Delete task"))
             delete_button.clicked.connect(self._delete)
@@ -371,7 +386,15 @@ class _TaskEditor(QWidget):
         save_button = accent(QPushButton("Save task"))
         save_button.clicked.connect(self._save)
         button_row.addWidget(save_button)
-        layout.addLayout(button_row)
+        outer.addLayout(button_row)
+        self._fit_to_screen(body)
+
+    def _fit_to_screen(self, body):
+        """As tall as the form wants, but never taller than the screen it opens on."""
+        screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
+        room = screen.availableGeometry().height() - 90 if screen else 840
+        wanted = body.sizeHint().height() + 70
+        self.resize(480, max(420, min(wanted, room)))
 
     _closed = False
 
