@@ -261,3 +261,12 @@ def test_a_pick_made_before_the_since_field_existed_is_dropped_once_no_longer_du
     monkeypatch.setattr(review_store, "get_problem", lambda pid: due)
     review_wheel._state["fate"] = one["id"]
     assert review_wheel.current()["id"] == one["id"]     # still due: still fated
+
+
+def test_the_fated_banner_is_told_the_moment_the_wheel_lands(qapp):
+    told = []
+    dialog = wheel_ui.WheelDialog([({"id": 1, "name": "Odd Photos"}, 1.0)], on_start=lambda p: None,
+                                  on_fated=lambda: told.append(review_wheel.fate()))
+    dialog._landed(0)
+    assert told == [1]
+    dialog.close()

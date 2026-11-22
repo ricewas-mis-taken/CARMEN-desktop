@@ -1328,6 +1328,14 @@ class _TopicView(QWidget):
         self._wheel_button.setVisible(fated is None)
         self._fate_strip.show_for(fated)
 
+    def _show_fate_everywhere(self):
+        views = list(self._review_tab._topic_views.values()) if self._review_tab else [self]
+        for view in views:
+            try:
+                view._show_wheel_button()
+            except RuntimeError:      # a topic view whose window is already gone
+                pass
+
     def _open_wheel(self):
         fated = self._active_fate()
         if fated is not None:
@@ -1342,7 +1350,7 @@ class _TopicView(QWidget):
         if not items:
             QMessageBox.information(self, "Carmen Focus", "Nothing is due to spin for.")
             return
-        _register_popup(WheelDialog(items, on_start=self._start_problem))
+        _register_popup(WheelDialog(items, on_start=self._start_problem, on_fated=self._show_fate_everywhere))
         self._show_wheel_button()
 
     def _set_search(self, text):

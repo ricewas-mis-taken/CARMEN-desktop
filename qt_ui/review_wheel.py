@@ -468,13 +468,14 @@ class WheelWidget(QWidget):
 class WheelDialog(QWidget):
     """Opens on the wheel. When it stops, the winner is fated and can be started from here."""
 
-    def __init__(self, items, on_start):
+    def __init__(self, items, on_start, on_fated=None):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle("Spin the wheel")
         self.resize(540, 720)
         self._problems = [problem for problem, _ in items]
         self._on_start = on_start
+        self._on_fated = on_fated
         self._winner = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
@@ -510,6 +511,8 @@ class WheelDialog(QWidget):
     def _landed(self, index):
         self._winner = self._problems[index]
         review_wheel.set_fate(self._winner["id"])
+        if self._on_fated is not None:
+            self._on_fated()      # the "left up to fate" banner shows now, not when the tab next refreshes
         self._result.setText(self._winner["name"])
         fade = QPropertyAnimation(self._fade, b"opacity", self)
         fade.setDuration(450)
