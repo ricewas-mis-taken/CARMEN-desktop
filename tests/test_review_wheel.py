@@ -270,3 +270,13 @@ def test_the_fated_banner_is_told_the_moment_the_wheel_lands(qapp):
     dialog._landed(0)
     assert told == [1]
     dialog.close()
+
+
+def test_start_it_is_greyed_out_while_the_fated_review_is_running(qapp, monkeypatch):
+    strip = review_tab._FateStrip(lambda: None)
+    strip.show_for({"name": "Odd Photos"}, running=True)
+    assert not strip._button.isEnabled()
+    strip.show_for({"name": "Odd Photos"}, running=False)
+    assert strip._button.isEnabled()
+    monkeypatch.setattr(review_tab.session_manager, "get_status", lambda: {"isActive": True, "reviewProblemId": 7})
+    assert review_tab._review_running(7) and not review_tab._review_running(8)

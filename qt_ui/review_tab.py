@@ -951,6 +951,15 @@ class _AddTopicDialog(QWidget):
         self._on_added(topic)
 
 
+def _review_running(problem_id):
+    """True while a review of this problem is under way (running or paused), here or on a task card."""
+    status = session_manager.get_status()
+    if status.get("isActive") and status.get("reviewProblemId") == problem_id:
+        return True
+    active = review_store.get_active_review()
+    return bool(active) and active.get("problemId") == problem_id
+
+
 class _FateStrip(QFrame):
     """The review the wheel chose, across the whole width above the list, with a button to start it."""
 
@@ -975,9 +984,11 @@ class _FateStrip(QFrame):
         self._name = ""
         self.hide()
 
-    def show_for(self, problem):
+    def show_for(self, problem, running=False):
         self._name = problem["name"] if problem else ""
         self.setVisible(problem is not None)
+        self._button.setEnabled(not running)       # already being worked on: nothing to start
+        self._button.setToolTip("Already running" if running else "")
         self._elide()
 
     def _elide(self):
@@ -1326,7 +1337,7 @@ class _TopicView(QWidget):
     def _show_wheel_button(self):
         fated = self._active_fate()
         self._wheel_button.setVisible(fated is None)
-        self._fate_strip.show_for(fated)
+        self._fate_strip.show_for(fated, running=fated is not None and _review_running(fated["id"]))
 
     def _show_fate_everywhere(self):
         views = list(self._review_tab._topic_views.values()) if self._review_tab else [self]
