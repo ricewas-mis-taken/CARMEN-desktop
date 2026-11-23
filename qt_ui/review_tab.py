@@ -3247,6 +3247,14 @@ class _AddProblemDialog(QWidget):
         self._status_label = role_label("", "error")
         layout.addWidget(self._status_label)
 
+        # Shown when the name is already taken and a first attempt is waiting: the time goes onto the
+        # problem that exists instead of being lost with this form.
+        self._existing = None
+        self._merge_button = accent(QPushButton("Add my time to the existing problem"))
+        self._merge_button.clicked.connect(self._add_to_existing)
+        self._merge_button.hide()
+        layout.addWidget(self._merge_button)
+
         button_row = QHBoxLayout()
         button_row.addStretch(1)
         cancel_button = QPushButton("Cancel")
@@ -3403,11 +3411,35 @@ class _AddProblemDialog(QWidget):
                 )
         except review_store.DuplicateNameError as e:
             self._status_label.setText(str(e))
+            self._offer_existing(subject_id, name)
             return None
         if problem is None:
             self._status_label.setText("Could not save this problem.")
             return None
         return problem
+
+    def _offer_existing(self, subject_id, name):
+        if self._editing or self._pending_first_attempt is None:
+            return
+        existing = review_store.find_problem(subject_id, name)
+        if existing is None:
+            return
+        self._existing = existing
+        seconds = self._pending_first_attempt["seconds"]
+        self._status_label.setText(
+            f'"{existing["name"]}" is already in this subject. Add your {_format_mmss(seconds)} to it, '
+            "or change the name to save a new problem.")
+        self._merge_button.show()
+
+    def _add_to_existing(self):
+        attempt, existing = self._pending_first_attempt, self._existing
+        if attempt is None or existing is None:
+            return
+        problem = review_store.record_first_attempt(
+            existing["id"], attempt["seconds"], self_solved=attempt["selfSolved"], shakiness=attempt["shakiness"],
+        ) or existing
+        self.close()
+        self._on_added(problem)
 
     def _submit(self):
         problem = self._gather_and_save()

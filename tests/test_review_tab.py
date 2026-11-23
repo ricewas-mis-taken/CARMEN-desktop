@@ -1238,3 +1238,27 @@ def test_clearing_and_refreshing_the_parked_strip_never_flashes_a_window(qtbot):
     QApplication.processEvents()
     QApplication.instance().removeEventFilter(watch)
     assert shown == []
+
+
+def test_a_first_attempt_can_be_added_to_the_problem_that_already_exists(qtbot, isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    existing = review_store.create_problem(
+        topic["id"], subject["id"], "Creating Strings", stars=1,
+        description_type="text", description_text="x",
+    )
+    added = []
+    dialog = review_tab._AddProblemDialog(topic["id"], on_added=added.append)
+    qtbot.addWidget(dialog)
+    dialog._name_edit.setText("creating strings")
+    dialog._text_edit.setPlainText("again")
+    dialog.apply_first_attempt = review_tab._AddProblemDialog.apply_first_attempt.__get__(dialog)
+    dialog._first_attempt_status = review_tab.QLabel()
+    dialog.apply_first_attempt(26 * 60, True, 3)
+
+    dialog._submit()
+    assert dialog._merge_button.isVisibleTo(dialog) and added == []
+    dialog._merge_button.click()
+
+    assert len(added) == 1 and added[0]["id"] == existing["id"]
+    assert added[0]["reviewCount"] == 1
+    assert review_store.list_sessions(existing["id"])[0]["durationSeconds"] == 26 * 60
