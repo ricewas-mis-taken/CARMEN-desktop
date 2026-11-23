@@ -1791,7 +1791,12 @@ class _ReviewBanner(QWidget):
         auto-resumed, never one the user chose."""
         if self._first_attempt_callback is None or self._end_session_on_finish:
             return
-        on_break = bool(session_manager.get_status().get("isBreak"))
+        status = session_manager.get_status()
+        # The first attempt waits whenever the task session beside it does: a break, or any pause.
+        own_task = (self._problem or {}).get("eventId")
+        on_break = bool(status.get("isBreak")) or bool(
+            status.get("isActive") and status.get("isPaused") and status.get("source") == "task"
+            and own_task is not None and status.get("eventId") == own_task)
         entered_break = on_break and not self._was_on_break
         left_break = self._was_on_break and not on_break
         self._was_on_break = on_break
@@ -1916,8 +1921,10 @@ class _ReviewBanner(QWidget):
         rides BESIDE whatever session starts next (pausing, resting and resuming with it), keeping
         its elapsed time. False if this banner is not such a review."""
         problem_id = (self._problem or {}).get("id")
-        if not self._end_session_on_finish or self._finishing or problem_id is None:
+        if not self._end_session_on_finish or self._finishing:
             return False
+        if problem_id is None:
+            return self._make_first_attempt_independent()
         status, is_parked = self._linked_view()
         if is_parked or not status.get("isActive"):
             return False
@@ -1928,6 +1935,25 @@ class _ReviewBanner(QWidget):
         self._session_token = token          # first: from here the banner follows review_store
         self._end_session_on_finish = False
         session_manager.end_session(end_type="manual")
+        self._changed()
+        return True
+
+    def _make_first_attempt_independent(self):
+        """The first-attempt timer hands its session over the same way, carrying its own clock: from here it
+        is timed by this banner and rides beside the next session, pausing and resting with it."""
+        if self._first_attempt_callback is None:
+            return False
+        status, is_parked = self._linked_view()
+        if is_parked or not status.get("isActive"):
+            return False
+        paused = bool(status.get("isPaused"))
+        self._accumulated_seconds = self._elapsed_seconds_now()
+        self._start_time = None if paused else datetime.now()
+        self._is_paused = paused
+        self._auto_paused = False
+        self._end_session_on_finish = False
+        session_manager.end_session(end_type="manual")
+        self._publish_first_attempt()
         self._changed()
         return True
 
