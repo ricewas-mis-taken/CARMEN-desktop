@@ -1151,3 +1151,12 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   existing shared-settings path (config.SHARED_SETTINGS, newest stamp wins). Chosen because a per-computer Discord
   switch left a card up from a computer the user had turned it off on. Still local: window geometry, browser profile
   ids, restoreWindow, the API token.
+
+2026-11-23  Saving a forgotten attempt, and spending vacation mid-session
+  Fork: when a first attempt's Add Problem form is abandoned, or a plain focus session was really a go at a problem,
+  either leave the time as history only, or let the history file it afterwards. Chosen: a "Save as an attempt" button on
+  those history cards (attempt_link.py) that records one more attempt on an existing problem, or a new one, through the
+  same review_store path as a live finish, then marks the entry (linkedProblemId) so it is never saved twice. Duplicate
+  names in Add Problem offer "Add my time to the existing problem" the same way. The history edit stays on this computer
+  (synced history entries are not edited after filing); the attempt itself syncs with the review data. Vacation line now
+  also shows during a session. No extension counterpart: desktop-only UI.
