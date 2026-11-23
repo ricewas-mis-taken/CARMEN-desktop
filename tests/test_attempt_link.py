@@ -45,3 +45,44 @@ def test_a_missing_problem_saves_nothing(isolate_review_db):
     session_history.append_entry(entry)
     assert attempt_link.link(entry, 9999) is None
     assert "linkedProblemId" not in session_history.load_all(include_beside=True)[0]
+
+
+def test_the_dialog_saves_a_first_attempt_as_a_new_problem(qtbot, isolate_review_db):
+    from qt_ui import attempt_link_dialog
+    topic = review_store.create_topic("USACO")
+    review_store.create_subject(topic["id"], "Complete Search", "#4A90D9")
+    entry = _first_attempt()
+    session_history.append_entry(entry)
+    saved = []
+    dialog = attempt_link_dialog.AttemptLinkDialog(entry, on_saved=saved.append)
+    qtbot.addWidget(dialog)
+    dialog._name_edit.setText("Creating Strings")
+    dialog._save()
+    assert saved and saved[0]["name"] == "Creating Strings" and saved[0]["reviewCount"] == 1
+    assert session_history.load_all(include_beside=True)[0]["reviewProblemName"] == "Creating Strings"
+
+
+def test_the_dialog_saves_onto_an_existing_problem(qtbot, isolate_review_db):
+    from qt_ui import attempt_link_dialog
+    _topic, _subject, problem = _setup()
+    entry = _first_attempt()
+    session_history.append_entry(entry)
+    saved = []
+    dialog = attempt_link_dialog.AttemptLinkDialog(entry, on_saved=saved.append)
+    qtbot.addWidget(dialog)
+    dialog._problem_combo.setCurrentIndex(dialog._problem_combo.findData(problem["id"]))
+    dialog._save()
+    assert saved[0]["id"] == problem["id"]
+
+
+def test_the_history_card_offers_to_save_a_first_attempt(qtbot, isolate_review_db):
+    from PySide6.QtWidgets import QPushButton
+    from qt_ui import history_viewer
+    card = history_viewer._SessionCard(_first_attempt())
+    qtbot.addWidget(card)
+    card.toggle()
+    assert any("Save as an attempt" in b.text() for b in card.findChildren(QPushButton))
+    done = history_viewer._SessionCard(dict(_first_attempt(), linkedProblemId=3, reviewProblemName="X"))
+    qtbot.addWidget(done)
+    done.toggle()
+    assert not any("Save as an attempt" in b.text() for b in done.findChildren(QPushButton))

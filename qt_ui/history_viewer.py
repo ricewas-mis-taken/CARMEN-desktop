@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import attempt_link
 import session_history
 import session_manager
 import tasks_store
@@ -250,9 +251,10 @@ class _ActivityStrip(QWidget):
 class _SessionCard(QFrame):
     """One finished session. Click it (or the arrow) to open the details."""
 
-    def __init__(self, session):
+    def __init__(self, session, on_changed=None):
         super().__init__()
         self.session = session
+        self._on_changed = on_changed
         self._details = None
         self.setObjectName("HistCard")
         self.setStyleSheet(
@@ -338,6 +340,21 @@ class _SessionCard(QFrame):
             self.toggle()
         super().mousePressEvent(event)
 
+    def _save_as_attempt(self):
+        from qt_ui import attempt_link_dialog
+        attempt_link_dialog.open_attempt_link(self.session, on_saved=self._saved)
+
+    def _saved(self, problem):
+        if self._on_changed is not None:
+            self._on_changed()
+            return
+        self.session = {**self.session, "source": "review", "linkedProblemId": problem["id"],
+                        "reviewProblemId": problem["id"], "reviewProblemName": problem["name"]}
+        self.title_label.setText(session_title(self.session))
+        if self._details is not None:
+            self.toggle()
+            self.toggle()
+
     def _build_details(self):
         s = self.session
         panel = QFrame()
@@ -378,6 +395,14 @@ class _SessionCard(QFrame):
         for entry in problems:
             text, color = _format_violation(entry)
             line(f'<span style="color:{color};">&nbsp;&nbsp;{_esc(text)}</span>')
+
+        if attempt_link.linkable(s):
+            save = QPushButton("Save as an attempt at a problem…")
+            save.setCursor(Qt.PointingHandCursor)
+            save.clicked.connect(self._save_as_attempt)
+            box.addWidget(save, 0, Qt.AlignLeft)
+        elif attempt_link.linked(s):
+            line(f'Saved as an attempt at <b style="color:{INK};">{_esc(s.get("reviewProblemName") or "a problem")}</b>')
 
         exceptions = s.get("processBlocklistExceptions") or []
         additions = s.get("domainWhitelistAdditions") or []
@@ -604,7 +629,7 @@ class HistoryTab(QWidget):
             for session in items:
                 if drawn >= self._shown:
                     break
-                card = _SessionCard(session)
+                card = _SessionCard(session, on_changed=self.refresh)
                 self._cards.append(card)
                 self._timeline.addWidget(card)
                 drawn += 1
