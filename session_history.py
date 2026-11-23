@@ -42,6 +42,21 @@ def append_entry(entry):
     _append_entries([entry])
 
 
+def update_entry(session_entry_id, fields):
+    """Changes fields on one filed session (found by entry_id). Returns True if it was found. Meant for
+    small edits after the fact, such as saving a session as an attempt at a problem."""
+    with _lock:
+        history = list(_load_all_locked())
+        for entry in history:
+            if entry_id(entry) == session_entry_id:
+                entry.update(fields)
+                break
+        else:
+            return False
+        _save_all_locked(history)
+    return True
+
+
 def merge_remote(entries):
     """Adds sessions another device filed. Returns how many were new."""
     return _append_entries(entries)
