@@ -1160,3 +1160,12 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   names in Add Problem offer "Add my time to the existing problem" the same way. The history edit stays on this computer
   (synced history entries are not edited after filing); the attempt itself syncs with the review data. Vacation line now
   also shows during a session. No extension counterpart: desktop-only UI.
+
+2026-11-23  Reviews and timers inside a Pomodoro; history edits sync
+  Fork: model a Pomodoro as a parent session that owns nested reviews/timers (new state in session_manager), or keep the
+  existing "ride beside" design (a review_store review or first-attempt timer pauses and rests with the live task session)
+  and only add grouping. Chosen: keep ride-beside, extend it to a first attempt that started before the Pomodoro
+  (make_independent), and group in the history (session_group.py: by time for beside reviews, by hand via groupedUnder
+  for earlier ones). No time moves between sessions, so nothing double counts. A running plain focus timer is still set
+  aside (parked) when a Pomodoro starts, not carried beside it. History edits now sync: session_history.update_entry stamps
+  editedAt, the sync pushes anything that ended or was edited after its watermark, and a newer edit replaces the local copy.
