@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -341,6 +342,22 @@ class _SessionCard(QFrame):
             self.toggle()
         super().mousePressEvent(event)
 
+    def contextMenuEvent(self, event):
+        """Right-click: save the session as an attempt at a problem, or group it under a Pomodoro."""
+        s = self.session
+        everything = session_history.load_all(include_beside=True)
+        menu = QMenu(self)
+        if attempt_link.linkable(s):
+            menu.addAction("Save as an attempt at a problem…", self._save_as_attempt)
+        if session_group.groupable(s):
+            if s.get("groupedUnder"):
+                menu.addAction("Take it out of that session", self._unlink)
+            elif session_group.candidates(s, everything):
+                menu.addAction("Link to a Pomodoro or task session…", self._link_to_session)
+        if menu.actions():
+            menu.exec(event.globalPos())
+            event.accept()
+
     def _group_lines(self, box, s, line):
         everything = session_history.load_all(include_beside=True)
         members = session_group.members_of(s, everything)
@@ -354,16 +371,6 @@ class _SessionCard(QFrame):
         if parent is not None:
             line(f'Part of <b style="color:{INK};">{_esc(session_title(parent))}</b> '
                  f'({_esc(_time_range(parent))})')
-        if s.get("groupedUnder"):
-            unlink = QPushButton("Take it out of that session")
-            unlink.setCursor(Qt.PointingHandCursor)
-            unlink.clicked.connect(self._unlink)
-            box.addWidget(unlink, 0, Qt.AlignLeft)
-        elif session_group.candidates(s, everything):
-            group = QPushButton("Link to a Pomodoro or task session…")
-            group.setCursor(Qt.PointingHandCursor)
-            group.clicked.connect(self._link_to_session)
-            box.addWidget(group, 0, Qt.AlignLeft)
 
     def _link_to_session(self):
         from PySide6.QtWidgets import QInputDialog
@@ -445,12 +452,7 @@ class _SessionCard(QFrame):
 
         self._group_lines(box, s, line)
 
-        if attempt_link.linkable(s):
-            save = QPushButton("Save as an attempt at a problem…")
-            save.setCursor(Qt.PointingHandCursor)
-            save.clicked.connect(self._save_as_attempt)
-            box.addWidget(save, 0, Qt.AlignLeft)
-        elif attempt_link.linked(s):
+        if attempt_link.linked(s):
             line(f'Saved as an attempt at <b style="color:{INK};">{_esc(s.get("reviewProblemName") or "a problem")}</b>')
 
         exceptions = s.get("processBlocklistExceptions") or []
