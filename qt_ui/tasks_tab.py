@@ -1231,7 +1231,7 @@ class _TaskCard(QFrame):
 
     def _open_vacation_dialog(self):
         usable = self._cash_in_max()
-        if usable <= 0 or self._is_running():
+        if usable <= 0:
             return
         minutes = _VacationDialog.get_minutes(
             self._task.get("name") or "this task", self._color, self._cash_in_balance_int, usable,
@@ -1322,15 +1322,15 @@ class _TaskCard(QFrame):
         else:
             self._update_idle_view(fraction, display_logged, display_required, locked_by_other, status, reviews)
 
-        # The vacation line and restrictions stay quiet while a session is on screen.
+        # The restrictions stay quiet while a session is on screen; the vacation line does not, since
+        # cashing vacation in against today's goal is just as useful mid-session.
         in_session = is_running or is_waiting
-        self._vacation_label.setVisible(not in_session)
+        self._vacation_label.setVisible(True)
         self._blocklist_button.setVisible(not in_session)
-        if not in_session:
-            usable = self._cash_in_max() > 0
-            self._vacation_label.set_state(
-                f"{_format_minutes(display_balance)} vacation" if display_balance >= 0.5 else "No vacation banked",
-                usable)
+        usable = self._cash_in_max() > 0
+        self._vacation_label.set_state(
+            f"{_format_minutes(display_balance)} vacation" if display_balance >= 0.5 else "No vacation banked",
+            usable)
 
         if self.property("locked") != locked_by_other:
             self.setProperty("locked", locked_by_other)
