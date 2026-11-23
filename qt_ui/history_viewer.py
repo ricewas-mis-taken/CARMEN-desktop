@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 import attempt_link
+import session_group
 import session_history
 import session_manager
 import tasks_store
@@ -340,6 +341,52 @@ class _SessionCard(QFrame):
             self.toggle()
         super().mousePressEvent(event)
 
+    def _group_lines(self, box, s, line):
+        everything = session_history.load_all(include_beside=True)
+        members = session_group.members_of(s, everything)
+        if members:
+            line(f'<b style="color:{INK};">Inside this session</b>')
+            for member in members:
+                line(f"&nbsp;&nbsp;{_esc(session_title(member))}, {_esc(_duration_text(worked_seconds(member)))}")
+        if not session_group.groupable(s):
+            return
+        parent = session_group.parent_of(s, everything)
+        if parent is not None:
+            line(f'Part of <b style="color:{INK};">{_esc(session_title(parent))}</b> '
+                 f'({_esc(_time_range(parent))})')
+        if s.get("groupedUnder"):
+            unlink = QPushButton("Take it out of that session")
+            unlink.setCursor(Qt.PointingHandCursor)
+            unlink.clicked.connect(self._unlink)
+            box.addWidget(unlink, 0, Qt.AlignLeft)
+        elif session_group.candidates(s, everything):
+            group = QPushButton("Link to a Pomodoro or task session…")
+            group.setCursor(Qt.PointingHandCursor)
+            group.clicked.connect(self._link_to_session)
+            box.addWidget(group, 0, Qt.AlignLeft)
+
+    def _link_to_session(self):
+        from PySide6.QtWidgets import QInputDialog
+        everything = session_history.load_all(include_beside=True)
+        options = session_group.candidates(self.session, everything)
+        labels = [f"{session_title(o)}  {_time_range(o)}" for o in options]
+        label, ok = QInputDialog.getItem(self, "Link to a session", "Group this under:", labels, 0, False)
+        if ok and label in labels and session_group.link(self.session, options[labels.index(label)]):
+            self._regrouped({"groupedUnder": session_history.entry_id(options[labels.index(label)])})
+
+    def _unlink(self):
+        if session_group.unlink(self.session):
+            self._regrouped({"groupedUnder": None})
+
+    def _regrouped(self, fields):
+        if self._on_changed is not None:
+            self._on_changed()
+            return
+        self.session = {**self.session, **fields}
+        if self._details is not None:
+            self.toggle()
+            self.toggle()
+
     def _save_as_attempt(self):
         from qt_ui import attempt_link_dialog
         attempt_link_dialog.open_attempt_link(self.session, on_saved=self._saved)
@@ -395,6 +442,8 @@ class _SessionCard(QFrame):
         for entry in problems:
             text, color = _format_violation(entry)
             line(f'<span style="color:{color};">&nbsp;&nbsp;{_esc(text)}</span>')
+
+        self._group_lines(box, s, line)
 
         if attempt_link.linkable(s):
             save = QPushButton("Save as an attempt at a problem…")
@@ -572,7 +621,8 @@ class HistoryTab(QWidget):
         # The tab re-reads the log every time it is shown; laying the page out again is the
         # costly part, so only do it when a session was added or the view itself changed.
         last = everything[-1] if everything else {}
-        signature = (len(everything), last.get("sessionId"), last.get("startTime"), last.get("endTime"),
+        edited = max((e.get("editedAt") or "" for e in everything), default="")     # a session saved or linked since
+        signature = (len(everything), last.get("sessionId"), last.get("startTime"), last.get("endTime"), edited,
                      self._window_days, self._kind, self._shown, date.today())
         if signature == getattr(self, "_signature", None):
             return
