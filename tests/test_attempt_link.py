@@ -86,3 +86,25 @@ def test_the_history_card_offers_to_save_a_first_attempt(qtbot, isolate_review_d
     qtbot.addWidget(done)
     done.toggle()
     assert not any("Save as an attempt" in b.text() for b in done.findChildren(QPushButton))
+
+
+def test_a_saved_attempt_reaches_the_other_computer(isolate_review_db):
+    import sync_live
+    entry = _first_attempt()
+    session_history.append_entry(entry)
+    watermark = max(e["endTime"] for e in session_history.load_all(include_beside=True))
+    assert session_history.entries_ended_after(watermark) == []
+
+    session_history.update_entry(session_history.entry_id(entry), {"linkedProblemId": 5, "reviewProblemName": "Creating Strings"})
+    changed = session_history.entries_ended_after(watermark)
+    assert [e["reviewProblemName"] for e in changed] == ["Creating Strings"]
+
+    wire = sync_live.history_entry_from_wire(sync_live.history_entry_to_wire(changed[0]))
+    stale = dict(_first_attempt())                     # what the other computer still has
+    import json, os
+    with open(session_history.HISTORY_PATH, "w", encoding="utf-8") as f:
+        json.dump([stale], f)
+    session_history._cache["key"] = None
+    assert session_history.merge_remote([wire]) == 1
+    assert session_history.load_all(include_beside=True)[0]["reviewProblemName"] == "Creating Strings"
+    assert session_history.merge_remote([wire]) == 0   # nothing newer the second time

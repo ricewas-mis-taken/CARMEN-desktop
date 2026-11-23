@@ -133,7 +133,7 @@ def _gather_history():
     entries = session_history.entries_ended_after(watermark)
     records = []
     for entry in entries:
-        stamp = entry.get("endTime") or entry.get("startTime")
+        stamp = session_history.sync_stamp(entry) or entry.get("startTime")
         if not stamp:
             continue
         records.append({
@@ -144,7 +144,7 @@ def _gather_history():
             "updated_at": sync_client._to_wire_ts(stamp),
             "is_deleted": False,
         })
-    newest = max((e.get("endTime") or "" for e in entries), default="") or None
+    newest = max((session_history.sync_stamp(e) for e in entries), default="") or None
     return records, newest
 
 
