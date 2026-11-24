@@ -61,6 +61,10 @@ class FamilySync:
         self._last_report = {}
         self._hb_logged = (None, 0)
         self.last_error = None
+        try:
+            self.t.device_id = self.host.device_id()
+        except Exception:
+            pass
 
     # ---- time ----
     def _now_ms(self):

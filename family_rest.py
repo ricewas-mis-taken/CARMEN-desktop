@@ -14,9 +14,10 @@
   * https is required unless the backend is on this computer (localhost): a sign-in must never cross a network
     in the clear.
 
-Known limit: if the computer dies in the instant between the server spending a refresh token and the new one
-being saved, that sign-in cannot be resumed and the student signs in again. The same limit applies to every
-rotating-refresh-token client, including the browser extension.
+Crash safety: a refresh sends this computer's device id. The backend lets the same device replay a refresh for a
+short grace window (so a crash between "server spent the token" and "new one saved" is survivable) and treats a
+replay from anywhere else as theft. Outside the grace window the sign-in cannot be resumed and the student signs in
+again.
 """
 import json
 import logging
@@ -122,6 +123,8 @@ class FamilyRest(FamilyTransport):
         self._offset_ms = 0
         self.early_refresh_ms = EARLY_REFRESH_MS
         self.refresh_count = 0                    # how many refreshes actually went to the server (tests read this)
+        self.device_id = None                     # sent with a refresh: the backend lets the SAME device replay a refresh
+                                                  # briefly (a crash between spend and save) but treats any other as theft
         self.session_lost = None                  # the code, once the server has ended the sign-in
         try:
             self._base = normalize_base(base)
@@ -225,7 +228,10 @@ class FamilyRest(FamilyTransport):
                     self._access = None
                 raise FamilyError("session_lost", "Not signed in.", 401)
             try:
-                reply = self._request("POST", "/auth/refresh", body={"refreshToken": refresh_token}, auth=False, retry=False)
+                body = {"refreshToken": refresh_token}
+                if self.device_id:
+                    body["deviceId"] = str(self.device_id)[:64]
+                reply = self._request("POST", "/auth/refresh", body=body, auth=False, retry=False)
             except FamilyError as err:
                 if err.status == 401 and err.code in _SESSION_ENDED_CODES:
                     self.session_lost = err.code
