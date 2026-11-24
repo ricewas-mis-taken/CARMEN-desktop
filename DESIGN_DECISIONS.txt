@@ -1076,3 +1076,30 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
     It also passes --autostart, like the Windows entry, so "open the window on sign-in" is honoured.
   - If macOS refuses notification permission, reminders fall back to a plain osascript banner (no
     buttons) instead of vanishing. Snooze buttons need the permission to be granted in System Settings.
+
+2026-11-24  Linked guides (family features): a guide's rules run as ordinary Carmen sessions, behind a transport seam
+  Forks and what was chosen:
+  - A guide-started session / study block is a normal session_manager session (source "guide" plus a "guide" record
+    shown as "Set by <name>"), not a second enforcement path. The same window tracker, lock popups and history apply.
+    Rejected: a parallel overlay-only mode (two enforcers to keep in step, and the history/summary would miss it).
+    The student can end it early (the guide sees it); a guide session refuses student-added sites (that would undo
+    the guide's deny list). A guide ending a session is filed "natural" so it reads as completed on REST and in the
+    Supabase projection (which maps only "manual" to ended_early).
+  - Fail-safe, not fail-open and not fail-closed: server data is replaced only by a complete valid copy
+    (family_rules.sanitize_*); one malformed study block rejects the whole schedule; a malformed command is declined;
+    offline keeps the cached rules/blocks. Same rule as the browser extension's rules cache.
+  - Deny first, and an allow list cannot say "except": denied hosts are dropped from the session's allow list; the full
+    deny list is exposed read-only at GET /family/rules for the extension. Extension-side use is NOT done yet.
+  - Transport seam: family_transport.py (interface), family_rest.py (dev backend), family_supabase.py (documented stub,
+    never called; the user chose a new Supabase project, ref wwkoiwegmgweblyaxmdw). Rejected: calling Supabase tables
+    directly from family_sync (the Supabase schema forbids client writes to student_status/session_summaries; the
+    existing sync rows feed them through a trigger), and writing an unrunnable Supabase client.
+  - Consent is time-bound: uploads are gated by the active links' scopes and start at the moment of consent (history
+    watermark, screen-time marks), hostnames only; with no link only the heartbeat is sent.
+  - Study blocks never interrupt a session the student started (parity with the extension); ending one early skips it for
+    that day and tells the backend (POST /me/schedule/skips).
+  - Refresh sends the device id so the backend's grace replay survives a crash; https is required off-loopback.
+  - Off by default (config familyEnabled); per computer, not in SHARED_SETTINGS.
+  Left for later: extension consumption of /family/rules, requests/assignments/kudos UI, per-violation timeline events.
+  Cross-reference: carmen-extension (and carmen-guide-extension) DESIGN_DECISIONS.txt -- add a matching 2026-11-24
+  "Linked guides" entry pointing here; /family/rules is the contract between the two.
