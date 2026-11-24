@@ -52,8 +52,9 @@ RECEIVER_STAMPED = {
 # tests below or the SQLite tests above; the rest stay on the device by design
 # (see FEATURE_IMPLEMENT.txt item 7: the running session and history sync through sync_live).
 SYNCED_FILES = {"tasks.json", "board.json", "calendar.db", "session_history.json", "session_state.json", "quicknote.json", "scribe.json", "devices.json", "score.json"}
+# family_state.json: the family account's caches and upload queues; per computer on purpose (see FAMILY.md)
 LOCAL_ONLY_FILES = {
-    "config.json", "screentime.json",
+    "config.json", "screentime.json", "family_state.json",
     "daily_summaries.json", "active_review.json", "device_id.txt", "last_sync.txt",
     "pull_cursor.txt", "sync_owner.txt", "uploaded_photos.json", "taskbar_quiet_settings.json", "taskbar_quiet_saved.json", "taskbar_quiet_user.json",
     "live_cursor.txt", "live_history_pushed.txt", "live_state_pushed.txt",
