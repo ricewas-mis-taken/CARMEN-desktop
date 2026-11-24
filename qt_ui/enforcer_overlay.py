@@ -180,7 +180,20 @@ def build_overlay(
     _open_windows.add(win)
     win.destroyed.connect(lambda: _open_windows.discard(win))
     _stack_in(win)
+    _keep_main_window_back()
     return win
+
+
+def _keep_main_window_back():
+    """The blocked app going away makes the OS raise whatever is next, and the OS takes a moment
+    to do it, so the main window is sent back now and again just after."""
+    try:
+        from qt_ui import main_window
+    except Exception:
+        return
+    main_window.send_to_back()
+    for delay in (150, 500, 1200):
+        QTimer.singleShot(delay, main_window.send_to_back)
 
 
 def build_unblock_reason_dialog(process_name):
@@ -444,8 +457,10 @@ class _LockOverlay(QWidget):
             self._time_label.setText(f"Time remaining: {minutes}m {seconds}s")
 
         try:
-            self.raise_()
             if sys.platform != "darwin":
+                # On a Mac the always-on-top flag keeps it in front; re-raising every 50 ms also kept
+                # pulling Carmen forward and made other apps hard to click.
+                self.raise_()
                 self.activateWindow()
         except Exception:
             pass

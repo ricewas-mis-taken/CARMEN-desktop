@@ -400,8 +400,12 @@ def _apply_settings(records):
         if record.get("sync_id") != "defaults" or not isinstance(data, dict):
             continue
         try:
+            before = config.load_config().get("theme")
             if config.apply_remote_settings(data.get("settings"), record.get("updated_at")):
                 _write(SETTINGS_PUSHED_PATH, record["updated_at"])
+                if config.load_config().get("theme") != before:
+                    import theme
+                    theme.notify_remote()
         except Exception:
             logger.exception("sync_live: could not apply the shared defaults")
 

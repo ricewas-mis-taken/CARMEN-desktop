@@ -43,6 +43,7 @@ from Quartz import (
 )
 
 from mac_os import browser_profiles_mac
+import process_aliases
 import qt_gui_thread
 import qt_ui.enforcer_overlay as enforcer_overlay
 import session_manager
@@ -326,6 +327,24 @@ def _find_pid_by_process_name(process_name):
     return None
 
 
+def _find_pid_by_app_name(name):
+    """The pid of the running app whose names (executable, localized name, .app folder) match `name`
+    as the same program, so "Discord.exe" finds "Discord"."""
+    if not name:
+        return None
+    try:
+        for app in NSWorkspace.sharedWorkspace().runningApplications():
+            if app.activationPolicy() != 0:
+                continue
+            pid = app.processIdentifier()
+            for candidate in _name_candidates(pid, _process_name_for(pid)):
+                if process_aliases.same_process(candidate, name):
+                    return pid
+    except Exception:
+        pass
+    return None
+
+
 def _activate(pid):
     try:
         app = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
@@ -386,12 +405,14 @@ def hard_lock_redirect(offending_process_name=None):
     actually running."""
     frontmost_pid, frontmost_process = _frontmost_app()
 
+    acted = False
     if (
         frontmost_pid is not None
         and not session_manager.is_exempt(frontmost_process, frontmost_pid)
         and frontmost_process
         and is_blocked_window(frontmost_process, frontmost_pid)
     ):
+        acted = True
         if _process_is_blocked(frontmost_pid, frontmost_process):
             _hide_app(frontmost_pid, True)
         else:
@@ -401,8 +422,13 @@ def hard_lock_redirect(offending_process_name=None):
 
     last_acceptable = session_manager.get_last_acceptable_process()
     target_pid = _find_pid_by_process_name(last_acceptable) if last_acceptable else None
-    if target_pid:
+    # Only take the user back to their focus app when the blocked app was really what they were in.
+    # If they had already moved on to something else by the time this ran, leave them there: pulling
+    # them back made it impossible to click or open any other app for a while.
+    if target_pid and acted:
         _activate(target_pid)
+    if not acted:
+        return
 
     label = offending_process_name or frontmost_process or "that app"
     status = session_manager.get_status()
@@ -490,11 +516,11 @@ def restore_window_for_process(process_name):
     """Un-hides and activates process_name's app, if it's running --
     same role as enforcer.restore_window_for_process on Windows, called
     right after a mid-session unblock."""
-    pid = _find_pid_by_process_name(process_name)
+    pid = _find_pid_by_process_name(process_name) or _find_pid_by_app_name(process_name)
     if not pid:
         return
+    _hide_app(pid, False)          # un-hide first, then bring it forward
     _activate(pid)
-    _hide_app(pid, False)
 
 
 def _show_lock_overlay(message, duration_ms, offending_process_name=None, blackout_rect=None):

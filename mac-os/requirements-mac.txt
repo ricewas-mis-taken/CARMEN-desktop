@@ -8,6 +8,8 @@ PySide6
 watchdog
 supabase
 httpx
+websockets
+pypresence
 keyring
 python-dotenv
 pytest

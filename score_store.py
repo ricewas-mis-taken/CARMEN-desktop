@@ -79,6 +79,14 @@ def _save(data):
     os.replace(tmp, PATH)
 
 
+def _live(events):
+    """The events that count: well-formed and not deleted. Anything else (a tombstone, or a stray record
+    that sync pulled in by mistake) is ignored instead of crashing every page that shows the score."""
+    return [e for e in events
+            if isinstance(e, dict) and not e.get("isDeleted") and isinstance(e.get("key"), str)
+            and isinstance(e.get("date"), str) and isinstance(e.get("points"), (int, float))]
+
+
 def clamp(value):
     return max(MIN_SCORE, min(MAX_SCORE, value))
 
@@ -88,7 +96,7 @@ def score(data=None):
     0 and the first good day after it climbs from 0, not from a hidden negative."""
     data = data or load()
     total = BASE
-    for event in sorted(data["events"], key=lambda e: (e["date"], e["key"])):
+    for event in sorted(_live(data["events"]), key=lambda e: (e["date"], e["key"])):
         total = clamp(total + event["points"])
     return total
 
@@ -98,7 +106,7 @@ def score_through(day, data=None):
     data = data or load()
     cut = day.isoformat()
     total = BASE
-    for event in sorted(data["events"], key=lambda e: (e["date"], e["key"])):
+    for event in sorted(_live(data["events"]), key=lambda e: (e["date"], e["key"])):
         if event["date"] <= cut:
             total = clamp(total + event["points"])
     return total
@@ -154,7 +162,7 @@ def stamp_unsynced():
 def events_between(first, last, data=None):
     data = data or load()
     a, b = first.isoformat(), last.isoformat()
-    return [e for e in data["events"] if a <= e["date"] <= b]
+    return [e for e in _live(data["events"]) if a <= e["date"] <= b]
 
 
 def record_review(session_key, due_iso, done_day, name=""):

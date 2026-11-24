@@ -47,6 +47,8 @@ DEFAULT_CONFIG = {
     "focusRulesUpdatedAt": None,
     # When the shared settings below last changed on any computer (cloud time).
     "settingsUpdatedAt": None,
+    "themeShared": False,       # the saved theme has been sent to the other computer at least once
+    "theme": None,              # {"name": ..., "custom": {...}}: shared, so both computers look the same
 }
 
 # The saved defaults and options every computer should agree on: what a new session blocks
@@ -56,7 +58,7 @@ SHARED_SETTINGS = (
     "processBlocklist", "domainWhitelist", "last_duration_minutes", "last_lock_mode",
     "last_hide_taskbar_badges", "last_stop_taskbar_flashing",
     "discordPresence", "discordShowNames", "allowAiAgents", "openOnStartup",
-    "scribeOptionsHidden", "tourDone", "reportCardWeek",
+    "scribeOptionsHidden", "tourDone", "reportCardWeek", "theme",
 )
 _SHARED_FLAGS = ("last_hide_taskbar_badges", "last_stop_taskbar_flashing", "discordPresence",
                  "discordShowNames", "allowAiAgents", "openOnStartup", "scribeOptionsHidden", "tourDone")
@@ -206,7 +208,12 @@ def export_shared_settings():
         cfg = _load_for_update()
         settings = shared_settings(cfg)
         stamp = cfg.get("settingsUpdatedAt")
-        if stamp is None and settings != shared_settings({}):
+        needs_stamp = stamp is None and settings != shared_settings({})
+        # A theme chosen before the theme was shared has no stamp of its own: send it once.
+        if cfg.get("theme") and not cfg.get("themeShared"):
+            cfg["themeShared"] = True
+            needs_stamp = True
+        if needs_stamp:
             stamp = cfg["settingsUpdatedAt"] = server_clock.next_stamp()
             save_config(cfg)
     return {"stamp": stamp, "settings": settings}
@@ -234,6 +241,14 @@ def _clean_shared_settings(data):
     week = data.get("reportCardWeek")
     if isinstance(week, str) and len(week) <= 20:
         clean["reportCardWeek"] = week
+    theme = data.get("theme")
+    if isinstance(theme, dict) and isinstance(theme.get("name"), str) and len(theme["name"]) <= 40:
+        picked = {"name": theme["name"]}
+        custom = theme.get("custom")
+        if isinstance(custom, dict):
+            picked["custom"] = {k: v for k, v in custom.items()
+                                if isinstance(k, str) and isinstance(v, str) and len(v) <= 9}
+        clean["theme"] = picked
     return clean
 
 

@@ -9,6 +9,7 @@ import threading
 import theme
 import time
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from calendar_log import logger
@@ -119,6 +120,14 @@ def main():
     # thread below is the one that matters most — it can trigger
     # enforcer.py's lock overlays at any time once it starts).
     app = QApplication(sys.argv)
+    if sys.platform == "darwin":
+        # The app is designed on light surfaces. With the Mac in Dark mode, every widget the stylesheet does
+        # not colour itself (menus, tooltips, message boxes, colour pickers) came up with white text on a
+        # pale background.
+        try:
+            app.styleHints().setColorScheme(Qt.ColorScheme.Light)
+        except Exception:
+            pass
     import gc_guard
     gc_guard.install(app)            # cycle collection only ever runs on this thread (see gc_guard)
     # Background threads (sync, saving, the API) share the interpreter lock with the interface. The default
@@ -205,6 +214,12 @@ def main():
 
     import sync_client
     sync_client.add_pulled_listener(_refresh_open_window)
+
+    def _theme_changed_elsewhere():
+        from qt_ui.options_dialog import reapply_stylesheet
+        qt_gui_thread.run_on_gui_thread(reapply_stylesheet)
+
+    theme.add_remote_listener(_theme_changed_elsewhere)
 
     def on_quit():
         stop_event.set()
@@ -354,6 +369,11 @@ def main():
                 sys.path.insert(0, _mac_os_dir)
             from mac_os import menubar_timer_mac
             _menubar_timer = menubar_timer_mac.install(icon)
+
+            from mac_os import dock_reopen_mac
+            import qt_ui.main_window as _main_window
+            if not dock_reopen_mac.install(_main_window.open_main_window):
+                logger.warning("Dock-click reopen could not be hooked")
         except Exception:
             logger.exception("menubar timer unavailable")
 

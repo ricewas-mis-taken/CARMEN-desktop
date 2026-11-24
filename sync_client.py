@@ -204,6 +204,24 @@ def _load_pull_cursor():
         return None
 
 
+SCORE_RESYNC_MARKER = paths.private_path("score_resync_v1.txt")
+
+
+def _first_score_pull():
+    """True once per computer. Score events other computers pushed before this computer knew how to read
+    them were stepped over by the pull cursor, so the very first pull after the upgrade starts from
+    the beginning (applying a record twice is a no-op), then never again."""
+    if os.path.exists(SCORE_RESYNC_MARKER):
+        return False
+    try:
+        os.makedirs(os.path.dirname(SCORE_RESYNC_MARKER), exist_ok=True)
+        with open(SCORE_RESYNC_MARKER, "w", encoding="utf-8") as f:
+            f.write("1")
+    except OSError:
+        return False
+    return True
+
+
 def _save_pull_cursor(server_ts):
     os.makedirs(os.path.dirname(PULL_CURSOR_PATH), exist_ok=True)
     tmp_path = PULL_CURSOR_PATH + ".tmp"
@@ -1184,7 +1202,7 @@ def sync_now():
         calendar_logger.exception("sync_client.sync_now: failed gathering local changes")
         return SyncResult(success=False, pushed=0, pulled=0, skipped=0, error="Sync failed while reading local data.")
 
-    cursor = _load_pull_cursor()
+    cursor = None if _first_score_pull() else _load_pull_cursor()
     pushed = skipped_push = 0
     refreshed = False
     while True:

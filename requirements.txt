@@ -1,11 +1,11 @@
-pywin32
+pywin32; sys_platform == 'win32'
 psutil
 flask
 flask-cors
 pystray
 pillow
 python-dateutil
-winsdk
+winsdk; sys_platform == 'win32'
 PySide6
 watchdog
 supabase

@@ -408,9 +408,24 @@ class MenubarTimer:
         except Exception:
             pass
 
+    def _run_tray_item(self, prefix):
+        """Calls the pystray menu item directly. The native NSMenu kept from pystray goes stale each
+        time pystray rebuilds the menu (its item targets are released), so replaying it did nothing."""
+        try:
+            for item in self._icon.menu.items:
+                if str(item.text).lower().startswith(prefix.lower()):
+                    if item.enabled:
+                        item(self._icon)
+                    return True
+        except Exception:
+            return False
+        return False
+
     def _menu_action(self, prefix):
         """Runs the tray menu item whose title starts with `prefix` (so the panel's
         buttons do exactly what the menu does, Quit included)."""
+        if self._run_tray_item(prefix):
+            return
         menu = self._menu
         if menu is None:
             return

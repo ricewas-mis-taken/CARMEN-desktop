@@ -348,6 +348,15 @@ def _load():
     _state.update(data)
     if _state["isActive"] and not _state.get("sessionId"):
         _state["sessionId"] = uuid.uuid4().hex   # a session from before sessions had ids
+    if _state["isActive"]:
+        # An unblock granted by a Mac name ("Discord") used to leave the Windows spelling
+        # ("Discord.exe") on the list. Honour every unblock already on record.
+        granted = {process_aliases.canonical(e.get("process", "")) for e in _state.get("processBlocklistExceptions") or []
+                   if isinstance(e, dict)}
+        granted.discard("")
+        if granted:
+            _state["processBlocklist"] = [p for p in _state["processBlocklist"]
+                                          if process_aliases.canonical(p) not in granted]
 
 
 _load()
@@ -1556,11 +1565,13 @@ def remove_process_from_blocklist(process_name, reason, plan=None, minutes=None)
         if not _state["isActive"]:
             return None, None
         now = datetime.now()
-        existing_lower = {p.lower() for p in _state["processBlocklist"]}
-        if process_name.lower() in existing_lower:
-            _state["processBlocklist"] = [
-                p for p in _state["processBlocklist"] if p.lower() != process_name.lower()
-            ]
+        # Blocking matches by app (process_aliases), so unblocking must too: "Discord" on a Mac has to
+        # remove the "Discord.exe" a Windows computer put on the list, or the app stays blocked.
+        wanted = process_aliases.canonical(process_name)
+        _state["processBlocklist"] = [
+            p for p in _state["processBlocklist"]
+            if p.lower() != process_name.lower() and process_aliases.canonical(p) != wanted
+        ]
 
         exception_entry = {
             "process": process_name,
