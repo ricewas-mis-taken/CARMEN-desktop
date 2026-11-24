@@ -89,3 +89,23 @@ def test_a_first_attempt_started_before_the_pomodoro_rides_beside_it(world):
     dialog.close()
     from PySide6.QtWidgets import QApplication
     QApplication.processEvents()
+
+
+def test_a_review_left_running_when_the_pomodoro_ends_gets_its_own_blocking_session(world):
+    topic, first, _second = _two_problems(world)
+    tab = _tab(world)
+    task_id = _linked_task_id(topic)
+    session_manager.start_pomodoro_session(25, 5, 4, "hard", [], [], source="task", event_id=task_id, event_title="Same")
+    view = tab._topic_views[topic["id"]]
+    view._begin_review(first)
+    assert session_manager.get_status()["source"] == "task"
+
+    session_manager.end_session()                                # the Pomodoro stops, the review keeps going
+    banner = view._review_banner
+    banner._tick()
+
+    status = session_manager.get_status()
+    assert status["isActive"] and status["source"] == "review"
+    assert status["reviewProblemId"] == first["id"]
+    assert review_store.get_active_review() is None              # one tracker, not two
+    assert banner._end_session_on_finish
