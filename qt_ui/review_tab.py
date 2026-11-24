@@ -1702,6 +1702,7 @@ class _ReviewBanner(QWidget):
         self._gone_ticks = 0
         self._auto_paused = False
         self._was_on_break = False
+        self._carried_seconds = 0      # time already on the clock when this review took over a session
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -1849,7 +1850,8 @@ class _ReviewBanner(QWidget):
             status, _ = self._linked_view()
             if not status.get("startTime"):
                 return 0
-            return tasks_store.worked_seconds(status["startTime"], None, status.get("violationLog"))
+            return self._carried_seconds + tasks_store.worked_seconds(
+                status["startTime"], None, status.get("violationLog"))
         if self._is_independent_review():
             # review_store is the source of truth once a pomodoro's break
             # can pause this from outside this widget entirely (see
@@ -1878,6 +1880,7 @@ class _ReviewBanner(QWidget):
         # widget instance is new.
         self._start_time = resumed_started_at or datetime.now()
         self._accumulated_seconds = accumulated_seconds
+        self._carried_seconds = 0
         self._is_paused = False
         is_first_attempt = first_attempt_callback is not None or (
             problem.get("id") is None and problem.get("name") == session_manager.FIRST_ATTEMPT_NAME
@@ -1935,6 +1938,44 @@ class _ReviewBanner(QWidget):
         self._session_token = token          # first: from here the banner follows review_store
         self._end_session_on_finish = False
         session_manager.end_session(end_type="manual")
+        self._changed()
+        return True
+
+    def _take_over_session_when_alone(self):
+        """The reverse of make_independent(): a review that rode beside a session (a pomodoro) is left
+        running when that session ends, with nothing blocking. It starts its own session from its task's
+        rules, keeping the time already on its clock. True if it did."""
+        problem = self._problem or {}
+        if (self._end_session_on_finish or self._finishing or not self._is_independent_review()
+                or problem.get("id") is None or self._currently_paused()):
+            return False
+        if session_manager.get_status().get("isActive"):
+            return False
+        topic = review_store.get_topic(problem.get("topicId"))
+        task = tasks_store.get_task(topic["linkedTaskId"]) if topic and topic.get("linkedTaskId") else None
+        if task is None:
+            return False
+        carried = self._elapsed_seconds_now()
+        token = self._session_token
+        session_manager.start_session(
+            duration_minutes=tasks_store.BURNOUT_MINUTES,
+            lock_mode=task["lockMode"],
+            process_blocklist=task.get("processBlocklist", []),
+            domain_whitelist=task.get("domainWhitelist", []),
+            source="review",
+            event_id=task["id"],
+            event_title=f"{task['name']} - {problem.get('subjectName', '')} review",
+            review_problem_name=problem["name"],
+            review_subject_name=problem.get("subjectName"),
+            review_problem_id=problem["id"],
+            hide_taskbar_badges=bool(task.get("hideTaskbarBadges")),
+            stop_taskbar_flashing=bool(task.get("stopTaskbarFlashing")),
+            fated=review_wheel.fate() == problem["id"],
+        )
+        self._carried_seconds = carried
+        self._end_session_on_finish = True
+        self._session_token = None
+        review_store.abandon_review(token)
         self._changed()
         return True
 
@@ -2068,6 +2109,7 @@ class _ReviewBanner(QWidget):
                 return
         self._apply_first_attempt_request()
         self._sync_first_attempt_with_pomodoro_break()
+        self._take_over_session_when_alone()
         is_paused = self._currently_paused()
         self._pause_btn.setText(self._pause_button_text(is_paused))
         # Updated unconditionally, even while paused -- _elapsed_seconds_now()
@@ -2105,6 +2147,7 @@ class _ReviewBanner(QWidget):
             # extension's own pause/resume call.
             if self._currently_paused():
                 review_store.resume_active_review()
+                self._take_over_session_when_alone()
             else:
                 review_store.pause_active_review()
             self._pause_btn.setText(self._pause_button_text(self._currently_paused()))
