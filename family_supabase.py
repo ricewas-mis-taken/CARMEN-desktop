@@ -46,6 +46,10 @@ SUPABASE_TABLES = (
 )
 
 
+SUPABASE_PROJECT_REF = "wwkoiwegmgweblyaxmdw"    # the project chosen for the family features (NOT called from here)
+SUPABASE_RPCS = ("revoke_link", "redeem_invite", "update_link", "decide_request", "my_schedule", "set_quiet_hours")
+
+
 class SupabaseFamilyTransport(FamilyTransport):
     name = "supabase"
 
