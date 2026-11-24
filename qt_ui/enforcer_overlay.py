@@ -53,6 +53,11 @@ _OVERLAY_STYLESHEET = """
         color: #9AA1AC;
         font-size: 11px;
     }
+    QLabel#LockOverlayBy {
+        color: #C9CEFA;
+        font-size: 12px;
+        font-weight: 600;
+    }
     QProgressBar {
         background: #33373F;
         border: none;
@@ -165,6 +170,19 @@ def _to_logical_rect(rect):
         return rect
     left, top, width, height = rect
     return (int(left / dpr), int(top / dpr), int(width / dpr), int(height / dpr))
+
+
+def guide_attribution():
+    """Returns "Set by <name>" while a linked guide's session (or study block) is running, else "". Read live from the session,
+    so every lock popup says who set the rules it is enforcing. Never raises: a popup must always be able to open."""
+    try:
+        guide = session_manager.get_status().get("guide")
+        if isinstance(guide, dict):
+            import family_rules
+            return family_rules.attribution(guide)
+    except Exception:
+        pass
+    return ""
 
 
 def build_overlay(
@@ -334,6 +352,9 @@ class _LockOverlay(QWidget):
         width, height = 380, 150
         if offending_process_name:
             height += 40
+        attribution = guide_attribution()
+        if attribution:
+            height += 20
         self.resize(width, height)
         if sys.platform != "darwin":
             shadow = QGraphicsDropShadowEffect(self)
@@ -351,6 +372,13 @@ class _LockOverlay(QWidget):
         message_label.setWordWrap(True)
         message_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(message_label)
+
+        if attribution:
+            # Who set the rules this popup is enforcing -- never anonymous (see family_sync.py).
+            by_label = QLabel(attribution)
+            by_label.setObjectName("LockOverlayBy")
+            by_label.setAlignment(Qt.AlignCenter)
+            layout.addWidget(by_label)
 
         self._time_label = QLabel()
         self._time_label.setObjectName("LockOverlayTime")

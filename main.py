@@ -186,6 +186,10 @@ def main():
     sync_scheduler.start(stop_event)
     sync_live.start(stop_event)
     sync_realtime.start(stop_event)
+    # The family features (linked parent/instructor rules): the thread idles until the student signs in to a
+    # family account in Options -> Linked guides. See family_sync.py and FAMILY.md.
+    import family_sync
+    family_sync.start(stop_event)
 
     def _refresh_open_window(tables):
         import qt_ui.main_window as main_window

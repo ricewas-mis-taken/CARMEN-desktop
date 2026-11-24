@@ -25,6 +25,7 @@ Endpoints:
     POST /tasks/<task_id>/domain-whitelist
     GET  /api/focus/rules
     POST /api/focus/rules
+    GET  /family/rules
     POST /review/pause
     POST /review/resume
 
@@ -831,6 +832,12 @@ def whitelist_domains_add():
     if len(domain.strip()) > _MAX_ENTRY_LENGTH or len(reason.strip()) > _MAX_REASON_LENGTH:
         return jsonify({"error": "domain or reason is too long"}), 400
 
+    guide = session_manager.get_status().get("guide")
+    if guide:
+        # A session a guide set: only the guide opens more sites. (session_manager enforces this too.)
+        who = guide.get("name") or "your guide"
+        return jsonify({"error": f"This session was set by {who}. Ask them to open the site."}), 403
+
     # See blocklist_apps_remove() above for why is_active() is checked
     # atomically inside add_domain_to_whitelist rather than as a separate
     # pre-check here.
@@ -929,6 +936,39 @@ def focus_rules_set():
             "merged": conflict,
         }
     )
+
+
+_FAMILY_RULES_OFF = {
+    "enabled": False, "signedIn": False, "allow": [], "deny": [], "byGuide": [], "version": "", "status": "off",
+    "fetchedAtMs": None, "studyBlock": None, "classWindow": None,
+}
+
+
+@app.route("/family/rules", methods=["GET"])
+def family_rules_get():
+    """The rules linked guides (a parent, an instructor) have set for this student, read-only, so the browser
+    extension can enforce guide site rules through the desktop instead of fetching them itself. Same shape the
+    guide-aware extension keeps from the family backend's /me/rules:
+
+        allow / deny      every guide's lists, merged. Apply deny FIRST, then allow.
+        byGuide           [{guideId, name, allow, deny, note}] so a block can say who set it
+        version           changes whenever the rules change (cheap to compare)
+        status            "ok" heard from the server in the last 5 minutes, "stale" enforcing the cached copy
+                          (offline), "none" nothing cached, "off" the family features are not switched on
+        studyBlock        null, or the recurring study block active right now {lockMode, allow, endsAt, by}
+        classWindow       null, or an instructor's class time on now {name, by, endsAt, deny}: deny-only, soft
+
+    With the family features off (the default) this is the empty "off" shape, so an extension that polls it
+    behaves exactly as before. Open like GET /status: read-only, loopback only, hostnames and guide names only.
+    On any internal error it answers 503, which a client must read as "unreachable: keep what you have", never as
+    "no rules"."""
+    import family_sync
+    if not family_sync.is_enabled():
+        return jsonify(_FAMILY_RULES_OFF)
+    try:
+        return jsonify(family_sync.instance().effective_rules())
+    except Exception:
+        return jsonify({"error": "family rules unavailable"}), 503
 
 
 @app.route("/review/topics", methods=["GET"])
