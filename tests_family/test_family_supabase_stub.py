@@ -30,6 +30,6 @@ def test_names_the_project_and_does_no_network():
 def test_tables_and_rpcs_exist_in_the_schema():
     sql = "\n".join(open(os.path.join(SQL_DIR, f), encoding="utf-8").read() for f in os.listdir(SQL_DIR) if f.endswith(".sql") and f[0] in "0")
     for table in fs.SUPABASE_TABLES:
-        assert re.search(rf"create table\s+(public\.)?{table}\b", sql), table
+        assert re.search(rf"create table\s+(if not exists\s+)?(public\.)?{table}\b", sql), table
     for fn in fs.SUPABASE_RPCS:
         assert re.search(rf"create (or replace )?function\s+{fn}\b", sql), fn
