@@ -46,7 +46,10 @@ def _clear(layout):
     while layout.count():
         item = layout.takeAt(0)
         if item.widget():
-            item.widget().deleteLater()
+            widget = item.widget()
+            widget.hide()                    # gone from the screen now, not when the event loop gets to deleteLater
+            widget.setParent(None)
+            widget.deleteLater()
         elif item.layout():
             _clear(item.layout())
 
