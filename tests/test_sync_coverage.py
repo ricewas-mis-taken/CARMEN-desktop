@@ -62,6 +62,10 @@ LOCAL_ONLY_FILES = {
     "goal_notified.json",   # which tasks already told this computer their daily target was reached today
     "installed_apps_cache.json",    # the apps found on this computer, so the task editor can list them at once
     "window_state.json",    # which of this computer's windows are open, to put them back after a crash
+    "plans.json", "plan_notes.json",    # the nightly plans and which QuickNote lines they made (the cards and lines themselves sync)
+    "plan_examples.json",   # what plan_ml was taught on this computer (not shared yet: see DESIGN_DECISIONS.txt, 2026-11-24)
+    "shutdown_log.json",    # when this computer was last used each night, which only makes sense per computer
+    "plan_prompt_sent.json",    # which of tonight's nudges this computer already showed
 }
 # Reference data that ships with the app, not something a user creates.
 SHIPPED_REFERENCE_FILES = {"screentime_domains.json", "screentime_domains_curated.json",
