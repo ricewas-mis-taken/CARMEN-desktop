@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 import pytest
 
 import config
+import plan_ml
+import plan_store
 import quicknote_store
 import scribe_store
 import device_id
@@ -84,6 +86,13 @@ def device(tmp_path, monkeypatch):
         monkeypatch.setattr(scribe_store, "PATH", str(base / "scribe.json"))
         monkeypatch.setattr(scribe_store, "STAMP_PATH", str(base / "scribe_stamp.txt"))
         monkeypatch.setattr(scribe_store, "IMAGES_DIR", str(base / "scribe_images"))
+        monkeypatch.setattr(plan_ml, "EXAMPLES_PATH", str(base / "plan_examples.json"))
+        monkeypatch.setattr(plan_ml, "REPORTS_PATH", str(base / "plan_reports.jsonl"))
+        monkeypatch.setattr(plan_ml, "_model", None)
+        monkeypatch.setattr(plan_store, "PATH", str(base / "plans.json"))
+        monkeypatch.setattr(plan_store, "NOTE_META_PATH", str(base / "plan_notes.json"))
+        monkeypatch.setattr(sync_live, "PLANS_PUSHED_PATH", str(base / "live_plans_pushed.txt"))
+        monkeypatch.setattr(sync_live, "PLAN_EXAMPLES_PUSHED_PATH", str(base / "live_plan_examples_pushed.txt"))
         monkeypatch.setattr(config, "CONFIG_PATH", str(base / "config.json"))
         monkeypatch.setattr(sync_live, "SETTINGS_PUSHED_PATH", str(base / "live_settings_pushed.txt"))
         return states[name]

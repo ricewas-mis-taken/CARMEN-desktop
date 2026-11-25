@@ -339,6 +339,8 @@ def main():
     import score_store
     discord_presence.start(stop_event)
     score_store.start(stop_event)
+    import plan_prompt
+    plan_prompt.start(stop_event)       # learns the usual stop time and nudges before it (plan_prompt.py)
 
     # Instant re-minimize on click (hard lock only) -- a WinEvent hook, not
     # part of window_tracker's poll loop, so it needs a real Windows message

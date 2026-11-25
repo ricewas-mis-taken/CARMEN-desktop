@@ -522,6 +522,14 @@ def _nav_pixmap(key, color):
         p.drawLine(QPointF(18.9, 8.8), QPointF(14.9, 9.4))
         p.drawLine(QPointF(6.3, 19.2), QPointF(5.1, 15.2))
         p.drawLine(QPointF(5.1, 15.2), QPointF(9.1, 14.6))
+    elif key == "today":     # a rail with two stops and a block beside each
+        p.drawLine(QPointF(7, 5), QPointF(7, 19))
+        p.setBrush(QColor(color))
+        p.drawEllipse(QPointF(7, 8), 1.5, 1.5)
+        p.drawEllipse(QPointF(7, 16), 1.5, 1.5)
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(QRectF(11, 5.5, 8, 5), 1.6, 1.6)
+        p.drawRoundedRect(QRectF(11, 13.5, 8, 5), 1.6, 1.6)
     elif key == "week":      # a calendar page with the days in a row
         p.drawRoundedRect(QRectF(4, 5.5, 16, 14), 2.5, 2.5)
         p.drawLine(QPointF(4, 10), QPointF(20, 10))

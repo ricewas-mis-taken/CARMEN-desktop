@@ -48,6 +48,12 @@ PRESET_TAGS = [
     {"id": "long-term", "label": "Long-term", "color": "#6B46C1", "bg": "#EDE4FB"},
     {"id": "quick", "label": "Quick", "color": "#B45309", "bg": "#FCEEDD"},
     {"id": "shopping", "label": "Shopping", "color": "#2B6CB0", "bg": "#DCEEFC"},
+    {"id": "study", "label": "Study", "color": "#0F766E", "bg": "#D9F2EF"},
+    {"id": "work", "label": "Work", "color": "#334155", "bg": "#E4E8EF"},
+    {"id": "health", "label": "Health", "color": "#B91C1C", "bg": "#FBE3E3"},
+    {"id": "home", "label": "Home", "color": "#92400E", "bg": "#F6E9D6"},
+    {"id": "creative", "label": "Creative", "color": "#9D174D", "bg": "#F9E0EC"},
+    {"id": "admin", "label": "Admin", "color": "#4D5B1F", "bg": "#EAEFD3"},
 ]
 PRESET_TAGS_BY_ID = {tag["id"]: tag for tag in PRESET_TAGS}
 
@@ -64,6 +70,8 @@ DEFAULT_BOARD_TASK = {
     "finished": False,
     "finishedAt": None,
     "nextDueDate": None,  # recurring tasks only, set when finished
+    "autoTagged": False,  # tags were already guessed once for this card, so a cleared tag is never put back
+    "plannedFor": None,  # the day (YYYY-MM-DD) the nightly plan put this on, or None for one added by hand
     # Sync scaffolding (multi-device sync). See load_board()/delete_task()
     # for how isDeleted is populated and filtered.
     "updatedAt": None,
@@ -95,6 +103,12 @@ def _backfill_sync_fields(task):
         changed = True
     if "tags" not in task:
         task["tags"] = []
+        changed = True
+    if "plannedFor" not in task:
+        task["plannedFor"] = None
+        changed = True
+    if "autoTagged" not in task:
+        task["autoTagged"] = bool(task.get("tags"))
         changed = True
     return changed
 
@@ -192,10 +206,11 @@ def _resolve_recurrence(recurring_days, recurrence_pattern):
 def create_task(
     name, importance, recurring_days=None, recurrence_pattern=None,
     description_text="", description_link="",
-    photo_bytes=None, photo_filename=None, tags=None,
+    photo_bytes=None, photo_filename=None, tags=None, planned_for=None,
 ):
     with _lock:
         task = copy.deepcopy(DEFAULT_BOARD_TASK)
+        task["plannedFor"] = planned_for
         task["id"] = _new_id()
         task["name"] = name
         task["importance"] = max(1, min(10, int(importance)))
@@ -263,6 +278,30 @@ def delete_task(task_id):
             save_board(tasks)
             sync_trigger.note_change()
         return found
+
+
+def auto_tag_untagged(suggest):
+    """Gives every active card that has no tag the tags `suggest(name)` returns (a list of tag ids), once: a card the
+    person later clears is left alone. Returns the number of cards that got a tag."""
+    with _lock:
+        tasks = load_board(include_deleted=True)
+        tagged = 0
+        looked_at = False
+        for task in tasks:
+            if task.get("isDeleted") or task.get("finished") or task.get("autoTagged") or task.get("tags"):
+                continue
+            task["autoTagged"] = True
+            looked_at = True
+            picked = [t for t in (suggest(task.get("name") or "") or []) if t in PRESET_TAGS_BY_ID][:2]
+            if picked:
+                task["tags"] = picked
+                task["updatedAt"] = server_clock.local_stamp(task.get("updatedAt"))
+                tagged += 1
+        if looked_at:
+            save_board(tasks)
+        if tagged:
+            sync_trigger.note_change()
+        return tagged
 
 
 def update_importance(task_id, importance):

@@ -14,6 +14,7 @@ What earns and costs points (all small: a good day is about +12, a bad one about
   - a review done on or before its due date: +6; later than that costs 3 more per day (to -15)
   - a review left overdue: -3 for each day, for at most 10 days per due date
   - things set aside (out of rotation) never cost anything
+  - the nightly plan (plan_store): +4 for making one, then -7 to +7 for how much of it was done
 Pauses and unblocks add their own events through add_event()."""
 import json
 import os
@@ -269,6 +270,8 @@ def _settle_day(data, day, tasks, sessions, overdue, tasks_store):
             if 1 <= days <= OVERDUE_MAX_DAYS:
                 add_event(f"overdue:{problem_id}:{due.isoformat()}:{day.isoformat()}", day, "overdue",
                           -OVERDUE_DAY_COST, f"review {days} day{'s' if days != 1 else ''} overdue", _data=data)
+    import plan_store
+    plan_store.score_day(day, data)               # the nightly plan: +4 for making one, up to +/-7 for how it went
     return len(data["events"]) - before
 
 

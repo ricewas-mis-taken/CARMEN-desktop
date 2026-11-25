@@ -31,6 +31,7 @@ DEFAULT_CONFIG = {
     "restoreWindow": {},        # set just before the app restarts itself into new code: {"open", "page"}
     "openOnStartup": True,      # sign-in launches Carmen with its window open, not only in the tray
     "scribeOptionsHidden": False,   # Scribe's options card is tucked away (the Hide options button)
+    "nightlyPrompt": True,      # a nudge shortly before the usual stop, asking you to plan tomorrow (plan_prompt.py)
     "allowAiAgents": True,      # the browser extension leaves an AI agent's own tabs (Claude in Chrome) alone during a session
     "tourDone": False,         # the welcome tour has been shown (or skipped) once
     "reportCardWeek": "",       # the Monday of the week whose report card was last shown
@@ -58,10 +59,11 @@ SHARED_SETTINGS = (
     "processBlocklist", "domainWhitelist", "last_duration_minutes", "last_lock_mode",
     "last_hide_taskbar_badges", "last_stop_taskbar_flashing",
     "discordPresence", "discordShowNames", "allowAiAgents", "openOnStartup",
-    "scribeOptionsHidden", "tourDone", "reportCardWeek", "theme",
+    "scribeOptionsHidden", "tourDone", "reportCardWeek", "theme", "nightlyPrompt",
 )
 _SHARED_FLAGS = ("last_hide_taskbar_badges", "last_stop_taskbar_flashing", "discordPresence",
-                 "discordShowNames", "allowAiAgents", "openOnStartup", "scribeOptionsHidden", "tourDone")
+                 "discordShowNames", "allowAiAgents", "openOnStartup", "scribeOptionsHidden", "tourDone",
+                 "nightlyPrompt")
 _change_listeners = []
 
 

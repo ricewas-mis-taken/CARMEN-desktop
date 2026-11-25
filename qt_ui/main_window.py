@@ -32,6 +32,7 @@ import theme
 from qt_ui import motion
 from qt_ui.account_widget import AccountArea
 from qt_ui.home_tab import HomeTab
+from qt_ui.today_tab import TodayTab
 from qt_ui.ui_kit import LogoMark, nav_icon
 from qt_ui.board_tab import BoardTab
 from qt_ui.focus_tab import FocusTab
@@ -191,7 +192,7 @@ _NORMAL_SIZE = (800, 800)
 # setMinimumSize overrides what the layouts report, so without this the pages were
 # squeezed until buttons and titles lost their text. Content widths, beside the sidebar.
 _PAGE_MIN_WIDTH = {
-    "home": 480, "focus": 630, "tasks": 520, "board": 600,
+    "home": 480, "today": 560, "focus": 630, "tasks": 520, "board": 600,
     "review": 640, "scribe": 640, "screentime": 480, "history": 540, "openings": 640,
 }
 _MIN_HEIGHT = 560
@@ -323,6 +324,7 @@ class _MainWindow(QWidget):
 
         self._pages = {}
         self._add_page("home", HomeTab(on_navigate=self._show_tab))
+        self._add_page("today", TodayTab())
         self._add_page("focus", FocusTab())
         self._add_page("tasks", TasksTab())
         self._add_page("board", BoardTab())
@@ -390,7 +392,7 @@ class _MainWindow(QWidget):
         self._nav_group.setExclusive(True)
         # (page key, label) in groups; a group's heading is the line above it.
         nav_groups = [
-            ("Today", [("home", "Home")]),
+            ("Today", [("home", "Home"), ("today", "Today")]),
             ("Work", [("focus", "Focus"), ("tasks", "Tasks"), ("board", "The Board")]),
             ("Study", [("review", "Review"), ("scribe", "Scribe")]),
             ("Look back", [("screentime", "Screen Time"), ("history", "Session History")]),

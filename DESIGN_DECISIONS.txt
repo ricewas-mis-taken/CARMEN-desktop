@@ -1190,3 +1190,42 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
     It also passes --autostart, like the Windows entry, so "open the window on sign-in" is honoured.
   - If macOS refuses notification permission, reminders fall back to a plain osascript banner (no
     buttons) instead of vanishing. Snooze buttons need the permission to be granted in System Settings.
+
+2026-11-24  Nightly plan, the Today page, and the small model behind them
+  Fork 1, how the lines are understood: a hosted language model, a trained classifier library (scikit-learn,
+  hashing + SGD), or a small model written here. Chose plan_ml.py: multinomial naive Bayes over word, bigram and
+  character features, started from hand-written rules whose weight fades as k/(k+n) (k=10) with the person's own
+  examples. Reasons: it learns from a few dozen lines, trains in under a millisecond, needs no download and sends
+  nothing off the computer, and it is rebuilt from one list of labelled lines, so a correction is one edit (the same
+  line taught again replaces the old lesson) and there is no hidden state. It always asks for a one-tap confirm until
+  15 lines are learned, then auto-files only above 0.80 with a 0.35 lead (the rules alone are over-confident at n=0,
+  which is why the gate exists). Thresholds are unsourced heuristics from the research notes; tune them from the
+  right-click reports (private/plan_reports.jsonl) rather than by guessing.
+  Fork 2, where a line lives: a task stays in the plan (a timed block on Today, not a tasks_store task, because those
+  are recurring targets), a board item becomes a board card (planned-for day, tags), a note becomes a QuickNote line.
+  Chose filing into the existing stores over a parallel plan-only list, so the Board and QuickNote stay the one place
+  for those things and keep syncing. The plan itself, the model's examples, the shutdown log and the nudge record stay
+  per computer for now (test_sync_coverage lists them). Not done, on purpose: syncing plan_examples.json. Two
+  computers would then learn from each other; it needs its own merge (union by line, newest wins) and was left out
+  of this change. Plans are not synced either, so Today shows each computer's own plans.
+  Fork 3, the stop time: read from when the app last saw someone at the computer each night (a mark every 30 s in
+  plan_prompt, only 18:00-06:00), not from Windows shutdown events (unverified, and a laptop that sleeps never shuts
+  down). A night is measured in minutes after 18:00 so midnight is not a cliff; the guess is a recency-weighted median
+  after dropping far outliers, Friday/Saturday nights judged by other late nights. Three nights are needed before it
+  trusts itself (22:30 until then). Nudges at 30 and 15 minutes before, once per night each, skipped when tomorrow
+  already has a plan, nobody is at the computer, or the nudge is over ten minutes stale (an app started late).
+  Fork 4, scoring: +4 for planning, then -7..+7 by share done, counting at most 8 items and ignoring tasks under 10
+  minutes and plans of one line, so padding or splitting a plan cannot farm points; events are keyed per day so
+  settling twice changes nothing. Abandoned items cost nothing beyond the missing swing (loss aversion research says a
+  forgiving design keeps people planning).
+  Browser extension: no counterpart. Nothing here is enforced or shown in the browser; /status is unchanged.
+
+2026-11-24  Plans and what the model learned now sync (follow-up to the entry above)
+  Fork: sync each as one whole record like the QuickNote (newest wins), or finer. Whole-record lost data in a test:
+  two computers each teaching a different line, the second push replaced the first. So plans sync one record per
+  planned day (newest edit of a day wins; a day is edited by one person at a time, and the plan's QuickNote
+  "planned for" marks ride inside that record), and the model's lessons sync one record per taught line (newest
+  lesson for a line wins, lines only one computer knows are added, nothing local is dropped). Both use the fast lane
+  with the QuickNote and Scribe, so they arrive within seconds. Still per computer: the shutdown log (when this
+  computer was last used) and which nudges it already showed. Not synced: plan_reports.jsonl (reports are for me to
+  read, not for the model).

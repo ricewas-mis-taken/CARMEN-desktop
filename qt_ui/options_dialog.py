@@ -46,6 +46,8 @@ class OptionsDialog(QWidget):
         self._discord_names = self._config_box("Include task and problem names", "discordShowNames", False)
         self._discord_names.setEnabled(self._discord_on.isChecked())
         self._discord_on.toggled.connect(self._discord_names.setEnabled)
+        self._layout.addWidget(field_label("Planning"))
+        self._config_box("Ask me to plan tomorrow shortly before I usually stop for the night", "nightlyPrompt", True)
         self._layout.addWidget(field_label("Browser extension"))
         self._extension_note = role_label(self._extension_text(), "hint", wrap=True)
         self._layout.addWidget(self._extension_note)
