@@ -453,7 +453,7 @@ class BoardTab(QWidget):
             elif self._tag_filter != "all":
                 empty_text = "No tasks with this tag."
             else:
-                empty_text = "Nothing on the board yet. Click “+ Add task” to put the first thing on it."
+                empty_text = "Nothing on the board yet."
             empty_label = QLabel(empty_text)
             empty_label.setWordWrap(True)
             empty_label.setAlignment(Qt.AlignCenter)
@@ -829,7 +829,7 @@ class _FinishedListDialog(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(10)
-        layout.addWidget(dialog_title("Finished tasks", "Done and kept here. Open one to see it again or delete it."))
+        layout.addWidget(dialog_title("Finished tasks"))
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -889,7 +889,7 @@ class _UpcomingListDialog(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(10)
-        layout.addWidget(dialog_title("Upcoming tasks", "Repeating tasks that are resting until their next day."))
+        layout.addWidget(dialog_title("Upcoming tasks"))
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -922,7 +922,7 @@ class _UpcomingListDialog(QWidget):
 
         upcoming = board_store.list_upcoming_tasks()
         if not upcoming:
-            empty_label = QLabel("Nothing recurring waiting to come back yet.")
+            empty_label = QLabel("Nothing upcoming.")
             empty_label.setStyleSheet("color: #667085; font-size: 13.5px;")
             self._list_layout.addWidget(empty_label)
         for task in upcoming:
@@ -1022,7 +1022,7 @@ class _AddTaskDialog(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(8)
-        layout.addWidget(dialog_title("Add a task", "Goes on the board, most important first."))
+        layout.addWidget(dialog_title("Add a task"))
 
         layout.addWidget(_bold_label("Name"))
         self._name_edit = WrapEdit()
@@ -1161,7 +1161,7 @@ class _EditTaskDialog(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(8)
-        layout.addWidget(dialog_title("Edit task", "Name, repeats, tags and notes. Importance is changed on the card."))
+        layout.addWidget(dialog_title("Edit task"))
 
         layout.addWidget(_bold_label("Name"))
         self._name_edit = WrapEdit(task.get("name") or "")

@@ -55,6 +55,9 @@ DEFAULT_TASK = {
     "periodAnchor": None,  # "YYYY-MM-DD" Monday two-week stretches count from ("biweekly_total")
     "lockMode": "soft",
     "processBlocklist": [],
+    # Chrome/Edge profiles (AUMIs) this task blocks while it runs, one profile instead of the whole browser.
+    # Tasks saved before this existed have none, which is what they always did.
+    "browserProfileBlocklist": [],
     "domainWhitelist": [],
     # Quiet taskbar while this task runs (see taskbar_quiet.py).
     "hideTaskbarBadges": False,

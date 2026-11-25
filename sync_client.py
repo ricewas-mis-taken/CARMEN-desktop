@@ -576,7 +576,7 @@ def _normalize_task(item):
     for key, expected in (("name", str), ("color", str), ("recurrence", str), ("lockMode", str)):
         if not isinstance(merged.get(key), expected):
             merged[key] = tasks_store.DEFAULT_TASK[key]
-    for key in ("weekdays", "processBlocklist", "domainWhitelist", "targetMinutesHistory"):
+    for key in ("weekdays", "processBlocklist", "browserProfileBlocklist", "domainWhitelist", "targetMinutesHistory"):
         if not isinstance(merged.get(key), list):
             merged[key] = list(tasks_store.DEFAULT_TASK[key])
     if not isinstance(merged.get("cashedInDates"), dict):

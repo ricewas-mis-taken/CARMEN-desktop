@@ -130,3 +130,16 @@ def test_relaunch_closes_carmen_through_its_normal_shutdown_and_remembers_the_wi
         update_center._relaunch.clear()
         update_center.set_needs_relaunch(False)
         os.environ.pop("CARMEN_RESTARTED", None)
+
+
+def test_a_failed_pull_still_reports_the_error_to_the_caller(monkeypatch):
+    import threading
+    import auto_updater
+    import update_center
+    monkeypatch.setitem(update_center._state, "remote", True)
+    monkeypatch.setitem(update_center._state, "busy", False)
+    monkeypatch.setattr(auto_updater, "pull_now", lambda: False)
+    got, finished = [], threading.Event()
+    update_center.apply_async(lambda fn: fn(), lambda result: (got.append(result), finished.set()))
+    assert finished.wait(5)
+    assert "could not be pulled" in got[0]["error"]

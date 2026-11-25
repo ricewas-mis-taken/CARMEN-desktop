@@ -227,6 +227,13 @@ class _StateMark(QWidget):
             painter.drawRoundedRect(QRectF(8, 3.5, 2.5, 7), 1, 1)
 
 
+# Pause, Resume and Finish on a review line look alike: the same dark, larger button.
+_REVIEW_BUTTON_STYLE = (
+    f"QPushButton{{background:{INK};border:none;border-radius:19px;padding:0 24px;"
+    "font-size:14px;font-weight:600;color:#FFFFFF;}"
+    "QPushButton:hover{background:#2F353D;}")
+
+
 class _ReviewBox(QFrame):
     """Reviews of this task's topic that are timed beside its session: one review reads as
     a line with its own pause button; several read as a short list, the running one first."""
@@ -288,10 +295,8 @@ class _ReviewBox(QFrame):
             title.setStyleSheet(
                 f"font-size:13px;font-weight:{'600' if running else '500'};color:{INK if running else '#475467'};")
             column.addWidget(title)
-            if len(rows) == 1:
-                column.addWidget(_note(
-                    "Paused for the break" if on_break else ("Pauses on breaks, resumes after" if running else "Paused"),
-                    MUTED, 11.5))
+            if len(rows) == 1 and (on_break or not running):
+                column.addWidget(_note("Paused for the break" if on_break else "Paused", MUTED, 11.5))
             line.addLayout(column, 1)
             clock = QLabel(_format_clock(row["seconds"]))
             clock.setStyleSheet(f"font-family:'{NUM_FONTS[0]}';font-size:15px;color:{INK if running else MUTED};")
@@ -307,25 +312,19 @@ class _ReviewBox(QFrame):
                 buttons.setSpacing(8)
                 buttons.addStretch(1)
                 toggle = QPushButton("Pause" if running else "Resume")
-                toggle.setMinimumHeight(28)
+                toggle.setMinimumHeight(38)
                 toggle.setCursor(Qt.PointingHandCursor)
                 toggle.setToolTip("Pause this review" if running else "Resume this review")
-                toggle.setStyleSheet(
-                    "QPushButton{background:#FFFFFF;border:1px solid #DDE1E8;border-radius:14px;padding:0 16px;"
-                    f"font-size:12.5px;font-weight:600;color:{INK};}}"
-                    "QPushButton:hover{background:#F2F4F7;}")
+                toggle.setStyleSheet(_REVIEW_BUTTON_STYLE)
                 toggle.clicked.connect(lambda _checked=False, r=row: on_toggle(r))
                 buttons.addWidget(toggle)
                 self.pause_buttons.append(toggle)
                 if on_finish is not None and row.get("active"):
                     finish = QPushButton("Finish")
-                    finish.setMinimumHeight(28)
+                    finish.setMinimumHeight(38)
                     finish.setCursor(Qt.PointingHandCursor)
                     finish.setToolTip("Stop timing and record how it went")
-                    finish.setStyleSheet(
-                        f"QPushButton{{background:{INK};border:none;border-radius:14px;padding:0 18px;"
-                        "font-size:12.5px;font-weight:600;color:#FFFFFF;}}"
-                        "QPushButton:hover{background:#2F353D;}")
+                    finish.setStyleSheet(_REVIEW_BUTTON_STYLE)
                     finish.clicked.connect(lambda _checked=False, r=row: on_finish(r))
                     buttons.addWidget(finish)
                     self.finish_buttons.append(finish)
@@ -397,7 +396,6 @@ class _PomodoroDialog(QDialog):
         title = QLabel("Start a Pomodoro")
         title.setStyleSheet(f"font-size:18px;font-weight:700;color:{INK};")
         layout.addWidget(title)
-        layout.addWidget(_note("Focus blocks are blocked, breaks are free."))
 
         row = QHBoxLayout()
         row.setSpacing(10)
@@ -654,7 +652,7 @@ class TasksTab(QWidget):
 
         tasks = [t for t in tasks_store.load_tasks() if not t.get("archived")]
         if not tasks:
-            self._empty_label = QLabel("No tasks yet. Click “+ Add recurring task” to create one.")
+            self._empty_label = QLabel("No tasks yet.")
             self._empty_label.setStyleSheet(f"color:{FAINT};font-size:14px;")
             self._grid.addWidget(self._empty_label, 0, 0)
         for task in tasks:
@@ -1162,6 +1160,7 @@ class _TaskCard(QFrame):
             source="task",
             event_id=self._task["id"],
             event_title=self._task["name"],
+            blocked_browser_profiles=list(self._task.get("browserProfileBlocklist") or []),
             hide_taskbar_badges=bool(self._task.get("hideTaskbarBadges")),
             stop_taskbar_flashing=bool(self._task.get("stopTaskbarFlashing")),
         )
@@ -1176,6 +1175,7 @@ class _TaskCard(QFrame):
             source="task",
             event_id=self._task["id"],
             event_title=self._task.get("name") or "(untitled task)",
+            blocked_browser_profiles=list(self._task.get("browserProfileBlocklist") or []),
             is_burnout=is_burnout,
             hide_taskbar_badges=bool(self._task.get("hideTaskbarBadges")),
             stop_taskbar_flashing=bool(self._task.get("stopTaskbarFlashing")),
@@ -1230,7 +1230,7 @@ class _TaskCard(QFrame):
 
     def _open_vacation_dialog(self):
         usable = self._cash_in_max()
-        if usable <= 0 or self._is_running():
+        if usable <= 0:
             return
         minutes = _VacationDialog.get_minutes(
             self._task.get("name") or "this task", self._color, self._cash_in_balance_int, usable,
@@ -1321,15 +1321,15 @@ class _TaskCard(QFrame):
         else:
             self._update_idle_view(fraction, display_logged, display_required, locked_by_other, status, reviews)
 
-        # The vacation line and restrictions stay quiet while a session is on screen.
+        # The restrictions stay quiet while a session is on screen; the vacation line does not, since
+        # cashing vacation in against today's goal is just as useful mid-session.
         in_session = is_running or is_waiting
-        self._vacation_label.setVisible(not in_session)
+        self._vacation_label.setVisible(True)
         self._blocklist_button.setVisible(not in_session)
-        if not in_session:
-            usable = self._cash_in_max() > 0
-            self._vacation_label.set_state(
-                f"{_format_minutes(display_balance)} vacation" if display_balance >= 0.5 else "No vacation banked",
-                usable)
+        usable = self._cash_in_max() > 0
+        self._vacation_label.set_state(
+            f"{_format_minutes(display_balance)} vacation" if display_balance >= 0.5 else "No vacation banked",
+            usable)
 
         if self.property("locked") != locked_by_other:
             self.setProperty("locked", locked_by_other)

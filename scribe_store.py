@@ -23,8 +23,8 @@ STAMP_PATH = paths.private_path("scribe_stamp.txt")   # when the shared part (th
 MAX_SYNC_BYTES = 6 * 1024 * 1024
 IMAGES_DIR = paths.private_path("scribe_images")
 
-TOOLS = ("line", "curve", "fill", "text", "rect", "circle", "select", "arrow", "freehand")
-BACKGROUNDS = ("white", "black", "grid", "darkgrid", "dots", "lined", "paper")
+TOOLS = ("line", "curve", "fill", "text", "rect", "circle", "select", "arrow", "freehand", "eraser")
+BACKGROUNDS = ("white", "black", "grid", "darkgrid", "dots", "lined", "paper", "blueprint")
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp")
 MIN_ZOOM = 1e-6      # effectively unlimited zoom-out
 MAX_ZOOM = 64.0
@@ -50,6 +50,20 @@ DEFAULT_PREFS = {
 _lock = threading.Lock()
 SETTLE_SECONDS = 20   # the board is only shared once it has been left alone this long
 _changed_at = 0.0     # monotonic time of the last edit
+_pen_down_at = None   # monotonic time the pen (mouse) went down on the board, None once it is up
+PEN_DOWN_MAX_SECONDS = 60   # a pen "down" for longer than this is a missed release, not a drawing
+
+
+def set_pen_down(down):
+    """The canvas says whether the pen is down. Reading a big board back to share it holds the interpreter for
+    hundreds of ms, which mid-stroke made the pen's points arrive late and the line come out straight."""
+    global _pen_down_at
+    _pen_down_at = time.monotonic() if down else None
+
+
+def pen_is_down():
+    at = _pen_down_at
+    return at is not None and time.monotonic() - at < PEN_DOWN_MAX_SECONDS
 
 
 def new_layer(name, layer_id=None):
@@ -325,12 +339,18 @@ def _mark_changed():
 def is_settled():
     """False while the board is being drawn on. Sharing it means re-reading and re-encoding the whole
     board, which stalls the app for a moment, so it waits until you stop."""
-    return time.monotonic() - _changed_at >= SETTLE_SECONDS
+    return time.monotonic() - _changed_at >= SETTLE_SECONDS and not pen_is_down()
 
 
 def export():
     """{"layers", "updatedAt"} to share with the other computers, or None if there is nothing
     worth sharing yet (an untouched board) or it is too big to send."""
+    try:
+        # A board this large is never shared (layers are most of the file); do not read it all back to find out.
+        if os.path.getsize(PATH) > 2 * MAX_SYNC_BYTES:
+            return None
+    except OSError:
+        pass
     doc = load()
     with _lock:
         stamp = _read_stamp()

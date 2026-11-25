@@ -20,7 +20,9 @@ def install(parent=None):
 
     def collect():
         ticks["n"] += 1
-        gc.collect(2 if ticks["n"] % 12 == 0 else 1)        # a young sweep every 5 s, everything every minute
+        from qt_ui import filter_guard
+        with filter_guard.quiet():                          # widgets freed now must not run Python event filters
+            gc.collect(2 if ticks["n"] % 12 == 0 else 1)        # a young sweep every 5 s, everything every minute
 
     _timer = QTimer(parent)
     _timer.setInterval(5000)

@@ -1,0 +1,92 @@
+import Foundation
+
+/// One finished focus session, in the shape session_history.py files it.
+public struct HistoryEntry: Identifiable, Equatable {
+    public var id: String
+    public var start: Date
+    public var end: Date
+    public var endType: String
+    public var lockMode: LockMode
+    public var source: String
+    public var eventId: String?
+    public var title: String?
+    public var violationCount: Int
+    public var beside: Bool
+    public var pomodoro: PomodoroPlan?
+
+    public init(id: String, start: Date, end: Date, endType: String, lockMode: LockMode, source: String,
+                eventId: String?, title: String?, violationCount: Int = 0, beside: Bool = false, pomodoro: PomodoroPlan? = nil) {
+        self.id = id; self.start = start; self.end = end; self.endType = endType; self.lockMode = lockMode
+        self.source = source; self.eventId = eventId; self.title = title
+        self.violationCount = violationCount; self.beside = beside; self.pomodoro = pomodoro
+    }
+
+    public var seconds: TimeInterval { max(0, end.timeIntervalSince(start)) }
+
+    public init?(record: SyncRecord) {
+        guard !record.isDeleted, let data = record.data.object,
+              let startText = data["startTime"]?.string, let endText = data["endTime"]?.string,
+              let start = WireTime.parseWire(startText), let end = WireTime.parseWire(endText) else { return nil }
+        self.init(id: record.syncId, start: start, end: end,
+                  endType: data["endType"]?.string ?? "natural",
+                  lockMode: LockMode(rawValue: data["lockMode"]?.string ?? "soft") ?? .soft,
+                  source: data["source"]?.string ?? "manual",
+                  eventId: data["eventId"]?.string, title: data["eventTitle"]?.string,
+                  violationCount: Int(data["violationCount"]?.number ?? 0),
+                  beside: data["beside"]?.bool ?? false)
+    }
+
+    /// The record the desktop reads back: the same keys session_manager files, times as UTC with a zone.
+    public func record(deviceId: String) -> SyncRecord {
+        var data: [String: JSONValue] = [
+            "startTime": .string(WireTime.wireString(start)),
+            "endTime": .string(WireTime.wireString(end)),
+            "endType": .string(endType),
+            "reason": .null,
+            "lockMode": .string(lockMode.rawValue),
+            "processBlocklist": .array([]),
+            "domainWhitelist": .array([]),
+            "violationCount": .number(Double(violationCount)),
+            "violationLog": .array([]),
+            "domainWhitelistAdditions": .array([]),
+            "processBlocklistExceptions": .array([]),
+            "source": .string(source),
+            "reviewProblemName": .null,
+            "reviewSubjectName": .null,
+            "pomodoro": pomodoro.map { plan -> JSONValue in
+                return .object(["focusMinutes": .number(Double(plan.focusMinutes)), "breakMinutes": .number(Double(plan.breakMinutes)),
+                         "totalCycles": .number(Double(plan.cycles)), "currentCycle": .number(Double(plan.cycles)),
+                         "phase": .string("break")])
+            } ?? JSONValue.null,
+            "sessionId": .string(id),
+            "isBurnout": .bool(false),
+        ]
+        data["eventId"] = eventId.map { .string($0) } ?? .null
+        data["eventTitle"] = title.map { .string($0) } ?? .null
+        return SyncRecord(table: "session_history", syncId: id, data: .object(data), deviceId: deviceId,
+                          updatedAt: WireTime.wireString(end), isDeleted: false)
+    }
+}
+
+/// Day totals the Home and Tasks screens show.
+public enum Progress {
+    public static func seconds(on day: Date, taskId: String? = nil, in history: [HistoryEntry],
+                               calendar: Calendar = .current) -> TimeInterval {
+        history.filter { !$0.beside && (taskId == nil || $0.eventId == taskId) && calendar.isDate($0.start, inSameDayAs: day) }
+            .reduce(0) { $0 + $1.seconds }
+    }
+
+    /// Days in a row with some focus, counted back from today (or from yesterday while today is still empty).
+    public static func streak(history: [HistoryEntry], today: Date = Date(), calendar: Calendar = .current) -> Int {
+        var day = calendar.startOfDay(for: today)
+        if seconds(on: day, in: history, calendar: calendar) < 60 {
+            day = calendar.date(byAdding: .day, value: -1, to: day)!
+        }
+        var run = 0
+        while seconds(on: day, in: history, calendar: calendar) >= 60 {
+            run += 1
+            day = calendar.date(byAdding: .day, value: -1, to: day)!
+        }
+        return run
+    }
+}

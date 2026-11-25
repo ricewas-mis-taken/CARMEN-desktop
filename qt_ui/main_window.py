@@ -116,6 +116,18 @@ def reopen_after_restart():
         _win._show_tab(state["page"])
 
 
+def reopen_after_crash(state):
+    """After a crash restart: the windows that were open come back (`state` is what window_memory saved)."""
+    main = state.get("main") or {}
+    if main.get("open"):
+        open_main_window()
+        if _win is not None and main.get("page") in _win._pages:
+            _win._show_tab(main["page"])
+    if state.get("mini"):
+        from qt_ui import mini_timer
+        mini_timer.open_mini_timer()
+
+
 def open_main_window():
     global _win
     _remembered["open"] = True
@@ -356,6 +368,19 @@ class _MainWindow(QWidget):
         title.setObjectName("SidebarTitle")
         brand_row.addWidget(title, 1)
         layout.addWidget(brand)
+
+        # Right under the name, not at the bottom: a short window clips the bottom of the sidebar, and
+        # this is the button that applies an update or relaunches Carmen.
+        self._update_button = QPushButton("Update ready")
+        self._update_button.setCursor(Qt.PointingHandCursor)
+        self._update_button.setFixedHeight(34)
+        self._update_button.setStyleSheet(
+            "QPushButton{margin:0 12px 8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.35);"
+            "background:rgba(255,255,255,0.12);color:#FFFFFF;font-weight:700;font-size:13px;}"
+            "QPushButton:hover{background:rgba(255,255,255,0.22);}QPushButton:disabled{color:rgba(255,255,255,0.6);}")
+        self._update_button.clicked.connect(self._apply_update)
+        self._update_button.hide()
+        layout.addWidget(self._update_button)
         self._brand_title = title
         self._brand_row = brand_row
         self._group_captions = []
@@ -396,16 +421,6 @@ class _MainWindow(QWidget):
         layout.addStretch(1)
         self._marker = _NavMarker(sidebar)
 
-        self._update_button = QPushButton("Update ready")
-        self._update_button.setCursor(Qt.PointingHandCursor)
-        self._update_button.setFixedHeight(34)
-        self._update_button.setStyleSheet(
-            "QPushButton{margin:0 12px 6px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.35);"
-            "background:rgba(255,255,255,0.12);color:#FFFFFF;font-weight:700;font-size:13px;}"
-            "QPushButton:hover{background:rgba(255,255,255,0.22);}QPushButton:disabled{color:rgba(255,255,255,0.6);}")
-        self._update_button.clicked.connect(self._apply_update)
-        self._update_button.hide()
-        layout.addWidget(self._update_button)
         self._update_timer = QTimer(self)
         self._update_timer.timeout.connect(self._sync_update_button)
         self._update_timer.start(3000)

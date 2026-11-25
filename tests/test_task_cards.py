@@ -487,3 +487,16 @@ def test_a_review_row_on_the_card_can_be_finished(qtbot, world, isolate_review_d
     dialog._solved_btn.setChecked(True)
     dialog._submit()
     assert review_store.get_problem(problem["id"])["reviewCount"] == 1
+
+
+def test_vacation_can_be_spent_in_the_middle_of_a_session(qtbot, world, monkeypatch):
+    _bank_vacation(monkeypatch, 65)
+    task = _task()
+    card = _card(qtbot, task)
+    card._start_button.click()
+    card._burnout_button.click()
+    _refresh(card)
+    assert card._vacation_label.isVisible() or not card._vacation_label.isHidden()
+    monkeypatch.setattr(tasks_tab._VacationDialog, "get_minutes", staticmethod(lambda *a, **k: 5))
+    card._vacation_label.clicked.emit()
+    assert tasks_store.get_task(task["id"])["cashedInDates"][date.today().isoformat()] == 5
