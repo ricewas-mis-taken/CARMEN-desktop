@@ -16,6 +16,7 @@ from datetime import date, datetime, timedelta
 
 import paths
 import plan_ml
+import server_clock
 
 PATH = paths.private_path("plans.json")
 NOTE_META_PATH = paths.private_path("plan_notes.json")
@@ -28,6 +29,19 @@ MIN_COUNTED_MINUTES = 10       # a task shorter than this is not counted either
 SWING = 7                      # a day's completion score runs from -SWING (none done) to +SWING (all done)
 
 _lock = threading.RLock()
+_change_listeners = []
+
+
+def add_change_listener(listener):
+    _change_listeners.append(listener)
+
+
+def _changed():
+    for listener in list(_change_listeners):
+        try:
+            listener()
+        except Exception:
+            pass
 
 
 def _read():
@@ -74,8 +88,10 @@ def _store_day(day, items, made_at=None):
         entry = data["days"].get(_key(day)) or {}
         entry["items"] = items
         entry["madeAt"] = made_at or entry.get("madeAt") or datetime.now().isoformat()
+        entry["updatedAt"] = server_clock.next_stamp()
         data["days"][_key(day)] = entry
         _write(data)
+    _changed()
 
 
 def save_plan(day, entries):
@@ -254,6 +270,62 @@ def change_kind(day, item_id, kind):
         _store_day(day, loaded["items"], loaded["madeAt"])
     plan_ml.teach(item["text"], kind, tags=item["tags"], minutes=item["minutes"], corrected=True)
     return item
+
+
+def export_days(after=None):
+    """[{"day", "items", "madeAt", "noteMeta", "updatedAt"}] for every day edited after the stamp `after`, for
+    sharing with other computers. noteMeta carries the QuickNote lines' "planned for" marks, which live apart."""
+    out = []
+    with _lock:
+        days = dict(_read()["days"])
+    notes = _read_notes()
+    for day, entry in sorted(days.items()):
+        stamp = entry.get("updatedAt") if isinstance(entry, dict) else None
+        if not stamp or not (after is None or server_clock.is_newer(stamp, after)):
+            continue
+        items = [i for i in entry.get("items", []) if isinstance(i, dict) and i.get("id")]
+        meta = {}
+        for item in items:
+            if item.get("kind") == "note":
+                key = plan_ml.normalize(item.get("ref") or item["text"])
+                if key in notes:
+                    meta[key] = notes[key]
+        out.append({"day": day, "items": items, "madeAt": entry.get("madeAt"), "noteMeta": meta, "updatedAt": stamp})
+    return out
+
+
+def apply_remote_day(day, items, made_at, stamp, note_meta=None):
+    """Takes another computer's plan for a day when it is newer than ours. Returns True if it replaced ours."""
+    if not isinstance(items, list) or server_clock.parse(stamp) is None:
+        return False
+    try:
+        date.fromisoformat(str(day))
+    except ValueError:
+        return False
+    clean = []
+    for item in items:
+        if (isinstance(item, dict) and isinstance(item.get("id"), str) and isinstance(item.get("text"), str)
+                and item.get("kind") in plan_ml.CLASSES):
+            clean.append({"id": item["id"], "text": item["text"][:300], "kind": item["kind"],
+                          "tags": [t for t in (item.get("tags") or []) if isinstance(t, str)][:4],
+                          "minutes": item["minutes"] if isinstance(item.get("minutes"), int) else None,
+                          "done": bool(item.get("done")),
+                          "doneAt": item["doneAt"] if isinstance(item.get("doneAt"), str) else None,
+                          "ref": item["ref"] if isinstance(item.get("ref"), str) else None,
+                          "start": item["start"] if isinstance(item.get("start"), int) else None})
+    with _lock:
+        data = _read()
+        mine = data["days"].get(str(day))
+        if isinstance(mine, dict) and not server_clock.is_newer(stamp, mine.get("updatedAt")):
+            return False
+        data["days"][str(day)] = {"items": clean, "madeAt": made_at if isinstance(made_at, str) else None,
+                                  "updatedAt": stamp}
+        _write(data)
+    if isinstance(note_meta, dict):
+        for key, meta in note_meta.items():
+            if isinstance(meta, dict) and isinstance(meta.get("day"), str):
+                _remember_note(key, meta["day"], [t for t in (meta.get("tags") or []) if isinstance(t, str)])
+    return True
 
 
 def unfinished(day):
