@@ -183,6 +183,23 @@ def _close_out(item):
         quicknote_store.save([n for n in quicknote_store.load()[0] if n.strip() and n != item["ref"]])
 
 
+def note_cleared(text):
+    """A planned note was cleared from the QuickNote: its plan line counts as done. Looks at the last week."""
+    key = plan_ml.normalize(text)
+    changed = False
+    for offset in range(8):
+        day = date.today() - timedelta(days=offset - 1)           # a plan for tomorrow too
+        loaded = load_day(day)
+        for item in loaded["items"]:
+            if item["kind"] == "note" and not item["done"] and plan_ml.normalize(item.get("ref") or item["text"]) == key:
+                item["done"], item["doneAt"] = True, datetime.now().isoformat()
+                changed = True
+        if changed:
+            _store_day(day, loaded["items"], loaded["madeAt"])
+            return True
+    return False
+
+
 def set_start(day, item_id, minutes_after_midnight):
     """Pins a task to a clock time on the Today page (None to let it flow again)."""
     with _lock:
