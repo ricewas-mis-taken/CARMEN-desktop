@@ -117,3 +117,10 @@ def test_options_are_shared_too():
         assert key in config.SHARED_SETTINGS
     clean = config._clean_shared_settings({"discordPresence": False, "allowAiAgents": "yes", "reportCardWeek": "2026-11-16"})
     assert clean == {"discordPresence": False, "reportCardWeek": "2026-11-16"}
+
+
+def test_the_nightly_plan_reminder_is_shared_and_must_be_a_boolean():
+    import config
+    assert "nightlyPrompt" in config.SHARED_SETTINGS and config.DEFAULT_CONFIG["nightlyPrompt"] is True
+    assert config._clean_shared_settings({"nightlyPrompt": False}) == {"nightlyPrompt": False}
+    assert config._clean_shared_settings({"nightlyPrompt": "no"}) == {}
