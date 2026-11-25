@@ -207,6 +207,38 @@ def set_minutes(day, item_id, minutes):
     return True
 
 
+def remove_item(day, item_id):
+    """Takes a line out of the plan (a board card or note it made stays where it is)."""
+    with _lock:
+        loaded = load_day(day)
+        left = [i for i in loaded["items"] if i["id"] != item_id]
+        if len(left) == len(loaded["items"]):
+            return False
+        _store_day(day, left, loaded["madeAt"])
+    return True
+
+
+def change_kind(day, item_id, kind):
+    """Turns a planned line into a different kind (the person says the guess was wrong), files it there and teaches
+    plan_ml. A task gets the minutes plan_ml would give it. Returns the changed item, or None."""
+    if kind not in plan_ml.CLASSES:
+        return None
+    with _lock:
+        loaded = load_day(day)
+        item = next((i for i in loaded["items"] if i["id"] == item_id), None)
+        if item is None:
+            return None
+        if item["kind"] == kind:
+            return item
+        guess = plan_ml.predict(item["text"])
+        item["kind"] = kind
+        item["minutes"] = (guess["minutes"] or plan_ml.DEFAULT_MINUTES) if kind == "task" else None
+        item["ref"] = _file_somewhere(item, day)
+        _store_day(day, loaded["items"], loaded["madeAt"])
+    plan_ml.teach(item["text"], kind, tags=item["tags"], minutes=item["minutes"], corrected=True)
+    return item
+
+
 def unfinished(day):
     """What was planned for `day` and not done, to offer when planning the next one."""
     return [i for i in load_day(day)["items"] if not i["done"]]
