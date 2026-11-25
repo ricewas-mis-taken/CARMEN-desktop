@@ -1219,3 +1219,13 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   settling twice changes nothing. Abandoned items cost nothing beyond the missing swing (loss aversion research says a
   forgiving design keeps people planning).
   Browser extension: no counterpart. Nothing here is enforced or shown in the browser; /status is unchanged.
+
+2026-11-24  Plans and what the model learned now sync (follow-up to the entry above)
+  Fork: sync each as one whole record like the QuickNote (newest wins), or finer. Whole-record lost data in a test:
+  two computers each teaching a different line, the second push replaced the first. So plans sync one record per
+  planned day (newest edit of a day wins; a day is edited by one person at a time, and the plan's QuickNote
+  "planned for" marks ride inside that record), and the model's lessons sync one record per taught line (newest
+  lesson for a line wins, lines only one computer knows are added, nothing local is dropped). Both use the fast lane
+  with the QuickNote and Scribe, so they arrive within seconds. Still per computer: the shutdown log (when this
+  computer was last used) and which nudges it already showed. Not synced: plan_reports.jsonl (reports are for me to
+  read, not for the model).
