@@ -15,6 +15,7 @@ import threading
 from collections import defaultdict
 
 import paths
+import server_clock
 
 EXAMPLES_PATH = paths.private_path("plan_examples.json")
 REPORTS_PATH = paths.private_path("plan_reports.jsonl")
@@ -55,7 +56,20 @@ DEFAULT_MINUTES = 30
 MIN_MINUTES, MAX_MINUTES = 5, 480
 
 _lock = threading.Lock()
+_change_listeners = []
 _model = None          # (signature, _Model): rebuilt only when the examples change
+
+
+def add_change_listener(listener):
+    _change_listeners.append(listener)
+
+
+def _changed():
+    for listener in list(_change_listeners):
+        try:
+            listener()
+        except Exception:
+            pass
 
 
 def normalize(line):
@@ -241,12 +255,54 @@ def teach(line, label, tags=None, minutes=None, corrected=False):
     key = normalize(text)
     entry = {"line": text, "label": label, "tags": sorted(set(tags or [])),
              "minutes": int(minutes) if minutes else None,
-             "weight": CORRECTION_WEIGHT if corrected else 1.0}
+             "weight": CORRECTION_WEIGHT if corrected else 1.0, "at": server_clock.next_stamp()}
     with _lock:
         examples = [e for e in _load_examples() if normalize(e["line"]) != key]
         examples.append(entry)
         _save_examples(examples)
+    _changed()
     return True
+
+
+def export_examples():
+    """{"items": every lesson, "updatedAt": the newest lesson's stamp or None}, for sharing with other computers."""
+    with _lock:
+        items = _load_examples()
+    stamps = [e["at"] for e in items if isinstance(e.get("at"), str) and server_clock.parse(e["at"])]
+    newest = None
+    for stamp in stamps:
+        if newest is None or server_clock.is_newer(stamp, newest):
+            newest = stamp
+    return {"items": items, "updatedAt": newest}
+
+
+def apply_remote_examples(items):
+    """Merges lessons another computer taught: a line known to both keeps whichever lesson is newer, a line only
+    the other computer knows is added. Nothing local is dropped. Returns True when anything changed here."""
+    if not isinstance(items, list):
+        return False
+    with _lock:
+        mine = {normalize(e["line"]): e for e in _load_examples()}
+        changed = False
+        for theirs in items:
+            if not (isinstance(theirs, dict) and isinstance(theirs.get("line"), str)
+                    and theirs.get("label") in CLASSES and server_clock.parse(theirs.get("at")) is not None):
+                continue
+            key = normalize(theirs["line"])
+            if not key:
+                continue
+            ours = mine.get(key)
+            if ours is None or server_clock.is_newer(theirs["at"], ours.get("at")):
+                mine[key] = {"line": theirs["line"][:500], "label": theirs["label"],
+                             "tags": [t for t in (theirs.get("tags") or []) if isinstance(t, str)][:6],
+                             "minutes": theirs["minutes"] if isinstance(theirs.get("minutes"), int) else None,
+                             "weight": CORRECTION_WEIGHT if theirs.get("weight") == CORRECTION_WEIGHT else 1.0,
+                             "at": theirs["at"]}
+                changed = True
+        if changed:
+            ordered = sorted(mine.values(), key=lambda e: e.get("at") or "")
+            _save_examples(ordered)
+    return changed
 
 
 def predict(line):
