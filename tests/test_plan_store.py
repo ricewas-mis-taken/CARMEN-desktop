@@ -117,3 +117,19 @@ def test_saving_the_plan_again_keeps_what_was_already_ticked():
     plan_store.set_done(DAY, items[0]["id"])
     again = _plan(_entry("a job 30 min", "task", 30), _entry("b job 30 min", "task", 30), _entry("c job 30 min", "task", 30))
     assert [i["done"] for i in again] == [True, False, False]
+
+
+def test_a_line_can_be_removed_from_the_plan():
+    items = _plan(_entry("a job 30 min", "task", 30), _entry("b job 30 min", "task", 30))
+    assert plan_store.remove_item(DAY, items[0]["id"]) and not plan_store.remove_item(DAY, "nope")
+    assert [i["text"] for i in plan_store.load_day(DAY)["items"]] == ["b job"]
+
+
+def test_changing_the_kind_refiles_the_line_and_teaches_the_model():
+    items = _plan(_entry("fix bike", "task", 30))
+    changed = plan_store.change_kind(DAY, items[0]["id"], "note")
+    assert changed["kind"] == "note" and changed["minutes"] is None
+    assert "fix bike" in quicknote_store.load()[0]
+    assert plan_ml.predict("fix bike")["label"] == "note"
+    back = plan_store.change_kind(DAY, items[0]["id"], "task")
+    assert back["kind"] == "task" and back["minutes"] >= plan_ml.MIN_MINUTES
