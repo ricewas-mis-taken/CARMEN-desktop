@@ -53,3 +53,9 @@ def test_clock_and_length_text():
     assert today_flow.clock_text(0) == "12:00 am" and today_flow.clock_text(13 * 60 + 5) == "1:05 pm"
     assert today_flow.clock_text(25 * 60) == "1:00 am"
     assert today_flow.length_text(45) == "45 min" and today_flow.length_text(90) == "1 h 30 min"
+
+
+def test_a_done_task_sits_where_it_really_ended():
+    out = today_flow.flow([_t("a", 45, done=True, doneMinute=10 * 60 + 30)], now_minutes=14 * 60, stop_minutes=24 * 60)
+    block = out["blocks"][0]
+    assert block["end"] == 10 * 60 + 30 and block["start"] == 10 * 60 + 30 - 45

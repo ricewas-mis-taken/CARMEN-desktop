@@ -139,3 +139,11 @@ def nudge_times(now=None):
     """The times tonight's two nudges are due: [(minutes before, datetime), ...], earliest first."""
     stop, _learned = expected_stop(now)
     return [(lead, stop - timedelta(minutes=lead)) for lead in LEAD_MINUTES]
+
+
+def usual_stop_minutes(day):
+    """When the night that starts on `day` usually ends, as minutes after that day's midnight (so 00:30 is 1470)."""
+    minutes = typical_stop(day)
+    if minutes is None:
+        return DEFAULT_STOP[0] * 60 + DEFAULT_STOP[1]
+    return ANCHOR_HOUR * 60 + int(minutes)

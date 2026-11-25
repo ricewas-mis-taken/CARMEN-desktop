@@ -23,11 +23,13 @@ def flow(items, now_minutes, stop_minutes, planning_ahead=False):
     pinned = sorted((t for t in tasks if t.get("start") is not None and not t.get("done")), key=lambda t: t["start"])
     blocks = []
     done_blocks = []
-    clock = DAY_START if planning_ahead else 0
+    clock = DAY_START
     for task in tasks:
         if task.get("done"):
             minutes = max(MIN_BLOCK, int(task["minutes"]))
             start = task.get("start")
+            if start is None and task.get("doneMinute") is not None:
+                start = max(0, int(task["doneMinute"]) - minutes)          # where it really ended, if known
             if start is None:
                 start = clock
             done_blocks.append({"item": task, "start": start, "end": start + minutes, "pinned": task.get("start") is not None})

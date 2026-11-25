@@ -68,3 +68,9 @@ def test_the_two_nudges_come_thirty_and_fifteen_minutes_before():
     nudges = shutdown_model.nudge_times(datetime(2026, 11, 20, 20, 0))
     assert [lead for lead, _t in nudges] == [30, 15]
     assert nudges[1][1] - nudges[0][1] == timedelta(minutes=15)
+
+
+def test_the_usual_stop_as_minutes_after_midnight():
+    assert shutdown_model.usual_stop_minutes(date(2026, 11, 9)) == 22 * 60 + 30         # nothing learned: the default
+    _log(date(2026, 11, 2), [(0, 30)] * 6)
+    assert shutdown_model.usual_stop_minutes(date(2026, 11, 9)) == 24 * 60 + 30
