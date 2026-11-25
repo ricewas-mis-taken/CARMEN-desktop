@@ -83,3 +83,16 @@ def test_tags_start_from_keywords_and_a_quick_one_is_marked_quick():
 def test_corrupt_files_do_not_break_it(tmp_path):
     (tmp_path / "plan_examples.json").write_text("{not json")
     assert plan_ml.predict("anything")["label"] in plan_ml.CLASSES
+
+
+def test_remote_lessons_are_merged_by_line_and_the_newer_one_wins():
+    import server_clock
+    plan_ml.teach("fix bike", "task")
+    old = server_clock.next_stamp()
+    older = {"line": "fix bike", "label": "note", "at": "2000-01-01T00:00:00+00:00"}
+    newer = {"line": "Fix  Bike", "label": "board", "at": server_clock.next_stamp(old)}
+    other = {"line": "call mom", "label": "note", "at": old}
+    assert not plan_ml.apply_remote_examples([older])
+    assert plan_ml.apply_remote_examples([newer, other, {"line": "", "label": "task", "at": old}, "junk", {"line": "x"}])
+    labels = {plan_ml.normalize(e["line"]): e["label"] for e in plan_ml._load_examples()}
+    assert labels == {"fix bike": "board", "call mom": "note"}
