@@ -110,3 +110,10 @@ def test_settling_a_day_scores_its_plan(monkeypatch):
     score_store.settle(today=date(2026, 11, 26), tasks=[], sessions=[])
     events = {e["key"]: e["points"] for e in score_store.load()["events"]}
     assert events == {"plan:2026-11-24": plan_store.PLAN_MADE_POINTS, "plandone:2026-11-24": plan_store.SWING}
+
+
+def test_saving_the_plan_again_keeps_what_was_already_ticked():
+    items = _plan(_entry("a job 30 min", "task", 30), _entry("b job 30 min", "task", 30))
+    plan_store.set_done(DAY, items[0]["id"])
+    again = _plan(_entry("a job 30 min", "task", 30), _entry("b job 30 min", "task", 30), _entry("c job 30 min", "task", 30))
+    assert [i["done"] for i in again] == [True, False, False]

@@ -84,6 +84,7 @@ def save_plan(day, entries):
     Returns the items now in the plan (replacing any earlier plan for that day)."""
     items = []
     seen = set()
+    before = {plan_ml.normalize(i["text"]): i for i in load_day(day)["items"]}      # saving again keeps what was ticked
     for entry in entries or []:
         text = (entry.get("text") or "").strip()
         kind = entry.get("kind")
@@ -99,6 +100,9 @@ def save_plan(day, entries):
         predicted = entry.get("predicted") or {}
         changed = bool(predicted) and (predicted.get("label") != kind or sorted(predicted.get("tags") or []) != sorted(tags))
         plan_ml.teach(text, kind, tags=tags, minutes=item["minutes"], corrected=changed)
+        earlier = before.get(plan_ml.normalize(title))
+        if earlier is not None:
+            item.update(done=earlier["done"], doneAt=earlier.get("doneAt"), start=earlier.get("start"))
         item["ref"] = _file_somewhere(item, day)
         items.append(item)
     if not items:
