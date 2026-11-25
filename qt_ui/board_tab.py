@@ -37,6 +37,8 @@ from qt_ui import motion
 from qt_ui.wrap_edit import WrapEdit
 
 import board_store
+import plan_ml
+import plan_store
 import quicknote_store
 from qt_ui.safe_link import make_link_label
 from qt_ui.ui_kit import (
@@ -196,7 +198,7 @@ class BoardTab(QWidget):
         self._tag_filter = "all"
         self._hidden_tags = set()
         layout.addLayout(self._build_header())
-        layout.addLayout(self._build_tag_chips())
+        layout.addWidget(self._build_tag_chips())
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -227,89 +229,125 @@ class BoardTab(QWidget):
         super().showEvent(event)
 
     def _refresh_notes(self):
-        """QuickNote starts where the board ends: a thick rule, then one plain list. Add a line,
-        tick lines off (they strike through), clear the ticked ones (that saves the list)."""
+        """QuickNote sits under the board as one soft card: a line to add, then the lines in two groups, the ones
+        the nightly plan made and the loose ones, each with its tags. Tick lines off (they strike through) and
+        clear the ticked ones (that saves the list)."""
         from qt_ui.quicknote import _Tick
         if self._notes_widget is not None:
             self._list_layout.removeWidget(self._notes_widget)
             self._notes_widget.deleteLater()
-        box = QWidget()
-        box.setObjectName("BoardNotes")
-        box.setStyleSheet("QWidget#BoardNotes{background:transparent;}")
-        column = QVBoxLayout(box)
-        column.setContentsMargins(2, 18, 6, 12)
-        column.setSpacing(10)
+        wrap = QWidget()
+        wrap.setObjectName("BoardNotes")
+        wrap.setStyleSheet("QWidget#BoardNotes{background:transparent;}")
+        wrap_layout = QVBoxLayout(wrap)
+        wrap_layout.setContentsMargins(0, 14, 0, 6)
+        card = QFrame()
+        card.setObjectName("NoteCard")
+        card.setStyleSheet("QFrame#NoteCard{background:#FFFFFF;border:1px solid #E3E6EC;border-radius:18px;}")
+        column = QVBoxLayout(card)
+        column.setContentsMargins(20, 16, 20, 16)
+        column.setSpacing(8)
+        wrap_layout.addWidget(card)
 
-        rule = QFrame()
-        rule.setFixedHeight(3)
-        rule.setStyleSheet(f"background:{INK};border:none;")
-        column.addWidget(rule)
-
+        notes = [n.strip() for n in quicknote_store.load()[0] if n.strip()]
         top = QHBoxLayout()
+        top.setSpacing(10)
         head = QLabel("QuickNote")
-        head.setStyleSheet(f"font-size: 22px; font-weight: 700; color: {INK}; background: transparent;")
+        head.setStyleSheet(f"font-size: 20px; font-weight: 700; color: {INK}; background: transparent; border: none;")
         top.addWidget(head)
+        if notes:
+            count = QLabel(str(len(notes)))
+            count.setStyleSheet(f"background:#EEF0F4;color:{MUTED};border:none;border-radius:10px;padding:1px 9px;"
+                                "font-size:12px;font-weight:600;")
+            top.addWidget(count)
         top.addStretch(1)
         self._clear_button = QPushButton("Clear ticked")
         self._clear_button.setCursor(Qt.PointingHandCursor)
         self._clear_button.setFlat(True)
         self._clear_button.setStyleSheet(
-            f"QPushButton{{color:{MUTED};font-size:13.5px;font-weight:600;border:none;background:transparent;"
-            f"text-decoration:underline;}}QPushButton:hover{{color:{INK};}}")
+            f"QPushButton{{color:{MUTED};font-size:13px;font-weight:600;border:none;background:transparent;}}"
+            f"QPushButton:hover{{color:{INK};}}")
         self._clear_button.clicked.connect(self._clear_ticked)
         top.addWidget(self._clear_button)
         column.addLayout(top)
 
         adder = QHBoxLayout()
-        adder.setSpacing(12)
+        adder.setSpacing(8)
         self._note_input = WrapEdit(boxed=False, max_rows=3)
-        self._note_input.setPlaceholderText("Add a line")
+        self._note_input.setPlaceholderText("Jot something down")
         self._note_input.setStyleSheet(
-            f"QPlainTextEdit#WrapEdit{{background:transparent;color:{INK};border:none;"
-            f"border-bottom:2px solid {INK};padding:4px 2px;font-size:15px;}}"
-            "QPlainTextEdit#WrapEdit:focus{border-bottom:2px solid #5B8DEF;}")
+            f"QPlainTextEdit#WrapEdit{{background:#F3F5F9;color:{INK};border:1px solid transparent;border-radius:12px;"
+            "padding:7px 12px;font-size:14.5px;}"
+            "QPlainTextEdit#WrapEdit:focus{background:#FFFFFF;border:1px solid #5B8DEF;}")
         self._note_input.returnPressed.connect(self._add_note)
         adder.addWidget(self._note_input, 1)
         add = QPushButton("Add")
         add.setCursor(Qt.PointingHandCursor)
-        add.setFlat(True)
+        add.setFixedSize(58, 36)
         add.setStyleSheet(
-            f"QPushButton{{color:{INK};font-size:14.5px;font-weight:700;border:none;background:transparent;}}"
-            "QPushButton:hover{color:#5B8DEF;}")
+            f"QPushButton{{background:{INK};color:#FFFFFF;border:none;border-radius:12px;font-size:13.5px;"
+            "font-weight:600;}QPushButton:hover{background:#2F353D;}")
         add.clicked.connect(self._add_note)
         adder.addWidget(add)
         column.addLayout(adder)
 
         self._note_rows = []
-        notes = [n.strip() for n in quicknote_store.load()[0] if n.strip()]
         if not notes:
-            empty = QLabel("Nothing jotted down yet.")
-            empty.setStyleSheet(f"color: {MUTED}; font-size: 14.5px; background: transparent;")
+            empty = QLabel("Nothing jotted down yet. Quick reminders and questions land here.")
+            empty.setWordWrap(True)
+            empty.setStyleSheet(f"color: {MUTED}; font-size: 13.5px; background: transparent; border: none;"
+                                "padding: 6px 2px;")
             column.addWidget(empty)
-        for text in notes:
-            hair = QFrame()
-            hair.setFixedHeight(1)
-            hair.setStyleSheet("background:#E3E6EC;border:none;")
-            column.addWidget(hair)
-            line = QHBoxLayout()
-            line.setSpacing(12)
-            tick = _Tick()
-            tick.setFixedSize(20, 20)
-            label = QLabel(text)
-            label.setWordWrap(True)
-            self._style_note(label, False)
-            tick.toggled.connect(lambda on, lab=label: self._style_note(lab, on))
-            line.addWidget(tick, 0, Qt.AlignTop)
-            line.addWidget(label, 1)
-            column.addLayout(line)
-            self._note_rows.append((tick, label, text))
-        self._notes_widget = box
-        self._list_layout.addWidget(box)
+        planned = [n for n in notes if plan_store.note_meta(n)]
+        loose = [n for n in notes if not plan_store.note_meta(n)]
+        groups = [("From your plan", planned), ("Loose notes", loose)] if planned else [(None, loose)]
+        for title, group in groups:
+            if not group:
+                continue
+            if title:
+                column.addWidget(self._note_group_title(title, len(group)))
+            for text in group:
+                self._add_note_row(column, text, _Tick)
+        self._notes_widget = wrap
+        self._list_layout.addWidget(wrap)
+
+    @staticmethod
+    def _note_group_title(title, count):
+        label = QLabel(f"{title}  ·  {count}")
+        label.setStyleSheet(f"color:{MUTED};font-size:12.5px;font-weight:700;background:transparent;border:none;"
+                            "padding:10px 0 2px 0;")
+        return label
+
+    def _add_note_row(self, column, text, tick_class):
+        hair = QFrame()
+        hair.setFixedHeight(1)
+        hair.setStyleSheet("background:#EEF0F4;border:none;")
+        column.addWidget(hair)
+        line = QHBoxLayout()
+        line.setSpacing(10)
+        tick = tick_class()
+        tick.setFixedSize(20, 20)
+        label = QLabel(text)
+        label.setWordWrap(True)
+        self._style_note(label, False)
+        tick.toggled.connect(lambda on, lab=label: self._style_note(lab, on))
+        line.addWidget(tick, 0, Qt.AlignTop)
+        line.addWidget(label, 1)
+        meta = plan_store.note_meta(text)
+        tags = (meta or {}).get("tags") or plan_ml.predict_tags(text)
+        for tag_id in tags[:2]:
+            preset = board_store.PRESET_TAGS_BY_ID.get(tag_id)
+            if preset:
+                pill = _make_tag_pill(preset)
+                pill.setFixedHeight(20)
+                line.addWidget(pill, 0, Qt.AlignVCenter)
+        column.addLayout(line)
+        self._note_rows.append((tick, label, text))
 
     @staticmethod
     def _style_note(label, ticked):
         label.setStyleSheet(
-            f"color: {'#98A2B3' if ticked else INK}; font-size: 15px; background: transparent;"
+            f"color: {'#98A2B3' if ticked else INK}; font-size: 14.5px; background: transparent; border: none;"
             + ("text-decoration: line-through;" if ticked else ""))
         font = label.font()
         font.setStrikeOut(ticked)
@@ -326,6 +364,9 @@ class BoardTab(QWidget):
 
     def _clear_ticked(self):
         keep = [text for tick, _label, text in self._note_rows if not tick.isChecked()]
+        for tick, _label, text in self._note_rows:
+            if tick.isChecked():
+                plan_store.note_cleared(text)
         quicknote_store.save(keep)
         self._refresh_notes()
 
@@ -381,7 +422,17 @@ class BoardTab(QWidget):
 
     def _build_tag_chips(self):
         """One chip per tag, instead of a drop-down: click one to show only that tag."""
-        row = QHBoxLayout()
+        holder = QScrollArea()
+        holder.setFrameShape(QScrollArea.NoFrame)
+        holder.setWidgetResizable(True)
+        holder.setFixedHeight(38)
+        holder.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        holder.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        holder.setStyleSheet("QScrollArea{background:transparent;border:none;}")
+        inner = QWidget()
+        inner.setStyleSheet("background:transparent;")
+        row = QHBoxLayout(inner)
+        row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(6)
         self._tag_chips = {}
         entries = [("all", "All")] + [(t["id"], t["label"]) for t in board_store.PRESET_TAGS]
@@ -396,7 +447,8 @@ class BoardTab(QWidget):
             self._tag_chips[tag_id] = chip
             row.addWidget(chip)
         row.addStretch(1)
-        return row
+        holder.setWidget(inner)
+        return holder
 
     def _set_tag_filter(self, tag_id):
         self._tag_filter = tag_id
@@ -440,6 +492,10 @@ class BoardTab(QWidget):
             f"Hide Tags ({len(self._hidden_tags)})" if self._hidden_tags else "Hide Tags"
         )
 
+        try:
+            board_store.auto_tag_untagged(plan_ml.predict_tags)       # every card gets a tag to start with
+        except Exception:
+            pass
         tasks = board_store.list_active_tasks()
         if self._tag_filter != "all":
             tasks = [t for t in tasks if self._tag_filter in (t.get("tags") or [])]
@@ -463,11 +519,17 @@ class BoardTab(QWidget):
             self._list_layout.addWidget(empty_label)
         known = getattr(self, "_seen_task_ids", None)
         self._seen_task_ids = {t.get("id") for t in tasks}
-        for task in tasks:
-            card = _BoardCard(task, on_changed=self.refresh)
-            self._list_layout.addWidget(card)
-            if known is not None and task.get("id") not in known:
-                motion.appear(card)          # only what is new fades in, not the whole board again
+        planned = [t for t in tasks if t.get("plannedFor")]
+        rest = [t for t in tasks if not t.get("plannedFor")]
+        groups = [("From your plan", planned), ("Everything else", rest)] if planned and rest else [(None, tasks)]
+        for title, group in groups:
+            if title:
+                self._list_layout.addWidget(self._section_title(title, len(group)))
+            for task in group:
+                card = _BoardCard(task, on_changed=self.refresh)
+                self._list_layout.addWidget(card)
+                if known is not None and task.get("id") not in known:
+                    motion.appear(card)          # only what is new fades in, not the whole board again
         self._notes_widget = None
         self._refresh_notes()
 
@@ -483,6 +545,13 @@ class BoardTab(QWidget):
             parts[0] = f"{len(tasks)} of {active_count} tasks"
         parts.append("most important first")
         self._subtitle.setText(", ".join(parts))
+
+    @staticmethod
+    def _section_title(text, count):
+        label = QLabel(f"{text}  ·  {count}")
+        label.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {MUTED}; background: transparent; "
+                            "padding: 6px 2px 0 2px;")
+        return label
 
     def _open_add_dialog(self):
         _AddTaskDialog(on_added=lambda _t: self.refresh())
