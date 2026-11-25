@@ -76,20 +76,20 @@ def test_a_day_is_judged_on_at_most_eight_real_items():
     assert not [i for i in plan_store.counted(items) if i["text"] == "tiny"]
 
 
-def _settled_points(done_count, total):
+def _settled_points(done_count, total, day=DAY):
     entries = [_entry("job %d 30 min" % n, "task", 30) for n in range(total)]
-    items = _plan(*entries)
+    items = plan_store.save_plan(day, entries)
     for item in items[:done_count]:
-        plan_store.set_done(DAY, item["id"])
+        plan_store.set_done(day, item["id"])
     data = score_store.load()
-    plan_store.score_day(DAY, data)
+    plan_store.score_day(day, data)
     return sum(e["points"] for e in data["events"])
 
 
 def test_the_score_rewards_planning_and_how_much_was_done():
     assert _settled_points(4, 4) == plan_store.PLAN_MADE_POINTS + plan_store.SWING
-    assert _settled_points(0, 4) == plan_store.PLAN_MADE_POINTS - plan_store.SWING
-    assert _settled_points(2, 4) == plan_store.PLAN_MADE_POINTS
+    assert _settled_points(0, 4, date(2026, 11, 20)) == plan_store.PLAN_MADE_POINTS - plan_store.SWING
+    assert _settled_points(2, 4, date(2026, 11, 21)) == plan_store.PLAN_MADE_POINTS
 
 
 def test_a_one_line_plan_earns_only_the_planning_points_and_scoring_twice_changes_nothing():
