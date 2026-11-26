@@ -72,8 +72,6 @@ running session: `{name, kind, ...}`) so the extension can say "Set by <name>"; 
 `POST /whitelist/domains/add` answers 403 during a guide's session.
 
 **Extension parity:** the browser extension (`CARMEN-chrome-extension`, branch `desktop-guide-rules`) now polls `/family/rules`; see its README and DESIGN_DECISIONS.
-read `/family/rules`; until it does, deny rules are enforced for sites only through the session's allow list
-(denied hosts are removed from it) and not for a denied *subdomain of an allowed site*. See the checklist below.
 
 ## Backends
 
@@ -118,6 +116,6 @@ by `tests_family/tools/ct_bridge.mjs` through the carmenlinked harness; run it u
 1. Desktop core: `family_rules.py` (pure), `family_sync.py`, `family_report.py`, `family_store.py`, `family_host.py`; `session_manager` gains `guide` (default `None`, cleaned, in `_DEFAULT_STATE`, cleaned in `_clean_remote_session`, filed in the history entry only when set). Tests use the isolation fixtures; `family_state.json` is declared local-only in `tests/test_sync_coverage.py`.
 2. Local API: `GET /family/rules` (new, read-only, safe "off" default), `GET /status.guide` (null default). No mutating route added, so no `_require_token`.
 3. Qt UI: Options -> Linked guides (`qt_ui/family_panel.py`), "Set by" on the lock popup (`qt_ui/enforcer_overlay.py`) and in the Focus tab's session label. A running guide session is edited live by `update_session`.
-4-6. Extension (chrome/ and firefox/): **not touched.** Needed later: poll `/family/rules`, apply deny first, show `status.guide` as "Set by <name>"; mirror into firefox/ byte-for-byte and `node --check`.
+4-6. Extension (chrome/ and firefox/): done in CARMEN-chrome-extension (branch desktop-guide-rules).
 7. Sync: `guide` travels with the running session (shared on purpose: the other computer also shows who set it); `config` keys `familyEnabled`/`familyApiBase` are per computer (not in `SHARED_SETTINGS`); the family cache is local-only.
 8. Design decision logged in `DESIGN_DECISIONS.txt` (2026-11-24); counterpart note to be added in the extension repos.
