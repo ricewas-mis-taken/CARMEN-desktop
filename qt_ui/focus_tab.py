@@ -642,6 +642,7 @@ class FocusTab(QWidget):
                 row = self._waiting_rows.pop(park_id)
                 self._waiting_box.removeWidget(row)
                 row.deleteLater()
+        live = session_manager.get_status()
         for index, session in enumerate(parked):
             park_id = session.get("parkId")
             row = self._waiting_rows.get(park_id)
@@ -653,6 +654,12 @@ class FocusTab(QWidget):
                 if self._waiting_box.indexOf(row) != index:
                     self._waiting_box.removeWidget(row)
                     self._waiting_box.insertWidget(index, row)
+            # A review running over its own task's paused pomodoro: resuming that pomodoro keeps the
+            # review running beside it (review_tab.switch_to_parked), so say "Resume", not "Switch".
+            beside = (live.get("source") == "review" and session.get("source") == "task"
+                      and session.get("eventId") == live.get("eventId"))
+            row.switch_button.setText(
+                ("Resume pomodoro" if session.get("pomodoro") else "Resume") if beside else "Switch to this")
         # Reviews set aside: listed after the sessions, read-only.
         keep_tokens = {r.get("token") for r in set_aside}
         for token in list(self._review_rows):
