@@ -1,5 +1,7 @@
-"""The Supabase transport is a documented stub: every call raises NotImplementedError, and the tables/functions it
-names must exist in the schema in carmenlinked/supabase/ (skipped if that folder is not next to this repo)."""
+"""The Supabase transport (family_supabase.py) is real now; this file used to pin the old documented stub (every call
+raised NotImplementedError). What survives from it: the project ref, and the check that every table and SQL function the
+transport uses exists in the schema in carmenlinked/supabase/ (skipped if that folder is not next to this repo).
+The behaviour tests are in test_family_supabase.py (fake HTTP server) and test_family_supabase_live.py (real project)."""
 import os
 import re
 
@@ -13,23 +15,21 @@ METHODS = [m for m in dir(FamilyTransport) if not m.startswith("_") and callable
 
 
 @pytest.mark.parametrize("name", METHODS)
-def test_every_call_raises_not_implemented(name):
-    fn = getattr(fs.SupabaseFamilyTransport(), name)
-    with pytest.raises(NotImplementedError) as err:
-        fn(*([None] * fn.__code__.co_argcount)[1:]) if False else fn(*[None] * (fn.__code__.co_argcount - 1))
-    assert "not written yet" in str(err.value)
+def test_every_interface_call_is_implemented(name):
+    assert getattr(fs.SupabaseFamilyTransport, name) is not getattr(FamilyTransport, name)
 
 
-def test_names_the_project_and_does_no_network():
-    assert fs.SUPABASE_PROJECT_REF == "wwkoiwegmgweblyaxmdw"
+def test_names_the_project_and_is_stdlib_only():
+    assert fs.SUPABASE_PROJECT_REF == "wwkoiwegmgweblyaxmdw" and fs.DEFAULT_URL == "https://wwkoiwegmgweblyaxmdw.supabase.co"
     import inspect
-    assert "urllib" not in inspect.getsource(fs) and "supabase import" not in inspect.getsource(fs)
+    src = inspect.getsource(fs)
+    assert "import requests" not in src and "import httpx" not in src and "supabase import" not in src
 
 
 @pytest.mark.skipif(not os.path.isdir(SQL_DIR), reason="backend repo not present")
 def test_tables_and_rpcs_exist_in_the_schema():
     sql = "\n".join(open(os.path.join(SQL_DIR, f), encoding="utf-8").read() for f in os.listdir(SQL_DIR) if f.endswith(".sql") and f[0] in "0")
     for table in fs.SUPABASE_TABLES:
-        assert re.search(rf"create table\s+(if not exists\s+)?(public\.)?{table}\b", sql), table
+        assert re.search(rf"create table\s+(if not exists\s+)?(public\.)?{table}\b", sql, re.I), table
     for fn in fs.SUPABASE_RPCS:
-        assert re.search(rf"create (or replace )?function\s+{fn}\b", sql), fn
+        assert re.search(rf"create (or replace )?function\s+(public\.)?{fn}\b", sql, re.I), fn

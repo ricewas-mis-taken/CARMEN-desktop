@@ -44,13 +44,16 @@ _FRIENDLY = {
     "invalid_credentials": "Incorrect email or password.",
     "validation": "Enter your email and password.",
     "bad_base": "That does not look like a server address.",
+    "email_not_confirmed": "Confirm your email address first (open the link in the e-mail), then sign in.",
+    "upstream_error": "Could not reach the family server. Check the address and your connection.",
     "insecure_base": "Use an https:// address: a sign-in must not cross a network unencrypted.",
 }
 
 
 class FamilySync:
-    def __init__(self, transport, store, host, settings, clock=None):
+    def __init__(self, transport, store, host, settings, clock=None, transport_factory=None):
         self.t = transport
+        self._factory = transport_factory
         self.store = store
         self.host = host
         self.settings = settings            # object with get(key, default) and set(**values)
@@ -82,11 +85,23 @@ class FamilySync:
         self._wake.set()
 
     # ---- sign-in and out ----
-    def sign_in(self, email, password, base=None):
-        """-> (ok, message). On success the family features are switched on and the first pass runs at once."""
+    def sign_in(self, email, password, base=None, backend=None, key=None):
+        """-> (ok, message). On success the family features are switched on and the first pass runs at once.
+        `backend` ("dev" or "supabase") swaps the transport when it differs from the current one; `key` is the
+        Supabase project's publishable key. Without them nothing changes from the single-backend behaviour."""
         try:
-            chosen = base if base is not None else self.settings.get("familyApiBase", "")
-            self.t.configure(chosen)
+            if backend and backend != getattr(self.t, "name", None) and self._factory is not None:
+                self.t = self._factory(backend, base, key)
+                try:
+                    self.t.device_id = self.host.device_id()
+                except Exception:
+                    pass
+            urlkey = "familySupabaseUrl" if getattr(self.t, "name", "") == "supabase" else "familyApiBase"
+            chosen = base if base is not None else self.settings.get(urlkey, "")
+            if getattr(self.t, "name", "") == "supabase":
+                self.t.configure(chosen, key or self.settings.get("familySupabaseKey", "") or None)
+            else:
+                self.t.configure(chosen)
             user = self.t.login(email, password)
         except FamilyError as err:
             return False, self._friendly(err)
@@ -94,7 +109,13 @@ class FamilySync:
         if previous and previous.get("id") != user["id"]:
             self.store.clear_account()                 # a different account never inherits another's caches or marks
         self.store.set(user=user, deviceId=self.store.get("deviceId"))
-        self.settings.set(familyEnabled=True, familyApiBase=self.t.base if hasattr(self.t, "base") else chosen)
+        if getattr(self.t, "name", "") == "supabase":
+            self.settings.set(familyEnabled=True, familyBackend="supabase", familySupabaseUrl=self.t.base,
+                              familySupabaseKey=key or self.settings.get("familySupabaseKey", ""))
+        elif backend:
+            self.settings.set(familyEnabled=True, familyBackend="dev", familyApiBase=self.t.base if hasattr(self.t, "base") else chosen)
+        else:
+            self.settings.set(familyEnabled=True, familyApiBase=self.t.base if hasattr(self.t, "base") else chosen)
         self.store.add_notice({"kind": "link", "text": f"Signed in to the family account {user.get('email') or ''}. "
                                "Nothing is shared until a parent or instructor links to you."}, self._now_ms())
         self.poke()
@@ -616,7 +637,8 @@ class FamilySync:
         last_ok = data.get("lastOkMs")
         return {
             "enabled": self.enabled(), "signedIn": bool(self.enabled() and self.t.is_signed_in()),
-            "base": self.settings.get("familyApiBase", ""), "user": data.get("user"),
+            "base": self.settings.get("familyApiBase", ""), "backend": self.settings.get("familyBackend", "dev") or "dev",
+            "supabaseUrl": self.settings.get("familySupabaseUrl", ""), "supabaseKey": self.settings.get("familySupabaseKey", ""), "user": data.get("user"),
             "links": out_links, "notices": list(reversed(data.get("notices") or [])),
             "unreadNotices": sum(1 for n in data.get("notices") or [] if not n.get("read") and not n.get("silent")),
             "rules": self.effective_rules(),
@@ -674,11 +696,17 @@ class _ConfigSettings:
         config.update_config(lambda cfg: cfg.update(values))
 
 
-def make_transport():
-    """The ONE place that chooses the backend. Supabase later: return family_supabase.SupabaseFamilyTransport()."""
-    import family_rest
+def make_transport(backend=None, base=None, key=None):
+    """The ONE place that chooses the backend: config "familyBackend" ("dev" default, or "supabase"), or the arguments."""
     import config
-    return family_rest.FamilyRest(config.load_config().get("familyApiBase") or family_rest.DEFAULT_BASE)
+    cfg = config.load_config()
+    backend = backend or cfg.get("familyBackend") or "dev"
+    if backend == "supabase":
+        import family_supabase
+        return family_supabase.SupabaseFamilyTransport(base or cfg.get("familySupabaseUrl") or family_supabase.DEFAULT_URL,
+                                                       key or cfg.get("familySupabaseKey") or family_supabase.DEFAULT_KEY)
+    import family_rest
+    return family_rest.FamilyRest(base or cfg.get("familyApiBase") or family_rest.DEFAULT_BASE)
 
 
 def instance():
@@ -687,7 +715,7 @@ def instance():
         if _instance is None:
             import family_host
             import family_store
-            _instance = FamilySync(make_transport(), family_store.default(), family_host.DesktopHost(), _ConfigSettings())
+            _instance = FamilySync(make_transport(), family_store.default(), family_host.DesktopHost(), _ConfigSettings(), transport_factory=make_transport)
         return _instance
 
 

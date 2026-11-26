@@ -17,7 +17,7 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
 import family_rules
@@ -198,10 +198,25 @@ class FamilyPanel(QWidget):
             self._password = QLineEdit()
             self._password.setEchoMode(QLineEdit.Password)
             box.addWidget(self._password)
+            box.addWidget(field_label("Family server"))
+            self._backend = QComboBox()
+            self._backend.addItem("Carmen family server (development)", "dev")
+            self._backend.addItem("Supabase project", "supabase")
+            self._backend.setCurrentIndex(1 if snap.get("backend") == "supabase" else 0)
+            box.addWidget(self._backend)
             box.addWidget(field_label("Server address"))
-            self._base = QLineEdit(snap["base"] or "")
+            self._urls = {"dev": snap["base"] or "http://localhost:8420",
+                          "supabase": snap.get("supabaseUrl") or "https://wwkoiwegmgweblyaxmdw.supabase.co"}
+            self._shown_backend = self._backend.currentData()
+            self._base = QLineEdit(self._urls[self._shown_backend])
             self._base.setPlaceholderText("https://...")
             box.addWidget(self._base)
+            self._key_label = field_label("Project key (public)")
+            box.addWidget(self._key_label)
+            self._key = QLineEdit(snap.get("supabaseKey") or "sb_publishable_6TwTWF_E7TjqOckpgEC1vQ_WuSkwxsi")
+            box.addWidget(self._key)
+            self._backend.currentIndexChanged.connect(self._backend_changed)
+            self._backend_changed()
             box.addWidget(note("Only change this if you were given a different address. It must be https:// unless it is on this computer."))
             self._message = QLabel("")
             self._message.setWordWrap(True)
@@ -213,6 +228,18 @@ class FamilyPanel(QWidget):
             self._password.returnPressed.connect(self._sign_in)
             box.addWidget(self._sign_in_button)
         layout.addWidget(card)
+
+    def _backend_changed(self, _index=None):
+        """Swap the address shown with the server type (each type remembers its own address)."""
+        try:
+            self._urls[self._shown_backend] = self._base.text().strip()
+            now = self._backend.currentData()
+            self._shown_backend = now
+            self._base.setText(self._urls[now])
+            self._key.setVisible(now == "supabase")
+            self._key_label.setVisible(now == "supabase")
+        except RuntimeError:
+            pass
 
     def _say(self, text, error=True):
         label = getattr(self, "_message", None)
@@ -235,7 +262,9 @@ class FamilyPanel(QWidget):
         self._busy = True
         self._sign_in_button.setEnabled(False)
         self._say("Signing in...", error=False)
-        self._run(lambda: self._sync.sign_in(email, password, base or None), self._after_sign_in)
+        backend = self._backend.currentData()
+        key = self._key.text().strip() if backend == "supabase" else None
+        self._run(lambda: self._sync.sign_in(email, password, base or None, backend, key), self._after_sign_in)
 
     def _after_sign_in(self, result):
         self._busy = False

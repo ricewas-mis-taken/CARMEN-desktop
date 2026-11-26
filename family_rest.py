@@ -48,17 +48,20 @@ class KeyringTokenStore:
     Saving is best effort, like auth_manager: the in-memory sign-in is already valid; the only cost of a failed
     save is signing in again next launch."""
 
+    def __init__(self, username=None):
+        self._username = username or KEYRING_USERNAME
+
     def get(self):
         try:
             import keyring
-            return keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME)
+            return keyring.get_password(KEYRING_SERVICE, self._username)
         except Exception:
             return None
 
     def set(self, token):
         try:
             import keyring
-            keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, token)
+            keyring.set_password(KEYRING_SERVICE, self._username, token)
             return True
         except Exception:
             logger.warning("Could not save the family sign-in to the OS credential store", exc_info=True)
@@ -67,7 +70,7 @@ class KeyringTokenStore:
     def clear(self):
         try:
             import keyring
-            keyring.delete_password(KEYRING_SERVICE, KEYRING_USERNAME)
+            keyring.delete_password(KEYRING_SERVICE, self._username)
         except Exception:
             pass
 

@@ -49,6 +49,9 @@ DEFAULT_CONFIG = {
     # Per computer, never shared between computers, and off until the student signs in to a family account.
     "familyEnabled": False,
     "familyApiBase": "http://localhost:8420",
+    "familyBackend": "dev",     # "dev" (the CarmenLinked dev backend) or "supabase" (the real project)
+    "familySupabaseUrl": "https://wwkoiwegmgweblyaxmdw.supabase.co",
+    "familySupabaseKey": "sb_publishable_6TwTWF_E7TjqOckpgEC1vQ_WuSkwxsi",   # public by design: it only identifies the project
     "themeShared": False,       # the saved theme has been sent to the other computer at least once
     "theme": None,              # {"name": ..., "custom": {...}}: shared, so both computers look the same
 }
