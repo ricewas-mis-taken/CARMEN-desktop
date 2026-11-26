@@ -181,10 +181,14 @@ class _WaitingRow(QFrame):
         self.end_button = button("End", DANGER_STYLE, height=34)
         row.addWidget(self.switch_button)
         row.addWidget(self.end_button)
-        self.switch_button.clicked.connect(lambda: session_manager.swap_with_parked(self.park_id))
+        self.switch_button.clicked.connect(self._switch)
         self.end_button.clicked.connect(
             lambda: session_manager.end_parked_session(park_id=self.park_id, end_type="manual"))
         self.update_from(session)
+
+    def _switch(self):
+        from qt_ui import review_tab
+        review_tab.switch_to_parked(self.park_id)
 
     def update_from(self, session):
         color = _session_color(session)
