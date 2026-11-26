@@ -109,3 +109,36 @@ def test_a_review_left_running_when_the_pomodoro_ends_gets_its_own_blocking_sess
     assert status["reviewProblemId"] == first["id"]
     assert review_store.get_active_review() is None              # one tracker, not two
     assert banner._end_session_on_finish
+
+
+def test_a_review_started_while_the_pomodoro_is_paused_leaves_it_paused(world):
+    topic, first, _second = _two_problems(world)
+    tab = _tab(world)
+    task_id = _linked_task_id(topic)
+    session_manager.start_pomodoro_session(25, 5, 4, "hard", [], [], source="task", event_id=task_id, event_title="Same")
+    session_manager.pause_session("aside")
+
+    tab._topic_views[topic["id"]]._begin_review(first)
+
+    status = session_manager.get_status()
+    assert status["source"] == "review" and not status["isPaused"]            # the review blocks on its own
+    parked = status["parkedSessions"]
+    assert len(parked) == 1 and parked[0]["source"] == "task" and parked[0]["pomodoro"] is not None
+
+
+def test_resuming_the_paused_pomodoro_keeps_the_review_running_beside_it(world):
+    topic, first, _second = _two_problems(world)
+    tab = _tab(world)
+    task_id = _linked_task_id(topic)
+    session_manager.start_pomodoro_session(25, 5, 4, "hard", [], [], source="task", event_id=task_id, event_title="Same")
+    session_manager.pause_session("aside")
+    tab._topic_views[topic["id"]]._begin_review(first)
+    park_id = session_manager.get_status()["parkedSessions"][0]["parkId"]
+
+    review_tab.switch_to_parked(park_id)
+
+    status = session_manager.get_status()
+    assert status["source"] == "task" and not status["isPaused"]              # the pomodoro runs again
+    assert status["parkedSessions"] == []                                     # nothing left waiting
+    active = review_store.get_active_review()
+    assert active["problemId"] == first["id"] and not active["isPaused"]      # the review never stopped

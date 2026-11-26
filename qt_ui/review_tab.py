@@ -2377,6 +2377,26 @@ def make_live_review_independent():
     return False
 
 
+def switch_to_parked(park_id):
+    """Brings a waiting session back to the front. When a review owns the live session and the one
+    waiting is its own task's paused session (a review started while that pomodoro was paused), the
+    review is not set aside: it rides beside the session that comes back, still running."""
+    status = session_manager.get_status()
+    parked = next((p for p in status.get("parkedSessions") or [] if p.get("parkId") == park_id), None)
+    same_task = (parked is not None and status.get("isActive") and status.get("source") == "review"
+                 and parked.get("source") == "task" and parked.get("eventId") == status.get("eventId"))
+    if same_task and make_live_review_independent():
+        # Ending the review's own session brought back the most recently waiting one, still paused.
+        now = session_manager.get_status()
+        if now.get("isActive") and now.get("startTime") == parked["startTime"]:
+            if now.get("isPaused"):
+                session_manager.resume_session()
+        else:
+            session_manager.swap_with_parked(park_id)
+        return
+    session_manager.swap_with_parked(park_id)
+
+
 def _make_room_for(task):
     """True when a review of `task` may start its own blocking session (the linked task's
     app/site rules). Nothing running, or a paused session: yes (the paused one is set
