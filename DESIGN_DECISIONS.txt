@@ -1103,3 +1103,19 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   Left for later: extension consumption of /family/rules, requests/assignments/kudos UI, per-violation timeline events.
   Cross-reference: carmen-extension (and carmen-guide-extension) DESIGN_DECISIONS.txt -- add a matching 2026-11-24
   "Linked guides" entry pointing here; /family/rules is the contract between the two.
+
+2026-11-26  Real Supabase transport for the family features (replaces the documented stub)
+  Forks and what was chosen:
+  - Talk to the database through the SQL functions the CarmenLinked adapter already uses (RPC with the student's own JWT), not
+    table-by-table from Python. Rejected: direct table reads/writes (the schema forbids client writes to student_status,
+    session_summaries, screentime_samples; the functions also write the audit/shared-log lines the student is promised) and
+    supabase-py (a new dependency for a handful of HTTP calls; urllib matches family_rest and behaves the same on Windows).
+  - Status/summaries are sent in the desktop's own sync_records shapes and the server stamps a strictly increasing updated_at
+    (push_sync), so the client never owns ordering; no tombstones are sent because the desktop never deletes a summary.
+  - Same seam as before: FamilyTransport unchanged; family_sync gained only a backend swap at sign-in. familyBackend is per
+    computer (not in SHARED_SETTINGS), default "dev", so nothing changes until the student picks Supabase.
+  - Refresh token under its own credential entry (a dev token is not a GoTrue token). Refresh is single-flight; there is no
+    persistent 60 s grace like the dev backend's (Supabase allows ~10 s), documented rather than faked.
+  - Real-project tests are opt-in (marker supabase, CARMENLINKED_DIR) and use SQL-created throwaway users, never GoTrue sign-up.
+  Cross-reference: CARMEN-chrome-extension DESIGN_DECISIONS.txt 2026-11-26 "Guide rules from the desktop's /family/rules"
+  (same day, same linked-guides feature; /family/rules is the contract between the two).

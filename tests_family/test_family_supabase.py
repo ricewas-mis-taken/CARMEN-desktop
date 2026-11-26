@@ -363,3 +363,31 @@ def test_make_transport_picks_the_backend(monkeypatch):
     assert family_sync.make_transport().name == "supabase"
     monkeypatch.setattr(config, "load_config", lambda: {})
     assert family_sync.make_transport().name == "rest"
+
+
+def test_sign_in_with_a_backend_choice_swaps_the_transport_and_saves_it(fake, tmp_path):
+    import family_store
+    import family_sync
+    from tests_family.fakes import DictSettings, FakeHost, FakeTransport
+    settings = DictSettings()
+    made = []
+
+    def factory(backend, base, key):
+        made.append((backend, base, key))
+        return fs.SupabaseFamilyTransport(base, key, MemoryTokenStore())
+    fake.rpc_answers["my_profile"] = {"displayName": "Kid"}
+    sync = family_sync.FamilySync(FakeTransport(), family_store.FamilyStore(str(tmp_path / "f.json")), FakeHost(), settings, transport_factory=factory)
+    assert sync.sign_in("a@b.co", "pw", fake.url, "supabase", "sb_publishable_x") == (True, None)
+    assert made == [("supabase", fake.url, "sb_publishable_x")] and sync.t.name == "supabase"
+    assert settings.d["familyBackend"] == "supabase" and settings.d["familySupabaseUrl"] == fake.url and settings.d["familySupabaseKey"] == "sb_publishable_x"
+    assert sync.snapshot()["backend"] == "supabase"
+
+
+def test_sign_in_without_a_backend_choice_is_unchanged(tmp_path):
+    import family_store
+    import family_sync
+    from tests_family.fakes import DictSettings, FakeHost, FakeTransport
+    settings = DictSettings()
+    sync = family_sync.FamilySync(FakeTransport(), family_store.FamilyStore(str(tmp_path / "f.json")), FakeHost(), settings)
+    assert sync.sign_in("a@b.co", "pw", "http://localhost:1") == (True, None)
+    assert "familyBackend" not in settings.d

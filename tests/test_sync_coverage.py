@@ -63,7 +63,7 @@ LOCAL_ONLY_FILES = {
     "goal_notified.json",   # which tasks already told this computer their daily target was reached today
 }
 # Reference data that ships with the app, not something a user creates.
-SHIPPED_REFERENCE_FILES = {"screentime_domains.json", "screentime_domains_curated.json",
+SHIPPED_REFERENCE_FILES = {"screentime_domains.json", "family_site_categories.json", "screentime_domains_curated.json",
                           "manifest.json"}   # named in the tour's extension steps, not a data file
 
 

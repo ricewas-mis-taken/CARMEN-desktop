@@ -71,18 +71,36 @@ as "unreachable, keep what you have", never as "no rules". `GET /status` gains `
 running session: `{name, kind, ...}`) so the extension can say "Set by <name>"; old extensions ignore it.
 `POST /whitelist/domains/add` answers 403 during a guide's session.
 
-**Extension parity (not done here):** the existing browser extension in `CARMEN-chrome-extension` does not yet
+**Extension parity:** the browser extension (`CARMEN-chrome-extension`, branch `desktop-guide-rules`) now polls `/family/rules`; see its README and DESIGN_DECISIONS.
 read `/family/rules`; until it does, deny rules are enforced for sites only through the session's allow list
 (denied hosts are removed from it) and not for a denied *subdomain of an allowed site*. See the checklist below.
 
 ## Backends
 
-`family_transport.py` is the interface; `family_rest.py` talks to the dev backend (`familyApiBase`);
-`family_supabase.py` is a **documented stub** (every call raises `NotImplementedError`) naming the tables and RPCs of
-the Supabase schema in `carmenlinked/supabase/` (project `wwkoiwegmgweblyaxmdw`); its names are checked against the SQL by a
-test. It is not called anywhere. With Supabase the status/summary/screen-time posts collapse into the sync rows
-`sync_live` already uploads (the projection trigger fills the guide-readable tables); see the stub's docstring.
-Switching = one line in `family_sync.make_transport()`.
+`family_transport.py` is the interface. Two implementations, chosen by the config key `familyBackend` (`dev` by default,
+or `supabase`) in `family_sync.make_transport()`, and by the **Family server** choice in Options -> Linked guides -> sign-in:
+
+* `family_rest.py` talks to the CarmenLinked dev backend (`familyApiBase`, default `http://localhost:8420`).
+* `family_supabase.py` talks to the real Supabase project (`familySupabaseUrl`, default `https://wwkoiwegmgweblyaxmdw.supabase.co`;
+  `familySupabaseKey`, the public publishable key, prefilled). It is a stdlib-only port of the CarmenLinked JS adapter
+  (`carmenlinked/client/src`): GoTrue password grant / refresh / logout, then PostgREST with **the student's own token**, so Row Level
+  Security decides what is visible. Reads and writes are the SQL functions of `carmenlinked/supabase/*.sql` (`my_rules`, `my_commands`,
+  `ack_command`, `me_heartbeat`, `me_push_status`, `me_push_summaries`, `me_push_screentime`, `my_schedule_json`, `revoke_link_json`, ...),
+  which answer in the dev backend's JSON, so `family_sync.py`, the store and the panel did not change. Status and summaries are stored
+  by the server as the desktop's own `sync_records` shapes (`live_session` / `session_history`) with a strictly increasing aware-UTC
+  `updated_at`; the client sends the shapes and the server owns the clock. Sign-up is never called; no auth setting is touched.
+  The refresh token is kept in the Credential Manager under its own entry (`family_refresh_token_supabase`), refresh is single-flight,
+  https is required off-loopback, and "could not reach" (network, 5xx, bad JSON) is kept apart from "refused" (the server said no).
+  The schema check test (`tests_family/test_family_supabase_stub.py`) confirms every function it calls exists in the SQL.
+
+Differences you will notice with Supabase: no `ETag` (RPC calls are POSTs); the refresh token is tolerated for re-use for about 10 s
+only (the dev backend allows 60 s from the same device), so a crash between "server spent the token" and "saved the new one" is
+survivable only when the app restarts within that window; an access token already issued stays valid for up to 1 h after a sign-out
+(the refresh token is revoked at once). A new email must be confirmed before it can sign in.
+
+Tests: `tests_family/test_family_supabase.py` (fake Supabase on a local port; always runs), and
+`tests_family/test_family_supabase_live.py` (marker `supabase`; skipped unless `CARMENLINKED_DIR` is set; uses throwaway users created
+by `tests_family/tools/ct_bridge.mjs` through the carmenlinked harness; run it under `flock /tmp/ct-supabase.lock`).
 
 ## Known limits
 
