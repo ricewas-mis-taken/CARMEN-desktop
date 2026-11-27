@@ -42,8 +42,8 @@ def test_a_pause_still_open_at_the_end_runs_to_the_end():
 
 
 def test_the_cost_is_capped():
-    result = pause_budget.summarize(_entry(_log((0, "pause", "checking"), (600, "resume", None)), minutes=600))
-    assert result["cost"] == pause_budget.MAX_COST
+    result = pause_budget.summarize(_entry(_log((0, "pause", "checking"), (239, "resume", None)), minutes=600))
+    assert result["cost"] == pause_budget.MAX_COST          # 3h59m of checking: the most a session can cost
 
 
 def test_a_session_ending_scores_its_escape_pauses_once(isolate_state):
@@ -273,3 +273,64 @@ def test_checking_and_long_break_open_their_detail_instead_of_pausing(qtbot, iso
     popup._choices["long_break"].click()
     assert popup._minutes_row.isVisible() and not popup._note_row.isVisible()
     assert not session_manager.get_status()["isPaused"]
+
+
+def _paused(reason, minutes_paused, session_minutes, **extra):
+    log = [{"kind": "pause", "timestamp": T0.isoformat(), "pauseReason": reason, **extra},
+           {"kind": "resume", "timestamp": (T0 + timedelta(minutes=minutes_paused)).isoformat()}]
+    return pause_budget.summarize(_entry(log, session_minutes))
+
+
+def test_a_pause_left_for_hours_counts_for_nothing_instead_of_looking_elsewhere():
+    # An unanswered "later" pause that ran 12 hours (left paused overnight): not 12 hours of looking elsewhere.
+    result = _paused("later", 751, 780)
+    assert result["escape_seconds"] == 0 and result["cost"] == 0 and result["free_seconds"] == 0
+    assert result["abandoned_seconds"] == 751 * 60
+    assert result["pauses"] == [{"reason": "abandoned", "seconds": 751 * 60}]
+
+
+def test_every_reason_is_judged_the_same_way_once_a_pause_is_abandoned():
+    for reason in ("break", "interrupted", "stuck", "checking", "unspecified"):
+        result = _paused(reason, 6 * 60, 400)
+        assert result["abandoned_seconds"] == 6 * 3600, reason
+        assert result["free_seconds"] == 0 and result["escape_seconds"] == 0 and result["cost"] == 0, reason
+
+
+def test_a_pause_just_under_the_limit_still_counts_as_before():
+    result = _paused("checking", 239, 400)
+    assert result["escape_seconds"] == 239 * 60 and result["abandoned_seconds"] == 0 and result["cost"] > 0
+
+
+def test_a_long_break_set_for_hours_is_free_for_those_hours():
+    result = _paused("long_break", 7 * 60, 600, pauseMinutes=480)
+    assert result["free_seconds"] == 7 * 3600 and result["abandoned_seconds"] == 0 and result["cost"] == 0
+
+
+def test_a_long_break_left_far_past_its_time_keeps_its_own_time_free_and_abandons_the_rest():
+    result = _paused("long_break", 10 * 60, 700, pauseMinutes=30)
+    assert result["free_seconds"] == 31 * 60
+    assert result["abandoned_seconds"] == 10 * 3600 - 31 * 60
+    assert result["escape_seconds"] == 0 and result["cost"] == 0
+
+
+def test_a_session_set_aside_for_another_one_is_never_abandoned():
+    result = _paused("aside", 6 * 60, 400)
+    assert result["free_seconds"] == 6 * 3600 and result["abandoned_seconds"] == 0
+
+
+def test_a_review_that_was_left_paused_shows_it_on_its_own_too():
+    entry = dict(_entry(_log((10, "pause", "break"), (400, "resume", None)), 420), source="review")
+    result = pause_budget.summarize(entry)
+    assert result["exempt"] and result["free_seconds"] == 0 and result["abandoned_seconds"] == 390 * 60
+
+
+def test_a_session_ending_after_an_overnight_pause_costs_no_points(isolate_state):
+    session_manager.start_session(60, "soft", [], [])
+    state = session_manager._state
+    start = datetime.fromisoformat(state["startTime"])
+    state["violationLog"] = [
+        {"kind": "pause", "timestamp": start.isoformat(), "pauseReason": "later"},
+        {"kind": "resume", "timestamp": (start + timedelta(hours=12)).isoformat()}]
+    session_manager._score_pauses("sess", start.isoformat(), (start + timedelta(hours=13)).isoformat(),
+                                  state["violationLog"])
+    assert not [e for e in score_store.events() if e["kind"] == "pauses"]

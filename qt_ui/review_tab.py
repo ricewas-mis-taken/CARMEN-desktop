@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
     QGridLayout,
+    QSizePolicy,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -33,10 +34,12 @@ from qt_ui.wrap_edit import WrapEdit
 
 from calendar_log import logger as calendar_logger
 import review_store
+import review_wheel
 import session_history
 import session_manager
 from qt_ui import confirm_dialog
 import tasks_store
+from qt_ui.review_wheel import WheelDialog
 from qt_ui.safe_link import make_link_label
 from qt_ui.ui_kit import (
     discard_widget,
@@ -338,7 +341,6 @@ class _CategoryRow(QPushButton):
         self.setChecked(checked)
         self.setFixedHeight(34)
         self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip(f"Show {name.lower() if color is None else name}: {count} problem{'s' if count != 1 else ''}")
         self.setAccessibleName(name)
 
     def paintEvent(self, _event):
@@ -753,6 +755,7 @@ class ReviewTab(QWidget):
         self._rerender_start_cells()
 
     def _banner_finished(self):
+        review_wheel.review_done()        # the wheel's pick, if that was it, is done and the wheel is free
         self.on_review_finished()
         for view in self._topic_views.values():
             view.refresh()
@@ -908,7 +911,7 @@ class _AddTopicDialog(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(8)
-        layout.addWidget(dialog_title("New topic", "A topic is a tab on the Review page: one subject you study."))
+        layout.addWidget(dialog_title("New topic"))
         layout.addWidget(field_label("Name"))
         self._name_edit = WrapEdit()
         self._name_edit.setPlaceholderText("e.g. Math")
@@ -948,6 +951,57 @@ class _AddTopicDialog(QWidget):
         self._on_added(topic)
 
 
+def _review_running(problem_id):
+    """True while a review of this problem is under way (running or paused), here or on a task card."""
+    status = session_manager.get_status()
+    if status.get("isActive") and status.get("reviewProblemId") == problem_id:
+        return True
+    active = review_store.get_active_review()
+    return bool(active) and active.get("problemId") == problem_id
+
+
+class _FateStrip(QFrame):
+    """The review the wheel chose, across the whole width above the list, with a button to start it."""
+
+    def __init__(self, on_start):
+        super().__init__()
+        self.setObjectName("FateStrip")
+        self.setStyleSheet(
+            "QFrame#FateStrip { background: #FFF4D6; border: 1px solid #F2D58A; border-radius: 12px; }")
+        row = QHBoxLayout(self)
+        row.setContentsMargins(14, 8, 8, 8)
+        row.setSpacing(10)
+        self._label = QLabel()
+        self._label.setMinimumWidth(0)
+        self._label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._label.setStyleSheet("font-size: 14px; font-weight: 700; color: #7A5A00; background: transparent; border: none;")
+        row.addWidget(self._label, 1)
+        self._button = accent(QPushButton("Start it"))
+        self._button.setCursor(Qt.PointingHandCursor)
+        self._button.setFixedHeight(30)
+        self._button.clicked.connect(on_start)
+        row.addWidget(self._button)
+        self._name = ""
+        self.hide()
+
+    def show_for(self, problem, running=False):
+        self._name = problem["name"] if problem else ""
+        self.setVisible(problem is not None)
+        self._button.setEnabled(not running)       # already being worked on: nothing to start
+        self._button.setToolTip("Already running" if running else "")
+        self._elide()
+
+    def _elide(self):
+        text = f"Fated: {self._name}"
+        room = max(40, self._label.width())
+        self._label.setText(QFontMetrics(self._label.font()).elidedText(text, Qt.ElideRight, room))
+        self._label.setToolTip(self._name)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._elide()
+
+
 class _TopicView(QWidget):
     def __init__(self, topic_id, review_tab=None):
         super().__init__()
@@ -970,7 +1024,20 @@ class _TopicView(QWidget):
         layout.addLayout(self._build_header())
         self._summary_label = QLabel()
         self._summary_label.setStyleSheet(f"font-size: 13px; color: {MUTED}; background: transparent;")
-        layout.addWidget(self._summary_label)
+        self._summary_label.setMinimumWidth(0)
+        self._summary_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        summary_row = QHBoxLayout()
+        summary_row.setSpacing(8)
+        summary_row.addWidget(self._summary_label, 1)
+        self._wheel_button = accent(QPushButton("Spin the wheel"))
+        self._wheel_button.setCursor(Qt.PointingHandCursor)
+        self._wheel_button.setFixedHeight(32)
+        self._wheel_button.clicked.connect(self._open_wheel)
+        summary_row.addWidget(self._wheel_button)
+        layout.addLayout(summary_row)
+        # Where the wheel's pick is shown: its own full-width row, so a narrow window never cuts it off.
+        self._fate_strip = _FateStrip(self._open_wheel)
+        layout.addWidget(self._fate_strip)
         self._rows = []
 
         if review_tab is not None:
@@ -1010,12 +1077,6 @@ class _TopicView(QWidget):
         self._root_layout = root
 
         self.refresh()
-
-    SIDEBAR_FROM = 760       # narrower than this the list needs the room more than the sidebar does
-
-    def resizeEvent(self, event):
-        self._side_card.setVisible(event.size().width() >= self.SIDEBAR_FROM)
-        super().resizeEvent(event)
 
     def _show_banner_for_linked_session(self):
         if not self._review_banner.is_running():
@@ -1256,6 +1317,11 @@ class _TopicView(QWidget):
         box.addSpacing(6)
         box.addWidget(heading("Sort by"))
         self._sort_combo = QComboBox()
+        self._sort_combo.setCursor(Qt.PointingHandCursor)
+        self._sort_combo.setStyleSheet(
+            "QComboBox { background: #F7F8FA; border: 1px solid #E6E9EF; border-radius: 10px; padding: 7px 10px; "
+            f"font-size: 13px; color: {INK}; }} QComboBox:focus {{ border: 1.5px solid {INK}; background: #FFFFFF; }} "
+            "QComboBox::drop-down { border: none; width: 24px; }")
         for key, label in SORT_CHOICES:
             self._sort_combo.addItem(label, key)
         self._sort_combo.currentIndexChanged.connect(self._set_sort)
@@ -1263,6 +1329,40 @@ class _TopicView(QWidget):
 
         box.addStretch(1)
         return card
+
+    def _active_fate(self):
+        """The problem the wheel chose and you have not finished yet, or None."""
+        return review_wheel.current()
+
+    def _show_wheel_button(self):
+        fated = self._active_fate()
+        self._wheel_button.setVisible(fated is None)
+        self._fate_strip.show_for(fated, running=fated is not None and _review_running(fated["id"]))
+
+    def _show_fate_everywhere(self):
+        views = list(self._review_tab._topic_views.values()) if self._review_tab else [self]
+        for view in views:
+            try:
+                view._show_wheel_button()
+            except RuntimeError:      # a topic view whose window is already gone
+                pass
+
+    def _open_wheel(self):
+        fated = self._active_fate()
+        if fated is not None:
+            owner = self._review_tab._topic_views.get(fated["topicId"]) if self._review_tab else None
+            if owner is not None and owner is not self:      # the pick lives in another topic: start it there
+                self._review_tab._select_topic(fated["topicId"])
+                owner._start_problem(fated)
+            else:
+                self._start_problem(fated)
+            return
+        items = review_wheel.entries(self._topic_id)
+        if not items:
+            QMessageBox.information(self, "Carmen Focus", "Nothing is due to spin for.")
+            return
+        _register_popup(WheelDialog(items, on_start=self._start_problem, on_fated=self._show_fate_everywhere))
+        self._show_wheel_button()
 
     def _set_search(self, text):
         self._search = text.strip().lower()
@@ -1277,13 +1377,10 @@ class _TopicView(QWidget):
         self.refresh()
 
     def _rebuild_categories(self, base):
-        """One row per subject (plus "All"), each with how many problems it holds in this view."""
-        while self._category_box.count():
-            widget = self._category_box.takeAt(0).widget()
-            if widget is not None:
-                discard_widget(widget)
-                widget.deleteLater()
-        self._category_buttons = {}
+        """One row per subject (plus "All"), each with how many problems it holds in this view.
+
+        The rows are only rebuilt when the list itself changed. Tearing down and recreating the
+        same buttons on every refresh (it runs on each show) is what Qt crashed on."""
         counts = {}
         for problem in base:
             counts[problem["subjectId"]] = counts.get(problem["subjectId"], 0) + 1
@@ -1292,6 +1389,16 @@ class _TopicView(QWidget):
             self._subject_filter = None
         entries = [(None, "All categories", None, len(base))] + [
             (sub["id"], sub["name"], sub["color"], counts.get(sub["id"], 0)) for sub in subjects]
+        if entries == getattr(self, "_category_entries", None) and self._category_buttons:
+            for subject_id, row in self._category_buttons.items():
+                row.setChecked(subject_id == self._subject_filter)
+            return
+        self._category_entries = entries
+        while self._category_box.count():
+            widget = self._category_box.takeAt(0).widget()
+            if widget is not None:
+                discard_widget(widget)
+        self._category_buttons = {}
         for subject_id, name, color, count in entries:
             row = _CategoryRow(
                 name, color, count, checked=subject_id == self._subject_filter,
@@ -1323,6 +1430,7 @@ class _TopicView(QWidget):
     def refresh(self):
         base = review_store.list_problems(self._topic_id, due_only=self._due_only)
         self._rebuild_categories(base)
+        self._show_wheel_button()
         shown = [p for p in base if self._subject_filter in (None, p["subjectId"]) and self._matches_search(p)]
         self._problems = self._sorted(shown)
         self._update_summary(len(base))
@@ -1359,7 +1467,7 @@ class _TopicView(QWidget):
             if self._search or self._subject_filter is not None:
                 text = "Nothing matches. Clear the search or pick All categories."
             elif self._due_only:
-                text = "Nothing to review today. Switch to All to see every problem."
+                text = "Nothing due today."
             else:
                 text = "No problems yet. Add one to start building the list."
             empty = QLabel(text)
@@ -1401,6 +1509,14 @@ class _TopicView(QWidget):
         _register_popup(_AddProblemDialog(self._topic_id, on_added=lambda _p: self.refresh(), problem=problem))
 
     def _start_problem(self, problem):
+        fated = self._active_fate()
+        if fated is not None and fated["id"] != problem["id"]:
+            if not _confirm(self, "Left up to fate",
+                            f"You left this one up to fate: {fated['name']}. Starting something else "
+                            f"loses {review_wheel.BREAK_COST} points. Start it anyway?"):
+                return
+            review_wheel.break_fate()
+            self._show_wheel_button()
         tab = self._review_tab
         if tab is None:
             if not self._review_banner.is_running():
@@ -1459,6 +1575,7 @@ class _TopicView(QWidget):
                 review_problem_id=problem["id"],
                 hide_taskbar_badges=bool(task.get("hideTaskbarBadges")),
                 stop_taskbar_flashing=bool(task.get("stopTaskbarFlashing")),
+                fated=review_wheel.fate() == problem["id"],
             )
             end_session_on_finish = True
 
@@ -1485,9 +1602,11 @@ class _TopicView(QWidget):
 
         if self._review_tab:
             self._review_tab.on_review_started()
+        review_wheel.mark_started(problem["id"])
         self._review_banner.start(problem, token, end_session_on_finish=end_session_on_finish)
 
     def _banner_finished(self):
+        review_wheel.review_done()
         if self._review_tab:
             self._review_tab.on_review_finished()
         self.refresh()
@@ -1583,6 +1702,7 @@ class _ReviewBanner(QWidget):
         self._gone_ticks = 0
         self._auto_paused = False
         self._was_on_break = False
+        self._carried_seconds = 0      # time already on the clock when this review took over a session
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -1672,7 +1792,12 @@ class _ReviewBanner(QWidget):
         auto-resumed, never one the user chose."""
         if self._first_attempt_callback is None or self._end_session_on_finish:
             return
-        on_break = bool(session_manager.get_status().get("isBreak"))
+        status = session_manager.get_status()
+        # The first attempt waits whenever the task session beside it does: a break, or any pause.
+        own_task = (self._problem or {}).get("eventId")
+        on_break = bool(status.get("isBreak")) or bool(
+            status.get("isActive") and status.get("isPaused") and status.get("source") == "task"
+            and own_task is not None and status.get("eventId") == own_task)
         entered_break = on_break and not self._was_on_break
         left_break = self._was_on_break and not on_break
         self._was_on_break = on_break
@@ -1725,7 +1850,8 @@ class _ReviewBanner(QWidget):
             status, _ = self._linked_view()
             if not status.get("startTime"):
                 return 0
-            return tasks_store.worked_seconds(status["startTime"], None, status.get("violationLog"))
+            return self._carried_seconds + tasks_store.worked_seconds(
+                status["startTime"], None, status.get("violationLog"))
         if self._is_independent_review():
             # review_store is the source of truth once a pomodoro's break
             # can pause this from outside this widget entirely (see
@@ -1754,6 +1880,7 @@ class _ReviewBanner(QWidget):
         # widget instance is new.
         self._start_time = resumed_started_at or datetime.now()
         self._accumulated_seconds = accumulated_seconds
+        self._carried_seconds = 0
         self._is_paused = False
         is_first_attempt = first_attempt_callback is not None or (
             problem.get("id") is None and problem.get("name") == session_manager.FIRST_ATTEMPT_NAME
@@ -1797,8 +1924,10 @@ class _ReviewBanner(QWidget):
         rides BESIDE whatever session starts next (pausing, resting and resuming with it), keeping
         its elapsed time. False if this banner is not such a review."""
         problem_id = (self._problem or {}).get("id")
-        if not self._end_session_on_finish or self._finishing or problem_id is None:
+        if not self._end_session_on_finish or self._finishing:
             return False
+        if problem_id is None:
+            return self._make_first_attempt_independent()
         status, is_parked = self._linked_view()
         if is_parked or not status.get("isActive"):
             return False
@@ -1809,6 +1938,63 @@ class _ReviewBanner(QWidget):
         self._session_token = token          # first: from here the banner follows review_store
         self._end_session_on_finish = False
         session_manager.end_session(end_type="manual")
+        self._changed()
+        return True
+
+    def _take_over_session_when_alone(self):
+        """The reverse of make_independent(): a review that rode beside a session (a pomodoro) is left
+        running when that session ends, with nothing blocking. It starts its own session from its task's
+        rules, keeping the time already on its clock. True if it did."""
+        problem = self._problem or {}
+        if (self._end_session_on_finish or self._finishing or not self._is_independent_review()
+                or problem.get("id") is None or self._currently_paused()):
+            return False
+        if session_manager.get_status().get("isActive"):
+            return False
+        topic = review_store.get_topic(problem.get("topicId"))
+        task = tasks_store.get_task(topic["linkedTaskId"]) if topic and topic.get("linkedTaskId") else None
+        if task is None:
+            return False
+        carried = self._elapsed_seconds_now()
+        token = self._session_token
+        session_manager.start_session(
+            duration_minutes=tasks_store.BURNOUT_MINUTES,
+            lock_mode=task["lockMode"],
+            process_blocklist=task.get("processBlocklist", []),
+            domain_whitelist=task.get("domainWhitelist", []),
+            source="review",
+            event_id=task["id"],
+            event_title=f"{task['name']} - {problem.get('subjectName', '')} review",
+            review_problem_name=problem["name"],
+            review_subject_name=problem.get("subjectName"),
+            review_problem_id=problem["id"],
+            hide_taskbar_badges=bool(task.get("hideTaskbarBadges")),
+            stop_taskbar_flashing=bool(task.get("stopTaskbarFlashing")),
+            fated=review_wheel.fate() == problem["id"],
+        )
+        self._carried_seconds = carried
+        self._end_session_on_finish = True
+        self._session_token = None
+        review_store.abandon_review(token)
+        self._changed()
+        return True
+
+    def _make_first_attempt_independent(self):
+        """The first-attempt timer hands its session over the same way, carrying its own clock: from here it
+        is timed by this banner and rides beside the next session, pausing and resting with it."""
+        if self._first_attempt_callback is None:
+            return False
+        status, is_parked = self._linked_view()
+        if is_parked or not status.get("isActive"):
+            return False
+        paused = bool(status.get("isPaused"))
+        self._accumulated_seconds = self._elapsed_seconds_now()
+        self._start_time = None if paused else datetime.now()
+        self._is_paused = paused
+        self._auto_paused = False
+        self._end_session_on_finish = False
+        session_manager.end_session(end_type="manual")
+        self._publish_first_attempt()
         self._changed()
         return True
 
@@ -1923,6 +2109,7 @@ class _ReviewBanner(QWidget):
                 return
         self._apply_first_attempt_request()
         self._sync_first_attempt_with_pomodoro_break()
+        self._take_over_session_when_alone()
         is_paused = self._currently_paused()
         self._pause_btn.setText(self._pause_button_text(is_paused))
         # Updated unconditionally, even while paused -- _elapsed_seconds_now()
@@ -1960,6 +2147,7 @@ class _ReviewBanner(QWidget):
             # extension's own pause/resume call.
             if self._currently_paused():
                 review_store.resume_active_review()
+                self._take_over_session_when_alone()
             else:
                 review_store.pause_active_review()
             self._pause_btn.setText(self._pause_button_text(self._currently_paused()))
@@ -2044,6 +2232,7 @@ class _ReviewBanner(QWidget):
         # state -- only needed for the token=None recovery path below, but
         # harmless to capture unconditionally.
         started_at_iso = self._linked_view()[0].get("startTime")
+        fated = problem.get("id") is not None and review_wheel.fate() == problem["id"]
         first_attempt_callback = self._first_attempt_callback
         self._session_token = None
         self._end_session_on_finish = False
@@ -2055,13 +2244,13 @@ class _ReviewBanner(QWidget):
             problem_name=problem["name"],
             on_submit=lambda self_solved, shakiness: self._complete_finish(
                 token, end_session, self_solved, shakiness, elapsed,
-                first_attempt_callback, problem, started_at_iso,
+                first_attempt_callback, problem, started_at_iso, fated,
             ),
         )
 
     def _complete_finish(
         self, token, end_session, self_solved, shakiness, elapsed,
-        first_attempt_callback, problem, started_at_iso,
+        first_attempt_callback, problem, started_at_iso, fated=False,
     ):
         if first_attempt_callback is not None:
             # No problem exists yet -- hand the timing/outcome back to the
@@ -2085,12 +2274,12 @@ class _ReviewBanner(QWidget):
         if end_session:
             _end_session_for_problem(problem)
         else:
-            _file_untimed_review(problem, elapsed)
+            _file_untimed_review(problem, elapsed, fated=fated)
         self._finishing = False
         self._on_finished()
 
 
-def _file_untimed_review(problem, seconds, now=None):
+def _file_untimed_review(problem, seconds, now=None, fated=False):
     """A review that ran without a session of its own (another kind of session was running,
     so none could start) is still time on its task. Session History and the task's
     count both read finished sessions, so this files the review as one. When a session of the
@@ -2117,6 +2306,7 @@ def _file_untimed_review(problem, seconds, now=None):
         "reviewProblemName": session_manager.FIRST_ATTEMPT_NAME if first_attempt else problem["name"],
         "reviewSubjectName": subject,
         "pomodoro": None, "sessionId": ("beside-" if beside else "untimed-") + uuid.uuid4().hex,
+        "fated": bool(fated),
     }
     if beside:
         entry["beside"] = True
@@ -2128,6 +2318,20 @@ def _can_drive_over(status):
     """True when a review may start its own blocking session: nothing is running, or
     what is running is paused (it is set aside and comes back when the review ends)."""
     return not status.get("isActive") or bool(status.get("isPaused"))
+
+
+def finish_review_for_status(status):
+    """Finishes the review that rides on this running or waiting task session (the mini timer's Finish),
+    through its banner so it is recorded as a review rather than just ending the session."""
+    for banner in list(_live_banners):
+        try:
+            if (banner.is_running() and banner._end_session_on_finish and banner._problem
+                    and _session_belongs_to(banner._problem, status)):
+                banner._finish()
+                return True
+        except RuntimeError:
+            _live_banners.discard(banner)
+    return False
 
 
 def finish_review_from_card(token, name, seconds):
@@ -2144,11 +2348,14 @@ def finish_review_from_card(token, name, seconds):
 
     active = review_store.get_active_review()
     problem = review_store.get_problem(active["problemId"]) if active and active["token"] == token else None
+    fated = bool(problem) and review_wheel.fate() == problem["id"]
 
     def submit(self_solved, shakiness):
         review_store.finish_review(token, self_solved=self_solved, shakiness=shakiness, duration_seconds=seconds)
         if problem:
-            _file_untimed_review(problem, seconds)
+            _file_untimed_review(problem, seconds, fated=fated)
+        if fated:
+            review_wheel.clear()
         for banner in list(_live_banners):
             try:
                 banner.hide()
@@ -2614,7 +2821,7 @@ class _NewCategoryDialog(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(8)
-        layout.addWidget(dialog_title("New category", "A group of problems, like Sorting or Chapter 7."))
+        layout.addWidget(dialog_title("New category"))
         layout.addWidget(field_label("Name"))
         self._name = QLineEdit(name)
         self._name.setPlaceholderText("Sorting")
@@ -2849,7 +3056,7 @@ class _BatchDialog(QWidget):
             return
         self._add.setEnabled(bool(names))
         if not names:
-            self._summary.setText("Nothing to add yet. Press Enter for a new line.")
+            self._summary.setText("Nothing to add yet.")
             self._add.setText("Add")
             return
         shown = ", ".join(names[:4]) + (" ..." if len(names) > 4 else "")
@@ -3109,6 +3316,14 @@ class _AddProblemDialog(QWidget):
         self._status_label = role_label("", "error")
         layout.addWidget(self._status_label)
 
+        # Shown when the name is already taken and a first attempt is waiting: the time goes onto the
+        # problem that exists instead of being lost with this form.
+        self._existing = None
+        self._merge_button = accent(QPushButton("Add my time to the existing problem"))
+        self._merge_button.clicked.connect(self._add_to_existing)
+        self._merge_button.hide()
+        layout.addWidget(self._merge_button)
+
         button_row = QHBoxLayout()
         button_row.addStretch(1)
         cancel_button = QPushButton("Cancel")
@@ -3265,11 +3480,35 @@ class _AddProblemDialog(QWidget):
                 )
         except review_store.DuplicateNameError as e:
             self._status_label.setText(str(e))
+            self._offer_existing(subject_id, name)
             return None
         if problem is None:
             self._status_label.setText("Could not save this problem.")
             return None
         return problem
+
+    def _offer_existing(self, subject_id, name):
+        if self._editing or self._pending_first_attempt is None:
+            return
+        existing = review_store.find_problem(subject_id, name)
+        if existing is None:
+            return
+        self._existing = existing
+        seconds = self._pending_first_attempt["seconds"]
+        self._status_label.setText(
+            f'"{existing["name"]}" is already in this subject. Add your {_format_mmss(seconds)} to it, '
+            "or change the name to save a new problem.")
+        self._merge_button.show()
+
+    def _add_to_existing(self):
+        attempt, existing = self._pending_first_attempt, self._existing
+        if attempt is None or existing is None:
+            return
+        problem = review_store.record_first_attempt(
+            existing["id"], attempt["seconds"], self_solved=attempt["selfSolved"], shakiness=attempt["shakiness"],
+        ) or existing
+        self.close()
+        self._on_added(problem)
 
     def _submit(self):
         problem = self._gather_and_save()

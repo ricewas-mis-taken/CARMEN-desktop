@@ -103,3 +103,14 @@ Switching = one line in `family_sync.make_transport()`.
 4-6. Extension (chrome/ and firefox/): **not touched.** Needed later: poll `/family/rules`, apply deny first, show `status.guide` as "Set by <name>"; mirror into firefox/ byte-for-byte and `node --check`.
 7. Sync: `guide` travels with the running session (shared on purpose: the other computer also shows who set it); `config` keys `familyEnabled`/`familyApiBase` are per computer (not in `SHARED_SETTINGS`); the family cache is local-only.
 8. Design decision logged in `DESIGN_DECISIONS.txt` (2026-11-24); counterpart note to be added in the extension repos.
+
+## Running the tests
+
+Run the two folders as two separate commands:
+
+```
+python -m pytest tests
+python -m pytest tests_family
+```
+
+`tests_family` needs no Windows modules and no Qt. When both folders are given to one pytest run on a loaded Linux machine, one timing-sensitive Qt test in `tests/test_review_tab.py` (`test_clearing_and_refreshing_the_parked_strip_never_flashes_a_window`) failed twice in a row, although it passes on its own, in its whole file, and in `tests/` alone. The cause was not found. Run separately, `tests` matches `main` exactly and `tests_family` passes.

@@ -1,0 +1,146 @@
+name: CarmenFocus
+# Generate the Xcode project with:  xcodegen generate   (https://github.com/yonaskolb/XcodeGen)
+# Fill in Config.xcconfig first (copy Config.example.xcconfig).
+options:
+  bundleIdPrefix: app.carmenfocus
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+configFiles:
+  Debug: Config.xcconfig
+  Release: Config.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    TARGETED_DEVICE_FAMILY: "1,2"        # iPhone and iPad
+    DEVELOPMENT_TEAM: $(CARMEN_TEAM_ID)
+    CODE_SIGN_STYLE: Automatic
+packages:
+  CarmenCore:
+    path: CarmenCore
+targets:
+  CarmenFocus:
+    type: application
+    platform: iOS
+    sources: [App]
+    dependencies:
+      - package: CarmenCore
+      - target: ActivityMonitor
+        embed: true
+      - target: ShieldConfiguration
+        embed: true
+      - target: ShieldAction
+        embed: true
+      - target: ScreenTimeReport
+        embed: true
+    entitlements:
+      path: Entitlements/App.entitlements
+      properties:
+        com.apple.developer.family-controls: true
+        com.apple.security.application-groups: [group.app.carmenfocus]
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Carmen Focus
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        CarmenSupabaseURL: $(CARMEN_SUPABASE_URL)
+        CarmenSupabaseKey: $(CARMEN_SUPABASE_KEY)
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.carmenfocus.ios
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+  ActivityMonitor:
+    type: app-extension
+    platform: iOS
+    sources: [Extensions/ActivityMonitor]
+    dependencies:
+      - package: CarmenCore
+    entitlements:
+      path: Entitlements/ActivityMonitor.entitlements
+      properties:
+        com.apple.developer.family-controls: true
+        com.apple.security.application-groups: [group.app.carmenfocus]
+    info:
+      path: Extensions/ActivityMonitor/Info.plist
+      properties:
+        CFBundleDisplayName: Carmen Monitor
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.deviceactivity.monitor-extension
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).CarmenMonitor
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.carmenfocus.ios.monitor
+  ShieldConfiguration:
+    type: app-extension
+    platform: iOS
+    sources: [Extensions/ShieldConfiguration]
+    dependencies:
+      - package: CarmenCore
+    entitlements:
+      path: Entitlements/ShieldConfiguration.entitlements
+      properties:
+        com.apple.developer.family-controls: true
+        com.apple.security.application-groups: [group.app.carmenfocus]
+    info:
+      path: Extensions/ShieldConfiguration/Info.plist
+      properties:
+        CFBundleDisplayName: Carmen Shield
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.ManagedSettingsUI.shield-configuration-service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).CarmenShieldConfiguration
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.carmenfocus.ios.shieldconfig
+  ShieldAction:
+    type: app-extension
+    platform: iOS
+    sources: [Extensions/ShieldAction]
+    dependencies:
+      - package: CarmenCore
+    entitlements:
+      path: Entitlements/ShieldAction.entitlements
+      properties:
+        com.apple.developer.family-controls: true
+        com.apple.security.application-groups: [group.app.carmenfocus]
+    info:
+      path: Extensions/ShieldAction/Info.plist
+      properties:
+        CFBundleDisplayName: Carmen Shield Action
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.ManagedSettings.shield-action-service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).CarmenShieldAction
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.carmenfocus.ios.shieldaction
+  ScreenTimeReport:
+    type: app-extension
+    platform: iOS
+    sources: [Extensions/ScreenTimeReport]
+    entitlements:
+      path: Entitlements/ScreenTimeReport.entitlements
+      properties:
+        com.apple.developer.family-controls: true
+        com.apple.security.application-groups: [group.app.carmenfocus]
+    info:
+      path: Extensions/ScreenTimeReport/Info.plist
+      properties:
+        CFBundleDisplayName: Carmen Screen Time
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.deviceactivityui.report-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.carmenfocus.ios.report
+schemes:
+  CarmenFocus:
+    build:
+      targets:
+        CarmenFocus: all
+    run:
+      config: Debug

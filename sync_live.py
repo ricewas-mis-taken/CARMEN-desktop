@@ -29,6 +29,8 @@ import calendar_store
 import config
 import device_id
 import multi_device
+import plan_ml
+import plan_store
 import quicknote_store
 import scribe_store
 import sync_photos
@@ -59,6 +61,10 @@ SETTINGS_TABLE = "settings"       # the saved block/allow lists and Start-dialog
 QUICKNOTE_TABLE = "quicknote"     # the one shared bullet-point note
 QUICKNOTE_PUSHED_PATH = os.path.join(_PRIVATE, "live_quicknote_pushed.txt")
 SCRIBE_TABLE = "scribe"           # the Scribe board's layers (its images go as photos)
+PLANS_TABLE = "plans"             # one row per planned day (nightly plan), newest edit of a day wins
+PLAN_EXAMPLES_TABLE = "plan_examples"   # what plan_ml was taught, merged line by line
+PLANS_PUSHED_PATH = os.path.join(_PRIVATE, "live_plans_pushed.txt")
+PLAN_EXAMPLES_PUSHED_PATH = os.path.join(_PRIVATE, "live_plan_examples_pushed.txt")
 SCRIBE_PUSHED_PATH = os.path.join(_PRIVATE, "live_scribe_pushed.txt")
 SETTINGS_PUSHED_PATH = os.path.join(_PRIVATE, "live_settings_pushed.txt")
 SCREENTIME_PUSHED_PATH = os.path.join(_PRIVATE, "live_screentime_pushed.json")
@@ -133,7 +139,7 @@ def _gather_history():
     entries = session_history.entries_ended_after(watermark)
     records = []
     for entry in entries:
-        stamp = entry.get("endTime") or entry.get("startTime")
+        stamp = session_history.sync_stamp(entry) or entry.get("startTime")
         if not stamp:
             continue
         records.append({
@@ -144,7 +150,7 @@ def _gather_history():
             "updated_at": sync_client._to_wire_ts(stamp),
             "is_deleted": False,
         })
-    newest = max((e.get("endTime") or "" for e in entries), default="") or None
+    newest = max((session_history.sync_stamp(e) for e in entries), default="") or None
     return records, newest
 
 
@@ -337,6 +343,71 @@ def _apply_quicknote(records):
             logger.exception("sync_live: could not apply the shared QuickNote")
 
 
+# --- gather / apply: the nightly plans and what plan_ml has learned ---
+
+def _gather_plans():
+    after = _read(PLANS_PUSHED_PATH)
+    days = plan_store.export_days(after)
+    if not days:
+        return [], None
+    newest = days[0]["updatedAt"]
+    records = []
+    for entry in days:
+        if server_clock.is_newer(entry["updatedAt"], newest):
+            newest = entry["updatedAt"]
+        records.append({
+            "table_name": PLANS_TABLE, "sync_id": entry["day"],
+            "data": {"items": entry["items"], "madeAt": entry["madeAt"], "noteMeta": entry["noteMeta"]},
+            "device_id": device_id.get_device_id(), "updated_at": entry["updatedAt"], "is_deleted": False,
+        })
+    return records, newest
+
+
+def _apply_plans(records):
+    for record in records:
+        data = record.get("data")
+        if not isinstance(data, dict):
+            continue
+        try:
+            if plan_store.apply_remote_day(record.get("sync_id"), data.get("items"), data.get("madeAt"),
+                                           record.get("updated_at"), data.get("noteMeta")):
+                _write(PLANS_PUSHED_PATH, record["updated_at"])
+        except Exception:
+            logger.exception("sync_live: could not apply a shared plan")
+
+
+def _example_id(line):
+    import hashlib
+    return hashlib.sha1(plan_ml.normalize(line).encode("utf-8")).hexdigest()[:20]
+
+
+def _gather_plan_examples():
+    """One record per taught line, so two computers teaching different lines never overwrite each other."""
+    after = _read(PLAN_EXAMPLES_PUSHED_PATH)
+    records, newest = [], None
+    for example in plan_ml.export_examples()["items"]:
+        stamp = example.get("at")
+        if not isinstance(stamp, str) or not server_clock.is_newer(stamp, after):
+            continue
+        if newest is None or server_clock.is_newer(stamp, newest):
+            newest = stamp
+        records.append({
+            "table_name": PLAN_EXAMPLES_TABLE, "sync_id": _example_id(example["line"]), "data": example,
+            "device_id": device_id.get_device_id(), "updated_at": stamp, "is_deleted": False,
+        })
+    return records, newest
+
+
+def _apply_plan_examples(records):
+    lessons = [r.get("data") for r in records if isinstance(r.get("data"), dict)]
+    if not lessons:
+        return
+    try:
+        plan_ml.apply_remote_examples(lessons)
+    except Exception:
+        logger.exception("sync_live: could not merge the shared plan examples")
+
+
 # --- gather / apply: the Scribe board ---
 
 _scribe_images_wanted = False     # set when new layers arrived: their images still have to be fetched
@@ -484,6 +555,8 @@ def _apply(records):
     _apply_settings(by_table.get(SETTINGS_TABLE, []))
     _apply_quicknote(by_table.get(QUICKNOTE_TABLE, []))
     _apply_scribe(by_table.get(SCRIBE_TABLE, []))
+    _apply_plans(by_table.get(PLANS_TABLE, []))
+    _apply_plan_examples(by_table.get(PLAN_EXAMPLES_TABLE, []))
 
 
 def tick():
@@ -506,6 +579,10 @@ def tick():
     push_records += note_records
     scribe_records, scribe_stamp = _gather_scribe()
     push_records += scribe_records
+    plan_records, plan_stamp = _gather_plans()
+    push_records += plan_records
+    example_records, example_stamp = _gather_plan_examples()
+    push_records += example_records
     screentime_records, screentime_fingerprints = _gather_screentime()
     push_records += screentime_records
     refreshed = False
@@ -541,6 +618,10 @@ def tick():
         _write(QUICKNOTE_PUSHED_PATH, note_stamp)
     if scribe_stamp:
         _write(SCRIBE_PUSHED_PATH, scribe_stamp)
+    if plan_stamp:
+        _write(PLANS_PUSHED_PATH, plan_stamp)
+    if example_stamp:
+        _write(PLAN_EXAMPLES_PUSHED_PATH, example_stamp)
     _remember_screentime_sent(screentime_fingerprints)
     _apply(records)
     try:
@@ -560,6 +641,8 @@ session_manager.add_change_listener(lambda: _wake.set())
 review_store.add_change_listener(lambda: _wake.set())
 config.add_change_listener(lambda: _wake.set())
 quicknote_store.add_change_listener(lambda: _wake.set())
+plan_store.add_change_listener(lambda: _wake.set())
+plan_ml.add_change_listener(lambda: _wake.set())
 scribe_store.add_change_listener(lambda: _wake.set())
 
 

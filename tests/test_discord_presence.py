@@ -85,3 +85,40 @@ def test_paused_shows_minutes_left_for_a_countdown_and_elapsed_for_a_stopwatch()
     assert watch["state"] == "Paused · 1 h 20 min elapsed"
     review = dp.describe({"isActive": False}, {"problemName": "P", "isPaused": True, "elapsedSeconds": 600})
     assert review["state"] == "Paused · 10 min elapsed"
+
+
+def test_turning_it_off_clears_the_card_before_disconnecting():
+    import threading
+    calls = []
+
+    class Client:
+        def clear(self):
+            calls.append("clear")
+
+        def close(self):
+            calls.append("close")
+
+    p = dp.Presence(threading.Event())
+    p._client, p._last = Client(), {"details": "Focus session", "state": "Locked in"}
+    p._drop(clear=True)
+    assert calls == ["clear", "close"]
+
+
+def test_off_at_startup_still_wipes_a_leftover_card(monkeypatch):
+    import threading
+    calls = []
+
+    class Client:
+        def clear(self):
+            calls.append("clear")
+
+        def close(self):
+            calls.append("close")
+
+    stop = threading.Event()
+    p = dp.Presence(stop)
+    monkeypatch.setattr(dp.config, "load_config", lambda: {"discordPresence": False})
+    monkeypatch.setattr(p, "_connect", lambda: setattr(p, "_client", Client()))
+    monkeypatch.setattr(stop, "wait", lambda s: stop.set())
+    p.run()
+    assert calls[:2] == ["clear", "close"]

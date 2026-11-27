@@ -1056,6 +1056,120 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   tag, left out of every total; session_history.load_all hides it unless include_beside), instead of not at all.
   Cross-reference: carmen-extension DESIGN_DECISIONS.txt [2026-11-07] "Quiet moments when a session starts".
 
+2026-11-11  Review wheel: drawn by weight, then the wheel is turned to match
+  The wheel picks which due review to do. Slice size is review_wheel.weight (late days, pushed back, points already
+  lost), so late reviews really are likelier. Chose to draw the winner by weight first and then turn the wheel so the
+  pointer stops inside that slice, over simulating physics and reading wherever it stops: the odds are exact and the
+  flick only changes how long the spin looks. The pick is "fated": starting any other review asks first and costs
+  BREAK_COST (3) points as a "fate" score event, then frees the wheel; finishing the pick frees it too. Fate is held in
+  memory only, so a restart lets you off. Desktop only: the extension has no Review tab, so there is nothing to mirror.
+
+2026-11-11  iPhone and iPad app: native Swift, cloud-only sync, finished sessions first
+  Chose a native SwiftUI app (ios/) over a web or cross-platform wrapper, because blocking other apps needs Apple's
+  Family Controls, Managed Settings and Device Activity APIs and their extensions, which only native code can use.
+  The phone talks straight to Supabase like the desktop (sync_records, same newest-wins rule) instead of to the desktop's
+  local API, so it works with the computer off. First version reads tasks and finished sessions and sends the
+  sessions it finished (table session_history, same keys as session_manager files). The running session (live_session)
+  is not shared yet: that record is the desktop's whole session state and a wrong write would corrupt the desktop's;
+  it needs its own careful pass. Hard lock on iOS means no "Continue anyway" on the shield and a 10 minute pause
+  budget; it cannot stop the person turning Screen Time access off, which is an iOS limit. Written on Windows, never
+  compiled: see ios/README.md. Desktop-only change in this repo; the browser extension is untouched.
+
+2026-11-11  iPhone app, second pass: shared running session, editable tasks, Pomodoro
+  The phone now writes and reads live_session. It writes only the keys a phone session means (isActive, times, lock
+  mode, sessionId, pause log, pomodoro, isBreak); session_manager fills the rest from its defaults, so the desktop is
+  never handed a half state. Times go out in cloud time using the Date header offset (same as server_clock.py). Ending
+  sends endedSessionId so the desktop only ends a session it knew. A newer session on either side replaces the other's,
+  matching the rule between two computers; the phone ends its own as "superseded" without writing that back over the
+  desktop's. Tasks keep the whole desktop record in a dict and edit only known keys, over a typed model, so a field the
+  desktop adds later is never dropped. Pomodoro blocks of 15 minutes or more get their own system-run windows so the
+  shield follows breaks with the app closed. Left out on purpose: finishing a review on the phone (it would need an
+  exact copy of review_scheduler and the score rules; a mistake shifts every later date) and Scribe (a separate
+  canvas build). Still uncompiled; see ios/README.md.
+
+2026-11-13  Stale sessions from another computer, and when the wheel's pick counts as done
+  A running session another computer kept sending, after this one had ended it, replaced the live session (the newer
+  stamp won) and a review was filed under the wrong problem. apply_remote_state now ignores a remote session this
+  computer already filed in its history, and one that began over a minute before the local one; the local session is
+  re-stamped so it becomes the shared truth. Start times are only compared past a minute because two computers' clocks
+  disagree by less than that and the compare must never flip a real newer session. Chose this over "the newest start
+  always wins": the stamp rule exists so pauses and edits propagate. The wheel's pick is dropped by looking at the
+  problem itself (reviewed since the pick was made, deleted, or set aside) rather than by hooking every finish path
+  (banner, task card, mini timer, another computer), because a missed hook leaves the pick stuck.
+
+2026-11-14  Qt crash on a monitor change: record it, stay out of its way, and come back by itself
+  Windows crash records for Carmen are all Qt6Gui.dll, at QScreen::geometry (4 of 6) or QScreen::virtualSiblings
+  (resolved by matching the fault offset to the DLL's export table), always an access violation inside Qt's own
+  event loop with no Python frame. The machine has two monitors at 125% and 150% zoom, more that have come and
+  gone, and two GPUs: a monitor dropping out or returning while Qt still holds its screen object is the likely
+  trigger, but no native stack existed to prove it. Chose three small things over a rewrite or a Qt workaround:
+  native_crash.py records the full native stack at the next access violation (a vectored exception handler that
+  only looks; Windows' own dump setting needs a system-wide change), screen_guard.py makes Carmen's timers skip
+  window moves and raw Win32 calls for a few seconds after the screens change (and the mini timer stops calling
+  SetWindowPos twice a second when it is already on top), and a crash restart now puts the open windows back
+  (window_memory.py, saved when the state changes) instead of leaving Carmen invisible in the tray. Not done:
+  turning high-DPI scaling off (it would shrink the whole interface on these zoom levels) and hiding every window
+  on a screen change (hiding during teardown is itself a native call). If native_crash.log names a Qt function,
+  the next step follows from that, not from this guess.
+
+2026-11-17  Scribe: undo that keeps item identity, and a whiteboard's missing basics
+  Undo on a real board (23,317 strokes, 939k points) cost 660 ms after a stroke and 333 ms after a move. Profiling
+  split it in two: the minimap heat map was rebuilt from scratch after every undo (walking every point), and a
+  restored snapshot swapped every item for a copy, so every per-item cache (outlines, boxes) missed at once.
+  Chose steps that hold the SAME item objects (a list of items per layer, plus a saved state only for the items an edit
+  changes in place; edits that only add, remove or reorder pass an empty list) over making the copies cheaper,
+  because identity is what keeps the caches valid. The heat map is now patched by the items added or removed, and a
+  rebuild that cannot be avoided (a move) runs in 6 ms slices between paints with the old cells drawn meanwhile.
+  Result: undo plus repaint about 60 ms for both kinds. The default for a step is still "every item", so a forgotten
+  caller is slow, not wrong.
+  New: resize handles and typed X/Y/W/H (shape maths in scribe_geometry, no new item fields, so another computer on
+  older code still reads the board), an eraser that removes whole shapes (a partial-stroke eraser would split strokes
+  and change what sync carries), live coordinates plus Go to, arrow nudge, layer-order keys, text edit, and a grid of
+  whole named papers instead of overlapping strips. Clicking and erasing use a remembered list of item boxes, kept
+  current by an edit counter, because a distance check against every outline was 29 ms per click.
+  Found, not changed: a board over MAX_SYNC_BYTES (6 MB) is silently not shared. This computer's board is 41 MB.
+
+2026-11-17  AI agents may work in their own browser tabs: an Options setting, on by default
+  The extension now leaves the tabs of an AI agent such as Claude in Chrome alone during a session (carmen-extension
+  DESIGN_DECISIONS.txt, same date, has the reasoning). The desktop owns the switch: config allowAiAgents (per computer,
+  not in SHARED_SETTINGS, since it describes this computer's browsers), shown in Options > Browser extension and sent
+  to the extension on /status. Default on, so agents work without setup. Only the extension acts on it.
+
+2026-11-18  Per-task browser profile blocking, and the task editor no longer waits for the app scan
+  Blocking one Chrome/Edge profile existed only in the default blocklist picker; a started task never passed any
+  profile to its session, so a task could not block one (it looked like the feature had gone). Tasks now carry
+  browserProfileBlocklist (default [] for old tasks, which is what they always did; a new task starts from the saved
+  default list like its app list does), the editor lists the profiles, a started task passes them on, and saving a
+  task that is running updates the live session. Synced with the task like its other lists (no new sync path).
+  The editor was slow because it scanned Start Menu shortcuts and Store packages on the screen's thread before
+  showing. It now shows with the apps the task already blocks and adds the rest when a background scan finishes
+  (scan remembered for 10 minutes). Not changed: the other pickers still scan up front.
+
+2026-11-18  Options sync across computers
+  Fork: keep options per computer (a laptop and a desktop may want different ones) vs. share them. Shared: the
+  Discord switches, AI-agent tabs, open-on-sign-in, Scribe options card, tour-done and report-card week, riding the
+  existing shared-settings path (config.SHARED_SETTINGS, newest stamp wins). Chosen because a per-computer Discord
+  switch left a card up from a computer the user had turned it off on. Still local: window geometry, browser profile
+  ids, restoreWindow, the API token.
+
+2026-11-23  Saving a forgotten attempt, and spending vacation mid-session
+  Fork: when a first attempt's Add Problem form is abandoned, or a plain focus session was really a go at a problem,
+  either leave the time as history only, or let the history file it afterwards. Chosen: a "Save as an attempt" button on
+  those history cards (attempt_link.py) that records one more attempt on an existing problem, or a new one, through the
+  same review_store path as a live finish, then marks the entry (linkedProblemId) so it is never saved twice. Duplicate
+  names in Add Problem offer "Add my time to the existing problem" the same way. The history edit stays on this computer
+  (synced history entries are not edited after filing); the attempt itself syncs with the review data. Vacation line now
+  also shows during a session. No extension counterpart: desktop-only UI.
+
+2026-11-23  Reviews and timers inside a Pomodoro; history edits sync
+  Fork: model a Pomodoro as a parent session that owns nested reviews/timers (new state in session_manager), or keep the
+  existing "ride beside" design (a review_store review or first-attempt timer pauses and rests with the live task session)
+  and only add grouping. Chosen: keep ride-beside, extend it to a first attempt that started before the Pomodoro
+  (make_independent), and group in the history (session_group.py: by time for beside reviews, by hand via groupedUnder
+  for earlier ones). No time moves between sessions, so nothing double counts. A running plain focus timer is still set
+  aside (parked) when a Pomodoro starts, not carried beside it. History edits now sync: session_history.update_entry stamps
+  editedAt, the sync pushes anything that ended or was edited after its watermark, and a newer edit replaces the local copy.
+
 2026-11-07  Theme is a shared setting; lock popups send the main window back
   The theme is one more key in config's SHARED_SETTINGS (same stamp and wake-up as the block list), so the
   two computers look the same; the stylesheet is re-applied live when it arrives (hard-coded widget colours
@@ -1076,6 +1190,45 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
     It also passes --autostart, like the Windows entry, so "open the window on sign-in" is honoured.
   - If macOS refuses notification permission, reminders fall back to a plain osascript banner (no
     buttons) instead of vanishing. Snooze buttons need the permission to be granted in System Settings.
+
+2026-11-24  Nightly plan, the Today page, and the small model behind them
+  Fork 1, how the lines are understood: a hosted language model, a trained classifier library (scikit-learn,
+  hashing + SGD), or a small model written here. Chose plan_ml.py: multinomial naive Bayes over word, bigram and
+  character features, started from hand-written rules whose weight fades as k/(k+n) (k=10) with the person's own
+  examples. Reasons: it learns from a few dozen lines, trains in under a millisecond, needs no download and sends
+  nothing off the computer, and it is rebuilt from one list of labelled lines, so a correction is one edit (the same
+  line taught again replaces the old lesson) and there is no hidden state. It always asks for a one-tap confirm until
+  15 lines are learned, then auto-files only above 0.80 with a 0.35 lead (the rules alone are over-confident at n=0,
+  which is why the gate exists). Thresholds are unsourced heuristics from the research notes; tune them from the
+  right-click reports (private/plan_reports.jsonl) rather than by guessing.
+  Fork 2, where a line lives: a task stays in the plan (a timed block on Today, not a tasks_store task, because those
+  are recurring targets), a board item becomes a board card (planned-for day, tags), a note becomes a QuickNote line.
+  Chose filing into the existing stores over a parallel plan-only list, so the Board and QuickNote stay the one place
+  for those things and keep syncing. The plan itself, the model's examples, the shutdown log and the nudge record stay
+  per computer for now (test_sync_coverage lists them). Not done, on purpose: syncing plan_examples.json. Two
+  computers would then learn from each other; it needs its own merge (union by line, newest wins) and was left out
+  of this change. Plans are not synced either, so Today shows each computer's own plans.
+  Fork 3, the stop time: read from when the app last saw someone at the computer each night (a mark every 30 s in
+  plan_prompt, only 18:00-06:00), not from Windows shutdown events (unverified, and a laptop that sleeps never shuts
+  down). A night is measured in minutes after 18:00 so midnight is not a cliff; the guess is a recency-weighted median
+  after dropping far outliers, Friday/Saturday nights judged by other late nights. Three nights are needed before it
+  trusts itself (22:30 until then). Nudges at 30 and 15 minutes before, once per night each, skipped when tomorrow
+  already has a plan, nobody is at the computer, or the nudge is over ten minutes stale (an app started late).
+  Fork 4, scoring: +4 for planning, then -7..+7 by share done, counting at most 8 items and ignoring tasks under 10
+  minutes and plans of one line, so padding or splitting a plan cannot farm points; events are keyed per day so
+  settling twice changes nothing. Abandoned items cost nothing beyond the missing swing (loss aversion research says a
+  forgiving design keeps people planning).
+  Browser extension: no counterpart. Nothing here is enforced or shown in the browser; /status is unchanged.
+
+2026-11-24  Plans and what the model learned now sync (follow-up to the entry above)
+  Fork: sync each as one whole record like the QuickNote (newest wins), or finer. Whole-record lost data in a test:
+  two computers each teaching a different line, the second push replaced the first. So plans sync one record per
+  planned day (newest edit of a day wins; a day is edited by one person at a time, and the plan's QuickNote
+  "planned for" marks ride inside that record), and the model's lessons sync one record per taught line (newest
+  lesson for a line wins, lines only one computer knows are added, nothing local is dropped). Both use the fast lane
+  with the QuickNote and Scribe, so they arrive within seconds. Still per computer: the shutdown log (when this
+  computer was last used) and which nudges it already showed. Not synced: plan_reports.jsonl (reports are for me to
+  read, not for the model).
 
 2026-11-24  Linked guides (family features): a guide's rules run as ordinary Carmen sessions, behind a transport seam
   Forks and what was chosen:

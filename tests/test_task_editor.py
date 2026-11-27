@@ -282,3 +282,13 @@ def test_editing_a_task_with_per_day_times_shows_them(qtbot, isolate_tasks):
     win = task_editor._TaskEditor(task, on_saved=None)
     qtbot.addWidget(win)
     assert win._day_edits["FR"].text() == "45"
+
+
+def test_the_editor_never_opens_taller_than_the_screen(qapp):
+    from PySide6.QtGui import QGuiApplication
+    import tasks_store
+    from qt_ui import task_editor
+    ed = task_editor._TaskEditor(dict(tasks_store.DEFAULT_TASK, id="t", name="x"), lambda t: None)
+    room = QGuiApplication.primaryScreen().availableGeometry().height()
+    assert ed.height() <= room
+    assert ed._scroll.widget() is not None

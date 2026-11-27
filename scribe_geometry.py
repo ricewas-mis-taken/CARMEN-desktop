@@ -90,8 +90,8 @@ def outline_points(item):
     return []
 
 
-def bounds(item):
-    """(x0, y0, x1, y1) in world coordinates, padded by half the line width."""
+def bounds(item, padded=True):
+    """(x0, y0, x1, y1) in world coordinates, padded by half the line width (padded=False: the shape itself)."""
     kind = item["type"]
     if kind in ("text", "image"):
         x, y = item["a"]
@@ -101,7 +101,7 @@ def bounds(item):
         pts = pts + [tuple(item["c"])]
     if not pts:
         return 0.0, 0.0, 0.0, 0.0
-    pad = item.get("width", 1) / 2
+    pad = item.get("width", 1) / 2 if padded else 0.0
     xs, ys = [p[0] for p in pts], [p[1] for p in pts]
     return min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad
 
@@ -186,3 +186,44 @@ def smooth_stroke(points, smoothness, zoom):
     pts = rdp(pts, smoothness * 0.35 / max(zoom, 0.02))
     pts = chaikin(pts, 0 if smoothness < 3 else (1 if smoothness < 7 else 2))
     return [list(p) for p in pts]
+
+
+def scale_item(item, sx, sy, ox, oy):
+    """Scales one shape about the point (ox, oy), in place. Points and boxes are replaced, never edited, so a
+    saved undo step that shares them stays right. Line width is left alone (a thicker pen is a style, not a size);
+    text grows with the shape; an image keeps its picture and changes its box."""
+    def point(p):
+        return [ox + (p[0] - ox) * sx, oy + (p[1] - oy) * sy]
+    for key in ("a", "b", "c"):
+        if key in item:
+            item[key] = point(item[key])
+    if item["type"] == "stroke":
+        item["pts"] = [point(p) for p in item["pts"]]
+    elif item["type"] in ("text", "image"):
+        item["w"], item["h"] = item["w"] * abs(sx), item["h"] * abs(sy)
+        if item["type"] == "text":
+            item["size"] = max(4, item.get("size", 16) * (abs(sx) + abs(sy)) / 2)
+        if sx < 0:
+            item["a"][0] -= item["w"]
+        if sy < 0:
+            item["a"][1] -= item["h"]
+
+
+def union_bounds(items, padded=False):
+    """(x0, y0, x1, y1) around every item (the shapes themselves, unless padded), or None when there are none."""
+    boxes = [bounds(i, padded) for i in items]
+    if not boxes:
+        return None
+    return (min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+
+def resize_to_box(items, old, new):
+    """Moves and scales `items` so the box `old` becomes `new` (both x0, y0, x1, y1)."""
+    ow, oh = old[2] - old[0], old[3] - old[1]
+    nw, nh = max(new[2] - new[0], 1.0), max(new[3] - new[1], 1.0)
+    # A shape with no width (or no height) has nothing to scale along that side: it just moves.
+    sx = nw / ow if ow > 1e-6 else 1.0
+    sy = nh / oh if oh > 1e-6 else 1.0
+    for item in items:
+        scale_item(item, sx, sy, old[0], old[1])
+        translate(item, new[0] - old[0], new[1] - old[1])

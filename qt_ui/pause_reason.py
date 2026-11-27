@@ -118,25 +118,35 @@ class _Popup(QWidget):
 
         # Long break: how long, one tap. A custom number is there too.
         self._minutes_row = QWidget()
-        mrow = QHBoxLayout(self._minutes_row)
-        mrow.setContentsMargins(0, 0, 0, 0)
-        mrow.setSpacing(6)
+        mcol = QVBoxLayout(self._minutes_row)
+        mcol.setContentsMargins(0, 0, 0, 0)
+        mcol.setSpacing(8)
+        mrow = QHBoxLayout()                     # the quick lengths get a row of their own: beside the number box
+        mrow.setSpacing(6)                       # they were squeezed until "30 min" was cut off
         for quick in _MINUTE_CHIPS:
             chip = QPushButton(f"{quick} min")
             chip.setCursor(Qt.PointingHandCursor)
             chip.setStyleSheet(_CHIP % INK)
             chip.clicked.connect(lambda _=False, m=quick: self._choose("long_break", minutes=m))
             mrow.addWidget(chip)
+        mcol.addLayout(mrow)
+        other = QHBoxLayout()
+        other.setSpacing(8)
+        other_label = QLabel("Another length")
+        other_label.setStyleSheet(f"color:{MUTED};font-size:12.5px;background:transparent;")
+        other.addWidget(other_label)
         self._minutes = QSpinBox()
         self._minutes.setRange(1, pause_budget.LONG_BREAK_MAX_MINUTES)
         self._minutes.setValue(30)
         self._minutes.setSuffix(" min")
+        self._minutes.setMinimumWidth(110)
         self._minutes.setStyleSheet(
             f"QSpinBox{{background:#FFFFFF;color:{INK};border:1px solid #E6E9EF;border-radius:10px;"
             "padding:6px 8px;font-size:13px;}")
         self._minutes.setToolTip("Another length, then press Enter")
         self._minutes.lineEdit().returnPressed.connect(lambda: self._choose("long_break"))
-        mrow.addWidget(self._minutes)
+        other.addWidget(self._minutes, 1)
+        mcol.addLayout(other)
         self._minutes_row.hide()
         layout.addWidget(self._minutes_row)
 

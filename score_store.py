@@ -14,6 +14,7 @@ What earns and costs points (all small: a good day is about +12, a bad one about
   - a review done on or before its due date: +6; later than that costs 3 more per day (to -15)
   - a review left overdue: -3 for each day, for at most 10 days per due date
   - things set aside (out of rotation) never cost anything
+  - the nightly plan (plan_store): +4 for making one, then -7 to +7 for how much of it was done
 Pauses and unblocks add their own events through add_event()."""
 import json
 import os
@@ -41,12 +42,31 @@ def _empty():
     return {"version": 1, "events": [], "settledThrough": None}
 
 
+def clean_events(items):
+    """Only well-formed events. Another computer may send its whole ledger as one record (an item holding an
+    "events" list): its events are unpacked into this one's list instead of being kept as a broken event."""
+    flat = []
+    for item in items or []:
+        if isinstance(item, dict) and isinstance(item.get("events"), list):
+            flat.extend(item["events"])
+        else:
+            flat.append(item)
+    seen, good = set(), []
+    for event in flat:
+        if (isinstance(event, dict) and isinstance(event.get("key"), str) and isinstance(event.get("date"), str)
+                and isinstance(event.get("points"), (int, float)) and event["key"] not in seen):
+            seen.add(event["key"])
+            good.append(event)
+    return good
+
+
 def load():
     try:
         with open(PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict) and isinstance(data.get("events"), list):
             data.setdefault("settledThrough", None)
+            data["events"] = clean_events(data["events"])
             return data
     except (OSError, ValueError):
         pass
@@ -123,7 +143,7 @@ def save_events(items):
     """Writes events merged in from another computer, keeping this one's own settled-through day."""
     with _lock:
         data = load()
-        data["events"] = items
+        data["events"] = clean_events(items)
         _save(data)
 
 
@@ -250,6 +270,8 @@ def _settle_day(data, day, tasks, sessions, overdue, tasks_store):
             if 1 <= days <= OVERDUE_MAX_DAYS:
                 add_event(f"overdue:{problem_id}:{due.isoformat()}:{day.isoformat()}", day, "overdue",
                           -OVERDUE_DAY_COST, f"review {days} day{'s' if days != 1 else ''} overdue", _data=data)
+    import plan_store
+    plan_store.score_day(day, data)               # the nightly plan: +4 for making one, up to +/-7 for how it went
     return len(data["events"]) - before
 
 

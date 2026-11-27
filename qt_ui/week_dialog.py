@@ -4,7 +4,7 @@ another day to move it. Earlier is free, each day later costs 3 points, said whi
 from datetime import date, timedelta
 
 from PySide6.QtCore import QMimeData, QPoint, Qt, QTimer
-from PySide6.QtGui import QDrag
+from PySide6.QtGui import QCursor, QDrag
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy, QSlider, QVBoxLayout, QWidget,
 )
@@ -80,9 +80,9 @@ class _Tag(QFrame):
             chip = QLabel(f"-{lost} pts" if lost else "free")
             chip.setStyleSheet(
                 f"color:{'#D9480F' if lost else '#2F9E44'};background:transparent;font-size:11.5px;font-weight:700;")
-            chip.setToolTip("Points this review loses on this day" if lost else "No points lost: on or before its due day")
+            pass
             row.addWidget(chip)
-        self.setToolTip(f"{problem['name']}, {problem.get('subjectName') or ''}. Drag to another day.")
+        self.setToolTip(f"{problem['name']}, {problem.get('subjectName') or ''}")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -287,12 +287,21 @@ class WeekDialog(QWidget):
         self._rows.setContentsMargins(0, 0, 4, 0)
         self._rows.setSpacing(0)
         scroll.setWidget(self._holder)
+        self._scroll = scroll
+        self._edge_timer = QTimer(self)
+        self._edge_timer.setInterval(25)
+        self._edge_timer.timeout.connect(self._scroll_at_edge)
         layout.addWidget(scroll, 1)
         bar = QHBoxLayout()
         self._span_label = QLabel("")
         self._span_label.setStyleSheet(f"color:{MUTED};font-size:13px;font-weight:600;background:transparent;")
         self._span_label.setFixedWidth(84)
         self._span = QSlider(Qt.Horizontal)
+        self._span.setStyleSheet(
+            "QSlider::groove:horizontal { height: 6px; border-radius: 3px; background: #E6E9EF; } "
+            f"QSlider::sub-page:horizontal {{ height: 6px; border-radius: 3px; background: {INK}; }} "
+            f"QSlider::handle:horizontal {{ width: 18px; height: 18px; margin: -6px 0; border-radius: 9px; "
+            f"background: #FFFFFF; border: 2px solid {INK}; }}")
         self._span.setRange(1, MAX_WEEKS)
         self._span.setValue(1)
         self._span.valueChanged.connect(self.refresh)
@@ -329,22 +338,38 @@ class WeekDialog(QWidget):
         total = sum(len(d["reviews"]) for d in plan)
         span = "this week" if weeks == 1 else f"in the next {weeks} weeks"
         if not total:
-            return f"Nothing to review {span}. Reviews show up here as they come due."
+            return f"Nothing to review {span}."
         text = f"{total} review{'s' if total != 1 else ''} {span}."
         heavy = [d for d in plan if d["heavy"]]
         if heavy:
             names = ", ".join(_weekday(d["date"], self._today) for d in heavy)
             text += f" Busiest: {names}. {_weekday(week_plan.lightest_day(plan), self._today)} is the lightest."
-        return text + " Drag a review to another day: earlier is free, each day later costs 3 points."
+        return text
+
+    EDGE = 60            # px from the top or bottom of the list where a held review starts scrolling it
+    EDGE_SPEED = 22      # px per tick at the very edge
+
+    def _scroll_at_edge(self):
+        """While a review is being dragged: holding it near the top or bottom edge scrolls the list that way."""
+        view = self._scroll.viewport()
+        y = view.mapFromGlobal(QCursor.pos()).y()
+        bar = self._scroll.verticalScrollBar()
+        if y < self.EDGE:
+            bar.setValue(bar.value() - round(self.EDGE_SPEED * min(1.0, (self.EDGE - y) / self.EDGE)))
+        elif y > view.height() - self.EDGE:
+            bar.setValue(bar.value() + round(self.EDGE_SPEED * min(1.0, (y - (view.height() - self.EDGE)) / self.EDGE)))
 
     def drag_started(self, problem):
+        self._edge_timer.start()
         for i in range(self._rows.count()):
             widget = self._rows.itemAt(i).widget()
             if isinstance(widget, _DayRow):
                 widget.show_cost(problem)
 
     def drag_ended(self):
+        self._edge_timer.stop()
         self.drag_started(None)
+        self._edge_timer.stop()
 
     def _show_hint(self, day, cost, problem):
         self._hint.setText("" if day is None else f"{problem['name']} to {_weekday(day, self._today)}: {cost_text(cost)}")

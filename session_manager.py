@@ -70,6 +70,9 @@ _state = {
     # paused-then-PC-shutdown-then-resumed review still get recorded instead
     # of silently vanishing on Finish.
     "reviewProblemId": None,
+    # True when the review wheel picked this review (qt_ui/review_wheel.py): the history entry keeps
+    # the flag so it can say "Fated" next to the review.
+    "fated": False,
     # True for a "Until I burnout" task session (tasks_store.BURNOUT_MINUTES
     # duration, see qt_ui/tasks_tab.py's _start_burnout) -- a first-class,
     # persisted flag rather than something each UI surface has to guess at
@@ -400,6 +403,7 @@ def start_session(
     hide_taskbar_badges=False,
     stop_taskbar_flashing=False,
     guide=None,
+    fated=False,
 ):
     # api_server.py's /session/start already validates this for the
     # network-facing path, but start_session() is also called in-process
@@ -461,6 +465,7 @@ def start_session(
         _state["reviewProblemName"] = review_problem_name
         _state["reviewSubjectName"] = review_subject_name
         _state["reviewProblemId"] = review_problem_id
+        _state["fated"] = bool(fated)
         _state["isBurnout"] = is_burnout
         _state["sessionId"] = uuid.uuid4().hex
         _state["endedSessionId"] = None
@@ -676,7 +681,7 @@ def update_taskbar_quiet(hide_badges, stop_flashing):
         state_events.bump()
 
 
-def update_blocklist(process_blocklist, domain_whitelist, lock_mode=None):
+def update_blocklist(process_blocklist, domain_whitelist, lock_mode=None, blocked_browser_profiles=None):
     """Replace the active session's block/allow lists (and, optionally, its
     lock mode) in-place, effective immediately -- lets a running session's
     rules be edited without ending and restarting it. lock_mode=None leaves
@@ -689,6 +694,8 @@ def update_blocklist(process_blocklist, domain_whitelist, lock_mode=None):
             return
         _state["processBlocklist"] = _clean_entries(process_blocklist)
         _state["domainWhitelist"] = _clean_entries(domain_whitelist)
+        if blocked_browser_profiles is not None:      # None leaves the session's profiles as they are
+            _state["blockedBrowserProfiles"] = _clean_entries(blocked_browser_profiles)
         if lock_mode is not None:
             _state["lockMode"] = lock_mode
         _save()
@@ -767,6 +774,7 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None, restore_pa
     pomodoro = dict(_state["pomodoro"]) if _state["pomodoro"] is not None else None
     session_id = _state.get("sessionId")
     guide = copy.deepcopy(_state.get("guide")) if _state.get("guide") else None
+    fated = bool(_state.get("fated"))
 
     if was_active:
         entry = (
@@ -792,6 +800,7 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None, restore_pa
                 # way to tell which task/subject/problem it was.
                 "reviewProblemName": review_problem_name,
                 "reviewSubjectName": review_subject_name,
+                "fated": fated,
                 "pomodoro": pomodoro,
                 "sessionId": session_id,
                 "isBurnout": bool(_state.get("isBurnout")),
@@ -824,6 +833,7 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None, restore_pa
     _state["reviewProblemName"] = None
     _state["reviewSubjectName"] = None
     _state["reviewProblemId"] = None
+    _state["fated"] = False
     _state["isBurnout"] = False
     _state["sessionId"] = None
     if was_active:
@@ -933,6 +943,7 @@ def _get_status_locked():
         "reviewProblemName": _state["reviewProblemName"],
         "reviewSubjectName": _state["reviewSubjectName"],
         "reviewProblemId": _state["reviewProblemId"],
+        "fated": bool(_state.get("fated")),
         "isFirstAttempt": is_first_attempt(_state),
         "isBurnout": _state["isBurnout"],
         "sessionId": _state.get("sessionId"),
@@ -1020,6 +1031,26 @@ def _clean_remote_state(data):
     return clean
 
 
+def _ended_here_locked(session_id):
+    """True when this computer's history already holds a finished session with this id."""
+    if not session_id:
+        return False
+    try:
+        return any(session_history.entry_id(e) == session_id
+                   for e in session_history.load_all(include_beside=True))
+    except Exception:
+        return False
+
+
+def _started_before(remote_start, local_start, margin_seconds=60):
+    """True when the remote session began clearly (over a minute) before ours. Two computers' clocks
+    differ by a little, so starts close together are not ordered by this."""
+    try:
+        return (datetime.fromisoformat(local_start) - datetime.fromisoformat(remote_start)).total_seconds() > margin_seconds
+    except (TypeError, ValueError):
+        return False
+
+
 def apply_remote_state(remote, remote_stamp):
     """Takes the state another computer shared, if it is newer than ours.
     Returns "applied", "ignored" (not newer, or unusable) or "kept-local".
@@ -1042,6 +1073,16 @@ def apply_remote_state(remote, remote_stamp):
             not remote_active and clean.get("endedSessionId") == local_id
         )
         different_session = not same_session
+        if remote_active and different_session and (
+                _ended_here_locked(clean.get("sessionId"))
+                or (local_active and _started_before(clean.get("startTime"), _state.get("startTime")))):
+            # A session this computer already ended, or one that began before ours, is a stale
+            # copy (the other computer kept running it and its newer stamp won). It must not
+            # replace the session in front of the person.
+            if local_active:
+                _save(at_least=remote_stamp)
+                return "kept-local"
+            return "ignored"
         if local_active and different_session and not remote_active:
             _save(at_least=remote_stamp)
             return "kept-local"

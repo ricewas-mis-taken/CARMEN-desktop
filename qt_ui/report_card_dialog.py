@@ -65,6 +65,8 @@ class ReportCardDialog(QWidget):
         if pause["free_seconds"] or pause["escape_seconds"]:
             extras.append(f"Pauses: {format_minutes(pause['free_seconds'] / 60)} honest, "
                           f"{format_minutes(pause['escape_seconds'] / 60)} looking elsewhere")
+        if pause.get("abandoned_seconds"):
+            extras.append(f"{format_minutes(pause['abandoned_seconds'] / 60)} left paused (not counted)")
         for text in extras:
             layout.addWidget(self._line(text))
 

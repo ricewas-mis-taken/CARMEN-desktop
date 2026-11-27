@@ -997,7 +997,7 @@ class HomeTab(QWidget):
             actions.addWidget(action)
         else:
             text.addWidget(self._big("Nothing is waiting for you"))
-            text.addWidget(_text("Today's goals are met and no reviews are due."))
+            text.addWidget(_text("Goals met, nothing due."))
             action = button("Plan something", SECONDARY_STYLE, height=44)
             action.clicked.connect(lambda: self._go("tasks"))
             actions.addWidget(action)
@@ -1103,7 +1103,7 @@ class HomeTab(QWidget):
         grade.setStyleSheet(f"color:{INK};font-size:30px;font-weight:800;background:transparent;")
         row.addWidget(grade, 0, Qt.AlignBottom)
         from qt_ui import explainer
-        info = explainer.InfoButton("score", "How the score and vacation minutes work")
+        info = explainer.InfoButton("score", "About the score")
         info.setProperty("tourId", "score-info")
         row.addWidget(info, 0, Qt.AlignTop)
         layout.addLayout(row)
@@ -1223,7 +1223,7 @@ class HomeTab(QWidget):
         goal = next_milestone(streak)
         col.addSpacing(4)
         col.addWidget(_Bar(streak / goal, "#F2842D", height=10))
-        col.addWidget(_text(f"{goal - streak} more to reach {goal}" if streak else "Focus today to light it", 14, FAINT))
+        col.addWidget(_text(f"{goal - streak} more to reach {goal}" if streak else "No streak yet", 14, FAINT))
         row.addLayout(col, 1)
         outer.addLayout(row)
         outer.addWidget(_heading("Jot something down"))
@@ -1257,7 +1257,7 @@ class HomeTab(QWidget):
         total = sum(m for _d, m in days)
         head = QHBoxLayout()
         for text, size, colour, weight, align in (
-                (f"{streak}-day streak" if streak else "No streak yet: one session today starts it", 17, INK, 700, Qt.AlignLeft),
+                (f"{streak}-day streak" if streak else "No streak yet", 17, INK, 700, Qt.AlignLeft),
                 (f"{active} active days, {format_minutes(total)} this year", 13, MUTED, 400, Qt.AlignRight)):
             label = QLabel(text)
             label.setAlignment(align | Qt.AlignVCenter)

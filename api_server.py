@@ -367,6 +367,8 @@ def status():
         }
     else:
         status_data["reviewInProgress"] = None
+    # Options > Browser extension: lets the extension leave an AI agent's own tabs alone. An old extension ignores it.
+    status_data["allowAiAgents"] = bool(config.load_config().get("allowAiAgents", True))
     return jsonify(status_data)
 
 

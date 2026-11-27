@@ -1824,6 +1824,20 @@ def all_session_history():
     return history
 
 
+def find_problem(subject_id, name):
+    """The live problem called `name` in this subject (any capitalisation), or None."""
+    with _lock:
+        try:
+            row = _get_conn().execute(
+                "SELECT id FROM review_problems WHERE is_deleted = 0 AND subject_id = ? AND LOWER(name) = LOWER(?)",
+                (subject_id, (name or "").strip()),
+            ).fetchone()
+        except Exception:
+            logger.exception("review_store.find_problem failed")
+            return None
+    return get_problem(row["id"]) if row else None
+
+
 def record_first_attempt(problem_id, duration_seconds, self_solved=True, shakiness=3):
     """Records a review that was timed *before* the problem's form was ever
     filled in -- the Add Problem dialog's "Start First Attempt" button opens

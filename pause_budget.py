@@ -12,6 +12,9 @@ A pause is recorded in the session's log as a marker with a reason. The reasons:
   checking     looking at something else                        counts against the budget
   (none)       an old extension or a tray pause with no reason  counts against the budget, so leaving
                                                                 the reason out is never the loophole
+  abandoned    a pause that ran past ABANDONED_AFTER_SECONDS    counts for nothing: nobody spends that long
+               (left paused overnight, the PC off)              looking at something else, so it is neither
+                                                                honest time nor a cost, and is shown on its own
 The budget is 10% of the session's length, at least 2 minutes. Past it, every 3 minutes costs a point
 (at most 15 a session)."""
 import math
@@ -26,6 +29,8 @@ POINT_EVERY_SECONDS = 180
 MAX_COST = 15
 LONG_BREAK_MAX_MINUTES = 480
 LONG_BREAK_GRACE_SECONDS = 60       # a minute of slack past the time set before it counts
+ABANDONED_AFTER_SECONDS = 4 * 3600  # a pause longer than this was left, not used (a long break may be set longer)
+NEVER_ABANDONED = {"aside", "rest"}  # Carmen itself knows why these paused: another session ran, or a Pomodoro break
 
 
 def exempt(session):
@@ -40,11 +45,16 @@ def reason_of(marker):
 
 def _pieces(reason, seconds, minutes):
     """One pause as budget items. A long break is free for the time it was set for (plus a minute's grace);
-    whatever runs past that is "overrun", which counts against the budget like checking something else."""
-    if reason == "long_break" and minutes:
-        free = int(minutes) * 60 + LONG_BREAK_GRACE_SECONDS
-        if seconds > free:
-            return [{"reason": reason, "seconds": free}, {"reason": "overrun", "seconds": seconds - free}]
+    whatever runs past that is "overrun", which counts against the budget like checking something else.
+    A pause that ran past ABANDONED_AFTER_SECONDS was left, not used: the part past what it was for is
+    "abandoned" and counts for nothing (see the module note). A long break keeps its own set time free."""
+    set_seconds = int(minutes) * 60 + LONG_BREAK_GRACE_SECONDS if reason == "long_break" and minutes else 0
+    if reason not in NEVER_ABANDONED and seconds > max(ABANDONED_AFTER_SECONDS, set_seconds):
+        kept = set_seconds if set_seconds and set_seconds < seconds else 0
+        pieces = [{"reason": reason, "seconds": kept}] if kept else []
+        return pieces + [{"reason": "abandoned", "seconds": seconds - kept}]
+    if set_seconds and seconds > set_seconds:
+        return [{"reason": reason, "seconds": set_seconds}, {"reason": "overrun", "seconds": seconds - set_seconds}]
     return [{"reason": reason, "seconds": seconds}]
 
 
@@ -69,20 +79,22 @@ def pauses(log, start_iso, end_iso, pending_free=False):
 
 def summarize(entry, pending_free=False):
     """What the history shows for one session: free pause seconds, escape pause seconds, the budget, and
-    the points the escape time cost."""
+    the points the escape time cost. Time left paused (abandoned) is reported on its own and costs nothing."""
     items = pauses(entry.get("violationLog"), entry.get("startTime"), entry.get("endTime"), pending_free)
+    abandoned = sum(p["seconds"] for p in items if p["reason"] == "abandoned")
     if exempt(entry):
-        return {"free_seconds": sum(p["seconds"] for p in items), "escape_seconds": 0, "budget_seconds": 0,
+        return {"free_seconds": sum(p["seconds"] for p in items if p["reason"] != "abandoned"),
+                "escape_seconds": 0, "abandoned_seconds": abandoned, "budget_seconds": 0,
                 "over_seconds": 0, "cost": 0, "pauses": items, "exempt": True}
     start, end = _parse(entry.get("startTime")), _parse(entry.get("endTime"))
     length = max(0, int((end - start).total_seconds())) if start and end else 0
     free = sum(p["seconds"] for p in items if p["reason"] in FREE)
-    escape = sum(p["seconds"] for p in items if p["reason"] not in FREE)
+    escape = sum(p["seconds"] for p in items if p["reason"] not in FREE and p["reason"] != "abandoned")
     budget = max(BUDGET_MINIMUM_SECONDS, int(length * BUDGET_SHARE))
     over = max(0, escape - budget)
     cost = min(MAX_COST, math.ceil(over / POINT_EVERY_SECONDS)) if over else 0
-    return {"free_seconds": free, "escape_seconds": escape, "budget_seconds": budget,
-            "over_seconds": over, "cost": cost, "pauses": items}
+    return {"free_seconds": free, "escape_seconds": escape, "abandoned_seconds": abandoned,
+            "budget_seconds": budget, "over_seconds": over, "cost": cost, "pauses": items}
 
 
 def live(status, now=None):

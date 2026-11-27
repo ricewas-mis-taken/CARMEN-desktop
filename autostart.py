@@ -39,8 +39,8 @@ else:
         points somewhere stale (e.g. the repo was moved). Safe to call on every
         startup from main.py."""
         try:
-            main_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "main.py")
-            command = f'"{_pythonw_executable()}" "{main_py}" --autostart'
+            supervisor_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "supervisor.py")
+            command = f'"{_pythonw_executable()}" "{supervisor_py}" --autostart'
 
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY_PATH, 0, winreg.KEY_READ) as key:
                 try:
