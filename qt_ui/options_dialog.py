@@ -30,7 +30,7 @@ class OptionsDialog(QWidget):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
         self.setWindowTitle("Options")
-        self.resize(500, 640)
+        self.resize(500, 720)
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(24, 22, 24, 20)
         self._layout.setSpacing(10)
@@ -52,6 +52,14 @@ class OptionsDialog(QWidget):
         self._extension_note = role_label(self._extension_text(), "hint", wrap=True)
         self._layout.addWidget(self._extension_note)
         self._config_box("Let AI agents (Claude in Chrome) work in their own tabs during a session", "allowAiAgents", True)
+        self._layout.addWidget(field_label("Linked guides"))
+        self._family_note = role_label(self._family_text(), "hint", wrap=True)
+        self._layout.addWidget(self._family_note)
+        family_button = QPushButton("Linked guides...")
+        family_button.setStyleSheet(SECONDARY_STYLE)
+        family_button.setCursor(Qt.PointingHandCursor)
+        family_button.clicked.connect(self._open_family)
+        self._layout.addWidget(family_button, 0, Qt.AlignLeft)
         self._layout.addWidget(field_label("Start-up"))
         self._config_box("Open Carmen's window when I sign in to Windows", "openOnStartup", True)
         self._layout.addWidget(field_label("Help"))
@@ -110,6 +118,25 @@ class OptionsDialog(QWidget):
                     parts.append(f"{link['browser']}: last seen {ago}")
             lines.append(f"{name}{who} - " + ", ".join(parts))
         return "\n".join(lines)
+
+    @staticmethod
+    def _family_text():
+        """One line on the family features: off by default, and who is linked once the student has signed in."""
+        try:
+            if not config.load_config().get("familyEnabled", False):
+                return "Off. Sign in to link with a parent or instructor; nothing is shared until you do."
+            import family_sync
+            snap = family_sync.instance().snapshot()
+            names = [l["guideName"] for l in snap["links"] if l["active"]]
+            if not names:
+                return "Signed in. No one is linked to you, so nothing is shared."
+            return f"Linked to {', '.join(names)}. Open this to see what each can see, or to end a link."
+        except Exception:
+            return "Open this to sign in to a family account and see who is linked to you."
+
+    def _open_family(self):
+        from qt_ui import family_panel
+        self._family_panel = family_panel.open_panel()
 
     def _config_box(self, text, key, default):
         box = QCheckBox(text)

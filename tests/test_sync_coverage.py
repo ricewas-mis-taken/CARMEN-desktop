@@ -53,8 +53,9 @@ RECEIVER_STAMPED = {
 # (see FEATURE_IMPLEMENT.txt item 7: the running session and history sync through sync_live).
 SYNCED_FILES = {"tasks.json", "board.json", "calendar.db", "session_history.json", "session_state.json", "quicknote.json", "scribe.json", "devices.json", "score.json",
                 "plans.json", "plan_examples.json"}
+# family_state.json: the family account's caches and upload queues; per computer on purpose (see FAMILY.md)
 LOCAL_ONLY_FILES = {
-    "config.json", "screentime.json",
+    "config.json", "screentime.json", "family_state.json",
     "daily_summaries.json", "active_review.json", "device_id.txt", "last_sync.txt",
     "pull_cursor.txt", "sync_owner.txt", "uploaded_photos.json", "taskbar_quiet_settings.json", "taskbar_quiet_saved.json", "taskbar_quiet_user.json",
     "live_cursor.txt", "live_history_pushed.txt", "live_state_pushed.txt",
@@ -100,7 +101,7 @@ def _data_file_names_mentioned_in_the_code():
     import re
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     pattern = re.compile(r"""["']([\w\-]+\.(?:json|db|txt|sqlite3?|ini|cfg|pkl))["']""")
-    skip_dirs = {".git", "tests", "__pycache__", "node_modules", "venv", ".venv", "mac-os", "scripts", "design-skills"}
+    skip_dirs = {".git", "tests", "tests_family", "__pycache__", "node_modules", "venv", ".venv", "mac-os", "scripts", "design-skills"}
     found = set()
     for folder, dirs, files in os.walk(root):
         dirs[:] = [d for d in dirs if d not in skip_dirs]

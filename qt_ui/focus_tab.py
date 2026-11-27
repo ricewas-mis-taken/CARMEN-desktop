@@ -95,6 +95,9 @@ def _review_name(review):
 
 def _session_kind(session):
     source = session.get("source")
+    if isinstance(session.get("guide"), dict):
+        import family_rules                       # a session a linked guide set says who set it
+        return family_rules.attribution(session["guide"])
     if session.get("reviewProblemName"):
         return "Review"
     if source == "task":

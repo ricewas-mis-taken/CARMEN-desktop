@@ -131,6 +131,13 @@ _state = {
     # session ends, the most recently set-aside one comes back as the current
     # (still paused) session.
     "parkedSessions": [],
+    # Who set this session, when a linked guide (parent or instructor) did -- see family_sync.py.
+    # None for every session the student started themselves, which is every session unless the
+    # family features are switched on: {"kind": "command"|"block", "id", "name", "commandId",
+    # "classSessionId", "className", "plannedMin", "blockIds", "own", "baseAllow"}. Shown as
+    # "Set by <name>" on the lock popups and in the session lists, and sent along with the
+    # finished session so it is filed under who set it.
+    "guide": None,
 }
 
 _DEFAULT_STATE = copy.deepcopy(_state)
@@ -346,6 +353,7 @@ def _load():
         # update() raise at import and stop the whole app starting.
         return
     _state.update(data)
+    _state["guide"] = _clean_guide(_state.get("guide"))
     if _state["isActive"] and not _state.get("sessionId"):
         _state["sessionId"] = uuid.uuid4().hex   # a session from before sessions had ids
     if _state["isActive"]:
@@ -394,6 +402,7 @@ def start_session(
     blocked_browser_profiles=None,
     hide_taskbar_badges=False,
     stop_taskbar_flashing=False,
+    guide=None,
     fated=False,
 ):
     # api_server.py's /session/start already validates this for the
@@ -468,11 +477,55 @@ def start_session(
         # was, same reasoning as the source/eventId resets above.
         _state["pomodoro"] = None
         _state["isBreak"] = False
+        _state["guide"] = _clean_guide(guide)
         _open_violation_index["process"] = None
         _open_violation_index["domain"] = None
         _save()
         state_events.bump()
     return get_status()
+
+
+def _clean_guide(guide):
+    """The who-set-this record kept with a session, or None. Anything that is not a dict, or has no usable name, is
+    dropped; text is capped, so a damaged record can never put junk on a popup."""
+    if not isinstance(guide, dict):
+        return None
+    name = guide.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return None
+
+    def text(key, limit=80):
+        value = guide.get(key)
+        return value[:limit] if isinstance(value, str) else None
+
+    def names(key):
+        value = guide.get(key)
+        return [v[:400] for v in value[:600] if isinstance(v, str)] if isinstance(value, list) else None
+
+    cleaned = {
+        "kind": guide.get("kind") if guide.get("kind") in ("command", "block") else "command",
+        "id": text("id", 80) or "", "name": name.strip()[:60], "commandId": text("commandId"),
+        "classSessionId": text("classSessionId"), "className": text("className"), "own": bool(guide.get("own")),
+    }
+    minutes = guide.get("plannedMin")
+    if isinstance(minutes, (int, float)) and not isinstance(minutes, bool) and 0 < minutes <= 1440:
+        cleaned["plannedMin"] = minutes
+    for key in ("blockIds", "baseAllow"):
+        value = names(key)
+        if value is not None:
+            cleaned[key] = value
+    return cleaned
+
+
+def update_guide(guide):
+    """Replaces the who-set-this record of the running session (a study block's set of blocks changed). A no-op when
+    nothing is running or the running session was not set by a guide."""
+    with _lock:
+        if not _state["isActive"] or not _state.get("guide"):
+            return
+        _state["guide"] = _clean_guide(guide)
+        _save()
+        state_events.bump()
 
 
 def start_pomodoro_session(
@@ -720,10 +773,11 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None, restore_pa
     # resumed a few times.
     pomodoro = dict(_state["pomodoro"]) if _state["pomodoro"] is not None else None
     session_id = _state.get("sessionId")
+    guide = copy.deepcopy(_state.get("guide")) if _state.get("guide") else None
     fated = bool(_state.get("fated"))
 
     if was_active:
-        session_history.append_entry(
+        entry = (
             {
                 "startTime": start_time,
                 "endTime": now.isoformat(),
@@ -752,6 +806,9 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None, restore_pa
                 "isBurnout": bool(_state.get("isBurnout")),
             }
         )
+        if guide is not None:
+            entry["guide"] = guide          # filed under who set it; absent for every ordinary session
+        session_history.append_entry(entry)
         _score_pauses(session_id, start_time, now.isoformat(), summary_log,
                       burnout=bool(_state.get("isBurnout")), source=source)
 
@@ -786,6 +843,7 @@ def _finalize_to_history_locked(now, end_type="natural", reason=None, restore_pa
     _state["stopTaskbarFlashing"] = False
     _state["pomodoro"] = None
     _state["isBreak"] = False
+    _state["guide"] = None
     _open_violation_index["process"] = None
     _open_violation_index["domain"] = None
     if restore_parked and _state.get("parkedSessions"):
@@ -893,6 +951,7 @@ def _get_status_locked():
         "hideTaskbarBadges": bool(_state.get("hideTaskbarBadges")),
         "stopTaskbarFlashing": bool(_state.get("stopTaskbarFlashing")),
         "isBreak": _state["isBreak"],
+        "guide": copy.deepcopy(_state.get("guide")),
         "pomodoro": dict(_state["pomodoro"]) if _state["pomodoro"] is not None else None,
         "parkedSessions": _parked_summaries_locked(),
         # The one that comes back next (kept for older readers of /status).
@@ -949,6 +1008,8 @@ def _clean_remote_session(data, allow_park_id=False):
             value = _clean_entries(value) if all(isinstance(v, str) for v in value) else []
         elif key == "violationLog":
             value = [v for v in value if isinstance(v, dict)]
+        elif key == "guide":
+            value = _clean_guide(value)
         clean[key] = copy.deepcopy(value)
     if allow_park_id:
         clean["parkId"] = data["parkId"] if isinstance(data.get("parkId"), str) else uuid.uuid4().hex
@@ -1526,6 +1587,10 @@ def add_domain_to_whitelist(domain, reason, plan=None, minutes=None):
     whatever session starts next instead of the one the user meant it for."""
     with _lock:
         if not _state["isActive"]:
+            return None, None
+        if _state.get("guide"):
+            # A session a guide set: only the guide opens more sites (the student asks them); a
+            # site added here would also undo the guide's deny list.
             return None, None
         now = datetime.now()
         existing_lower = {d.lower() for d in _state["domainWhitelist"]}

@@ -48,6 +48,10 @@ DEFAULT_CONFIG = {
     "focusRulesUpdatedAt": None,
     # When the shared settings below last changed on any computer (cloud time).
     "settingsUpdatedAt": None,
+    # The family features (a linked parent or instructor setting rules and starting sessions; see family_sync.py).
+    # Per computer, never shared between computers, and off until the student signs in to a family account.
+    "familyEnabled": False,
+    "familyApiBase": "http://localhost:8420",
     "themeShared": False,       # the saved theme has been sent to the other computer at least once
     "theme": None,              # {"name": ..., "custom": {...}}: shared, so both computers look the same
 }
