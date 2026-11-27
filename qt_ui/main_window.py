@@ -32,6 +32,7 @@ import theme
 from qt_ui import motion
 from qt_ui.account_widget import AccountArea
 from qt_ui.home_tab import HomeTab
+from qt_ui.today_tab import TodayTab
 from qt_ui.ui_kit import LogoMark, nav_icon
 from qt_ui.board_tab import BoardTab
 from qt_ui.focus_tab import FocusTab
@@ -116,6 +117,18 @@ def reopen_after_restart():
         _win._show_tab(state["page"])
 
 
+def reopen_after_crash(state):
+    """After a crash restart: the windows that were open come back (`state` is what window_memory saved)."""
+    main = state.get("main") or {}
+    if main.get("open"):
+        open_main_window()
+        if _win is not None and main.get("page") in _win._pages:
+            _win._show_tab(main["page"])
+    if state.get("mini"):
+        from qt_ui import mini_timer
+        mini_timer.open_mini_timer()
+
+
 def open_main_window():
     global _win
     _remembered["open"] = True
@@ -179,7 +192,7 @@ _NORMAL_SIZE = (800, 800)
 # setMinimumSize overrides what the layouts report, so without this the pages were
 # squeezed until buttons and titles lost their text. Content widths, beside the sidebar.
 _PAGE_MIN_WIDTH = {
-    "home": 480, "focus": 630, "tasks": 520, "board": 600,
+    "home": 480, "today": 560, "focus": 630, "tasks": 520, "board": 600,
     "review": 640, "scribe": 640, "screentime": 480, "history": 540, "openings": 640,
 }
 _MIN_HEIGHT = 560
@@ -311,6 +324,7 @@ class _MainWindow(QWidget):
 
         self._pages = {}
         self._add_page("home", HomeTab(on_navigate=self._show_tab))
+        self._add_page("today", TodayTab())
         self._add_page("focus", FocusTab())
         self._add_page("tasks", TasksTab())
         self._add_page("board", BoardTab())
@@ -356,6 +370,19 @@ class _MainWindow(QWidget):
         title.setObjectName("SidebarTitle")
         brand_row.addWidget(title, 1)
         layout.addWidget(brand)
+
+        # Right under the name, not at the bottom: a short window clips the bottom of the sidebar, and
+        # this is the button that applies an update or relaunches Carmen.
+        self._update_button = QPushButton("Update ready")
+        self._update_button.setCursor(Qt.PointingHandCursor)
+        self._update_button.setFixedHeight(34)
+        self._update_button.setStyleSheet(
+            "QPushButton{margin:0 12px 8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.35);"
+            "background:rgba(255,255,255,0.12);color:#FFFFFF;font-weight:700;font-size:13px;}"
+            "QPushButton:hover{background:rgba(255,255,255,0.22);}QPushButton:disabled{color:rgba(255,255,255,0.6);}")
+        self._update_button.clicked.connect(self._apply_update)
+        self._update_button.hide()
+        layout.addWidget(self._update_button)
         self._brand_title = title
         self._brand_row = brand_row
         self._group_captions = []
@@ -365,7 +392,7 @@ class _MainWindow(QWidget):
         self._nav_group.setExclusive(True)
         # (page key, label) in groups; a group's heading is the line above it.
         nav_groups = [
-            ("Today", [("home", "Home")]),
+            ("Today", [("home", "Home"), ("today", "Today")]),
             ("Work", [("focus", "Focus"), ("tasks", "Tasks"), ("board", "The Board")]),
             ("Study", [("review", "Review"), ("scribe", "Scribe")]),
             ("Look back", [("screentime", "Screen Time"), ("history", "Session History")]),
@@ -396,16 +423,6 @@ class _MainWindow(QWidget):
         layout.addStretch(1)
         self._marker = _NavMarker(sidebar)
 
-        self._update_button = QPushButton("Update ready")
-        self._update_button.setCursor(Qt.PointingHandCursor)
-        self._update_button.setFixedHeight(34)
-        self._update_button.setStyleSheet(
-            "QPushButton{margin:0 12px 6px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.35);"
-            "background:rgba(255,255,255,0.12);color:#FFFFFF;font-weight:700;font-size:13px;}"
-            "QPushButton:hover{background:rgba(255,255,255,0.22);}QPushButton:disabled{color:rgba(255,255,255,0.6);}")
-        self._update_button.clicked.connect(self._apply_update)
-        self._update_button.hide()
-        layout.addWidget(self._update_button)
         self._update_timer = QTimer(self)
         self._update_timer.timeout.connect(self._sync_update_button)
         self._update_timer.start(3000)

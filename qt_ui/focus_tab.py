@@ -584,7 +584,7 @@ class FocusTab(QWidget):
             self._now_chip.hide()
             self._clock_label.setText("")
             self._clock_caption.setText("")
-            self._status_label.setText("No active focus session.")
+            self._status_label.setText("")
             return
         paused = bool(status["isPaused"])
         on_break = bool(status.get("isBreak"))

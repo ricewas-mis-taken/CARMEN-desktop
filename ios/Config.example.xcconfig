@@ -1,0 +1,5 @@
+// Copy to Config.xcconfig (which git ignores) and fill in.
+CARMEN_TEAM_ID = ABCDE12345
+// The same two values the desktop reads from private/.env. xcconfig treats // as a comment, so the URL is split:
+CARMEN_SUPABASE_URL = https:/$()/YOUR-PROJECT.supabase.co
+CARMEN_SUPABASE_KEY = your-publishable-key

@@ -134,3 +134,23 @@ def test_each_review_bubble_says_what_it_loses_on_its_day(isolate_review_db, qtb
     assert len(tags) == 1
     from PySide6.QtWidgets import QLabel
     assert "-6 pts" in [label.text() for label in tags[0].findChildren(QLabel)]
+
+
+def test_holding_a_review_near_the_top_edge_scrolls_the_list_up(isolate_review_db, qtbot, monkeypatch):
+    from PySide6.QtCore import QPoint
+    from qt_ui import week_dialog
+    tab = week_dialog.WeekDialog()
+    qtbot.addWidget(tab)
+    tab._span.setValue(4)
+    tab.show()
+    bar = tab._scroll.verticalScrollBar()
+    bar.setValue(bar.maximum())
+    top = tab._scroll.viewport().mapToGlobal(QPoint(50, 5))
+    monkeypatch.setattr(week_dialog.QCursor, "pos", staticmethod(lambda: top))
+    before = bar.value()
+    tab._scroll_at_edge()
+    assert bar.value() < before
+    tab.drag_started(None)
+    assert tab._edge_timer.isActive()
+    tab.drag_ended()
+    assert not tab._edge_timer.isActive()

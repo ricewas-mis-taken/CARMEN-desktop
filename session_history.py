@@ -8,6 +8,7 @@ manually (tray "End Session" / POST /session/end) or by running out the
 clock — so it survives past whatever session_state.json currently holds.
 """
 import hashlib
+from datetime import datetime
 import json
 import logging
 import os
@@ -42,14 +43,35 @@ def append_entry(entry):
     _append_entries([entry])
 
 
+def update_entry(session_entry_id, fields):
+    """Changes fields on one filed session (found by entry_id). Returns True if it was found. Meant for
+    small edits after the fact, such as saving a session as an attempt at a problem."""
+    with _lock:
+        history = list(_load_all_locked())
+        for entry in history:
+            if entry_id(entry) == session_entry_id:
+                entry.update(fields)
+                entry["editedAt"] = datetime.now().isoformat()
+                break
+        else:
+            return False
+        _save_all_locked(history)
+    return True
+
+
 def merge_remote(entries):
     """Adds sessions another device filed. Returns how many were new."""
     return _append_entries(entries)
 
 
+def sync_stamp(entry):
+    """When an entry last changed for the sync: its end, or a later edit made to it afterwards."""
+    return max(entry.get("endTime") or "", entry.get("editedAt") or "")
+
+
 def entries_ended_after(watermark):
-    """Entries whose endTime is later than `watermark` (all of them when None)."""
-    return [e for e in load_all(include_beside=True) if watermark is None or (e.get("endTime") or "") > watermark]
+    """Entries that ended or were edited after `watermark` (all of them when None)."""
+    return [e for e in load_all(include_beside=True) if watermark is None or sync_stamp(e) > watermark]
 
 
 def _append_entries(new_entries):
@@ -88,6 +110,14 @@ def _append_entries(new_entries):
         added = 0
         for entry in new_entries:
             if entry_id(entry) in known:
+                # An edit made to a filed session on another computer (saving it as an attempt at a problem)
+                # replaces ours when it is newer.
+                mine = next((i for i, e in enumerate(history) if entry_id(e) == entry_id(entry)), None)
+                if (mine is not None and (entry.get("editedAt") or "") > (history[mine].get("editedAt") or "")
+                        and history[mine].get("endType") != "superseded"):
+                    history[mine] = entry
+                    added += 1
+                    continue
                 # A session filed early as "superseded" is only a stub if the same session later finishes for
                 # real: the longer, later entry replaces it instead of being dropped as a duplicate.
                 same = next((i for i, e in enumerate(history) if entry_id(e) == entry_id(entry)), None)

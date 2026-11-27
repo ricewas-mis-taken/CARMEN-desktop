@@ -292,11 +292,13 @@ def test_freehand_stroke_never_moves_after_drawing(qtbot):
 def test_every_tool_has_an_icon_and_a_tooltip_with_its_key(qtbot):
     tab = ScribeTab()
     qtbot.addWidget(tab)
-    assert set(tab._tool_buttons) == {"select", "freehand", "line", "curve", "arrow", "rect", "circle", "text", "fill"}
+    assert set(tab._tool_buttons) == {"select", "freehand", "line", "curve", "arrow", "rect", "circle", "text", "fill",
+                                       "eraser"}
     for key, button in tab._tool_buttons.items():
         assert not button.icon().isNull(), key
         assert button.toolTip()
-    assert "(1)" in tab._tool_buttons["line"].toolTip() and "(7)" in tab._tool_buttons["select"].toolTip()
+    assert "(L)" in tab._tool_buttons["line"].toolTip() and "(V)" in tab._tool_buttons["select"].toolTip()
+    assert "(P)" in tab._tool_buttons["freehand"].toolTip() and "(O)" in tab._tool_buttons["circle"].toolTip()
 
 
 def test_clicking_a_tool_on_the_rail_selects_it(qtbot):
@@ -400,15 +402,13 @@ def test_the_paper_stack_sets_the_background_and_shows_the_current_one(qtbot):
     stack.grab()      # every paper paints
 
 
-def test_clicking_a_paper_strip_picks_that_paper(qtbot):
-    from PySide6.QtCore import QPoint
+def test_clicking_a_paper_picks_that_paper(qtbot):
     tab = ScribeTab()
     qtbot.addWidget(tab)
     tab.show()
     stack = tab._paper_stack
     for index, key in enumerate(stack._keys):
-        y = int(stack._top(index)) + 6                  # inside this card's own strip
-        qtbot.mouseClick(stack, Qt.LeftButton, pos=QPoint(40, y))
+        qtbot.mouseClick(stack, Qt.LeftButton, pos=stack._tile(index).center().toPoint())     # the middle of its page
         assert tab.canvas.prefs["background"] == key, key
 
 
@@ -629,7 +629,7 @@ def test_the_timed_save_runs_off_the_ui_thread(qtbot, monkeypatch):
     assert seen and seen[0] is not threading.main_thread()
 
 
-def test_scribe_folds_its_options_into_a_popup_and_trims_the_top_bar_when_narrow(qtbot):
+def test_scribe_folds_its_options_into_a_popup_and_trims_the_top_bar_when_narrow(qtbot, isolate_config):
     from qt_ui.main_window import _scrolling
     tab = ScribeTab()
     holder = _scrolling(tab)                      # as in the app: the page sits in a scroll area
@@ -637,15 +637,53 @@ def test_scribe_folds_its_options_into_a_popup_and_trims_the_top_bar_when_narrow
     holder.resize(1300, 700)
     holder.show()
     qtbot.waitExposed(holder)
-    assert tab._side.isVisible() and not tab._options_button.isVisible()
+    assert tab._side.isVisible() and tab._options_button.isVisible()
+    assert tab._options_button.text() == "Hide options"
     holder.resize(700, 560)
     qtbot.wait(50)
     assert not tab._side.isVisible() and tab._options_button.isVisible()
+    assert tab._options_button.text() == "Options"
     assert not tab._pan_button.isVisible() and not tab._reset_button.isVisible()    # compact top bar
     assert tab.minimumSizeHint().width() <= 600                                     # no forced sideways scroll
     holder.resize(1300, 700)
     qtbot.wait(50)
     assert tab._side.isVisible() and tab._pan_button.isVisible()
+
+
+def test_the_options_card_can_be_hidden_and_brought_back_and_stays_that_way(qtbot, isolate_config):
+    import config
+    from qt_ui.main_window import _scrolling
+    tab = ScribeTab()
+    holder = _scrolling(tab)
+    qtbot.addWidget(holder)
+    holder.resize(1300, 700)
+    holder.show()
+    qtbot.waitExposed(holder)
+    assert tab._side.isVisible()
+    tab._options_button.click()                                   # wide window: hides the card for more board
+    assert not tab._side.isVisible() and tab._options_button.text() == "Show options"
+    assert config.load_config()["scribeOptionsHidden"] is True
+    holder.resize(700, 560)                                       # narrow, then wide again: still hidden
+    qtbot.wait(50)
+    holder.resize(1300, 700)
+    qtbot.wait(50)
+    assert not tab._side.isVisible()
+    tab._options_button.click()
+    assert tab._side.isVisible() and tab._options_button.text() == "Hide options"
+    assert config.load_config()["scribeOptionsHidden"] is False
+
+
+def test_the_hidden_options_card_is_remembered_next_time(qtbot, isolate_config):
+    import config
+    from qt_ui.main_window import _scrolling
+    config.update_config(lambda cfg: cfg.update(scribeOptionsHidden=True))
+    tab = ScribeTab()
+    holder = _scrolling(tab)
+    qtbot.addWidget(holder)
+    holder.resize(1300, 700)
+    holder.show()
+    qtbot.waitExposed(holder)
+    assert not tab._side.isVisible() and tab._options_button.text() == "Show options"
 
 
 def test_adding_a_stroke_updates_the_minimap_heat_without_a_full_walk(qtbot, tmp_path, monkeypatch):
@@ -807,3 +845,66 @@ def test_the_extent_is_worked_out_again_after_a_shape_moves_or_a_layer_hides(qtb
     canvas.doc["layers"][0]["visible"] = False
     canvas.layer_edited()
     assert canvas._all_bounds() is None
+
+
+def test_tool_letters_match_the_hover_text(qtbot):
+    from qt_ui import scribe_tab
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    for key, name, hotkey in (e for e in scribe_tab._TOOLS if e and e[2] and len(e[2]) == 1):
+        assert scribe_tab._TOOL_KEYS[hotkey.lower()] == key, (key, hotkey)
+        assert hotkey in tab._tool_buttons[key].toolTip()
+
+
+# ---- the paper picker ------------------------------------------------------
+def test_every_paper_the_store_knows_has_a_page_and_a_name():
+    from qt_ui.scribe_tab import _BACKGROUNDS, BACKGROUND_LABELS
+    assert set(scribe_store.BACKGROUNDS) == set(_BACKGROUNDS) == set(BACKGROUND_LABELS)
+
+
+def test_the_paper_picker_shows_every_page_whole_in_a_grid(qtbot):
+    from PySide6.QtCore import QPoint
+    from qt_ui.scribe_tab import _PaperPicker, BACKGROUND_LABELS
+    picker = _PaperPicker(BACKGROUND_LABELS.keys(), "grid")
+    qtbot.addWidget(picker)
+    picker.resize(192, picker.height())
+    picker.show()
+    tiles = [picker._tile(i) for i in range(len(BACKGROUND_LABELS))]
+    for i, tile in enumerate(tiles):
+        assert tile.left() >= 0 and tile.right() <= picker.width()            # inside the widget: nothing cut off
+        assert tile.top() >= 0 and tile.bottom() + picker.LABEL_H <= picker.height() + picker.GAP
+        for other in tiles[i + 1:]:
+            assert not tile.intersects(other)                                  # and no page covers another
+    assert not picker.grab().isNull()
+
+
+def test_clicking_a_page_or_pressing_arrows_picks_it(qtbot):
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtTest import QTest
+    from qt_ui.scribe_tab import _PaperPicker, BACKGROUND_LABELS
+    picker = _PaperPicker(BACKGROUND_LABELS.keys(), "grid")
+    qtbot.addWidget(picker)
+    picker.resize(192, picker.height())
+    picker.show()
+    picked = []
+    picker.picked.connect(picked.append)
+    keys = list(BACKGROUND_LABELS)
+    QTest.mouseClick(picker, Qt.LeftButton, Qt.NoModifier, picker._tile(keys.index("dots")).center().toPoint())
+    assert picked == ["dots"]
+    picker.set_current("dots", animate=False)
+    assert picker.current() == "dots"
+    picked.clear()
+    QTest.keyClick(picker, Qt.Key_Right)
+    QTest.keyClick(picker, Qt.Key_Up)
+    assert picked == [keys[keys.index("dots") + 1], keys[keys.index("dots") - 2]]
+    QTest.mouseClick(picker, Qt.LeftButton, Qt.NoModifier, QPointF(5, picker.height() - 1).toPoint())
+    assert len(picked) in (2, 3)                                                # the empty gutter picks nothing wrong
+
+
+def test_the_tab_picker_follows_the_chosen_paper(qtbot):
+    tab = ScribeTab()
+    qtbot.addWidget(tab)
+    tab._paper_stack.picked.emit("blueprint")
+    assert tab.canvas.prefs["background"] == "blueprint"
+    assert tab._paper_stack.current() == "blueprint"
+    assert not tab.canvas.grab().isNull()

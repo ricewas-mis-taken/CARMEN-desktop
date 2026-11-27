@@ -34,3 +34,12 @@ def test_legacy_events_without_a_stamp_get_one_so_they_are_sent(tmp_path, monkey
     score_store.stamp_unsynced()
     assert score_store.load()["events"][0]["updatedAt"]
 
+
+
+def test_a_whole_ledger_sent_as_one_record_is_unpacked_and_broken_events_dropped():
+    import score_store
+    ledger = {"events": [{"key": "goal:1", "date": "2026-11-07", "kind": "goals", "points": 2, "note": ""}],
+              "settledThrough": "2026-11-09", "key": "ledger"}
+    cleaned = score_store.clean_events([ledger, {"key": "x"}, {"key": "goal:1", "date": "2026-11-07", "points": 9},
+                                        {"key": "goal:2", "date": "2026-11-08", "points": 3}])
+    assert [e["key"] for e in cleaned] == ["goal:1", "goal:2"]

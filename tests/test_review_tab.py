@@ -934,7 +934,7 @@ def test_the_empty_list_explains_itself(qtbot, isolate_review_db):
     qtbot.addWidget(view)
     assert view._rows == []
     texts = [l.text() for l in view.findChildren(review_tab.QLabel)]
-    assert any("Nothing to review today" in t for t in texts)
+    assert any("Nothing due today" in t for t in texts)
     view._set_due_only(False)
     texts = [l.text() for l in view.findChildren(review_tab.QLabel)]
     assert any("No problems yet" in t for t in texts)
@@ -987,6 +987,16 @@ def test_the_sidebar_lists_every_category_with_its_count(qtbot, isolate_review_d
     assert list(buttons) == [None, integrals["id"], limits["id"]] or set(buttons) == {None, integrals["id"], limits["id"]}
     assert buttons[None]._count == 3 and buttons[integrals["id"]]._count == 2 and buttons[limits["id"]]._count == 1
     assert buttons[None].isChecked()
+
+
+def test_refreshing_keeps_the_same_category_buttons_unless_the_list_changed(qtbot, isolate_review_db):
+    view, integrals, limits = _view_with_problems(qtbot)
+    before = dict(view._category_buttons)
+    view.refresh()
+    assert all(view._category_buttons[k] is before[k] for k in before)
+    view._set_subject_filter(limits["id"])
+    assert all(view._category_buttons[k] is before[k] for k in before)
+    assert view._category_buttons[limits["id"]].isChecked() and not view._category_buttons[None].isChecked()
 
 
 def test_picking_a_category_shows_only_its_problems_and_all_brings_the_rest_back(qtbot, isolate_review_db):
@@ -1228,3 +1238,27 @@ def test_clearing_and_refreshing_the_parked_strip_never_flashes_a_window(qtbot):
     QApplication.processEvents()
     QApplication.instance().removeEventFilter(watch)
     assert shown == []
+
+
+def test_a_first_attempt_can_be_added_to_the_problem_that_already_exists(qtbot, isolate_review_db):
+    topic, subject = _make_topic_and_subject()
+    existing = review_store.create_problem(
+        topic["id"], subject["id"], "Creating Strings", stars=1,
+        description_type="text", description_text="x",
+    )
+    added = []
+    dialog = review_tab._AddProblemDialog(topic["id"], on_added=added.append)
+    qtbot.addWidget(dialog)
+    dialog._name_edit.setText("creating strings")
+    dialog._text_edit.setPlainText("again")
+    dialog.apply_first_attempt = review_tab._AddProblemDialog.apply_first_attempt.__get__(dialog)
+    dialog._first_attempt_status = review_tab.QLabel()
+    dialog.apply_first_attempt(26 * 60, True, 3)
+
+    dialog._submit()
+    assert dialog._merge_button.isVisibleTo(dialog) and added == []
+    dialog._merge_button.click()
+
+    assert len(added) == 1 and added[0]["id"] == existing["id"]
+    assert added[0]["reviewCount"] == 1
+    assert review_store.list_sessions(existing["id"])[0]["durationSeconds"] == 26 * 60

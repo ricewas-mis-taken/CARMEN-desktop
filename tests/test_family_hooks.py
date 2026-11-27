@@ -36,7 +36,7 @@ def test_ordinary_session_has_no_guide_and_history_has_no_new_key(isolate_state)
     assert "guide" not in entry
     assert set(entry) == {"startTime", "endTime", "endType", "reason", "lockMode", "processBlocklist", "domainWhitelist", "violationCount",
                           "violationLog", "domainWhitelistAdditions", "processBlocklistExceptions", "source", "eventId", "eventTitle",
-                          "reviewProblemName", "reviewSubjectName", "pomodoro", "sessionId", "isBurnout"}
+                          "reviewProblemName", "reviewSubjectName", "pomodoro", "sessionId", "isBurnout", "fated"}  # "fated" is main's key, not ours
 
 
 def test_ordinary_session_can_still_add_a_site(isolate_state):

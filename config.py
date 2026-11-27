@@ -30,7 +30,10 @@ DEFAULT_CONFIG = {
     "discordShowNames": False,
     "restoreWindow": {},        # set just before the app restarts itself into new code: {"open", "page"}
     "openOnStartup": True,      # sign-in launches Carmen with its window open, not only in the tray
-    "tourDone": False,          # the welcome tour has been shown (or skipped) once
+    "scribeOptionsHidden": False,   # Scribe's options card is tucked away (the Hide options button)
+    "nightlyPrompt": True,      # a nudge shortly before the usual stop, asking you to plan tomorrow (plan_prompt.py)
+    "allowAiAgents": True,      # the browser extension leaves an AI agent's own tabs (Claude in Chrome) alone during a session
+    "tourDone": False,         # the welcome tour has been shown (or skipped) once
     "reportCardWeek": "",       # the Monday of the week whose report card was last shown
     "quickNoteGeometry": None,
     "last_hide_taskbar_badges": False,
@@ -56,13 +59,18 @@ DEFAULT_CONFIG = {
     "theme": None,              # {"name": ..., "custom": {...}}: shared, so both computers look the same
 }
 
-# The saved defaults every computer should agree on: what a new session blocks
-# and allows, and what the Start dialog remembers. Everything else in this file
-# is about one computer (window geometry, browser profile ids, the API token).
+# The saved defaults and options every computer should agree on: what a new session blocks
+# and allows, what the Start dialog remembers, and the Options window's switches. Everything
+# else in this file is about one computer (window geometry, browser profile ids, the API token).
 SHARED_SETTINGS = (
     "processBlocklist", "domainWhitelist", "last_duration_minutes", "last_lock_mode",
-    "last_hide_taskbar_badges", "last_stop_taskbar_flashing", "theme",
+    "last_hide_taskbar_badges", "last_stop_taskbar_flashing",
+    "discordPresence", "discordShowNames", "allowAiAgents", "openOnStartup",
+    "scribeOptionsHidden", "tourDone", "reportCardWeek", "theme", "nightlyPrompt",
 )
+_SHARED_FLAGS = ("last_hide_taskbar_badges", "last_stop_taskbar_flashing", "discordPresence",
+                 "discordShowNames", "allowAiAgents", "openOnStartup", "scribeOptionsHidden", "tourDone",
+                 "nightlyPrompt")
 _change_listeners = []
 
 
@@ -236,9 +244,12 @@ def _clean_shared_settings(data):
         clean["last_duration_minutes"] = minutes
     if data.get("last_lock_mode") in ("soft", "hard"):
         clean["last_lock_mode"] = data["last_lock_mode"]
-    for key in ("last_hide_taskbar_badges", "last_stop_taskbar_flashing"):
+    for key in _SHARED_FLAGS:
         if isinstance(data.get(key), bool):
             clean[key] = data[key]
+    week = data.get("reportCardWeek")
+    if isinstance(week, str) and len(week) <= 20:
+        clean["reportCardWeek"] = week
     theme = data.get("theme")
     if isinstance(theme, dict) and isinstance(theme.get("name"), str) and len(theme["name"]) <= 40:
         picked = {"name": theme["name"]}

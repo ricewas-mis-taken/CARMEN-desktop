@@ -135,6 +135,12 @@ def main():
     sys.setswitchinterval(0.0005)
     import gc
     gc.set_threshold(10000, 20, 20)     # collect far less often: a big Scribe board holds ~200k objects
+    import native_crash
+    import paths
+    import screen_guard
+    import window_memory
+    native_crash.install(paths.private_path("native_crash.log"))     # where a crash inside Qt happened
+    screen_guard.install(app)                   # notices monitors coming and going, so timers keep out of the way
     import qt_ui.popup_fit as popup_fit
     popup_fit.install(app)                      # every popup opens a sensible size, on screen
     from PySide6.QtGui import QIcon
@@ -155,14 +161,29 @@ def main():
         qt_gui_thread.run_on_gui_thread(quicknote.open_quicknote)
 
     if os.environ.pop("CARMEN_RESTARTED", None):
-        # The app restarted itself into new code: the window comes back where it was.
         import qt_ui.main_window as main_window
-        qt_gui_thread.run_on_gui_thread(main_window.reopen_after_restart)
+        if os.environ.pop("CARMEN_CRASHED", None):
+            # It crashed and the supervisor started it again: the windows that were open come back from the last
+            # saved state, a moment later so a monitor that caused the crash has settled first. Saving starts
+            # only after that, so the old state is not overwritten with "nothing open".
+            from PySide6.QtCore import QTimer
+            saved = window_memory.load()
+            qt_gui_thread.run_on_gui_thread(
+                lambda: QTimer.singleShot(2500, lambda: main_window.reopen_after_crash(saved)))
+            qt_gui_thread.run_on_gui_thread(lambda: QTimer.singleShot(4000, lambda: window_memory.install(app)))
+        else:
+            # The app restarted itself into new code: the window comes back where it was.
+            qt_gui_thread.run_on_gui_thread(main_window.reopen_after_restart)
+            window_memory.install(app)
 
     elif AUTOSTARTED:
+        window_memory.install(app)
         if config.load_config().get("openOnStartup", True):
             import qt_ui.main_window as main_window
             qt_gui_thread.run_on_gui_thread(main_window.open_main_window)
+
+    else:
+        window_memory.install(app)
 
     if DEV_MODE:
         # Opens the main window automatically on launch/dev-restart, purely
@@ -322,6 +343,8 @@ def main():
     import score_store
     discord_presence.start(stop_event)
     score_store.start(stop_event)
+    import plan_prompt
+    plan_prompt.start(stop_event)       # learns the usual stop time and nudges before it (plan_prompt.py)
 
     # Instant re-minimize on click (hard lock only) -- a WinEvent hook, not
     # part of window_tracker's poll loop, so it needs a real Windows message
@@ -378,6 +401,9 @@ def main():
         # moment to actually free up before the fresh interpreter tries to
         # rebind it.
         time.sleep(0.3)
+        if os.environ.get("CARMEN_SUPERVISED"):
+            singleinstance.release()
+            os._exit(75)            # supervisor.py starts the fresh copy (and keeps watching it)
         if sys.platform == "win32":
             # os.execv on Windows does not replace the process: it starts a child and the
             # parent exits at once, and the child could lose the race for the lock or the

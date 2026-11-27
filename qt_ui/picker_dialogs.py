@@ -262,7 +262,7 @@ class _BlocklistPicker(QWidget):
         saved_profiles = {
             aumi for aumi in config.load_config().get("browserProfileBlocklist", [])
         }
-        self._checklist.add_separator_label("Browser profiles (blocks just that profile, not the whole browser):")
+        self._checklist.add_separator_label("Browser profiles")
         for profile in known_profiles:
             self._profile_aumi_keys.add(profile["aumi"])
             label = profile["label"] if profile["is_running"] else f"{profile['label']} (not open right now)"
@@ -419,7 +419,7 @@ class _TimerDialog(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(10)
-        layout.addWidget(dialog_title("Start a focus session", "Blocks your saved apps until the time is up."))
+        layout.addWidget(dialog_title("Start a focus session"))
 
         layout.addWidget(field_label("Minutes"))
         self._duration_edit = QLineEdit(str(cfg.get("last_duration_minutes", 25)))

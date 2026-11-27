@@ -3,6 +3,7 @@ on the window that opened it -- however much text or however big a picture it ca
 
 One application-wide filter instead of sizing each dialog by hand: a dialog that sizes itself from its
 content (a long description, a photo) used to open far bigger than the screen allows."""
+from qt_ui import filter_guard
 from PySide6.QtCore import QEvent, QObject, QPoint, Qt
 from PySide6.QtWidgets import QApplication, QFrame, QScrollArea, QVBoxLayout, QWidget
 
@@ -61,6 +62,12 @@ def fit(widget, anchor=None):
 
 class _Fitter(QObject):
     def eventFilter(self, obj, event):
+        if filter_guard.busy():
+            return False
+        with filter_guard.quiet():
+            return self._filter(obj, event)
+
+    def _filter(self, obj, event):
         if (event.type() == QEvent.Show and isinstance(obj, QWidget) and obj.isWindow()
                 and obj.objectName() == "PopupBg" and not obj.property("popupFitted")
                 and not (obj.windowFlags() & Qt.Popup) == Qt.Popup):

@@ -51,7 +51,8 @@ RECEIVER_STAMPED = {
 # Files under private/ that hold data. Synced ones are covered by the JSON
 # tests below or the SQLite tests above; the rest stay on the device by design
 # (see FEATURE_IMPLEMENT.txt item 7: the running session and history sync through sync_live).
-SYNCED_FILES = {"tasks.json", "board.json", "calendar.db", "session_history.json", "session_state.json", "quicknote.json", "scribe.json", "devices.json", "score.json"}
+SYNCED_FILES = {"tasks.json", "board.json", "calendar.db", "session_history.json", "session_state.json", "quicknote.json", "scribe.json", "devices.json", "score.json",
+                "plans.json", "plan_examples.json"}
 # family_state.json: the family account's caches and upload queues; per computer on purpose (see FAMILY.md)
 LOCAL_ONLY_FILES = {
     "config.json", "screentime.json", "family_state.json",
@@ -61,6 +62,12 @@ LOCAL_ONLY_FILES = {
     "live_review_pushed.txt", "live_screentime_pushed.json", "live_settings_pushed.txt", "live_quicknote_pushed.txt", "hang_trace.txt", "taskbar_quiet_pending.json", "other_device_seen.txt", "screentime_remote.json", "parked_reviews.json",
     "scribe_stamp.txt", "live_scribe_pushed.txt", "score_resync_v1.txt",
     "goal_notified.json",   # which tasks already told this computer their daily target was reached today
+    "installed_apps_cache.json",    # the apps found on this computer, so the task editor can list them at once
+    "window_state.json",    # which of this computer's windows are open, to put them back after a crash
+    "plan_notes.json",      # which QuickNote lines a plan made: travels inside the plan's own record (noteMeta)
+    "live_plans_pushed.txt", "live_plan_examples_pushed.txt",   # what this computer already sent of the above
+    "shutdown_log.json",    # when this computer was last used each night, which only makes sense per computer
+    "plan_prompt_sent.json",    # which of tonight's nudges this computer already showed
 }
 # Reference data that ships with the app, not something a user creates.
 SHIPPED_REFERENCE_FILES = {"screentime_domains.json", "family_site_categories.json", "screentime_domains_curated.json",

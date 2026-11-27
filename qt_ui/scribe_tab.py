@@ -10,6 +10,7 @@ import collections
 import copy
 import gc
 
+import config
 import gc_guard
 import math
 import threading
@@ -32,11 +33,13 @@ from PySide6.QtGui import (
     QShortcut,
 )
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QApplication,
     QButtonGroup,
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFrame,
     QScrollArea,
@@ -78,6 +81,7 @@ def _far_alpha(drawn, zoom, true_width=None):
 
 _FULL_DETAIL_PX = 40      # a stroke smaller than this on screen is drawn with far fewer points (see _paint_far_stroke)
 _ADDED = object()         # marks an undo step that only adds one shape (see ScribeCanvas._push_added)
+_SNAP = object()          # marks an undo step that remembers the layers (see ScribeCanvas._snapshot)
 MAX_UNDO = 100
 RULER = 20
 
@@ -90,12 +94,16 @@ _BACKGROUNDS = {
     "dots": ("#FFFFFF", "#7C828C", None, False),
     "lined": ("#FBF8EF", "#A9C4E8", None, False),
     "paper": ("#F6F1E4", None, None, False),
+    "blueprint": ("#1B3A66", "#2F5B96", "#6A94CC", True),
 }
 BACKGROUND_LABELS = {
     "white": "White", "black": "Black", "grid": "Grid", "darkgrid": "Dark grid",
-    "dots": "Dots", "lined": "Lined", "paper": "Paper",
+    "dots": "Dots", "lined": "Lined", "paper": "Paper", "blueprint": "Blueprint",
 }
-_TOOL_KEYS = {"1": "line", "2": "curve", "3": "fill", "4": "text", "5": "rect",
+# Letters that say what they are (the digits still work too).
+_TOOL_KEYS = {"v": "select", "p": "freehand", "l": "line", "c": "curve", "a": "arrow", "r": "rect", "o": "circle",
+              "t": "text", "f": "fill", "e": "eraser",
+              "1": "line", "2": "curve", "3": "fill", "4": "text", "5": "rect",
               "6": "circle", "7": "select", "8": "arrow", "0": "freehand"}
 _ITEM_FLAGS = {"shouldScale": "scale", "roundCorners": "round", "dashed": "dashed"}
 
@@ -114,6 +122,28 @@ class ScribeCanvas(QWidget):
     toolChanged = Signal(str)
     prefsChanged = Signal()     # options changed from inside the canvas
     layersChanged = Signal()
+    selectionChanged = Signal()     # which items are selected changed
+    selectionMoved = Signal()       # the selected items moved or changed size (the size boxes follow)
+    cursorMoved = Signal(float, float)    # where the pointer is on the board (world units)
+    cursorLeft = Signal()
+
+    HANDLE_PX = 8               # a resize handle, in screen pixels
+    HANDLE_GRAB_PX = 8          # how near the pointer must be to take hold of one
+    HANDLES = ("nw", "n", "ne", "e", "se", "s", "sw", "w")
+    _sel_items = ()
+    _hover_handle = None
+    _resizing = None
+    _erasing = None
+    ERASER_PX = 9               # the eraser's reach, in screen pixels
+
+    @property
+    def _sel(self):
+        return self._sel_items
+
+    @_sel.setter
+    def _sel(self, value):
+        self._sel_items = value
+        self.selectionChanged.emit()
 
     def __init__(self, doc):
         super().__init__()
@@ -171,29 +201,54 @@ class ScribeCanvas(QWidget):
         return (x - self.view["x"]) * z + self.width() / 2, (y - self.view["y"]) * z + self.height() / 2
 
     # ---- undo ------------------------------------------------------------
-    def _snapshot(self):
-        """The layers as they are now, for undo. Each item dict is copied but the
-        point lists inside are shared: they are only ever replaced (moving a shape
-        builds a new list), never edited in place. A full deep copy cost ~20 ms and
-        ~4 MB per step on a 1,400-stroke board, and 100 steps are kept."""
-        layers = [dict(layer, items=[dict(item) for item in layer["items"]]) for layer in self.doc["layers"]]
-        return layers, self.doc["activeLayer"]
+    def _snapshot(self, touching=None):
+        """The layers as they are now, for undo. The items themselves are NOT copied: a step holds the same
+        item objects the board holds, plus the state of just the ones the edit changes in place (`touching`;
+        None means every item, the safe default). Restoring puts those back in the same objects, so every
+        cache keyed on an item (outlines, bounds, paths) stays valid, and an undo on a 23,000-stroke board
+        no longer starts by rebuilding all of them. Edits that only add, remove or reorder items pass an
+        empty list: nothing is copied but the lists of items."""
+        layers = self.doc["layers"]
+        meta = [(layer, {k: v for k, v in layer.items() if k != "items"}, list(layer["items"])) for layer in layers]
+        if touching is None:
+            touched = [(item, dict(item)) for _layer, _state, items in meta for item in items]
+        else:
+            touched = [(item, dict(item)) for item in touching]
+        return (_SNAP, meta, self.doc["activeLayer"], touched, touching is None)
 
-    def _push_undo(self):
+    def _push_undo(self, touching=None):
         self._board_edited()               # every edit starts here: whatever follows may change the board
-        self._undo.append(self._snapshot())
+        if touching is None or touching:
+            self._heat_in_place_edit()
+        self._undo.append(self._snapshot(touching))
         del self._undo[:-MAX_UNDO]
         self._redo.clear()
 
     def _restore(self, snapshot):
+        _marker, meta, active, touched, _everything = snapshot
         self._board_edited()
-        self.doc["layers"], self.doc["activeLayer"] = snapshot
-        self.doc["activeLayer"] = min(self.doc["activeLayer"], len(self.doc["layers"]) - 1)
+        if touched:
+            self._heat_in_place_edit()
+        for item, state in touched:
+            item.clear()
+            item.update(state)
+        layers = []
+        for layer, state, items in meta:
+            layer.clear()
+            layer.update(state)
+            layer["items"] = list(items)
+            layers.append(layer)
+        self.doc["layers"][:] = layers
+        self.doc["activeLayer"] = max(0, min(active, len(layers) - 1))
         self._sel = []
         self._draft = None
         self.layersChanged.emit()
         self.changed.emit()
         self.update()
+
+    def _again(self, step):
+        """A snapshot of the board taken now, covering the same items the given step covers (for redo/undo)."""
+        return self._snapshot(None if step[4] else [item for item, _state in step[3]])
 
     def _push_added(self, item):
         """Undo for adding one shape: remember only that it was added (to the active layer), not a copy of
@@ -238,7 +293,7 @@ class ScribeCanvas(QWidget):
             item = self._remove_last(step[1])
             self._redo.append((_ADDED, step[1], item if item is not None else step[2]))
         else:
-            self._redo.append(self._snapshot())
+            self._redo.append(self._again(step))
             self._restore(step)
 
     def redo(self):
@@ -249,7 +304,7 @@ class ScribeCanvas(QWidget):
             self._add_back(step[1], step[2])
             self._undo.append((_ADDED, step[1], step[2]))
         else:
-            self._undo.append(self._snapshot())
+            self._undo.append(self._again(step))
             self._restore(step)
 
     # ---- options ---------------------------------------------------------
@@ -275,7 +330,7 @@ class ScribeCanvas(QWidget):
         now = time.monotonic()
         marker = (key, tuple(id(i) for i in self._sel))
         if not (self._last_edit and self._last_edit[0] == marker and now - self._last_edit[1] < 1.5):
-            self._push_undo()
+            self._push_undo(touching=list(self._sel))
         self._last_edit = (marker, now)
         self._board_edited()
         for item in self._sel:
@@ -330,6 +385,8 @@ class ScribeCanvas(QWidget):
             self.setCursor(Qt.ArrowCursor)
         elif self.tool == "text":
             self.setCursor(Qt.IBeamCursor)
+        elif self.tool == "eraser":
+            self.setCursor(Qt.BlankCursor)         # the ring drawn on the board is the cursor
         else:
             self.setCursor(Qt.CrossCursor)
 
@@ -407,7 +464,7 @@ class ScribeCanvas(QWidget):
 
     # ---- layers ----------------------------------------------------------
     def add_layer(self):
-        self._push_undo()
+        self._push_undo(touching=[])
         layers = self.doc["layers"]
         layers.insert(self.doc["activeLayer"] + 1, scribe_store.new_layer(f"Layer {len(layers) + 1}"))
         self.doc["activeLayer"] += 1
@@ -417,7 +474,7 @@ class ScribeCanvas(QWidget):
         layers = self.doc["layers"]
         if len(layers) <= 1:
             return
-        self._push_undo()
+        self._push_undo(touching=[])
         del layers[self.doc["activeLayer"]]
         self.doc["activeLayer"] = min(self.doc["activeLayer"], len(layers) - 1)
         self._sel = []
@@ -428,7 +485,7 @@ class ScribeCanvas(QWidget):
         j = i + step
         if not 0 <= j < len(layers):
             return
-        self._push_undo()
+        self._push_undo(touching=[])
         layers[i], layers[j] = layers[j], layers[i]
         self.doc["activeLayer"] = j
         self._layers_edited()
@@ -497,6 +554,24 @@ class ScribeCanvas(QWidget):
             self._paint_background(p)
             p.setRenderHint(QPainter.Antialiasing, True)
             self._paint_scene(p, self.width(), self.height(), self.zoom, self.view["x"], self.view["y"], ui=True)
+        if self.prefs["tool"] == "eraser" and self._cursor_world is not None and not self._pan and self.underMouse():
+            sx, sy = self._to_screen(*self._cursor_world)
+            ring = QPen(QColor(31, 35, 40, 210), 1.6)
+            p.setRenderHint(QPainter.Antialiasing, True)
+            p.setPen(ring)
+            p.setBrush(QColor(255, 255, 255, 70))
+            p.drawEllipse(QPointF(sx, sy), self.ERASER_PX, self.ERASER_PX)
+        if self._arrival is not None:
+            t = self._arrival
+            p.setRenderHint(QPainter.Antialiasing, True)
+            centre = QPointF(self.width() / 2, self.height() / 2)
+            for lag, base in ((0.0, 255), (0.18, 150)):
+                k = max(0.0, min(1.0, (t - lag) / (1 - lag)))
+                if 0 < k < 1:
+                    ring = QColor(37, 99, 235, int(base * (1 - k)))
+                    p.setPen(QPen(ring, 3 * (1 - k) + 1))
+                    p.setBrush(Qt.NoBrush)
+                    p.drawEllipse(centre, 14 + 90 * k, 14 + 90 * k)
         if self.prefs["showGuides"]:
             self._paint_guides(p)
         if self.prefs["showRulers"]:
@@ -570,8 +645,11 @@ class ScribeCanvas(QWidget):
     def _board_shape(self):
         return tuple((layer["visible"], len(layer["items"])) for layer in self.doc["layers"])
 
+    _edits = 0
+
     def _board_edited(self):
         """Something on the board may have changed: the picture and the board's extent are worked out again."""
+        self._edits += 1
         self._picture_fresh = False
         self._bounds_fresh = False
         self._ghost = None
@@ -654,42 +732,72 @@ class ScribeCanvas(QWidget):
 
     HEAT_CELL = 6    # minimap pixels per heat cell
 
+    HEAT_PATCH_LIMIT = 300      # more items than this changed at once: rebuild instead of patching
+    HEAT_SLICE_MS = 6           # how long one step of a background rebuild may take
+    HEAT_PAUSE_MS = 12          # and the gap between steps, so the window stays smooth
+    _heat_cache = None
+    _heat_job = None
+
+    def _heat_layers(self):
+        return [(id(layer), layer["visible"], list(layer["items"])) for layer in self.doc["layers"]]
+
+    def _heat_in_place_edit(self):
+        """Items are about to change shape or place (a move, a restyle): the cells remembered for them are wrong,
+        and taking them away later would take away the wrong cells. The next look rebuilds them, in the background."""
+        if self._heat_cache is not None:
+            self._heat_cache["stale"] = True
+
     def _heat(self, rect, scale, ox, oy):
-        """The heat cells, remembered while nothing under them has changed (it walks every point of every
-        stroke, so doing it on each mouse move made drawing lag). When the only change is strokes added
-        to the end of a layer, just those strokes are added, so pen-up on a big board stays instant."""
+        """The heat cells for the content, exact, remembered while nothing under them has changed (it walks
+        every point of every stroke). Strokes added or taken away since (undo, redo, a delete, a new line) are
+        added or taken away from the cells one by one, so those never cost a full walk."""
         geometry = (round(rect.width()), round(rect.height()), round(scale, 5), round(ox), round(oy))
         version = self._content_version()
-        shape = tuple((id(layer), layer["visible"], len(layer["items"])) for layer in self.doc["layers"])
-        last = tuple(layer["items"][-1] if layer["items"] else None for layer in self.doc["layers"])
-        known = getattr(self, "_heat_cache", None)
-        if known is not None and known["geometry"] == geometry:
+        known = self._heat_cache
+        if known is not None and known["geometry"] == geometry and not known.get("stale"):
             if known["version"] == version:
                 return known["heat"]
-            if self._appended_only(known, shape, last):
-                cell = self.HEAT_CELL
-                for layer, before in zip(self.doc["layers"], known["shape"]):
-                    if layer["visible"]:
-                        for item in layer["items"][before[2]:]:
-                            self._heat_add_item(known["heat"], item, rect, scale, ox, oy, cell)
-                known.update(version=version, shape=shape, last=last)
+            if self._heat_patch(known, rect, scale, ox, oy):
+                known["version"] = version
                 return known["heat"]
         heat = self._heat_compute(rect, scale, ox, oy)
-        self._heat_cache = {"geometry": geometry, "version": version, "shape": shape, "last": last, "heat": heat}
+        self._heat_cache = {"geometry": geometry, "version": version, "heat": heat, "layers": self._heat_layers(),
+                            "map": (scale, ox, oy), "rect": rect}
         return heat
 
     @staticmethod
-    def _appended_only(known, shape, last):
-        old = known["shape"]
-        if len(old) != len(shape):
+    def _common_prefix(old, new):
+        for i in range(min(len(old), len(new))):
+            if old[i] is not new[i]:
+                return i
+        return min(len(old), len(new))
+
+    def _heat_patch(self, known, rect, scale, ox, oy):
+        """Brings the remembered cells up to date by the items added and removed, in place. False when
+        that is not possible (layers changed, or too much changed at once): the caller rebuilds then."""
+        before, now = known["layers"], self.doc["layers"]
+        if len(before) != len(now):
             return False
-        for (lid0, vis0, n0), (lid1, vis1, n1), seen in zip(old, shape, known["last"]):
-            if lid0 != lid1 or vis0 != vis1 or n1 < n0:
+        work = []
+        changed = 0
+        for (layer_id, visible, old_items), layer in zip(before, now):
+            if layer_id != id(layer) or visible != layer["visible"]:
                 return False
-        # every layer that did not grow must still end in the same item it did before
-        for (lid0, vis0, n0), (lid1, vis1, n1), seen, now in zip(old, shape, known["last"], last):
-            if n1 == n0 and now is not seen:
+            items = layer["items"]
+            k = self._common_prefix(old_items, items)
+            removed, added = old_items[k:], items[k:]
+            changed += len(removed) + len(added)
+            if changed > self.HEAT_PATCH_LIMIT:
                 return False
+            if visible and (removed or added):
+                work.append((removed, added))
+        cell, heat = self.HEAT_CELL, known["heat"]
+        for removed, added in work:
+            for item in removed:
+                self._heat_add_item(heat, item, rect, scale, ox, oy, cell, -1.0)
+            for item in added:
+                self._heat_add_item(heat, item, rect, scale, ox, oy, cell)
+        known["layers"] = self._heat_layers()
         return True
 
     def _heat_compute(self, rect, scale, ox, oy):
@@ -702,9 +810,18 @@ class ScribeCanvas(QWidget):
         return heat
 
     @staticmethod
-    def _heat_add_item(heat, item, rect, scale, ox, oy, cell):
+    def _heat_add_item(heat, item, rect, scale, ox, oy, cell, sign=1.0):
+        """Adds one item's weight to the cells it passes through (sign=-1 takes it away again)."""
         cols, rows = int(rect.width() // cell) + 1, int(rect.height() // cell) + 1
         left, top = rect.left(), rect.top()
+
+        def bump(key, amount):
+            value = heat.get(key, 0.0) + amount * sign
+            if value > 1e-9:
+                heat[key] = value
+            else:
+                heat.pop(key, None)
+
         if item.get("type") == "stroke" and len(item["pts"]) > 1:
             pts = item["pts"]
             half = cell / 2
@@ -715,20 +832,69 @@ class ScribeCanvas(QWidget):
                     t = i / steps
                     c, r = int((ax + (bx - ax) * t - left) // cell), int((ay + (by - ay) * t - top) // cell)
                     if 0 <= c < cols and 0 <= r < rows:
-                        heat[(c, r)] = heat.get((c, r), 0.0) + 0.5
+                        bump((c, r), 0.5)
             return
         x0, y0, x1, y1 = geo.bounds(item)
         c0, r0 = int((x0 * scale + ox - left) // cell), int((y0 * scale + oy - top) // cell)
         c1, r1 = int((x1 * scale + ox - left) // cell), int((y1 * scale + oy - top) // cell)
         for c in range(max(c0, 0), min(c1, cols - 1) + 1):
             for r in range(max(r0, 0), min(r1, rows - 1) + 1):
-                heat[(c, r)] = heat.get((c, r), 0.0) + 1.5
+                bump((c, r), 1.5)
+
+    # -- the same cells, but never worked out in the middle of a paint --
+    def _heat_for_paint(self, rect, scale, ox, oy):
+        """(cells, base scale, ox, oy) to draw now. Up to date, or patched, it is exact and quick. When a full
+        rebuild is needed the cells already known are drawn as they are and the rebuild runs in small steps
+        between paints, so undo, redo and a move on a big board never wait for it."""
+        geometry = (round(rect.width()), round(rect.height()), round(scale, 5), round(ox), round(oy))
+        version = self._content_version()
+        known = self._heat_cache
+        if known is not None and known["geometry"] == geometry and not known.get("stale"):
+            if known["version"] == version or self._heat_patch(known, rect, scale, ox, oy):
+                known["version"] = version
+                return known["heat"], scale, ox, oy
+        self._start_heat_job(rect, scale, ox, oy, geometry, version)
+        if known is None:
+            return {}, scale, ox, oy
+        return known["heat"], known["map"][0], known["map"][1], known["map"][2]
+
+    def _start_heat_job(self, rect, scale, ox, oy, geometry, version):
+        job = self._heat_job
+        if job is not None and job["geometry"] == geometry and job["version"] == version:
+            return
+        layers = self._heat_layers()
+        self._heat_job = {"geometry": geometry, "version": version, "rect": rect, "map": (scale, ox, oy),
+                          "heat": {}, "lists": [items for _id, visible, items in layers if visible],
+                          "layers": layers, "i": 0, "j": 0}
+        QTimer.singleShot(self.HEAT_PAUSE_MS, self._heat_step)
+
+    def _heat_step(self):
+        job = self._heat_job
+        if job is None:
+            return
+        scale, ox, oy = job["map"]
+        cell, rect, heat = self.HEAT_CELL, job["rect"], job["heat"]
+        deadline = time.perf_counter() + self.HEAT_SLICE_MS / 1000
+        while job["i"] < len(job["lists"]):
+            items = job["lists"][job["i"]]
+            while job["j"] < len(items):
+                self._heat_add_item(heat, items[job["j"]], rect, scale, ox, oy, cell)
+                job["j"] += 1
+                if time.perf_counter() > deadline:
+                    QTimer.singleShot(self.HEAT_PAUSE_MS, self._heat_step)
+                    return
+            job["i"] += 1
+            job["j"] = 0
+        self._heat_job = None
+        self._heat_cache = {"geometry": job["geometry"], "version": job["version"], "heat": heat,
+                            "layers": job["layers"], "map": job["map"], "rect": rect}
+        self.update()
 
     def _paint_heat(self, p, rect, scale, ox, oy):
         # The cells are worked out against the content alone, so panning (which moves the view, and so the map)
         # never makes them be worked out again; here they are only moved and scaled onto the current map.
         base, bx, by = self._minimap_map(rect, content_only=True)
-        heat = self._heat(rect, base, bx, by)
+        heat, base, bx, by = self._heat_for_paint(rect, base, bx, by)
         if not heat:
             return
         peak = max(heat.values())
@@ -864,6 +1030,17 @@ class ScribeCanvas(QWidget):
             for item in self._sel:
                 x0, y0, x1, y1 = geo.bounds(item)
                 p.drawRect(QRectF(x0 - pad, y0 - pad, x1 - x0 + 2 * pad, y1 - y0 + 2 * pad))
+            if self._sel and self.prefs["tool"] == "select" and self._draft is None:
+                box = self.selection_box()
+                size = self.HANDLE_PX / zoom
+                if len(self._sel) > 1:
+                    p.drawRect(QRectF(box[0], box[1], box[2] - box[0], box[3] - box[1]))
+                p.setPen(QPen(QColor("#2563EB"), 1.5 / zoom))
+                p.setBrush(QColor("#FFFFFF"))
+                for hx, hy in self._handle_points(box).values():
+                    p.drawRoundedRect(QRectF(hx - size / 2, hy - size / 2, size, size), 2 / zoom, 2 / zoom)
+                p.setBrush(Qt.NoBrush)
+                p.setPen(pen)
             if self._band:
                 (ax, ay), (bx, by) = self._band
                 p.setBrush(QColor(59, 130, 246, 40))
@@ -1168,18 +1345,305 @@ class ScribeCanvas(QWidget):
             if layer["visible"]:
                 yield from reversed(layer["items"])
 
+    _hit_cache = None
+
+    def _hit_boxes(self):
+        """[(x0, y0, x1, y1, item)] for every visible item, top first, remembered until the board is edited or an
+        item is added or taken away. Testing a point against these four numbers is what lets a click or an eraser
+        sweep over thousands of strokes stay quick: only the few whose box holds the point are measured."""
+        key = (self._edits, self._board_shape())
+        known = self._hit_cache
+        if known is not None and known[0] == key:
+            return known[1]
+        boxes = []
+        for item in self._visible_items_top_first():
+            x0, y0, x1, y1 = self._bounds_of(item)
+            boxes.append((x0, y0, x1, y1, item))
+        self._hit_cache = (key, boxes)
+        return boxes
+
+    def _items_at(self, w, tol):
+        """Every visible item the point touches, top first."""
+        for x0, y0, x1, y1, item in self._hit_boxes():
+            if x0 - tol <= w[0] <= x1 + tol and y0 - tol <= w[1] <= y1 + tol and geo.hit_item(item, w[0], w[1], tol):
+                yield item
+
     def _item_at(self, w):
-        tol = 6 / self.zoom
-        return next((i for i in self._visible_items_top_first() if geo.hit_item(i, w[0], w[1], tol)), None)
+        return next(self._items_at(w, 6 / self.zoom), None)
+
+    def selection_box(self):
+        """(x0, y0, x1, y1) of the selected shapes themselves, or None when nothing is selected."""
+        return geo.union_bounds(self._sel) if self._sel else None
+
+    def _handle_points(self, box):
+        x0, y0, x1, y1 = box
+        mx, my = (x0 + x1) / 2, (y0 + y1) / 2
+        return {"nw": (x0, y0), "n": (mx, y0), "ne": (x1, y0), "e": (x1, my),
+                "se": (x1, y1), "s": (mx, y1), "sw": (x0, y1), "w": (x0, my)}
+
+    def _handle_at(self, pos):
+        """The resize handle under a screen position, or None. Only while the select tool has something selected."""
+        if self.tool != "select" or not self._sel:
+            return None
+        box = self.selection_box()
+        for name, (hx, hy) in self._handle_points(box).items():
+            sx, sy = self._to_screen(hx, hy)
+            if abs(pos.x() - sx) <= self.HANDLE_GRAB_PX and abs(pos.y() - sy) <= self.HANDLE_GRAB_PX:
+                return name
+        return None
+
+    @staticmethod
+    def _handle_cursor(name):
+        if name in ("nw", "se"):
+            return Qt.SizeFDiagCursor
+        if name in ("ne", "sw"):
+            return Qt.SizeBDiagCursor
+        return Qt.SizeVerCursor if name in ("n", "s") else Qt.SizeHorCursor
+
+    def _begin_resize(self, handle):
+        self._resizing = {"handle": handle, "box": self.selection_box(), "pushed": False,
+                          "states": [(item, dict(item)) for item in self._sel]}
+
+    def _resize_to(self, w, mods):
+        """Drags a handle: the edges it owns follow the pointer, the opposite ones stay. A corner keeps the shape's
+        proportions with Shift (for pictures it is the other way round: they keep theirs unless Shift is held)."""
+        job = self._resizing
+        x0, y0, x1, y1 = job["box"]
+        handle, least = job["handle"], max(2.0, 6 / self.zoom)
+        nx0, ny0, nx1, ny1 = x0, y0, x1, y1
+        if "w" in handle:
+            nx0 = min(w[0], x1 - least)
+        if "e" in handle:
+            nx1 = max(w[0], x0 + least)
+        if "n" in handle:
+            ny0 = min(w[1], y1 - least)
+        if "s" in handle:
+            ny1 = max(w[1], y0 + least)
+        pictures = all(item["type"] == "image" for item, _state in job["states"])
+        corner = len(handle) == 2
+        if corner and (bool(mods & Qt.ShiftModifier) != pictures):
+            ow, oh = max(x1 - x0, 1e-6), max(y1 - y0, 1e-6)
+            k = max((nx1 - nx0) / ow, (ny1 - ny0) / oh)
+            if "w" in handle:
+                nx0 = x1 - ow * k
+            else:
+                nx1 = x0 + ow * k
+            if "n" in handle:
+                ny0 = y1 - oh * k
+            else:
+                ny1 = y0 + oh * k
+        if not job["pushed"]:
+            self._push_undo(touching=[item for item, _state in job["states"]])
+            job["pushed"] = True
+        self._board_edited()
+        for item, state in job["states"]:
+            item.clear()
+            item.update(state)
+        geo.resize_to_box([item for item, _state in job["states"]], job["box"], (nx0, ny0, nx1, ny1))
+        if len(job["states"]) <= 20:
+            self.selectionMoved.emit()
+
+    def set_selection_box(self, x0, y0, x1, y1):
+        """Moves and resizes whatever is selected so its box is exactly this (typed in the size boxes)."""
+        if not self._sel:
+            return
+        old = self.selection_box()
+        now = time.monotonic()
+        marker = ("box", tuple(id(i) for i in self._sel))
+        if not (self._last_edit and self._last_edit[0] == marker and now - self._last_edit[1] < 1.5):
+            self._push_undo(touching=list(self._sel))
+        self._last_edit = (marker, now)
+        self._board_edited()
+        geo.resize_to_box(self._sel, old, (x0, y0, x1, y1))
+        self.changed.emit()
+        self.selectionMoved.emit()
+        self.update()
 
     def _is_selected(self, item):
         return any(item is s for s in self._sel)
+
+    # ---- the eraser ----
+    def _erase_along(self, a, b):
+        """The eraser moved from a to b (or was pressed at a == b): every shape it touches on the way goes, so a quick
+        sweep leaves no gaps. One pass over the board's boxes finds the few shapes near the path; only those are
+        measured at each spot along it."""
+        reach = self.ERASER_PX / self.zoom
+        boxes = self._hit_boxes()
+        lo_x, hi_x = min(a[0], b[0]) - reach, max(a[0], b[0]) + reach
+        lo_y, hi_y = min(a[1], b[1]) - reach, max(a[1], b[1]) + reach
+        near = [e for e in boxes if e[0] <= hi_x and e[2] >= lo_x and e[1] <= hi_y and e[3] >= lo_y]
+        if not near:
+            return
+        steps = max(1, int(math.hypot(b[0] - a[0], b[1] - a[1]) / (reach / 2)))
+        gone = set()
+        for i in range(1, steps + 1):
+            t = i / steps
+            x, y = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+            for x0, y0, x1, y1, item in near:
+                if (id(item) not in gone and x0 - reach <= x <= x1 + reach and y0 - reach <= y <= y1 + reach
+                        and geo.hit_item(item, x, y, reach)):
+                    gone.add(id(item))
+        if gone:
+            self._take_away(gone, boxes)
+
+    def _take_away(self, gone, boxes):
+        """Removes these shapes (by id). A whole drag is one undo step, however far it goes. The list of boxes is
+        kept up to date here, so the next move does not have to build it again."""
+        job = self._erasing
+        if not job["pushed"]:
+            self._push_undo(touching=[])
+            job["pushed"] = True
+        for layer in self.doc["layers"]:
+            if layer["visible"]:
+                layer["items"] = [item for item in layer["items"] if id(item) not in gone]
+        self._sel = [item for item in self._sel if id(item) not in gone]
+        self._board_edited()
+        self._hit_cache = ((self._edits, self._board_shape()), [e for e in boxes if id(e[4]) not in gone])
+        self.changed.emit()
+
+    # ---- what can be done with the selection ----
+    def delete_selection(self):
+        if not self._sel:
+            return False
+        self._push_undo(touching=[])
+        for layer in self.doc["layers"]:
+            layer["items"] = [i for i in layer["items"] if not self._is_selected(i)]
+        self._sel = []
+        self.changed.emit()
+        self.update()
+        return True
+
+    def duplicate_selection(self):
+        return bool(self._sel) and self.copy_selection() and self.paste_selection()
+
+    @staticmethod
+    def _reordered(items, chosen, how):
+        """`items` with the chosen ones moved: "front"/"back" to the end/start, "forward"/"backward" past
+        their neighbour. The chosen keep their order among themselves."""
+        picked = [i for i in items if any(i is c for c in chosen)]
+        if not picked:
+            return items
+        rest = [i for i in items if not any(i is c for c in chosen)]
+        if how == "front":
+            return rest + picked
+        if how == "back":
+            return picked + rest
+        out = list(items)
+        marks = [any(i is c for c in chosen) for i in out]
+        order = range(len(out) - 2, -1, -1) if how == "forward" else range(1, len(out))
+        for k in order:
+            a, b = (k, k + 1) if how == "forward" else (k - 1, k)
+            if marks[a] != marks[b] and marks[k]:
+                out[a], out[b] = out[b], out[a]
+                marks[a], marks[b] = marks[b], marks[a]
+        return out
+
+    def arrange(self, how):
+        """Moves the selection in front of or behind the other shapes (how: front, back, forward, backward)."""
+        if not self._sel:
+            return False
+        changed = False
+        for layer in self.doc["layers"]:
+            moved = self._reordered(layer["items"], self._sel, how)
+            if any(a is not b for a, b in zip(moved, layer["items"])):
+                changed = True
+        if not changed:
+            return False
+        self._push_undo(touching=[])
+        for layer in self.doc["layers"]:
+            layer["items"] = self._reordered(layer["items"], self._sel, how)
+        self.changed.emit()
+        self.update()
+        return True
+
+    def nudge(self, dx, dy):
+        """Moves the selection by this many screen pixels (so a tap moves it the same distance at any zoom)."""
+        if not self._sel:
+            return False
+        self._apply_to_selection(lambda item: geo.translate(item, dx / self.zoom, dy / self.zoom), "nudge")
+        self.changed.emit()
+        self.selectionMoved.emit()
+        return True
+
+    def edit_text(self, item):
+        """Changes a text shape's words (its box follows). One undo step."""
+        text, ok = QInputDialog.getMultiLineText(self, "Text", "Text:", item.get("text", ""))
+        if not ok or not text.strip() or text == item.get("text"):
+            return False
+        font = QFont()
+        font.setPixelSize(max(4, int(item.get("size", 16))))
+        box = QFontMetricsF(font).boundingRect(QRectF(0, 0, 10000, 10000), Qt.AlignLeft | Qt.AlignTop, text)
+        self._push_undo(touching=[item])
+        self._board_edited()
+        item["text"], item["w"], item["h"] = text, box.width(), box.height()
+        self.changed.emit()
+        self.selectionMoved.emit()
+        self.update()
+        return True
+
+    def mouseDoubleClickEvent(self, e):
+        if e.button() == Qt.LeftButton and self.tool == "select":
+            hit = self._item_at(self._to_world(e.position()))
+            if hit is not None and hit["type"] == "text":
+                self._sel = [hit]
+                self.edit_text(hit)
+                return
+        super().mouseDoubleClickEvent(e)
+
+    def original_size(self):
+        """Puts each selected picture back to its own size, around its middle."""
+        pictures = [i for i in self._sel if i["type"] == "image"]
+        if not pictures:
+            return False
+
+        def reset(item):
+            image = self._image(item["file"])
+            if image.isNull():
+                return
+            cx, cy = item["a"][0] + item["w"] / 2, item["a"][1] + item["h"] / 2
+            item["w"], item["h"] = float(image.width()), float(image.height())
+            item["a"] = [cx - item["w"] / 2, cy - item["h"] / 2]
+        self._push_undo(touching=pictures)
+        self._board_edited()
+        for item in pictures:
+            reset(item)
+        self.changed.emit()
+        self.selectionMoved.emit()
+        self.update()
+        return True
+
+    _arrival = None             # 0 to 1 while the ring that shows where a jump landed is growing
+
+    def go_to(self, x, y, zoom=None):
+        """Puts the board's middle on this point (and sets the zoom if one is given), with a ring that grows
+        from it so the eye finds where it landed."""
+        self._end_ghost()
+        self.view["x"], self.view["y"] = float(x), float(y)
+        if zoom is not None:
+            self.set_zoom(zoom)
+        self.changed.emit()
+        self.update()
+        from qt_ui import motion
+
+        def step(value):
+            self._arrival = value if value < 1.0 else None
+            self.update()
+        motion.stop(self.__dict__.get("_arrival_anim"))
+        self._arrival_anim = motion.tween(self, 0.0, 1.0, 700, step)
+
+    def zoom_to_selection(self):
+        box = self.selection_box()
+        if box is None:
+            return self.fit_all()
+        bw, bh = max(box[2] - box[0], 1.0), max(box[3] - box[1], 1.0)
+        self.view["x"], self.view["y"] = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+        self.set_zoom(0.8 * min(self.width() / bw, self.height() / bh))
 
     def _fill_at(self, w):
         target = next((i for i in self._visible_items_top_first() if geo.contains_fill(i, w[0], w[1])), None)
         if target is None:
             return
-        self._push_undo()
+        self._push_undo(touching=[target])
         target["fill"] = self.prefs["fill"]
         self.changed.emit()
         self.update()
@@ -1224,7 +1688,7 @@ class ScribeCanvas(QWidget):
     def cut_selection(self):
         if not self.copy_selection():
             return False
-        self._push_undo()
+        self._push_undo(touching=[])
         for layer in self.doc["layers"]:
             layer["items"] = [i for i in layer["items"] if not self._is_selected(i)]
         self._sel = []
@@ -1249,7 +1713,7 @@ class ScribeCanvas(QWidget):
         shift = count * 24 / self.zoom
         for item in items:
             geo.translate(item, cx - (x0 + x1) / 2 + shift, cy - (y0 + y1) / 2 + shift)
-        self._push_undo()
+        self._push_undo(touching=[])
         self._active_items().extend(items)
         if self.tool != "select":
             self.set_tool("select")                    # so they can be dragged straight away
@@ -1284,7 +1748,7 @@ class ScribeCanvas(QWidget):
             x, y = x + 30, y + 30
         if not added:
             return
-        self._push_undo()
+        self._push_undo(touching=[])
         self._active_items().extend(added)
         self._sel = added
         self.changed.emit()
@@ -1320,7 +1784,7 @@ class ScribeCanvas(QWidget):
     def clear_board(self):
         if not any(layer["items"] for layer in self.doc["layers"]):
             return
-        self._push_undo()
+        self._push_undo(touching=[])
         for layer in self.doc["layers"]:
             layer["items"] = []
         self._sel = []
@@ -1330,6 +1794,7 @@ class ScribeCanvas(QWidget):
     # ---- mouse / keys ----------------------------------------------------
     def mousePressEvent(self, e):
         self.setFocus()
+        scribe_store.set_pen_down(True)
         pos = e.position()
         mm = self._minimap_rect()
         if mm is not None and e.button() == Qt.LeftButton and mm.contains(pos):
@@ -1362,8 +1827,15 @@ class ScribeCanvas(QWidget):
             self._add_text(w)
         elif tool == "fill":
             self._fill_at(w)
+        elif tool == "eraser":
+            self._erasing = {"last": w, "pushed": False}
+            self._erase_along(w, w)
         elif tool == "select":
-            self._select_press(w, e.modifiers())
+            handle = self._handle_at(pos)
+            if handle is not None:
+                self._begin_resize(handle)
+            else:
+                self._select_press(w, e.modifiers())
         self.update()
 
     def _select_press(self, w, mods):
@@ -1394,7 +1866,21 @@ class ScribeCanvas(QWidget):
             self._update_cursor()
         w = self._to_world(pos)
         self._cursor_world = w
-        if self._pan:
+        self.cursorMoved.emit(w[0], w[1])
+        if not e.buttons() and not self._pan and self._draft is None:
+            handle = self._handle_at(pos)
+            if handle != self._hover_handle:
+                self._hover_handle = handle
+                if handle is not None:
+                    self.setCursor(self._handle_cursor(handle))
+                else:
+                    self._update_cursor()
+        if self._resizing is not None:
+            self._resize_to(w, e.modifiers())
+        elif self._erasing is not None:
+            self._erase_along(self._erasing["last"], w)
+            self._erasing["last"] = w
+        elif self._pan:
             start, vx, vy = self._pan
             self.view["x"] = vx - (pos.x() - start.x()) / self.zoom
             self.view["y"] = vy - (pos.y() - start.y()) / self.zoom
@@ -1419,17 +1905,26 @@ class ScribeCanvas(QWidget):
         elif self._move_last is not None:
             dx, dy = w[0] - self._move_last[0], w[1] - self._move_last[1]
             if not self._moved:
-                self._push_undo()
+                self._push_undo(touching=list(self._sel))
                 self._moved = True
             self._board_edited()
             for item in self._sel:
                 geo.translate(item, dx, dy)
             self._move_last = w
+            if len(self._sel) <= 20:
+                self.selectionMoved.emit()
         elif self._band:
             self._band = (self._band[0], w)
-        elif not self.prefs["showGuides"]:
+        elif not self.prefs["showGuides"] and self.prefs["tool"] != "eraser":
             return
         self.update()
+
+    def leaveEvent(self, event):
+        self.cursorLeft.emit()
+        if self.prefs["tool"] == "eraser":
+            self._cursor_world = None             # the eraser's ring goes with the pointer
+            self.update()
+        super().leaveEvent(event)
 
     def _update_around_stroke(self, d):
         """Repaint only the patch the newest piece of a freehand line can touch (and the minimap),
@@ -1446,6 +1941,7 @@ class ScribeCanvas(QWidget):
         self.update(region)
 
     def mouseReleaseEvent(self, e):
+        scribe_store.set_pen_down(False)
         if getattr(self, "_on_minimap", False):
             self._on_minimap = False
             return
@@ -1455,6 +1951,18 @@ class ScribeCanvas(QWidget):
             self._update_cursor()
             return
         if e.button() != Qt.LeftButton:
+            return
+        if self._erasing is not None:
+            self._erasing = None
+            self.update()
+            return
+        if self._resizing is not None:
+            moved = self._resizing["pushed"]
+            self._resizing = None
+            if moved:
+                self.changed.emit()
+                self.selectionMoved.emit()
+            self.update()
             return
         d = self._draft
         if d is not None:
@@ -1474,6 +1982,7 @@ class ScribeCanvas(QWidget):
             self._move_last = None
             if self._moved:
                 self.changed.emit()
+                self.selectionMoved.emit()
         elif self._band:
             (ax, ay), (bx, by) = self._band
             box = QRectF(QPointF(ax, ay), QPointF(bx, by)).normalized()
@@ -1482,6 +1991,7 @@ class ScribeCanvas(QWidget):
                 if box.intersects(QRectF(x0, y0, x1 - x0, y1 - y0)) and not self._is_selected(item):
                     self._sel.append(item)
             self._band = None
+            self.selectionChanged.emit()
         self.update()
 
     def wheelEvent(self, e):
@@ -1518,20 +2028,35 @@ class ScribeCanvas(QWidget):
             if not self.paste_selection():
                 self.paste_image()
         elif key in (Qt.Key_Delete, Qt.Key_Backspace) and self._sel:
-            self._push_undo()
-            for layer in self.doc["layers"]:
-                layer["items"] = [i for i in layer["items"] if not self._is_selected(i)]
-            self._sel = []
-            self.changed.emit()
-            self.update()
+            self.delete_selection()
+        elif key in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down) and self._sel:
+            step = 10 if e.modifiers() & Qt.ShiftModifier else 1            # screen pixels; Shift for a bigger step
+            self.nudge({Qt.Key_Left: -step, Qt.Key_Right: step}.get(key, 0),
+                       {Qt.Key_Up: -step, Qt.Key_Down: step}.get(key, 0))
+        elif ctrl and key in (Qt.Key_BracketRight, Qt.Key_BraceRight, Qt.Key_BracketLeft, Qt.Key_BraceLeft):
+            toward_front = key in (Qt.Key_BracketRight, Qt.Key_BraceRight)
+            whole = bool(e.modifiers() & Qt.ShiftModifier)                  # Ctrl+Shift+] all the way, Ctrl+] one step
+            self.arrange(("front" if whole else "forward") if toward_front else ("back" if whole else "backward"))
+        elif ctrl and key == Qt.Key_0:
+            self.set_zoom(1.0)
+        elif key in (Qt.Key_Plus, Qt.Key_Equal) or (ctrl and key == Qt.Key_Equal):
+            self.zoom_by(1.25)
+        elif key == Qt.Key_Minus:
+            self.zoom_by(1 / 1.25)
+        elif key == Qt.Key_Exclam or (key == Qt.Key_1 and e.modifiers() & Qt.ShiftModifier):
+            self.fit_all()
+        elif key == Qt.Key_At or (key == Qt.Key_2 and e.modifiers() & Qt.ShiftModifier):
+            self.zoom_to_selection()
+        elif key in (Qt.Key_Return, Qt.Key_Enter) and len(self._sel) == 1 and self._sel[0]["type"] == "text":
+            self.edit_text(self._sel[0])
         elif key == Qt.Key_M and not ctrl:
             self._minimap_on = not self._minimap_on
             self.update()
         elif key == Qt.Key_Escape:
             self._sel = []
             self._cancel_draft()
-        elif text in _TOOL_KEYS and not ctrl:
-            self.set_tool(_TOOL_KEYS[text])
+        elif text.lower() in _TOOL_KEYS and not ctrl:
+            self.set_tool(_TOOL_KEYS[text.lower()])
         else:
             super().keyPressEvent(e)
 
@@ -1545,17 +2070,18 @@ class ScribeCanvas(QWidget):
 
 # (key, name, hotkey) -- in the order the tool rail shows them, grouped by what they do.
 _TOOLS = [
-    ("select", "Select", "7"), ("freehand", "Freehand", "0"), ("line", "Line", "1"),
-    ("curve", "Curve", "2"), ("arrow", "Arrow", "8"),
+    ("select", "Select", "V"), ("freehand", "Freehand", "P"), ("line", "Line", "L"),
+    ("curve", "Curve", "C"), ("arrow", "Arrow", "A"),
     None,
-    ("rect", "Rectangle", "5"), ("circle", "Circle", "6"),
+    ("rect", "Rectangle", "R"), ("circle", "Circle", "O"),
     None,
-    ("text", "Text", "4"), ("fill", "Fill", "3"), ("insert", "Insert image", ""),
+    ("text", "Text", "T"), ("fill", "Fill", "F"), ("eraser", "Eraser", "E"), ("insert", "Insert image", "Ctrl+V"),
 ]
 
 # What each control does: shown when the pointer rests on it.
+# Hover text is a name and its key, never help text.
 TOOL_HELP = collections.defaultdict(str)
-HELP = collections.defaultdict(str)
+HELP = collections.defaultdict(str, {"undo": "Undo  (Ctrl+Z)", "redo": "Redo  (Ctrl+Y)"})
 
 SCRIBE_INK = "#1F2328"
 _QUICK_COLORS = ["#000000", "#E03131", "#F08C00", "#FAB005", "#2F9E44", "#1971C2", "#7048E8", "#FFFFFF"]
@@ -1590,7 +2116,7 @@ QToolButton { color: #1F2328; background: #F2F4F7; border: none; border-radius: 
     font-size: 12.5px; font-weight: 600; }
 QToolButton:hover { background: #E7EAF0; }
 QToolButton::menu-indicator { image: none; }
-QComboBox, QSpinBox { background: #F7F8FA; color: #1F2328; border: 1px solid #E6E9EF; border-radius: 9px;
+QComboBox, QSpinBox, QDoubleSpinBox { background: #F7F8FA; color: #1F2328; border: 1px solid #E6E9EF; border-radius: 9px;
     padding: 3px 8px; font-size: 12.5px; }
 QListWidget { background: #F7F8FA; color: #1F2328; border: 1px solid #E6E9EF; border-radius: 10px;
     padding: 3px; font-size: 12.5px; }
@@ -1658,6 +2184,18 @@ def _tool_pixmap(key, color):
         drop.cubicTo(18.2, 17.6, 18.2, 19.8, 20, 19.8)
         drop.cubicTo(21.8, 19.8, 21.8, 17.6, 20, 15)
         p.drawPath(drop)
+    elif key == "eraser":
+        block = QPainterPath(QPointF(4.5, 14.5))
+        block.lineTo(13, 6)
+        block.quadTo(14.5, 4.8, 16, 6.2)
+        block.lineTo(19.2, 9.4)
+        block.quadTo(20.4, 10.9, 19.2, 12.3)
+        block.lineTo(12, 19.5)
+        block.lineTo(8, 19.5)
+        block.closeSubpath()
+        p.drawPath(block)
+        p.drawLine(QPointF(9.2, 10.2), QPointF(15.3, 16.3))
+        p.drawLine(QPointF(12.5, 19.5), QPointF(20, 19.5))
     elif key == "insert":
         p.drawRoundedRect(QRectF(4, 5, 16, 14), 2.5, 2.5)
         p.drawEllipse(QPointF(9, 10), 1.5, 1.5)
@@ -1806,104 +2344,261 @@ class _StrokePreview(QWidget):
         p.drawPath(path)
 
 
-class _PaperStack(QWidget):
-    """The papers as a stack of wide rounded cards, each showing a strip of its top before the next
-    card begins. The chosen one is lifted: more of it shows, and a ring marks it."""
+class _PaperPicker(QWidget):
+    """The papers as a grid of small pages. Each is drawn whole (its pattern starts and ends on a line, so
+    nothing looks cut off) with its name under it. The chosen one wears a ring and a tick, and the ring
+    fades from one page to the next. Arrow keys move through them."""
     picked = Signal(str)
-    PEEK, EXTRA, CARD, RADIUS = 26, 54, 78, 12
+    TILE_H, LABEL_H, GAP, RADIUS, COLUMNS = 54, 20, 10, 10, 2
+    CELL = 8.0                 # the size of one square on a page, give or take what it takes to fit whole
 
     def __init__(self, keys, current):
         super().__init__()
         self._keys = list(keys)
-        self._current = current
-        self._pos = float(self._keys.index(current)) if current in self._keys else 0.0
+        self._current = current if current in self._keys else (self._keys[0] if self._keys else None)
+        self._previous = None
+        self._fade = 1.0                       # 0 to 1: the ring arriving on the chosen page
+        self._hover = None
         self._anim = None
+        self.setMouseTracking(True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedHeight(self._top(len(self._keys) - 1) + self.CARD + 6)
+        self.setFocusPolicy(Qt.TabFocus)
+        rows = -(-len(self._keys) // self.COLUMNS)
+        self.setFixedHeight(rows * (self.TILE_H + self.LABEL_H + self.GAP) - self.GAP + 8)
         self.setMinimumWidth(120)
 
     def current(self):
         return self._current
 
-    def _top(self, index):
-        lift = max(0.0, min(1.0, index - self._pos))
-        return 3 + index * self.PEEK + self.EXTRA * lift
-
     def set_current(self, key, animate=True):
-        if key not in self._keys:
+        if key not in self._keys or key == self._current:
             return
-        self._current = key
-        target = float(self._keys.index(key))
+        self._previous, self._current = self._current, key
         from qt_ui import motion
         motion.stop(self._anim)
-        if not animate:
-            self._pos = target
-            self.update()
-            return
 
         def step(value):
-            self._pos = value
+            self._fade = value
             self.update()
-        self._anim = motion.tween(self, self._pos, target, motion.MEDIUM_MS, step)
+        self._fade = 0.0
+        self._anim = motion.tween(self, 0.0, 1.0, motion.FAST_MS if hasattr(motion, "FAST_MS") else 220, step)
+        if not animate:
+            motion.stop(self._anim)
+            self._fade = 1.0
+            self.update()
+
+    # ---- geometry ----
+    def _tile(self, index):
+        width = (self.width() - self.GAP * (self.COLUMNS - 1)) / self.COLUMNS
+        col, row = index % self.COLUMNS, index // self.COLUMNS
+        return QRectF(col * (width + self.GAP) + 0.5, 4 + row * (self.TILE_H + self.LABEL_H + self.GAP) + 0.5,
+                      width - 1, self.TILE_H)
+
+    def _index_at(self, pos):
+        for index in range(len(self._keys)):
+            if self._tile(index).adjusted(-3, -3, 3, self.LABEL_H).contains(pos):
+                return index
+        return None
+
+    # ---- input ----
+    def mouseMoveEvent(self, event):
+        index = self._index_at(event.position())
+        if index != self._hover:
+            self._hover = index
+            self.update()
+
+    def leaveEvent(self, event):
+        self._hover = None
+        self.update()
 
     def mousePressEvent(self, event):
-        y = event.position().y()
-        for index in range(len(self._keys) - 1, -1, -1):
-            if y >= self._top(index):
-                self.picked.emit(self._keys[index])
-                return
+        index = self._index_at(event.position())
+        if index is not None and event.button() == Qt.LeftButton:
+            self.picked.emit(self._keys[index])
+
+    def keyPressEvent(self, event):
+        step = {Qt.Key_Left: -1, Qt.Key_Right: 1, Qt.Key_Up: -self.COLUMNS, Qt.Key_Down: self.COLUMNS}.get(event.key())
+        if step is None or self._current is None:
+            super().keyPressEvent(event)
+            return
+        target = self._keys.index(self._current) + step
+        if 0 <= target < len(self._keys):
+            self.picked.emit(self._keys[target])
+
+    # ---- painting ----
+    def _paint_page(self, p, key, rect):
+        """One page, drawn whole: the squares are made to fit the tile exactly, so the pattern begins and ends on a line."""
+        paper, minor, major, dark = _BACKGROUNDS[key]
+        path = QPainterPath()
+        path.addRoundedRect(rect, self.RADIUS, self.RADIUS)
+        p.save()
+        p.setClipPath(path)
+        p.fillRect(rect, QColor(paper))
+        if minor is not None:
+            cols = max(4, round(rect.width() / self.CELL))
+            rows = max(3, round(rect.height() / self.CELL))
+            dx, dy = rect.width() / cols, rect.height() / rows
+            if key == "dots":
+                p.setPen(QPen(QColor(minor), 2.2, Qt.SolidLine, Qt.RoundCap))
+                for i in range(1, cols):
+                    for j in range(1, rows):
+                        p.drawPoint(QPointF(rect.left() + i * dx, rect.top() + j * dy))
+            elif key == "lined":
+                p.setPen(QPen(QColor(minor), 1))
+                for j in range(1, rows):
+                    p.drawLine(QPointF(rect.left(), rect.top() + j * dy), QPointF(rect.right(), rect.top() + j * dy))
+                p.setPen(QPen(QColor("#E8A0A0"), 1))                     # the margin line of a notebook
+                p.drawLine(QPointF(rect.left() + 3 * dx, rect.top()), QPointF(rect.left() + 3 * dx, rect.bottom()))
+            else:
+                for i in range(1, cols):
+                    p.setPen(QPen(QColor(major if major and i % 5 == 0 else minor), 1))
+                    p.drawLine(QPointF(rect.left() + i * dx, rect.top()), QPointF(rect.left() + i * dx, rect.bottom()))
+                for j in range(1, rows):
+                    p.setPen(QPen(QColor(major if major and j % 5 == 0 else minor), 1))
+                    p.drawLine(QPointF(rect.left(), rect.top() + j * dy), QPointF(rect.right(), rect.top() + j * dy))
+        p.restore()
 
     def paintEvent(self, _event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        width = self.width()
-        # Farthest from the chosen paper first, the chosen one last: it sits on top of the stack.
-        for index in sorted(range(len(self._keys)), key=lambda i: -abs(i - self._pos)):
-            key = self._keys[index]
-            paper, minor, major, dark = _BACKGROUNDS[key]
-            near = max(0.0, 1.0 - abs(index - self._pos))            # 1 for the chosen paper, easing to 0
-            inset = 3 + 8 * (1 - near)                                 # the others sit narrower, the chosen sticks out
-            card = QRectF(inset, self._top(index), width - 2 * inset, self.CARD)
-            path = QPainterPath()
-            path.addRoundedRect(card, self.RADIUS, self.RADIUS)
-            p.setPen(Qt.NoPen)
-            for grow, alpha in ((12, 14), (8, 22), (5, 32), (2, 46)):  # a shadow cast up onto the paper behind
-                p.setBrush(QColor(20, 16, 40, int(alpha * (1 + near))))
-                p.drawRoundedRect(card.adjusted(-grow * 0.4, -grow, grow * 0.4, grow * 0.4 * near), self.RADIUS, self.RADIUS)
-            if near > 0.01:                                            # the halo round the lifted paper
-                for ring, alpha in ((7, 26), (5, 44), (3, 70)):
-                    p.setBrush(Qt.NoBrush)
-                    p.setPen(QPen(QColor(59, 130, 246, int(alpha * near)), 2))
-                    p.drawRoundedRect(card.adjusted(-ring, -ring, ring, ring), self.RADIUS + ring, self.RADIUS + ring)
-                p.setPen(Qt.NoPen)
-            p.save()
-            p.setClipPath(path)
-            p.fillRect(card, QColor(paper))
-            if minor is not None:
-                p.setPen(QPen(QColor(minor), 1))
-                if key == "dots":
-                    p.setPen(QPen(QColor(minor), 2, Qt.SolidLine, Qt.RoundCap))
-                    for x in range(int(card.left()) + 10, int(card.right()), 12):
-                        for y in range(int(card.top()) + 8, int(card.bottom()), 12):
-                            p.drawPoint(QPointF(x, y))
-                elif key == "lined":
-                    for y in range(int(card.top()) + 12, int(card.bottom()), 12):
-                        p.drawLine(QPointF(card.left(), y), QPointF(card.right(), y))
-                else:
-                    for k, x in enumerate(range(int(card.left()) + 6, int(card.right()), 12)):
-                        p.setPen(QPen(QColor(major if k % 5 == 0 and major else minor), 1))
-                        p.drawLine(QPointF(x, card.top()), QPointF(x, card.bottom()))
-                    for k, y in enumerate(range(int(card.top()) + 6, int(card.bottom()), 12)):
-                        p.setPen(QPen(QColor(major if k % 5 == 0 and major else minor), 1))
-                        p.drawLine(QPointF(card.left(), y), QPointF(card.right(), y))
-            p.restore()
+        label_font = QFont(self.font())
+        label_font.setPixelSize(12)
+        for index, key in enumerate(self._keys):
+            rect = self._tile(index)
+            hover = index == self._hover
+            lift = -1.0 if hover else 0.0
+            rect = rect.translated(0, lift)
+            ring = 1.0 if key == self._current and self._fade >= 1 else (
+                self._fade if key == self._current else (1 - self._fade if key == self._previous else 0.0))
             chosen = key == self._current
+            # a soft shadow under the page
+            p.setPen(Qt.NoPen)
+            for grow, alpha in ((4, 10), (2, 16)):
+                p.setBrush(QColor(20, 24, 40, alpha + (8 if hover else 0)))
+                p.drawRoundedRect(rect.adjusted(-grow * 0.3, grow * 0.3, grow * 0.3, grow), self.RADIUS, self.RADIUS)
+            self._paint_page(p, key, rect)
+            dark = _BACKGROUNDS[key][3]
+            edge = QColor(255, 255, 255, 70) if dark else QColor(31, 35, 40, 60 if not hover else 110)
             p.setBrush(Qt.NoBrush)
-            p.setPen(QPen(QColor(SCRIBE_INK) if chosen else QColor(255, 255, 255, 110) if dark else QColor(0, 0, 0, 105),
-                          2 if chosen else 1.4))                       # a clear edge, so each paper's start and end show
-            p.drawRoundedRect(card, self.RADIUS, self.RADIUS)
-            p.setPen(QPen(QColor(255, 255, 255, 150 if not dark else 40), 1))   # a bright lip on the top edge
-            p.drawLine(QPointF(card.left() + self.RADIUS, card.top() + 1.5), QPointF(card.right() - self.RADIUS, card.top() + 1.5))
+            p.setPen(QPen(edge, 1))
+            p.drawRoundedRect(rect, self.RADIUS, self.RADIUS)
+            if ring > 0.01:                                   # the ring: glow outside, ink edge, tick in the corner
+                halo = QColor(59, 130, 246, int(60 * ring))
+                p.setPen(QPen(halo, 3))
+                p.drawRoundedRect(rect.adjusted(-2.5, -2.5, 2.5, 2.5), self.RADIUS + 2.5, self.RADIUS + 2.5)
+                ink = QColor(SCRIBE_INK)
+                ink.setAlphaF(ring)
+                p.setPen(QPen(ink, 2))
+                p.drawRoundedRect(rect, self.RADIUS, self.RADIUS)
+                badge = QPointF(rect.right() - 11, rect.top() + 11)
+                p.setPen(Qt.NoPen)
+                p.setBrush(QColor(31, 35, 40, int(235 * ring)))
+                p.drawEllipse(badge, 7.5 * (0.6 + 0.4 * ring), 7.5 * (0.6 + 0.4 * ring))
+                p.setPen(QPen(QColor(255, 255, 255, int(255 * ring)), 1.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+                p.drawPolyline([QPointF(badge.x() - 3.2, badge.y() + 0.2), QPointF(badge.x() - 0.8, badge.y() + 2.6),
+                                QPointF(badge.x() + 3.4, badge.y() - 2.4)])
+            font = QFont(label_font)
+            font.setBold(chosen)
+            p.setFont(font)
+            p.setPen(QColor(SCRIBE_INK) if chosen or hover else QColor("#5B6472"))
+            p.drawText(QRectF(rect.left(), rect.bottom() + 3, rect.width(), self.LABEL_H - 3),
+                       Qt.AlignHCenter | Qt.AlignVCenter, BACKGROUND_LABELS.get(key, key.title()))
+        if self.hasFocus():
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(QColor(59, 130, 246, 140), 1.5, Qt.DotLine))
+            p.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 8, 8)
+
+
+class _GoToPopup(QWidget):
+    """Type where to go: a point on the board (and a zoom), or jump to the middle of the selection, the
+    origin, or everything. Enter goes; Esc closes."""
+
+    def __init__(self, canvas, anchor):
+        super().__init__(anchor.window(), Qt.Popup)
+        self._canvas = canvas
+        self.setStyleSheet(_STYLE + "QWidget#GoTo { background: #FFFFFF; border: 1px solid #D5DAE3; border-radius: 14px; }")
+        self.setObjectName("GoTo")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        box = QVBoxLayout(self)
+        box.setContentsMargins(14, 12, 14, 14)
+        box.setSpacing(8)
+        title = QLabel("Go to")
+        title.setProperty("scribe", "heading")
+        box.addWidget(title)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+        self.fields = {}
+        for row, (key, label, low, high, value, suffix) in enumerate((
+                ("x", "X", -1e9, 1e9, canvas.view["x"], ""), ("y", "Y", -1e9, 1e9, canvas.view["y"], ""),
+                ("zoom", "Zoom", 0.0001, 6400.0, canvas.zoom * 100, " %"))):
+            caption = QLabel(label)
+            caption.setProperty("scribe", "muted")
+            field = QDoubleSpinBox()
+            field.setRange(low, high)
+            field.setDecimals(1 if key != "zoom" else 2)
+            field.setGroupSeparatorShown(True)
+            field.setButtonSymbols(QAbstractSpinBox.NoButtons)
+            field.setSuffix(suffix)
+            field.setValue(value)
+            field.setMinimumWidth(150)
+            field.setKeyboardTracking(False)
+            self.fields[key] = field
+            grid.addWidget(caption, row, 0)
+            grid.addWidget(field, row, 1)
+        box.addLayout(grid)
+        self.keep_zoom = QCheckBox("Keep my zoom")
+        self.keep_zoom.setChecked(True)
+        box.addWidget(self.keep_zoom)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        shortcuts = (("Origin", "Go to 0, 0", self._origin), ("Selection", "Centre on what is selected", self._selection),
+                     ("Everything", "Fit the whole board", self._everything))
+        self.buttons = {}
+        for text, tip, fn in shortcuts:
+            button = QPushButton(text)
+            button.setToolTip(tip)
+            button.setFixedHeight(28)
+            button.clicked.connect(lambda _=False, f=fn: f())
+            self.buttons[text] = button
+            row.addWidget(button)
+        self.buttons["Selection"].setEnabled(bool(canvas._sel))
+        box.addLayout(row)
+        go = QPushButton("Go")
+        go.setDefault(True)
+        go.setFixedHeight(32)
+        go.setStyleSheet("QPushButton { background: #1F2328; color: #FFFFFF; } QPushButton:hover { background: #343A42; }")
+        go.clicked.connect(self.go)
+        box.addWidget(go)
+        self.go_button = go
+        for field in self.fields.values():
+            field.lineEdit().returnPressed.connect(self.go)
+        self.adjustSize()
+        point = anchor.mapToGlobal(anchor.rect().bottomLeft())
+        self.move(point.x(), point.y() + 6)
+        self.fields["x"].setFocus()
+        self.fields["x"].selectAll()
+
+    def go(self):
+        zoom = None if self.keep_zoom.isChecked() else self.fields["zoom"].value() / 100
+        self._canvas.go_to(self.fields["x"].value(), self.fields["y"].value(), zoom)
+        self.close()
+
+    def _origin(self):
+        self.fields["x"].setValue(0.0)
+        self.fields["y"].setValue(0.0)
+        self.go()
+
+    def _selection(self):
+        box = self._canvas.selection_box()
+        if box is not None:
+            self.fields["x"].setValue((box[0] + box[2]) / 2)
+            self.fields["y"].setValue((box[1] + box[3]) / 2)
+            self.go()
+
+    def _everything(self):
+        self.close()
+        self._canvas.fit_all()
 
 
 class ScribeTab(QWidget):
@@ -1934,6 +2629,10 @@ class ScribeTab(QWidget):
         center.addWidget(self._build_canvas_card(), 1)
         layout.addLayout(center, 1)
         self._root_layout = layout
+        try:
+            self._options_hidden = bool(config.load_config().get("scribeOptionsHidden", False))
+        except Exception:
+            self._options_hidden = False
         self._side = QScrollArea()                   # the options card: scrolls when the window is short
         self._side.setWidgetResizable(True)
         self._side.setFrameShape(QFrame.NoFrame)
@@ -1950,13 +2649,14 @@ class ScribeTab(QWidget):
         self.canvas.zoomChanged.connect(self._show_zoom)
         self.canvas.toolChanged.connect(self._show_tool)
         self.canvas.layersChanged.connect(self._refresh_layers)
+        self._show_view_place()
         self._show_zoom(self.canvas.zoom)
         self._show_tool(self.canvas.tool)
         self._refresh_layers()
         self._show_saved(True)
 
         for keys, fn in (("Ctrl+Z", self.canvas.undo), ("Ctrl+Y", self.canvas.redo),
-                         ("Ctrl+Shift+Z", self.canvas.redo)):
+                         ("Ctrl+Shift+Z", self.canvas.redo), ("Ctrl+G", self._open_go_to)):
             shortcut = QShortcut(QKeySequence(keys), self)
             shortcut.setContext(Qt.WidgetWithChildrenShortcut)
             shortcut.activated.connect(fn)
@@ -1988,8 +2688,8 @@ class ScribeTab(QWidget):
         """Saving a big board takes a few hundred ms; on the UI thread that froze the pen mid-stroke."""
         if not self._dirty:
             return
-        if self._saver is not None and self._saver.is_alive():
-            self._save_timer.start()               # one write at a time; try again shortly
+        if (self._saver is not None and self._saver.is_alive()) or scribe_store.pen_is_down():
+            self._save_timer.start()               # one write at a time, and never under a stroke; try again shortly
             return
         doc = self._copy_for_saving()
         self._dirty = False
@@ -2065,7 +2765,8 @@ class ScribeTab(QWidget):
         width = event.size().width()
         self._relayout_side(width < self._SIDE_BELOW)
         compact = width < self._COMPACT_BELOW
-        for widget in (self._topbar_title, self._saved_label, self._pan_button, self._reset_button):
+        for widget in (self._topbar_title, self._saved_label, self._pan_button, self._reset_button,
+                       self._coords_button):
             widget.setVisible(not compact)
 
     def _relayout_side(self, narrow):
@@ -2082,8 +2783,31 @@ class ScribeTab(QWidget):
             side.setWindowFlags(Qt.Widget)
             self._root_layout.addWidget(side)
             side.setMaximumHeight(16777215)
-            side.show()
-        self._options_button.setVisible(narrow)
+            side.setVisible(not self._options_hidden)
+        self._label_options_button()
+
+    def _label_options_button(self):
+        narrow = bool(getattr(self, "_side_narrow", False))
+        if narrow:
+            text, tip = "Options", "Options"
+        elif self._options_hidden:
+            text, tip = "Show options", "Show options"
+        else:
+            text, tip = "Hide options", "Hide options"
+        self._options_button.setText(text)
+        self._options_button.setToolTip(tip)
+
+    def _toggle_options(self):
+        """The Options button: a popup when the card has no room beside the board, otherwise it hides or
+        shows the card (and remembers which)."""
+        if getattr(self, "_side_narrow", False):
+            self._show_options_popup()
+            return
+        self._options_hidden = not self._options_hidden
+        self._side.setVisible(not self._options_hidden)
+        self._label_options_button()
+        hidden = self._options_hidden
+        config.update_config(lambda cfg: cfg.update(scribeOptionsHidden=hidden))
 
     def _show_options_popup(self):
         side = self._side
@@ -2125,6 +2849,7 @@ class ScribeTab(QWidget):
 
     def hideEvent(self, event):
         gc_guard.resume()                     # never left off if the page closes mid-stroke
+        scribe_store.set_pen_down(False)
         self.flush()                    # quick now: the board's text is remembered between saves
         super().hideEvent(event)
 
@@ -2209,8 +2934,8 @@ class ScribeTab(QWidget):
             button.setFixedSize(32, 32)
         minus.clicked.connect(lambda: self.canvas.zoom_by(1 / 1.25))
         plus.clicked.connect(lambda: self.canvas.zoom_by(1.25))
-        minus.setToolTip("Zoom out")
-        plus.setToolTip("Zoom in")
+        minus.setToolTip("Zoom out  (scroll down)")
+        plus.setToolTip("Zoom in  (scroll up)")
         self._zoom_label = QLabel("100%")
         self._zoom_label.setMinimumWidth(52)
         self._zoom_label.setAlignment(Qt.AlignCenter)
@@ -2219,13 +2944,13 @@ class ScribeTab(QWidget):
             "font-size: 13px; font-weight: 700; color: #1F2328; background: transparent;")
         self._pan_button = QPushButton("Pan")
         self._pan_button.setCheckable(True)
-        self._pan_button.setToolTip("Pan")
+        self._pan_button.setToolTip("Pan  (hold Space and drag)")
         self._pan_button.toggled.connect(self.canvas.set_pan_mode)
         fit = QPushButton("Fit")
         fit.setToolTip("Fit all")
         fit.clicked.connect(self.canvas.fit_all)
         reset = QPushButton("Reset")
-        reset.setToolTip("100%")
+        reset.setToolTip("Back to 100%")
         reset.clicked.connect(self.canvas.reset_view)
         for widget in (minus, self._zoom_label, plus, self._pan_button, fit, reset):
             bar.addWidget(widget)
@@ -2240,11 +2965,20 @@ class ScribeTab(QWidget):
             button.clicked.connect(fn)
             bar.addWidget(button)
         bar.addWidget(self._build_snap_menu())
-        self._options_button = QPushButton("Options")      # only when the options card has no room beside the board
-        self._options_button.clicked.connect(self._show_options_popup)
-        self._options_button.hide()
+        self._coords_button = QPushButton("")
+        self._coords_button.setProperty("scribe", "ghost")
+        self._coords_button.setMinimumWidth(176)
+        self._coords_button.setToolTip("Go to  (Ctrl+G)")
+        self._coords_button.setStyleSheet("font-size: 12px; font-weight: 600;")
+        self._coords_button.clicked.connect(self._open_go_to)
+        bar.addWidget(self._coords_button)
+        self._options_button = QPushButton("Hide options")   # hides the card, or opens it as a popup when narrow
+        self._options_button.clicked.connect(self._toggle_options)
         bar.addWidget(self._options_button)
         self._topbar_title, self._reset_button = title, reset
+        self.canvas.cursorMoved.connect(self._show_pointer_place)
+        self.canvas.cursorLeft.connect(self._show_view_place)
+        self.canvas.changed.connect(self._refresh_view_place)
         return card
 
     def _build_snap_menu(self):
@@ -2356,6 +3090,7 @@ class ScribeTab(QWidget):
             self._pref_checks[key] = check
             box.addWidget(check)
         self._refresh_preview()
+        self._build_selection_panel(box)
 
         # --- paper: thumbnails of each background (the combo underneath still holds the value)
         box.addSpacing(4)
@@ -2367,7 +3102,8 @@ class ScribeTab(QWidget):
         self._background.setToolTip(HELP["paper"])
         self._background.hide()
         box.addWidget(self._background)
-        self._paper_stack = _PaperStack(BACKGROUND_LABELS.keys(), prefs["background"])
+        box.addWidget(self._heading("Paper"))
+        self._paper_stack = _PaperPicker(BACKGROUND_LABELS.keys(), prefs["background"])
         self._paper_stack.picked.connect(
             lambda k: self._background.setCurrentIndex(self._background.findData(k)))
         box.addWidget(self._paper_stack)
@@ -2432,6 +3168,123 @@ class ScribeTab(QWidget):
     def _refresh_preview(self):
         prefs = self.canvas.prefs
         self._stroke_preview.set_style(prefs["stroke"], prefs["width"], prefs["dashed"], prefs["roundCorners"])
+
+    def _build_selection_panel(self, box):
+        """Where the selection is and how big it is: typed here, or dragged with its handles on the board."""
+        box.addSpacing(4)
+        head = QHBoxLayout()
+        head.addWidget(self._heading("Selection"))
+        head.addStretch(1)
+        self._selection_count = QLabel("")
+        self._selection_count.setProperty("scribe", "muted")
+        head.addWidget(self._selection_count)
+        box.addLayout(head)
+        self._box_fields = {}
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(6)
+        for n, (key, label) in enumerate((("x", "X"), ("y", "Y"), ("w", "W"), ("h", "H"))):
+            caption = QLabel(label)
+            caption.setProperty("scribe", "muted")
+            caption.setFixedWidth(12)
+            field = QDoubleSpinBox()
+            field.setRange(-1e9, 1e9)
+            field.setDecimals(1)
+            field.setButtonSymbols(QAbstractSpinBox.NoButtons)
+            field.setGroupSeparatorShown(True)
+            field.setKeyboardTracking(False)
+            field.setToolTip({"x": "Left edge", "y": "Top edge", "w": "Width", "h": "Height"}[key])
+            field.editingFinished.connect(lambda k=key: self._box_field_edited(k))
+            self._box_fields[key] = field
+            grid.addWidget(caption, n // 2, (n % 2) * 2)
+            grid.addWidget(field, n // 2, (n % 2) * 2 + 1)
+        box.addLayout(grid)
+        self._keep_ratio = QCheckBox("Keep proportions")
+        self._keep_ratio.setChecked(True)
+        box.addWidget(self._keep_ratio)
+        actions = QGridLayout()
+        actions.setHorizontalSpacing(6)
+        actions.setVerticalSpacing(6)
+        self._selection_buttons = []
+        for n, (text, tip, fn, kind) in enumerate((
+                ("Front", "Bring to front  (Ctrl+Shift+])", lambda: self.canvas.arrange("front"), None),
+                ("Back", "Send to back  (Ctrl+Shift+[)", lambda: self.canvas.arrange("back"), None),
+                ("Duplicate", "Duplicate  (Ctrl+D)", self.canvas.duplicate_selection, None),
+                ("Delete", "Delete  (Del)", self.canvas.delete_selection, "danger"))):
+            button = QPushButton(text)
+            button.setToolTip(tip)
+            button.setFixedHeight(28)
+            if kind:
+                button.setProperty("scribe", kind)
+            button.clicked.connect(lambda _=False, f=fn: f())
+            self._selection_buttons.append(button)
+            actions.addWidget(button, n // 2, n % 2)
+        box.addLayout(actions)
+        self._original_size_button = QPushButton("Original size")
+        self._original_size_button.setToolTip("Put the picture back to its own size")
+        self._original_size_button.setFixedHeight(28)
+        self._original_size_button.clicked.connect(lambda: self.canvas.original_size())
+        box.addWidget(self._original_size_button)
+        self.canvas.selectionChanged.connect(self._sync_selection_panel)
+        self.canvas.selectionMoved.connect(self._sync_selection_panel)
+        self._sync_selection_panel()
+
+    def _sync_selection_panel(self):
+        canvas = self.canvas
+        selection = canvas._sel
+        box = canvas.selection_box()
+        has = box is not None
+        values = {"x": box[0], "y": box[1], "w": box[2] - box[0], "h": box[3] - box[1]} if has else {}
+        for key, field in self._box_fields.items():
+            field.blockSignals(True)
+            field.setValue(values.get(key, 0.0))
+            field.blockSignals(False)
+            field.setEnabled(has)
+        for button in self._selection_buttons:
+            button.setEnabled(has)
+        self._keep_ratio.setEnabled(has)
+        self._selection_count.setText(f"{len(selection)} selected" if len(selection) > 1 else
+                                      ("1 selected" if selection else "Nothing selected"))
+        self._original_size_button.setVisible(bool(selection) and any(i["type"] == "image" for i in selection))
+
+    def _box_field_edited(self, key):
+        box = self.canvas.selection_box()
+        if box is None:
+            return
+        v = {k: field.value() for k, field in self._box_fields.items()}
+        old_w, old_h = box[2] - box[0], box[3] - box[1]
+        if self._keep_ratio.isChecked() and old_w > 0 and old_h > 0:
+            if key == "w":
+                v["h"] = v["w"] * old_h / old_w
+            elif key == "h":
+                v["w"] = v["h"] * old_w / old_h
+        width, height = max(v["w"], 1.0), max(v["h"], 1.0)
+        self.canvas.set_selection_box(v["x"], v["y"], v["x"] + width, v["y"] + height)
+
+    @staticmethod
+    def format_place(x, y, zoom=1.0):
+        """'x 665,799  y -46,971': whole numbers, with a decimal when zoomed in far enough for it to matter."""
+        digits = 1 if zoom >= 8 else 0
+        return f"x {x:,.{digits}f}   y {y:,.{digits}f}"
+
+    def _show_pointer_place(self, x, y):
+        self._pointer_inside = True
+        self._coords_button.setText(self.format_place(x, y, self.canvas.zoom))
+
+    def _show_view_place(self):
+        self._pointer_inside = False
+        self._coords_button.setText(self.format_place(self.canvas.view["x"], self.canvas.view["y"], self.canvas.zoom))
+
+    def _refresh_view_place(self):
+        if not getattr(self, "_pointer_inside", False):
+            self._show_view_place()
+
+    def _open_go_to(self):
+        if getattr(self, "_go_to", None) is not None and self._go_to.isVisible():
+            self._go_to.close()
+            return
+        self._go_to = _GoToPopup(self.canvas, self._coords_button)
+        self._go_to.show()
 
     def _background_changed(self):
         self.canvas.set_background(self._background.currentData())
