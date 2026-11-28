@@ -1229,3 +1229,14 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   with the QuickNote and Scribe, so they arrive within seconds. Still per computer: the shutdown log (when this
   computer was last used) and which nudges it already showed. Not synced: plan_reports.jsonl (reports are for me to
   read, not for the model).
+
+2026-11-26  A review started over its own paused pomodoro, and resuming that pomodoro
+  Starting a review while its task's pomodoro is paused already gives the review its own blocking session and leaves
+  the pomodoro paused and waiting (it is never auto-resumed). The fork was what "Switch to this" on that waiting
+  pomodoro should do: swap (pause the review, the old behaviour) or bring the pomodoro back with the review still
+  running beside it. Chose beside: the review hands its session over (make_live_review_independent, the same move
+  starting a pomodoro already makes), the pomodoro comes back and resumes, and the review keeps its time and rides the
+  pomodoro's pauses and breaks. The button says "Resume pomodoro" in that case. All desktop switch buttons (Focus tab,
+  Tasks card, mini timer) go through review_tab.switch_to_parked(). Known limit: the extension popup's Switch calls
+  /session/parked/switch, which runs off the Qt thread and cannot reach the review banner, so from the browser it still
+  swaps. Counterpart: carmen-extension DESIGN_DECISIONS.txt, same date (pomodoro and review notifications).

@@ -181,10 +181,14 @@ class _WaitingRow(QFrame):
         self.end_button = button("End", DANGER_STYLE, height=34)
         row.addWidget(self.switch_button)
         row.addWidget(self.end_button)
-        self.switch_button.clicked.connect(lambda: session_manager.swap_with_parked(self.park_id))
+        self.switch_button.clicked.connect(self._switch)
         self.end_button.clicked.connect(
             lambda: session_manager.end_parked_session(park_id=self.park_id, end_type="manual"))
         self.update_from(session)
+
+    def _switch(self):
+        from qt_ui import review_tab
+        review_tab.switch_to_parked(self.park_id)
 
     def update_from(self, session):
         color = _session_color(session)
@@ -638,6 +642,7 @@ class FocusTab(QWidget):
                 row = self._waiting_rows.pop(park_id)
                 self._waiting_box.removeWidget(row)
                 row.deleteLater()
+        live = session_manager.get_status()
         for index, session in enumerate(parked):
             park_id = session.get("parkId")
             row = self._waiting_rows.get(park_id)
@@ -649,6 +654,12 @@ class FocusTab(QWidget):
                 if self._waiting_box.indexOf(row) != index:
                     self._waiting_box.removeWidget(row)
                     self._waiting_box.insertWidget(index, row)
+            # A review running over its own task's paused pomodoro: resuming that pomodoro keeps the
+            # review running beside it (review_tab.switch_to_parked), so say "Resume", not "Switch".
+            beside = (live.get("source") == "review" and session.get("source") == "task"
+                      and session.get("eventId") == live.get("eventId"))
+            row.switch_button.setText(
+                ("Resume pomodoro" if session.get("pomodoro") else "Resume") if beside else "Switch to this")
         # Reviews set aside: listed after the sessions, read-only.
         keep_tokens = {r.get("token") for r in set_aside}
         for token in list(self._review_rows):

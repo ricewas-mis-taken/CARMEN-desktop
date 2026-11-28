@@ -1194,7 +1194,8 @@ class _TaskCard(QFrame):
     def _pause_resume(self):
         parked = self._parked_entry(session_manager.get_status())
         if parked:
-            session_manager.swap_with_parked(parked["parkId"])
+            from qt_ui import review_tab
+            review_tab.switch_to_parked(parked["parkId"])
             return
         if session_manager.get_status()["isPaused"]:
             session_manager.resume_session()

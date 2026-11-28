@@ -375,7 +375,8 @@ class MiniTimer(QWidget):
             else:
                 pause_reason.ask(self, self.refresh)
         elif kind == "parked":
-            session_manager.swap_with_parked(view["parkId"])        # it becomes the running one
+            from qt_ui import review_tab
+            review_tab.switch_to_parked(view["parkId"])             # it becomes the running one
             self._key = ("session",)
             self.refresh()
         else:
