@@ -59,6 +59,7 @@ LOCAL_ONLY_FILES = {
     "pull_cursor.txt", "sync_owner.txt", "uploaded_photos.json", "taskbar_quiet_settings.json", "taskbar_quiet_saved.json", "taskbar_quiet_user.json",
     "live_cursor.txt", "live_history_pushed.txt", "live_state_pushed.txt",
     "live_review_pushed.txt", "live_screentime_pushed.json", "live_settings_pushed.txt", "live_quicknote_pushed.txt", "hang_trace.txt", "taskbar_quiet_pending.json", "other_device_seen.txt", "screentime_remote.json", "parked_reviews.json",
+    "first_attempt.json",   # a first attempt timed beside a session on this computer, kept so a restart brings it back
     "scribe_stamp.txt", "live_scribe_pushed.txt", "score_resync_v1.txt",
     "goal_notified.json",   # which tasks already told this computer their daily target was reached today
     "installed_apps_cache.json",    # the apps found on this computer, so the task editor can list them at once

@@ -1306,28 +1306,78 @@ _FIRST_ATTEMPT_STALE_SECONDS = 10
 _first_attempt = None
 
 
-def publish_first_attempt(topic_id, started_at_iso, elapsed_seconds, is_paused, auto_paused=False):
+def _first_attempt_path():
+    return os.path.join(os.path.dirname(ACTIVE_SESSION_PATH), "first_attempt.json")
+
+
+_first_attempt_saved = None   # (elapsed, paused, monotonic second) of the last write, to skip redundant ones
+
+
+def _save_first_attempt_locked(snapshot):
+    """Keeps a first attempt that no task session is driving on disk, so a restart can bring it back
+    (the banner that times it, and the in-memory snapshot above, die with the process). Written when
+    it pauses or resumes, and otherwise at most every few seconds."""
+    global _first_attempt_saved
+    key = (snapshot["elapsed_seconds"] // 5, snapshot["is_paused"])
+    if _first_attempt_saved == key:
+        return
+    _first_attempt_saved = key
+    data = {k: v for k, v in snapshot.items() if k != "published_at"}
+    data["saved_at"] = datetime.now().isoformat()
+    try:
+        path = _first_attempt_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def publish_first_attempt(topic_id, started_at_iso, elapsed_seconds, is_paused, auto_paused=False, event_id=None):
     """Called by the first-attempt banner every tick. Anything not
     re-published for _FIRST_ATTEMPT_STALE_SECONDS reads as gone, so a banner
     that vanished without calling clear_first_attempt() (crash, an
-    unforeseen exit path) can never leave a phantom timer in /status."""
+    unforeseen exit path) can never leave a phantom timer in /status.
+    It is also saved to disk (see saved_first_attempt()) so a restart doesn't lose it."""
     global _first_attempt
     with _lock:
         _first_attempt = {
             "topic_id": topic_id,
+            "event_id": event_id,
             "started_at": started_at_iso,
             "elapsed_seconds": int(elapsed_seconds),
             "is_paused": bool(is_paused),
             "auto_paused": bool(auto_paused),
             "published_at": datetime.now(),
         }
+        _save_first_attempt_locked(_first_attempt)
+
+
+def saved_first_attempt():
+    """The first attempt that was running when the app last stopped, or None:
+    {topic_id, event_id, started_at, elapsed_seconds, is_paused}. Time the app was closed is not counted."""
+    try:
+        with open(_first_attempt_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not data.get("topic_id"):
+        return None
+    return data
 
 
 def clear_first_attempt():
-    global _first_attempt, _first_attempt_request
+    global _first_attempt, _first_attempt_request, _first_attempt_saved
     with _lock:
         _first_attempt = None
         _first_attempt_request = None
+        _first_attempt_saved = None
+        try:
+            os.remove(_first_attempt_path())
+        except OSError:
+            pass
 
 
 # A first attempt has no review_store row, so the extension cannot pause it the way it
