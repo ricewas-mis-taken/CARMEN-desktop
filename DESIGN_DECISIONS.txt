@@ -1266,3 +1266,5 @@ Rejected alternative: keeping a session_manager session open for the first
 attempt the whole time. Not used -- it would fight the pomodoro for the
 single live session slot.
 Desktop-only: the extension already reads first attempts from /status.
+Cross-ref: carmen-extension DESIGN_DECISIONS.txt [2026-11-28] "One session
+complete notification, not two" (same report, extension side).
