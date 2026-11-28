@@ -166,3 +166,24 @@ def test_the_options_dialog_has_a_help_section_that_starts_the_tour(qtbot, windo
     assert "Play the whole tour" in chips and "Your first task" in chips
     next(b for b in dialog.findChildren(QPushButton) if b.text() == "Your first task").click()
     qtbot.waitUntil(lambda: started == [["task"]], timeout=2000)
+
+
+def test_the_first_tour_ends_on_every_option(window):
+    tour_runner.register(window)
+    assert tour_runner.start_if_new() is not None
+    tour_runner._tour.finish(completed=True)
+    prefs = tour_runner._preferences
+    assert prefs is not None and prefs.windowTitle() == "Your preferences"
+    from PySide6.QtWidgets import QCheckBox, QPushButton
+    boxes = [b.text() for b in prefs.findChildren(QCheckBox)]
+    assert any("Discord" in b for b in boxes) and any("plan tomorrow" in b for b in boxes) and any("Windows" in b for b in boxes)
+    assert not any(b.text() == "Play the whole tour" for b in prefs.findChildren(QPushButton))
+    prefs.close()
+
+
+def test_replaying_the_tour_from_help_does_not_reopen_preferences(window):
+    tour_runner.register(window)
+    tour_runner._preferences = None
+    t = tour_runner.start(["review"])
+    t.finish(completed=True)
+    assert tour_runner._preferences is None
