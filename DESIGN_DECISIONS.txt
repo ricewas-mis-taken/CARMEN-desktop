@@ -1251,3 +1251,16 @@ Rejected alternative: a separate onboarding settings page. Not used -- it
 would duplicate every setting and drift from Options; one dialog with a
 mode keeps them identical.
 Desktop-only: no API, extension or sync change.
+[2026-11-28] Custom colours for tasks, review subjects and categories
+Decision: one shared ColorChoice widget (qt_ui/color_choice.py) replaces the
+three copy-pasted 10-swatch rows. It keeps the palette and adds a "+" that
+opens the system colour dialog; a chosen custom colour gets its own swatch.
+New review categories, once every palette colour is used in that tab, start
+on a generated unused colour instead of a duplicate (which create_subject
+rejects).
+Why: with more than 10 tasks/subjects the palette ran out, and review
+subjects must have unique colours per tab, so users hit a dead end.
+Rejected alternative: a bigger fixed palette. Not used -- it only moves the
+limit, and near-duplicate shades get hard to tell apart.
+No store, API or extension change: colours were already free-form "#rrggbb"
+strings everywhere; the extension doesn't render task colours.
