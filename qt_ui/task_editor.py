@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from qt_ui.wrap_edit import WrapEdit
+from qt_ui.color_choice import ColorChoice
 
 import config
 import installed_apps
@@ -204,18 +205,9 @@ class _TaskEditor(QWidget):
         layout.addWidget(self._name_edit)
 
         layout.addWidget(_bold_label("Color"))
-        self._swatch_row = QHBoxLayout()
-        self._swatch_buttons = {}
-        for hexval in COLOR_PALETTE:
-            btn = QPushButton()
-            btn.setFixedSize(28, 28)
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.clicked.connect(lambda checked=False, h=hexval: self._pick_color(h))
-            self._swatch_buttons[hexval] = btn
-            self._swatch_row.addWidget(btn)
-        self._swatch_row.addStretch(1)
-        layout.addLayout(self._swatch_row)
-        self._pick_color(self._color)
+        self._color_choice = ColorChoice(COLOR_PALETTE, self._color, on_change=self._pick_color, size=28)
+        self._color = self._color_choice.color()
+        layout.addWidget(self._color_choice)
 
         saved_kind = (task or {}).get("recurrence", "daily")
         if saved_kind not in {c[0] for c in REPEAT_CHOICES}:
@@ -471,9 +463,6 @@ class _TaskEditor(QWidget):
 
     def _pick_color(self, hexval):
         self._color = hexval
-        for h, btn in self._swatch_buttons.items():
-            border = "3px solid #1B2230" if h == hexval else "1px solid #0002"
-            btn.setStyleSheet(f"background: {h}; border-radius: 14px; border: {border}; padding: 0;")
 
     def _add_manual_process(self, add_row_fn):
         name = os.path.basename(self._process_manual_edit.text().strip())
