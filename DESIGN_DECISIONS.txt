@@ -1251,3 +1251,18 @@ Rejected alternative: a separate onboarding settings page. Not used -- it
 would duplicate every setting and drift from Options; one dialog with a
 mode keeps them identical.
 Desktop-only: no API, extension or sync change.
+
+[2026-11-28] First attempt survives a relaunch and keeps blocking after a pomodoro
+Decision: a first attempt that is NOT driving its own session (riding beside
+a pomodoro, or started with no task session) is saved to
+private/data/first_attempt.json (local-only) whenever it changes, and is
+restored on start-up with a fresh hidden Add Problem dialog. Time while the
+app was closed is not counted. When the session it rode beside ends, it
+starts its own session from its topic's linked task, the same way a
+problem-backed review already did.
+Why: relaunching lost the timer entirely, and after a pomodoro ended the
+first attempt kept timing with nothing blocking.
+Rejected alternative: keeping a session_manager session open for the first
+attempt the whole time. Not used -- it would fight the pomodoro for the
+single live session slot.
+Desktop-only: the extension already reads first attempts from /status.
