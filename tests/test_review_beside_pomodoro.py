@@ -142,3 +142,59 @@ def test_resuming_the_paused_pomodoro_keeps_the_review_running_beside_it(world):
     assert status["parkedSessions"] == []                                     # nothing left waiting
     active = review_store.get_active_review()
     assert active["problemId"] == first["id"] and not active["isPaused"]      # the review never stopped
+
+
+def _first_attempt_beside_pomodoro(world):
+    from test_review_switch import _start_current
+    topic, first, _second = _two_problems(world)
+    tab = _tab(world)
+    dialog = _start_current(world, tab, True, topic, first)
+    banner = tab._topic_views[topic["id"]]._review_banner
+    assert review_tab.make_live_review_independent()
+    task_id = _linked_task_id(topic)
+    session_manager.start_pomodoro_session(25, 5, 4, "hard", [], [], source="task", event_id=task_id, event_title="Same")
+    banner._tick()
+    return topic, tab, banner, dialog
+
+
+def _close(banner, dialog):
+    banner._end_early()
+    dialog.close()
+    from PySide6.QtWidgets import QApplication
+    QApplication.processEvents()
+
+
+def test_a_first_attempt_left_running_when_the_pomodoro_ends_keeps_blocking(world):
+    topic, tab, banner, dialog = _first_attempt_beside_pomodoro(world)
+    banner._accumulated_seconds = 300                    # five minutes in, beside the pomodoro
+
+    session_manager.end_session()                        # the Pomodoro ends, the first attempt keeps going
+    banner._tick()
+
+    status = session_manager.get_status()
+    assert status["isActive"] and session_manager.is_first_attempt(status)
+    assert banner._end_session_on_finish and banner._elapsed_seconds_now() >= 300
+    assert review_store.saved_first_attempt() is None    # the session carries it now
+    _close(banner, dialog)
+
+
+def test_a_first_attempt_beside_a_pomodoro_is_saved_and_comes_back_after_a_restart(world):
+    topic, tab, banner, dialog = _first_attempt_beside_pomodoro(world)
+    banner._accumulated_seconds = 240
+    banner._start_time = None
+    banner._is_paused = True
+    banner._publish_first_attempt()
+
+    saved = review_store.saved_first_attempt()
+    assert saved and saved["topic_id"] == topic["id"] and saved["elapsed_seconds"] == 240
+
+    banner._tick_timer.stop()
+    banner.hide()
+    banner._first_attempt_callback = None                 # the banner dies with the process
+    review_store._first_attempt = None
+    view = tab._topic_views[topic["id"]]
+    assert view._resume_saved_first_attempt()
+    assert banner.is_running() and banner._first_attempt_callback is not None
+    assert banner._elapsed_seconds_now() == 240 and banner._is_paused
+    _close(banner, dialog)
+    assert review_store.saved_first_attempt() is None
