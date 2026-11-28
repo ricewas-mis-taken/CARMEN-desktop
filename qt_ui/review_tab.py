@@ -41,6 +41,7 @@ from qt_ui import confirm_dialog
 import tasks_store
 from qt_ui.review_wheel import WheelDialog
 from qt_ui.safe_link import make_link_label
+from qt_ui.color_choice import ColorChoice
 from qt_ui.ui_kit import (
     discard_widget,
     accent,
@@ -100,6 +101,16 @@ def _soft_shadow(widget, blur=22, alpha=18):
     shadow.setOffset(0, 5)
     shadow.setColor(QColor(16, 24, 40, alpha))
     widget.setGraphicsEffect(shadow)
+
+
+def _unused_color(used):
+    """A colour not in `used` once every palette colour is taken: step around the hue wheel."""
+    from PySide6.QtGui import QColor
+    for step in range(1, 360):
+        hexval = QColor.fromHsv((step * 137) % 360, 170, 215).name().lower()
+        if hexval not in used:
+            return hexval
+    return COLOR_PALETTE[0]
 
 
 def _lighten(hex_color, mix=0.78):
@@ -2836,7 +2847,7 @@ class _NewCategoryDialog(QWidget):
         self._topic_id = topic_id
         self._on_done = on_done
         used = {s["color"].lower() for s in review_store.list_subjects(topic_id)}
-        self._color = next((c for c in COLOR_PALETTE if c.lower() not in used), COLOR_PALETTE[0])
+        self._color = next((c for c in COLOR_PALETTE if c.lower() not in used), None) or _unused_color(used)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
@@ -2848,18 +2859,9 @@ class _NewCategoryDialog(QWidget):
         self._name.returnPressed.connect(self._save)
         layout.addWidget(self._name)
         layout.addWidget(field_label("Colour"))
-        swatches = QHBoxLayout()
-        self._swatches = {}
-        for hexval in COLOR_PALETTE:
-            swatch = QPushButton()
-            swatch.setFixedSize(26, 26)
-            swatch.setCursor(Qt.PointingHandCursor)
-            swatch.clicked.connect(lambda _c=False, h=hexval: self._pick(h))
-            self._swatches[hexval] = swatch
-            swatches.addWidget(swatch)
-        swatches.addStretch(1)
-        layout.addLayout(swatches)
-        self._pick(self._color)
+        self._color_choice = ColorChoice(COLOR_PALETTE, self._color, on_change=self._pick, size=26)
+        self._color = self._color_choice.color()
+        layout.addWidget(self._color_choice)
         self._status = role_label("", "error", wrap=True)
         layout.addWidget(self._status)
         layout.addStretch(1)
@@ -2877,9 +2879,6 @@ class _NewCategoryDialog(QWidget):
 
     def _pick(self, hexval):
         self._color = hexval
-        for h, swatch in self._swatches.items():
-            border = "3px solid #1B2230" if h == hexval else "1px solid #0002"
-            swatch.setStyleSheet(f"background:{h};border:{border};border-radius:13px;padding:0;")
 
     def _save(self):
         name = self._name.text().strip()
@@ -3376,18 +3375,9 @@ class _AddProblemDialog(QWidget):
         layout.addWidget(self._new_subject_name)
 
         layout.addWidget(field_label("Colour"))
-        swatch_row = QHBoxLayout()
-        self._new_subject_color = COLOR_PALETTE[0]
-        self._swatch_buttons = {}
-        for hexval in COLOR_PALETTE:
-            btn = QPushButton()
-            btn.setFixedSize(22, 22)
-            btn.clicked.connect(lambda checked=False, h=hexval: self._pick_subject_color(h))
-            self._swatch_buttons[hexval] = btn
-            swatch_row.addWidget(btn)
-        swatch_row.addStretch(1)
-        layout.addLayout(swatch_row)
-        self._pick_subject_color(self._new_subject_color)
+        self._subject_color_choice = ColorChoice(COLOR_PALETTE, COLOR_PALETTE[0], on_change=self._pick_subject_color, size=22, round=False)
+        self._new_subject_color = self._subject_color_choice.color()
+        layout.addWidget(self._subject_color_choice)
 
         save_row = QHBoxLayout()
         save_row.addStretch(1)
@@ -3400,9 +3390,6 @@ class _AddProblemDialog(QWidget):
 
     def _pick_subject_color(self, hexval):
         self._new_subject_color = hexval
-        for h, btn in self._swatch_buttons.items():
-            border = "2px solid #1F2328" if h == hexval else "1px solid #0002"
-            btn.setStyleSheet(f"background: {h}; border-radius: 4px; border: {border};")
 
     def _toggle_add_subject(self):
         self._add_subject_form.setVisible(not self._add_subject_form.isVisible())
