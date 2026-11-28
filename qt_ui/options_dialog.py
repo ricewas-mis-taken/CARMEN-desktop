@@ -26,15 +26,23 @@ def reapply_stylesheet():
 
 
 class OptionsDialog(QWidget):
-    def __init__(self):
+    """Options. setup=True is the same set of choices shown once at the end of
+    the first tour, so people pick their preferences before they start; it
+    leaves out Help (they just finished the tour) and says so in its title."""
+
+    def __init__(self, setup=False):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("PopupBg")
-        self.setWindowTitle("Options")
+        self.setWindowTitle("Your preferences" if setup else "Options")
         self.resize(500, 640)
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(24, 22, 24, 20)
         self._layout.setSpacing(10)
-        self._layout.addWidget(dialog_title("Options"))
+        if setup:
+            self._layout.addWidget(dialog_title(
+                "Set your preferences", "You can change any of these later in Options."))
+        else:
+            self._layout.addWidget(dialog_title("Options"))
         self._layout.addWidget(field_label("Colours"))
         self._grid = QGridLayout()
         self._grid.setSpacing(10)
@@ -54,12 +62,13 @@ class OptionsDialog(QWidget):
         self._config_box("Let AI agents (Claude in Chrome) work in their own tabs during a session", "allowAiAgents", True)
         self._layout.addWidget(field_label("Start-up"))
         self._config_box("Open Carmen's window when I sign in to Windows", "openOnStartup", True)
-        self._layout.addWidget(field_label("Help"))
-        self._add_help()
+        if not setup:
+            self._layout.addWidget(field_label("Help"))
+            self._add_help()
         self._layout.addStretch(1)
         row = QHBoxLayout()
         row.addStretch(1)
-        done = accent(QPushButton("Done"))
+        done = accent(QPushButton("Start using Carmen" if setup else "Done"))
         done.clicked.connect(self.close)
         row.addWidget(done)
         self._layout.addLayout(row)

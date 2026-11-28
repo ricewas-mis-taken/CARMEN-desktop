@@ -11,20 +11,34 @@ def register(window):
     _window = window
 
 
-def _build(chapter_ids):
+_preferences = None
+
+
+def _build(chapter_ids, first_run=False):
     from qt_ui import tour, tour_content
     chapters = tour_content.chapters(_window)
     if chapter_ids:
         chapters = [c for c in chapters if c.id in chapter_ids] or chapters
-    return tour.Tour(_window, chapters, on_finished=_finished)
+    return tour.Tour(_window, chapters, on_finished=lambda completed: _finished(completed, first_run))
 
 
-def _finished(_completed):
-    """Skipped or finished, the tour does not come back by itself."""
+def _finished(_completed, first_run=False):
+    """Skipped or finished, the tour does not come back by itself. The first
+    tour, finished or skipped, ends on every option so people set their
+    preferences before they start."""
     config.update_config(lambda cfg: cfg.update(tourDone=True))
+    if first_run:
+        show_preferences()
 
 
-def start(chapter_ids=None):
+def show_preferences():
+    global _preferences
+    from qt_ui.options_dialog import OptionsDialog
+    _preferences = OptionsDialog(setup=True)
+    return _preferences
+
+
+def start(chapter_ids=None, first_run=False):
     """Plays the tour (all of it, or only the chapters named)."""
     global _tour
     if _window is None:
@@ -34,7 +48,7 @@ def start(chapter_ids=None):
     if _window.isMinimized() or not _window.isVisible():
         _window.showNormal()
         _window.raise_()
-    _tour = _build(chapter_ids)
+    _tour = _build(chapter_ids, first_run)
     _tour.start()
     return _tour
 
@@ -45,7 +59,7 @@ def start_if_new():
         return None
     if not _window.isVisible() or _window.isMinimized():
         return None
-    return start()
+    return start(first_run=True)
 
 
 def chapter_list():

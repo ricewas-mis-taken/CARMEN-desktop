@@ -1241,6 +1241,16 @@ instead of being cut off. Per-dialog resize() calls stay as the preferred size. 
   /session/parked/switch, which runs off the Qt thread and cannot reach the review banner, so from the browser it still
   swaps. Counterpart: carmen-extension DESIGN_DECISIONS.txt, same date (pomodoro and review notifications).
 
+[2026-11-28] First tour ends on a preferences screen
+Decision: the first-run tour, whether finished or skipped, opens Options in
+a "setup" mode titled "Set your preferences" (no Help section, button
+"Start using Carmen"). Replaying the tour from Options > Help does not.
+Why: new users should set Discord status, nightly planning, AI agents and
+start-up behaviour before they start instead of discovering Options later.
+Rejected alternative: a separate onboarding settings page. Not used -- it
+would duplicate every setting and drift from Options; one dialog with a
+mode keeps them identical.
+Desktop-only: no API, extension or sync change.
 [2026-11-28] Custom colours for tasks, review subjects and categories
 Decision: one shared ColorChoice widget (qt_ui/color_choice.py) replaces the
 three copy-pasted 10-swatch rows. It keeps the palette and adds a "+" that
