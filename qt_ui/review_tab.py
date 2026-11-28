@@ -1153,7 +1153,38 @@ class _TopicView(QWidget):
         # still active and still enforcing.
         if self._resume_linked_session():
             return
-        self._resume_independent_review()
+        if self._resume_independent_review():
+            return
+        self._resume_saved_first_attempt()
+
+    def _resume_saved_first_attempt(self):
+        """A first attempt that was running beside a session, or on its own, when the app stopped:
+        its banner and its Add Problem dialog died with the process. Brings both back, keeping the
+        time it had (not the time the app was closed). Returns True if it did."""
+        saved = review_store.saved_first_attempt()
+        if not saved or saved.get("topic_id") != self._topic_id:
+            return False
+        if self._review_banner.is_running():
+            return False
+        if self._review_tab:
+            self._review_tab.on_review_started()
+        dialog = _register_popup(_AddProblemDialog(
+            self._topic_id, on_added=self._after_add_problem,
+            on_start_first_attempt=self._start_first_attempt, start_hidden=True,
+        ))
+        done, cancelled = self._first_attempt_callbacks(dialog)
+        try:
+            started = datetime.fromisoformat(saved["started_at"])
+        except (KeyError, TypeError, ValueError):
+            started = None
+        self._review_banner.start(
+            {"name": "your new problem", "topicId": self._topic_id, "eventId": saved.get("event_id")},
+            token=None, end_session_on_finish=False,
+            first_attempt_callback=done, first_attempt_cancelled_callback=cancelled,
+            accumulated_seconds=int(saved.get("elapsed_seconds") or 0),
+        )
+        self._review_banner.restore_first_attempt_clock(started, bool(saved.get("is_paused")))
+        return True
 
     def _resume_independent_review(self):
         """Starts the banner for the review being timed with no task session
@@ -1778,6 +1809,7 @@ class _ReviewBanner(QWidget):
             self._elapsed_seconds_now(),
             self._currently_paused(),
             auto_paused=self._auto_paused,
+            event_id=(self._problem or {}).get("eventId"),
         )
 
     def _sync_first_attempt_with_pomodoro_break(self):
@@ -1908,6 +1940,16 @@ class _ReviewBanner(QWidget):
         self.show()
         self._changed()
 
+    def restore_first_attempt_clock(self, started_at, paused):
+        """After start() for a first attempt brought back from disk: its clock continues from the
+        accumulated seconds start() was given, and keeps its original start time and pause state."""
+        if started_at is not None:
+            self._first_attempt_started_at = started_at
+        self._is_paused = paused
+        self._start_time = None if paused else datetime.now()
+        self._pause_btn.setText(self._pause_button_text(self._currently_paused()))
+        self._publish_first_attempt()
+
     def is_finishing(self):
         """True while the how-did-it-go dialog is open for the review just finished."""
         return self._finishing
@@ -1946,6 +1988,8 @@ class _ReviewBanner(QWidget):
         running when that session ends, with nothing blocking. It starts its own session from its task's
         rules, keeping the time already on its clock. True if it did."""
         problem = self._problem or {}
+        if self._first_attempt_callback is not None and problem.get("id") is None:
+            return self._first_attempt_take_over()
         if (self._end_session_on_finish or self._finishing or not self._is_independent_review()
                 or problem.get("id") is None or self._currently_paused()):
             return False
@@ -1976,6 +2020,40 @@ class _ReviewBanner(QWidget):
         self._end_session_on_finish = True
         self._session_token = None
         review_store.abandon_review(token)
+        self._changed()
+        return True
+
+    def _first_attempt_take_over(self):
+        """A first attempt that rode beside a session (a pomodoro) keeps running once that session ends,
+        and nothing was blocking any more. It starts its own session from its topic's task, the same one
+        _start_first_attempt() would have, carrying the time already on its clock."""
+        if self._end_session_on_finish or self._finishing or self._currently_paused():
+            return False
+        if session_manager.get_status().get("isActive"):
+            return False
+        problem = self._problem or {}
+        topic = review_store.get_topic(problem.get("topicId"))
+        task = tasks_store.get_task(topic["linkedTaskId"]) if topic and topic.get("linkedTaskId") else None
+        if task is None:
+            return False
+        carried = self._elapsed_seconds_now()
+        session_manager.start_session(
+            duration_minutes=tasks_store.BURNOUT_MINUTES,
+            lock_mode=task["lockMode"],
+            process_blocklist=task.get("processBlocklist", []),
+            domain_whitelist=task.get("domainWhitelist", []),
+            source="review",
+            event_id=task["id"],
+            event_title=f"{task['name']} - first attempt",
+            review_problem_name=session_manager.FIRST_ATTEMPT_NAME,
+            review_subject_name=None,
+            hide_taskbar_badges=bool(task.get("hideTaskbarBadges")),
+            stop_taskbar_flashing=bool(task.get("stopTaskbarFlashing")),
+        )
+        self._problem = {**problem, "eventId": task["id"]}
+        self._carried_seconds = carried
+        self._end_session_on_finish = True
+        review_store.clear_first_attempt()      # the session now carries it, and restores it after a restart
         self._changed()
         return True
 
